@@ -111,6 +111,9 @@ export class Director extends EventEmitter {
       this.emit('program', { type: 'done', program: this.programJSON(prog) });
       return;
     }
+    // Re-check status before scheduling: stopProgram may have run while we
+    // were dispatching this step (outside review CRIT-5 race).
+    if (prog.status !== 'running') return;
     prog._timer = setTimeout(() => this._runStep(prog), step.delayMs);
   }
 

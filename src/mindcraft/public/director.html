@@ -209,7 +209,8 @@ function renderLeashes(leashes) {
     </div>`).join('');
 }
 window.releaseFor = async (name) => {
-  await api('/api/director/unleash', { agent: name });
+  const r = await api('/api/director/unleash', { agent: name });
+  log(r.success ? `leash released from ${name}` : `unleash failed: ${r.error}`, r.success ? 'ok' : 'err');
   refresh();
 };
 
@@ -225,7 +226,8 @@ function renderPrograms(programs) {
     </div>`).join('');
 }
 window.stopProg = async (pid) => {
-  await api('/api/director/program/stop', { id: pid });
+  const r = await api('/api/director/program/stop', { id: pid });
+  log(r.success ? `program ${pid} stopped` : `stop failed: ${r.error}`, r.success ? 'ok' : 'err');
   refresh();
 };
 

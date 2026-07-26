@@ -121,9 +121,7 @@ export class Helper {
   }
 
   stop() {
-    if (this._heartbeatTimer) clearInterval(this._heartbeatTimer); // legacy safety
     if (this._cycleTimer) clearInterval(this._cycleTimer);
-    this._heartbeatTimer = null;
     this._cycleTimer = null;
     this.status = 'stopped';
     this._killProc();
@@ -240,19 +238,24 @@ export class Swarm extends EventEmitter {
 
   // Watchdog: marks stale helpers, auto-recalls after maxStaleCycles.
   _watchdog() {
-    const now = Date.now();
-    for (const h of this.helpers.values()) {
-      if (h.isStale(now) && h.status !== 'stopped') {
-        h.status = 'stale';
-        h.staleCycles += 1;
-        this.emit('stale', { id: h.id, staleCycles: h.staleCycles });
-        if (h.staleCycles >= h.maxStaleCycles) {
-          console.warn(`[swarm] helper ${h.name} (${h.id}) stale ${h.staleCycles}x — auto-recalling`);
-          this.recall(h.id);
+    try {
+      const now = Date.now();
+      for (const h of this.helpers.values()) {
+        if (h.isStale(now) && h.status !== 'stopped') {
+          h.status = 'stale';
+          h.staleCycles += 1;
+          this.emit('stale', { id: h.id, staleCycles: h.staleCycles });
+          if (h.staleCycles >= h.maxStaleCycles) {
+            console.warn(`[swarm] helper ${h.name} (${h.id}) stale ${h.staleCycles}x — auto-recalling`);
+            this.recall(h.id);
+          }
         }
       }
+      this.emit('change');
+    } catch (err) {
+      // A throwing event listener must never kill the watchdog loop.
+      console.warn('[swarm] watchdog error:', String(err && err.message ? err.message : err));
     }
-    this.emit('change');
   }
 
   start() {

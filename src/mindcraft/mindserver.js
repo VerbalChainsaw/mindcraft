@@ -141,6 +141,24 @@ export function createMindServer(host_public = false, port = 8080) {
       }
     });
 
+    // Defense-in-depth: block cross-origin browser POSTs (CSRF) to state-
+    // changing endpoints. Same-origin pages and non-browser clients (no
+    // Origin header, e.g. curl) are allowed. (Outside review CRIT-1/3.)
+    const originGuard = (req, res, next) => {
+      const origin = req.headers.origin;
+      if (!origin) return next(); // curl / same-origin fetch without Origin
+      try {
+        const o = new URL(origin);
+        const hostHeader = String(req.headers.host || '');
+        if (`${o.host}` === hostHeader) return next();
+      } catch { /* malformed origin -> reject */ }
+      return res.status(403).json({ success: false, error: 'Cross-origin request blocked' });
+    };
+    app.use('/api', (req, res, next) => {
+      if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+      return originGuard(req, res, next);
+    });
+
     // NOTE: /api/key-status was removed as dead surface — key presence is
     // reported by /api/launcher-config, /api/keys responses, and /api/health.
 
@@ -165,11 +183,15 @@ export function createMindServer(host_public = false, port = 8080) {
         if (changed === 0) {
           return res.status(400).json({ success: false, error: 'No key values provided' });
         }
-        fsMod.writeFileSync(keysPath, JSON.stringify(current, null, 2), 'utf8');
+        // Atomic write: temp file + rename prevents concurrent-save data loss
+        // and partial writes (outside review CRIT-4).
+        const tmpPath = `${keysPath}.tmp-${process.pid}-${Date.now()}`;
+        fsMod.writeFileSync(tmpPath, JSON.stringify(current, null, 2), 'utf8');
+        fsMod.renameSync(tmpPath, keysPath);
         res.json({
           success: true,
           changed,
-          note: 'Keys saved. Restart the launcher to apply them to new agents.',
+          note: 'Keys saved and active immediately (hot-reloaded).',
           providerKeys: getProviderKeyStatus(),
         });
       } catch (error) {
@@ -178,6 +200,9 @@ export function createMindServer(host_public = false, port = 8080) {
     });
 
     // Health: single endpoint the dashboard polls to explain "why isn't my bot working".
+    // The TCP probe result is cached for 5s so rapid polling can't flood the
+    // Minecraft server with connections (outside review HIGH-1).
+    let _mcProbeCache = { at: 0, target: '', reachable: false };
     app.get('/api/health', async (_req, res) => {
       const config = loadLauncherConfig({}, getLauncherConfigPath());
       const keys = getProviderKeyStatus();
@@ -191,14 +216,21 @@ export function createMindServer(host_public = false, port = 8080) {
       // Probe the configured Minecraft server (raw TCP; fast + version-agnostic)
       const mcHost = config.agent_defaults.host || '127.0.0.1';
       const mcPort = config.agent_defaults.port || 55916;
-      const mcReachable = await new Promise((resolve) => {
-        const netMod = net;
-        const sock = netMod.createConnection({ host: mcHost, port: mcPort, timeout: 1200 }, () => {
-          sock.end(); resolve(true);
+      const mcTarget = `${mcHost}:${mcPort}`;
+      let mcReachable;
+      if (_mcProbeCache.target === mcTarget && (Date.now() - _mcProbeCache.at) < 5000) {
+        mcReachable = _mcProbeCache.reachable;
+      } else {
+        mcReachable = await new Promise((resolve) => {
+          const netMod = net;
+          const sock = netMod.createConnection({ host: mcHost, port: mcPort, timeout: 1200 }, () => {
+            sock.end(); resolve(true);
+          });
+          sock.on('error', () => resolve(false));
+          sock.on('timeout', () => { sock.destroy(); resolve(false); });
         });
-        sock.on('error', () => resolve(false));
-        sock.on('timeout', () => { sock.destroy(); resolve(false); });
-      });
+        _mcProbeCache = { at: Date.now(), target: mcTarget, reachable: mcReachable };
+      }
       const agents = [];
       for (const agentName in agent_connections) {
         const conn = agent_connections[agentName];

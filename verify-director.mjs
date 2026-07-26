@@ -3,6 +3,8 @@
 // and verifies the leash/program engines tick with a mock transport.
 import { createMindServer } from './src/mindcraft/mindserver.js';
 import { director } from './src/mindcraft/director.js';
+import { join } from 'path';
+const path = { join };
 
 const PORT = 39811;
 let pass = 0, fail = 0;
@@ -154,9 +156,34 @@ check('program exposes finishedAt', fast && typeof fast.finishedAt === 'number')
 r = await api('/api/key-status');
 check('/api/key-status removed (404)', r.status === 404);
 
-// 17. null-socket robustness: send-message socket event for unregistered agent must not crash server
+// 18. outside-review regressions
+// 18a. cross-origin POST blocked (CRIT-1/3)
+r = await fetch(base + '/api/keys', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example.com' }, body: '{}' });
+check('cross-origin POST blocked -> 403', r.status === 403, 'status=' + r.status);
+
+// 18b. same-origin POST allowed (Origin matches host)
+const hostHeader = 'localhost:' + PORT;
+r = await fetch(base + '/api/keys', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://' + hostHeader }, body: '{}' });
+check('same-origin POST allowed (400 no-key, not 403)', r.status !== 403, 'status=' + r.status);
+
+// 18c. keys hot-reload: write a key file at the canonical location (cwd/keys.json,
+// which is what keys.js, the .bat, and /api/keys all use). hasKey must see it without restart.
+const fsZ = await import('fs');
+const tmpKeyPath = path.join(process.cwd(), 'keys.json');
+fsZ.writeFileSync(tmpKeyPath, JSON.stringify({ SOME_TEST_KEY_X: 'abc123' }), 'utf8');
+// hit a hasKey-bearing endpoint: key-status package via health checks anyApiKey
 r = await api('/api/health');
-check('server alive after all audits', r.status === 200);
+check('written key is immediately visible via hasKey (hot-reload)', r.json.checks.anyApiKey === true, JSON.stringify(r.json.checks));
+fsZ.writeFileSync(tmpKeyPath, JSON.stringify({}), 'utf8'); // reset to empty for rest of suite
+r = await api('/api/health');
+check('key removal reflected immediately', r.json.checks.anyApiKey === false);
+
+// 18d. atomic temp files cleaned up
+const leftovers = fsZ.readdirSync(process.cwd()).filter(f => f.startsWith('keys.json.tmp-'));
+check('no atomic-write temp leftovers', leftovers.length === 0, leftovers.join(','));
+
+r = await api('/api/health');
+check('server alive after outside-review audits', r.status === 200);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 director.shutdown();
