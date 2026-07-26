@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Director Console — MindCraft</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --panel2:#1c2430; --line:#2a3340; --txt:#d6dee8; --muted:#8b97a7; --accent:#58a6ff; --good:#3fb950; --bad:#f85149; --warn:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; }
+  header .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); padding:2px 8px; border-radius:20px; }
+  .wrap { padding:20px; max-width:1200px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns: 340px 1fr; gap:20px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  input, select, textarea { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--txt); border-radius:7px; padding:8px 10px; font:inherit; }
+  textarea { min-height:80px; resize:vertical; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  button { cursor:pointer; border:1px solid var(--line); border-radius:7px; padding:9px 12px; font:inherit; background:var(--panel2); color:var(--txt); transition:.15s; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06182e; font-weight:600; }
+  button.danger { border-color:var(--bad); color:var(--bad); }
+  button.sm { padding:5px 9px; font-size:12px; }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  .pill { font-size:10px; padding:2px 8px; border-radius:20px; border:1px solid var(--line); text-transform:uppercase; letter-spacing:.4px; }
+  .pill.running, .pill.online { color:var(--good); border-color:var(--good); }
+  .pill.stopped, .pill.done { color:var(--muted); }
+  .pill.offline { color:var(--bad); border-color:var(--bad); }
+  .item { border:1px solid var(--line); border-radius:9px; padding:12px; background:var(--panel2); margin-bottom:10px; }
+  .item .top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .item .meta { font-size:12px; color:var(--muted); margin-top:6px; word-break:break-all; }
+  .item .meta code { color:var(--txt); background:rgba(255,255,255,.05); padding:1px 5px; border-radius:4px; }
+  .empty { color:var(--muted); font-style:italic; padding:12px; text-align:center; }
+  .log { font-family:ui-monospace,Consolas,monospace; font-size:12px; max-height:220px; overflow:auto; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .log .ok { color:var(--good); }
+  .log .err { color:var(--bad); }
+  .hint { font-size:11px; color:var(--muted); margin-top:4px; }
+  .quick { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 Director Console</h1>
+  <span class="tag">command · program · leash</span>
+  <span style="margin-left:auto"><a href="index.html" style="color:var(--muted);text-decoration:none">← Dashboard</a></span>
+</header>
+
+<div class="wrap">
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Target Agent</h2>
+        <select id="agentSelect"></select>
+        <div class="hint" id="agentHint">Loading agents…</div>
+      </div>
+
+      <div class="card">
+        <h2>⚡ Command (one-shot)</h2>
+        <label>Message / command</label>
+        <input id="cmdInput" placeholder='e.g. !goToPlayer("Director", 3) or plain chat' />
+        <div class="quick">
+          <button class="sm" data-cmd="!stop">!stop</button>
+          <button class="sm" data-cmd="!stats">!stats</button>
+          <button class="sm" data-cmd="!inventory">!inventory</button>
+          <button class="sm" data-cmd="!nearbyBlocks">!nearbyBlocks</button>
+          <button class="sm" data-cmd='!followPlayer("Director", 3)'>follow me</button>
+          <button class="sm" data-cmd='!goToPlayer("Director", 2)'>come here</button>
+        </div>
+        <div style="margin-top:10px"><button class="primary" id="sendCmd">Send Command</button></div>
+      </div>
+
+      <div class="card">
+        <h2>🪢 Leash (repeating directive)</h2>
+        <label>Directive</label>
+        <input id="leashMsg" value='!followPlayer("Director", 3)' />
+        <label>Re-issue every (ms)</label>
+        <input id="leashInterval" type="number" value="20000" min="2000" step="1000" />
+        <div style="margin-top:10px" class="row">
+          <div><button class="primary" id="attachLeash">Attach Leash</button></div>
+          <div><button class="danger" id="releaseLeash">Release</button></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>📜 Program (step sequence)</h2>
+        <label>Program name</label>
+        <input id="progName" value="patrol-1" />
+        <label>Steps — one per line: <code>message | delayMs</code></label>
+        <textarea id="progSteps">!goToCoordinates(0, 64, 0, 2) | 15000
+!collectBlocks("oak_log", 4) | 20000
+!goToPlayer("Director", 2) | 10000</textarea>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px">
+          <input type="checkbox" id="progLoop" style="width:auto" /> Loop forever
+        </label>
+        <div style="margin-top:10px"><button class="primary" id="startProg">Start Program</button></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Active Leashes</h2>
+        <div id="leashes" class="empty">None</div>
+      </div>
+      <div class="card">
+        <h2>Programs</h2>
+        <div id="programs" class="empty">None</div>
+      </div>
+      <div class="card">
+        <h2>Event Log</h2>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io({ path: window.location.pathname.replace(/director\.html$/, '') + 'socket.io' });
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+function log(msg, cls) {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.prepend(line);
+  while (logEl.childNodes.length > 200) logEl.removeChild(logEl.lastChild);
+}
+
+function agent() { return $('agentSelect').value; }
+
+async function api(path, body) {
+  const opts = body
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    : {};
+  const res = await fetch(path, opts);
+  return res.json().catch(() => ({ success: false, error: 'bad json' }));
+}
+
+// --- agents dropdown (socket push + REST fallback) ---
+function renderAgents(agents) {
+  const sel = $('agentSelect');
+  const cur = sel.value;
+  sel.innerHTML = '';
+  for (const a of agents) {
+    const opt = document.createElement('option');
+    opt.value = a.name;
+    opt.textContent = `${a.name} ${a.in_game ? '(in game)' : '(offline)'}`;
+    sel.appendChild(opt);
+  }
+  if (cur && agents.some(a => a.name === cur)) sel.value = cur;
+  $('agentHint').textContent = agents.length
+    ? `${agents.length} agent(s) registered`
+    : 'No agents yet — start one from the dashboard.';
+}
+socket.on('agents-status', renderAgents);
+api('/api/agents').then(r => { if (r.success) renderAgents(r.agents); });
+
+// --- command ---
+$('sendCmd').onclick = async () => {
+  const message = $('cmdInput').value.trim();
+  if (!message) return;
+  const r = await api('/api/director/command', { agent: agent(), message });
+  log(r.success ? `command → ${agent()}: ${message}` : `command failed: ${r.error}`, r.success ? 'ok' : 'err');
+};
+$('cmdInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('sendCmd').click(); });
+document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => { $('cmdInput').value = b.dataset.cmd; });
+
+// --- leash ---
+$('attachLeash').onclick = async () => {
+  const r = await api('/api/director/leash', {
+    agent: agent(), message: $('leashMsg').value.trim(), intervalMs: Number($('leashInterval').value),
+  });
+  log(r.success ? `leash attached to ${agent()}` : `leash failed: ${r.error}`, r.success ? 'ok' : 'err');
+  refresh();
+};
+$('releaseLeash').onclick = async () => {
+  const r = await api('/api/director/unleash', { agent: agent() });
+  log(r.success ? `leash released from ${agent()}` : `unleash: ${r.error}`, r.success ? 'ok' : 'err');
+  refresh();
+};
+
+// --- program ---
+$('startProg').onclick = async () => {
+  const steps = $('progSteps').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const [message, delay] = l.split('|').map(s => s.trim());
+    return { message, delayMs: Number(delay) || 5000 };
+  });
+  const r = await api('/api/director/program', {
+    agent: agent(), name: $('progName').value.trim(), steps, loop: $('progLoop').checked,
+  });
+  log(r.success ? `program ${r.program.name} started (${steps.length} steps)` : `program failed: ${r.error}`, r.success ? 'ok' : 'err');
+  refresh();
+};
+
+// --- state rendering ---
+function renderLeashes(leashes) {
+  const el = $('leashes');
+  if (!leashes.length) { el.className = 'empty'; el.textContent = 'None'; return; }
+  el.className = '';
+  el.innerHTML = leashes.map(l => `
+    <div class="item">
+      <div class="top"><b>${l.agentName}</b><span class="pill running">leashed</span></div>
+      <div class="meta"><code>${l.message}</code> every ${l.intervalMs}ms · issued ${l.issued}x · last ${l.lastOk ? 'OK' : 'FAIL'}</div>
+      <div style="margin-top:8px"><button class="sm danger" onclick="releaseFor('${l.agentName}')">Release</button></div>
+    </div>`).join('');
+}
+window.releaseFor = async (name) => {
+  await api('/api/director/unleash', { agent: name });
+  refresh();
+};
+
+function renderPrograms(programs) {
+  const el = $('programs');
+  if (!programs.length) { el.className = 'empty'; el.textContent = 'None'; return; }
+  el.className = '';
+  el.innerHTML = programs.map(p => `
+    <div class="item">
+      <div class="top"><b>${p.name}</b> <span class="pill ${p.status}">${p.status}</span></div>
+      <div class="meta">agent <code>${p.agentName}</code> · step ${Math.min(p.index, p.totalSteps)}/${p.totalSteps}${p.loop ? ' · looping (' + p.cycles + ' cycles)' : ''}${p.lastError ? ' · <span style="color:var(--bad)">' + p.lastError + '</span>' : ''}</div>
+      ${p.status === 'running' ? `<div style="margin-top:8px"><button class="sm danger" onclick="stopProg('${p.id}')">Stop</button></div>` : ''}
+    </div>`).join('');
+}
+window.stopProg = async (pid) => {
+  await api('/api/director/program/stop', { id: pid });
+  refresh();
+};
+
+async function refresh() {
+  const [progs, leashes] = await Promise.all([
+    api('/api/director/programs'),
+    api('/api/director/leashes'),
+  ]);
+  if (progs.success) renderPrograms(progs.programs);
+  if (leashes.success) renderLeashes(leashes.leashes);
+}
+
+socket.on('director-event', (e) => {
+  if (e.type === 'command') log(`event: command → ${e.agentName} ${e.ok ? 'OK' : 'FAIL: ' + e.error}`, e.ok ? 'ok' : 'err');
+  refresh();
+});
+socket.on('connect', () => { log('connected to mindserver', 'ok'); refresh(); });
+socket.on('disconnect', () => log('disconnected from mindserver', 'err'));
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

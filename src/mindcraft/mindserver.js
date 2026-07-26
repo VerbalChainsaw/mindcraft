@@ -2,9 +2,14 @@ import { Server } from 'socket.io';
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import * as mindcraft from './mindcraft.js';
 import { readFileSync } from 'fs';
+import * as mindcraft from './mindcraft.js';
+import { hasKey } from '../utils/keys.js';
+import { loadLauncherConfig, writeLauncherConfig, getLauncherConfigPath } from './launcher-config.js';
+import { swarm, defaultBrainHook } from './swarm/swarm.js';
+import { director } from './director.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Mindserver is:
@@ -16,8 +21,57 @@ let io;
 let server;
 const agent_connections = {};
 const agent_listeners = [];
+let mindserverHost = 'localhost';
+let mindserverPort = 8080;
 
 const settings_spec = JSON.parse(readFileSync(path.join(__dirname, 'public/settings_spec.json'), 'utf8'));
+
+const LAUNCHER_KEY_PROVIDERS = [
+  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'XAI_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'MISTRAL_API_KEY',
+  'REPLICATE_API_KEY',
+  'GROQCLOUD_API_KEY',
+  'HUGGINGFACE_API_KEY',
+  'NOVITA_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GHLF_API_KEY',
+  'HYPERBOLIC_API_KEY',
+  'QWEN_API_KEY',
+  'MERCURY_API_KEY',
+  'VLLM_API_KEY',
+  'CEREBRAS_API_KEY',
+];
+
+function getLauncherConfigSummary() {
+  const config = loadLauncherConfig({}, getLauncherConfigPath());
+  return {
+    ...config,
+    runtime: {
+      host: mindserverHost,
+      port: mindserverPort,
+    },
+  };
+}
+
+function hasProviderKey(name) {
+  return Boolean(hasKey(name));
+}
+
+function getProviderKeyStatus() {
+  const out = {};
+  for (const provider of LAUNCHER_KEY_PROVIDERS) {
+    out[provider] = Boolean(hasProviderKey(provider));
+  }
+  return out;
+}
+
+function safeMergeLauncherConfig(body = {}) {
+  return writeLauncherConfig(body, getLauncherConfigPath());
+}
 
 class AgentConnection {
     constructor(settings, viewer_port) {
@@ -52,7 +106,202 @@ export function createMindServer(host_public = false, port = 8080) {
 
     // Serve static files
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    app.use(express.json({ limit: '1mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '1mb' }));
     app.use(express.static(path.join(__dirname, 'public')));
+
+    // Launcher configuration APIs (for Simple Setup UI)
+    app.get('/api/launcher-config', (_req, res) => {
+      res.json({
+        success: true,
+        config: getLauncherConfigSummary(),
+        providerKeys: getProviderKeyStatus(),
+      });
+    });
+
+    app.post('/api/launcher-config', (req, res) => {
+      try {
+        const updated = safeMergeLauncherConfig(req.body);
+        res.json({
+          success: true,
+          config: {
+            ...updated,
+            runtime: {
+              host: mindserverHost,
+              port: mindserverPort,
+            },
+          },
+        });
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: String(error.message || error),
+        });
+      }
+    });
+
+    app.get('/api/key-status', (_req, res) => {
+      res.json({
+        success: true,
+        providerKeys: getProviderKeyStatus(),
+      });
+    });
+
+    // ----- Realtime agent swarm (angry helpers) -----
+    // GET  /api/swarm            -> list helpers
+    // POST /api/swarm/deploy      -> { name, command, cwd, location, host, cycleIntervalMs, brain }
+    // POST /api/swarm/recall/:id  -> remove a helper
+    // POST /api/swarm/relocate/:id -> { cwd, location, host }
+    // POST /api/swarm/pulse/:id   -> mark a helper alive (manual heartbeat)
+    app.get('/api/swarm', (_req, res) => {
+      res.json({ success: true, helpers: swarm.list(), running: true });
+    });
+
+    app.post('/api/swarm/deploy', (req, res) => {
+      try {
+        const h = swarm.deploy(req.body || {});
+        res.json({ success: true, helper: h.toJSON() });
+      } catch (error) {
+        res.status(400).json({ success: false, error: String(error && error.message ? error.message : error) });
+      }
+    });
+
+    app.post('/api/swarm/recall/:id', (req, res) => {
+      const r = swarm.recall(req.params.id);
+      if (!r.ok) return res.status(404).json({ success: false, error: r.error });
+      res.json({ success: true, id: req.params.id });
+    });
+
+    app.post('/api/swarm/relocate/:id', (req, res) => {
+      const r = swarm.relocate(req.params.id, req.body || {});
+      if (!r.ok) return res.status(404).json({ success: false, error: r.error });
+      res.json({ success: true, id: req.params.id, ...r });
+    });
+
+    app.post('/api/swarm/pulse/:id', (req, res) => {
+      const r = swarm.pulse(req.params.id);
+      if (!r.ok) return res.status(404).json({ success: false, error: r.error });
+      res.json({ success: true, id: req.params.id, ageMs: r.ageMs });
+    });
+
+    // ----- Director: program / direct / leash agents via REST -----
+    // POST /api/director/command          -> { agent, message }
+    // GET  /api/director/programs         -> list programs
+    // POST /api/director/program          -> { agent, name, steps:[{message,delayMs}], loop }
+    // POST /api/director/program/stop     -> { id } or { agent }
+    // GET  /api/director/leashes          -> list leashes
+    // POST /api/director/leash            -> { agent, message, intervalMs }
+    // POST /api/director/unleash          -> { agent }
+    app.post('/api/director/command', (req, res) => {
+      const { agent, message } = req.body || {};
+      const r = director.command(agent, message);
+      res.status(r.ok ? 200 : 400).json({ success: r.ok, error: r.error || null });
+    });
+
+    app.get('/api/director/programs', (_req, res) => {
+      res.json({ success: true, programs: director.listPrograms() });
+    });
+
+    app.post('/api/director/program', (req, res) => {
+      const { agent, name, steps, loop } = req.body || {};
+      const r = director.startProgram({ agentName: agent, name, steps, loop });
+      res.status(r.ok ? 200 : 400).json({ success: r.ok, program: r.program || null, error: r.error || null });
+    });
+
+    app.post('/api/director/program/stop', (req, res) => {
+      const { id, agent } = req.body || {};
+      const r = director.stopProgram(id || agent);
+      res.status(r.ok ? 200 : 404).json({ success: r.ok, stopped: r.stopped || [], error: r.error || null });
+    });
+
+    app.get('/api/director/leashes', (_req, res) => {
+      res.json({ success: true, leashes: director.listLeashes() });
+    });
+
+    app.post('/api/director/leash', (req, res) => {
+      const { agent, message, intervalMs } = req.body || {};
+      const r = director.leash(agent, message, intervalMs);
+      res.status(r.ok ? 200 : 400).json({ success: r.ok, leash: r.leash || null, error: r.error || null });
+    });
+
+    app.post('/api/director/unleash', (req, res) => {
+      const { agent } = req.body || {};
+      const r = director.unleash(agent);
+      res.status(r.ok ? 200 : 404).json({ success: r.ok, error: r.error || null });
+    });
+
+    // Agents summary for tooling (same data the dashboard sees via socket).
+    app.get('/api/agents', (_req, res) => {
+      const agents = [];
+      for (const agentName in agent_connections) {
+        const conn = agent_connections[agentName];
+        agents.push({
+          name: agentName,
+          in_game: conn.in_game,
+          viewerPort: conn.viewer_port,
+          socket_connected: !!conn.socket,
+        });
+      }
+      res.json({ success: true, agents });
+    });
+
+    // Restart the launcher so changed settings in launcher-config.json take effect.
+    // We respawn the current entrypoint (default main.js) preserving config path + cwd,
+    // then shut the current process down after the child has taken over the port.
+    let restarting = false;
+    app.post('/api/restart', (_req, res) => {
+      if (restarting) {
+        res.json({ success: false, error: 'Restart already in progress' });
+        return;
+      }
+      restarting = true;
+      // Resolve the entrypoint reliably regardless of how this process was
+      // launched (npm start, node main.js, or stdin-eval during tests):
+      //   1. explicit LAUNCHER_ENTRY env (set by the .bat / wrapper)
+      //   2. argv[1] if it looks like a script path (ends in .js)
+      //   3. fall back to main.js in the current working directory
+      // The remaining argv elements are forwarded as-is. This avoids WSL/
+      // Windows path-translation bugs and works even when process.argv[1]
+      // is not a real script file.
+      const forwardedArgs = process.argv.slice(2);
+      let entry;
+      if (process.env.LAUNCHER_ENTRY) {
+        entry = process.env.LAUNCHER_ENTRY;
+      } else if (process.argv[1] && /\.js$/.test(process.argv[1])) {
+        entry = process.argv[1];
+      } else {
+        entry = path.join(process.cwd(), 'main.js');
+      }
+      const childArgs = [entry, ...forwardedArgs];
+
+      // Close this server first so the child can bind the port cleanly.
+      let closed = false;
+      const doClose = () => new Promise((resolve) => {
+        if (closed) return resolve();
+        closed = true;
+        try { server.close(() => resolve()); } catch { resolve(); }
+      });
+
+      // Respond before shutting down so the UI gets a clean ack.
+      res.json({ success: true, message: 'Restarting launcher' });
+
+      doClose().then(() => {
+        const child = spawn(process.execPath, childArgs, {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            LAUNCHER_RESTARTING: '1',
+          },
+          // Detach so the child survives this process exiting on Windows
+          // (otherwise the OS terminates the child with the parent).
+          detached: true,
+          stdio: 'inherit',
+        });
+        child.unref();
+        // Hand off and exit; the detached child runs its own server on the same port.
+        setTimeout(() => process.exit(0), 400);
+      });
+    });
 
     // Texture proxy: resolve item/block textures using minecraft-assets with version fallback
     app.get('/assets/item/:agent/:name.png', async (req, res) => {
@@ -242,6 +491,62 @@ export function createMindServer(host_public = false, port = 8080) {
             }
         });
 
+        // ----- Realtime agent swarm control over Socket.io -----
+        socket.on('swarm-list', (callback) => {
+            callback({ success: true, helpers: swarm.list() });
+        });
+        socket.on('swarm-deploy', (spec, callback) => {
+            try {
+                const h = swarm.deploy(spec || {});
+                callback({ success: true, helper: h.toJSON() });
+            } catch (e) {
+                callback({ success: false, error: String(e && e.message ? e.message : e) });
+            }
+        });
+        socket.on('swarm-recall', (id, callback) => {
+            const r = swarm.recall(id);
+            callback(r.ok ? { success: true, id } : { success: false, error: r.error });
+        });
+        socket.on('swarm-relocate', (id, opts, callback) => {
+            const r = swarm.relocate(id, opts || {});
+            callback(r.ok ? { success: true, id, ...r } : { success: false, error: r.error });
+        });
+        socket.on('swarm-pulse', (id, callback) => {
+            const r = swarm.pulse(id);
+            callback(r.ok ? { success: true, id, ageMs: r.ageMs } : { success: false, error: r.error });
+        });
+
+        // ----- Director control over Socket.io -----
+        socket.on('director-command', (agent, message, callback) => {
+            const r = director.command(agent, message);
+            if (callback) callback({ success: r.ok, error: r.error || null });
+        });
+        socket.on('director-program', (spec, callback) => {
+            const r = director.startProgram({
+                agentName: spec?.agent, name: spec?.name, steps: spec?.steps, loop: spec?.loop,
+            });
+            if (callback) callback({ success: r.ok, program: r.program || null, error: r.error || null });
+        });
+        socket.on('director-program-stop', (idOrAgent, callback) => {
+            const r = director.stopProgram(idOrAgent);
+            if (callback) callback({ success: r.ok, stopped: r.stopped || [], error: r.error || null });
+        });
+        socket.on('director-leash', (spec, callback) => {
+            const r = director.leash(spec?.agent, spec?.message, spec?.intervalMs);
+            if (callback) callback({ success: r.ok, leash: r.leash || null, error: r.error || null });
+        });
+        socket.on('director-unleash', (agent, callback) => {
+            const r = director.unleash(agent);
+            if (callback) callback({ success: r.ok, error: r.error || null });
+        });
+        socket.on('director-state', (callback) => {
+            if (callback) callback({
+                success: true,
+                programs: director.listPrograms(),
+                leashes: director.listLeashes(),
+            });
+        });
+
         socket.on('shutdown', () => {
             console.log('Shutting down');
             for (let agentName in agent_connections) {
@@ -276,13 +581,39 @@ export function createMindServer(host_public = false, port = 8080) {
         });
     });
 
+    const host = host_public ? '0.0.0.0' : 'localhost';
+    mindserverHost = host;
+    mindserverPort = port;
     if (host_public) {
-        console.log('Public hosting not supported yet. Using localhost.');
+        console.log('Public hosting enabled: binding 0.0.0.0. This server is LAN reachable.');
     }
-    const host = 'localhost';
     server.listen(port, host, () => {
         console.log(`MindServer running on port ${port} on host ${host}`);
     });
+
+    // Start the realtime agent swarm (heartbeat + cycle + mobility).
+    swarm.setBrainHook(defaultBrainHook);
+    swarm.start();
+    swarm.on('change', () => {
+        try { io.emit('swarm-update', swarm.list()); } catch { /* io may not be ready */ }
+    });
+    swarm.on('deploy', (h) => { try { io.emit('swarm-event', { type: 'deploy', helper: h }); } catch {} });
+    swarm.on('recall', (e) => { try { io.emit('swarm-event', { type: 'recall', ...e }); } catch {} });
+    swarm.on('relocate', (e) => { try { io.emit('swarm-event', { type: 'relocate', ...e }); } catch {} });
+    swarm.on('stale', (e) => { try { io.emit('swarm-event', { type: 'stale', ...e }); } catch {} });
+
+    // Wire director transport: route messages through the agent's socket,
+    // exactly like the dashboard's chat box does.
+    director.setSender((agentName, message) => {
+        const conn = agent_connections[agentName];
+        if (!conn) return { ok: false, error: `agent '${agentName}' not registered` };
+        if (!conn.socket) return { ok: false, error: `agent '${agentName}' has no live socket` };
+        conn.socket.emit('send-message', { from: 'Director', message });
+        return { ok: true };
+    });
+    director.on('command', (e) => { try { io.emit('director-event', { type: 'command', ...e }); } catch {} });
+    director.on('program', (e) => { try { io.emit('director-event', { type: 'program', ...e }); } catch {} });
+    director.on('leash', (e) => { try { io.emit('director-event', { type: 'leash', ...e }); } catch {} });
 
     return server;
 }
