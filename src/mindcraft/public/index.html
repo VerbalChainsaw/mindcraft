@@ -445,7 +445,7 @@
     </div>
 
     <script>
-        const socket = io({ path: window.location.pathname + 'socket.io' })
+        const socket = io({ path: window.location.pathname.replace(/[^/]*$/, '') + 'socket.io' })
         const agentsDiv = document.getElementById('agents');
 
         // --- Health banner: explains WHY bots aren't working ---

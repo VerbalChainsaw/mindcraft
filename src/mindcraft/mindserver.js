@@ -141,12 +141,8 @@ export function createMindServer(host_public = false, port = 8080) {
       }
     });
 
-    app.get('/api/key-status', (_req, res) => {
-      res.json({
-        success: true,
-        providerKeys: getProviderKeyStatus(),
-      });
-    });
+    // NOTE: /api/key-status was removed as dead surface — key presence is
+    // reported by /api/launcher-config, /api/keys responses, and /api/health.
 
     // Save API keys from the setup wizard. Values are written to keys.json
     // (created from scratch if missing); presence-only is ever reported back.
@@ -540,13 +536,15 @@ export function createMindServer(host_public = false, port = 8080) {
             const agent = agent_connections[agentName];
             if (agent) {
                 agent.setSettings(settings);
-                agent.socket.emit('restart-agent');
+                if (agent.socket) agent.socket.emit('restart-agent');
             }
         });
 
         socket.on('restart-agent', (agentName) => {
             console.log(`Restarting agent: ${agentName}`);
-            agent_connections[agentName].socket.emit('restart-agent');
+            const conn = agent_connections[agentName];
+            if (conn && conn.socket) conn.socket.emit('restart-agent');
+            else console.warn(`Cannot restart '${agentName}': not registered or no live socket`);
         });
 
         socket.on('stop-agent', (agentName) => {
@@ -644,8 +642,8 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
 		socket.on('send-message', (agentName, data) => {
-			if (!agent_connections[agentName]) {
-				console.warn(`Agent ${agentName} not in game, cannot send message via MindServer.`);
+			if (!agent_connections[agentName] || !agent_connections[agentName].socket) {
+				console.warn(`Agent ${agentName} not in game or no socket, cannot send message via MindServer.`);
                 return;
 			}
 			try {

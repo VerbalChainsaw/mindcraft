@@ -236,8 +236,13 @@ async function launchProfile(profilePath, baseSettings) {
   }
 
   const hostPublic = normalizeBoolean(launcherConfig.mindserver_host_public, false);
+  // Honor port_scan_start when it differs from the mindserver port; otherwise
+  // scan starting at the configured mindserver port.
+  const scanBase = launcherConfig.port_scan_start && launcherConfig.port_scan_start !== 8080
+    ? launcherConfig.port_scan_start
+    : settings.mindserver_port;
   const resolvedPort = await resolveFreePort(
-    settings.mindserver_port,
+    scanBase,
     launcherConfig.port_scan_max,
   );
 
@@ -264,4 +269,7 @@ async function launchProfile(profilePath, baseSettings) {
   for (const profile of profilesToLaunch) {
     await launchProfile(profile, startupSettings);
   }
-})();
+})().catch((err) => {
+  console.error('[launcher] Fatal startup error:', err && err.message ? err.message : err);
+  process.exit(1);
+});

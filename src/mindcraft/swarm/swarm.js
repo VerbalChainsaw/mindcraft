@@ -77,13 +77,6 @@ export class Helper {
 
   async tick() {
     this.cycleCount += 1;
-    const now = Date.now();
-    if (this.isStale(now)) {
-      this.staleCycles += 1;
-      this.status = 'stale';
-    } else {
-      this.status = 'active';
-    }
     try {
       // Optional brain: consult LLM (guarded). Brain may return an override
       // command or a decision object; we pass it through to the executor.
@@ -119,16 +112,16 @@ export class Helper {
     if (this._cycleTimer) return;
     this.status = 'active';
     this.markAlive();
-    // Heartbeat: just refresh lastBeat on a steady cadence (proves liveness
-    // even if the cycle is slow/blocked).
-    this._heartbeatTimer = setInterval(() => this.markAlive(), this.heartbeatIntervalMs);
+    // NOTE: no self-ping heartbeat — lastBeat is refreshed ONLY by real
+    // liveness proof (a successful tick, or an external pulse via the API).
+    // A self-ping timer would defeat the watchdog entirely.
     this._cycleTimer = setInterval(() => {
       this.tick().catch(() => {});
     }, this.cycleIntervalMs);
   }
 
   stop() {
-    if (this._heartbeatTimer) clearInterval(this._heartbeatTimer);
+    if (this._heartbeatTimer) clearInterval(this._heartbeatTimer); // legacy safety
     if (this._cycleTimer) clearInterval(this._cycleTimer);
     this._heartbeatTimer = null;
     this._cycleTimer = null;
@@ -193,8 +186,15 @@ export class Swarm extends EventEmitter {
     this._running = false;
   }
 
-  setExecutor(fn) { this._executor = fn; }
-  setBrainHook(fn) { this._brainHook = fn; }
+  setExecutor(fn) {
+    this._executor = fn;
+    for (const h of this.helpers.values()) h.setExecutor(fn);
+  }
+  setBrainHook(fn) {
+    this._brainHook = fn;
+    // Propagate to already-deployed helpers so call order never matters.
+    for (const h of this.helpers.values()) h._brainHook = fn;
+  }
 
   deploy(spec = {}) {
     const h = new Helper(spec);
@@ -226,11 +226,6 @@ export class Swarm extends EventEmitter {
     return r;
   }
 
-  get(id) {
-    const h = this.helpers.get(id);
-    return h ? h.toJSON() : null;
-  }
-
   list() {
     return Array.from(this.helpers.values()).map((h) => h.toJSON());
   }
@@ -240,7 +235,7 @@ export class Swarm extends EventEmitter {
     if (!h) return { ok: false, error: 'not found' };
     h.markAlive();
     this.emit('change');
-    return { ok: true, id, ageMs: h.ageMs };
+    return { ok: true, id, ageMs: Date.now() - h.lastBeat };
   }
 
   // Watchdog: marks stale helpers, auto-recalls after maxStaleCycles.
@@ -313,7 +308,7 @@ async function defaultExecutor({ helper, brain } = {}) {
       }, Math.max(2000, Math.floor(helper.cycleIntervalMs * 0.8)));
       proc.stdout.on('data', (d) => { stdout += String(d); });
       proc.stderr.on('data', (d) => { stderr += String(d); });
-      proc.on('error', (e) => close({ ok: false, error: String(e.message || e), stdout, stderr }));
+      proc.on('error', (e) => { clearTimeout(to); close({ ok: false, error: String(e.message || e), stdout, stderr }); });
       proc.on('close', (code) => {
         clearTimeout(to);
         close({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() });

@@ -127,6 +127,37 @@ check('setup wizard has key form', setupPage.includes('saveKeyBtn') && setupPage
 const idx2 = await (await fetch(base + '/')).text();
 check('dashboard has health banner', idx2.includes('healthBanner') && idx2.includes('api/health'));
 
+// 14. audit regressions — swarm staleness is now real (no self-ping heartbeat)
+const { swarm } = await import('./src/mindcraft/swarm/swarm.js');
+const helper = swarm.deploy({ name: 'audit-h', command: 'echo hi', cycleIntervalMs: 60000, staleAfterMs: 100, maxStaleCycles: 999 });
+await new Promise(rs => setTimeout(rs, 350));
+check('helper goes stale without liveness proof', helper.isStale() === true);
+const pr = swarm.pulse(helper.id);
+check('pulse returns numeric ageMs (was undefined bug)', pr.ok && typeof pr.ageMs === 'number' && pr.ageMs >= 0);
+check('pulse refreshes staleness', helper.isStale() === false);
+swarm.recall(helper.id);
+check('swarm.get dead method removed', typeof swarm.get === 'undefined');
+
+// 15. audit regressions — program finishes immediately after last step (no idle timer)
+const t0 = Date.now();
+r = await api('/api/director/program', {
+  agent: 'andy', name: 'fast-finish',
+  steps: [{ message: 'only-step', delayMs: 5000 }],
+});
+await new Promise(rs => setTimeout(rs, 300));
+r = await api('/api/director/programs');
+const fast = r.json.programs.find(p => p.name === 'fast-finish');
+check('single-step program done immediately (not after delayMs)', fast && fast.status === 'done' && (Date.now() - t0) < 2000, JSON.stringify(fast));
+check('program exposes finishedAt', fast && typeof fast.finishedAt === 'number');
+
+// 16. audit regressions — dead /api/key-status removed
+r = await api('/api/key-status');
+check('/api/key-status removed (404)', r.status === 404);
+
+// 17. null-socket robustness: send-message socket event for unregistered agent must not crash server
+r = await api('/api/health');
+check('server alive after all audits', r.status === 200);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 director.shutdown();
 server.close(() => process.exit(fail ? 1 : 0));

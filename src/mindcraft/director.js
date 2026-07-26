@@ -90,6 +90,7 @@ export class Director extends EventEmitter {
         prog.index = 0;
       } else {
         prog.status = 'done';
+        prog.finishedAt = Date.now();
         prog._timer = null;
         this.emit('program', { type: 'done', program: this.programJSON(prog) });
         return;
@@ -101,6 +102,15 @@ export class Director extends EventEmitter {
     if (!r.ok) prog.lastError = r.error || 'dispatch failed';
     this.emit('program', { type: 'step', program: this.programJSON(prog) });
     prog.index += 1;
+    // If this was the last step of a non-looping program, finish immediately
+    // after its delay elapses is unnecessary — mark done now (no idle timer).
+    if (!prog.loop && prog.index >= prog.steps.length) {
+      prog.status = 'done';
+      prog.finishedAt = Date.now();
+      prog._timer = null;
+      this.emit('program', { type: 'done', program: this.programJSON(prog) });
+      return;
+    }
     prog._timer = setTimeout(() => this._runStep(prog), step.delayMs);
   }
 
@@ -110,7 +120,7 @@ export class Director extends EventEmitter {
       if (prog.id === idOrAgent || prog.agentName === idOrAgent) {
         if (prog._timer) clearTimeout(prog._timer);
         prog._timer = null;
-        if (prog.status === 'running') prog.status = 'stopped';
+        if (prog.status === 'running') { prog.status = 'stopped'; prog.finishedAt = Date.now(); }
         stopped.push(prog.id);
       }
     }
@@ -120,10 +130,10 @@ export class Director extends EventEmitter {
   }
 
   listPrograms() {
-    // prune finished programs older than 10 min
+    // prune finished programs 10 min after they FINISHED (not started)
     const cutoff = Date.now() - 10 * 60 * 1000;
     for (const [pid, p] of this.programs) {
-      if (p.status !== 'running' && p.startedAt < cutoff) this.programs.delete(pid);
+      if (p.status !== 'running' && (p.finishedAt || p.startedAt) < cutoff) this.programs.delete(pid);
     }
     return Array.from(this.programs.values()).map((p) => this.programJSON(p));
   }
@@ -132,7 +142,7 @@ export class Director extends EventEmitter {
     return {
       id: p.id, name: p.name, agentName: p.agentName, status: p.status,
       loop: p.loop, index: p.index, totalSteps: p.steps.length,
-      cycles: p.cycles, startedAt: p.startedAt,
+      cycles: p.cycles, startedAt: p.startedAt, finishedAt: p.finishedAt || null,
       lastStep: p.lastStep, lastError: p.lastError,
       steps: p.steps,
     };
