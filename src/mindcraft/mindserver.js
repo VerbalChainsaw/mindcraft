@@ -74,6 +74,13 @@ function safeMergeLauncherConfig(body = {}) {
   return writeLauncherConfig(body, getLauncherConfigPath());
 }
 
+function resolveLauncherEntry() {
+  const candidate = process.env.LAUNCHER_ENTRY
+    || (process.argv[1] && /\.js$/.test(process.argv[1]) ? process.argv[1] : null)
+    || path.join(process.cwd(), 'main.js');
+  return path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate);
+}
+
 class AgentConnection {
     constructor(settings, viewer_port) {
         this.socket = null;
@@ -373,14 +380,7 @@ export function createMindServer(host_public = false, port = 8080) {
       // Windows path-translation bugs and works even when process.argv[1]
       // is not a real script file.
       const forwardedArgs = process.argv.slice(2);
-      let entry;
-      if (process.env.LAUNCHER_ENTRY) {
-        entry = process.env.LAUNCHER_ENTRY;
-      } else if (process.argv[1] && /\.js$/.test(process.argv[1])) {
-        entry = process.argv[1];
-      } else {
-        entry = path.join(process.cwd(), 'main.js');
-      }
+      const entry = resolveLauncherEntry();
       const childArgs = [entry, ...forwardedArgs];
 
       // Close this server first so the child can bind the port cleanly.
@@ -560,8 +560,15 @@ export function createMindServer(host_public = false, port = 8080) {
                 console.warn(`Agent ${agentName} tried to send a message but is not logged in`);
                 return;
             }
-            console.log(`${curAgentName} sending message to ${agentName}: ${json.message}`);
-            agent_connections[agentName].socket.emit('chat-message', curAgentName, json);
+            const conn = agent_connections[agentName];
+            if (!conn || !conn.socket) {
+                console.warn(`Agent ${agentName} has no live socket, cannot send message`);
+                return;
+            }
+            const senderName = curAgentName || json?.from || 'client';
+            const msg = typeof json?.message === 'string' ? json.message : '';
+            console.log(`${senderName} sending message to ${agentName}: ${msg}`);
+            conn.socket.emit('chat-message', senderName, json);
         });
 
         socket.on('set-agent-settings', (agentName, settings) => {
@@ -751,6 +758,7 @@ function agentsStatusUpdate(socket) {
 
 let listenerInterval = null;
 function addListener(listener_socket) {
+    if (!listener_socket || agent_listeners.includes(listener_socket)) return;
     agent_listeners.push(listener_socket);
     if (agent_listeners.length === 1) {
         listenerInterval = setInterval(async () => {
@@ -758,9 +766,23 @@ function addListener(listener_socket) {
             for (let agentName in agent_connections) {
                 let agent = agent_connections[agentName];
                 if (agent.in_game) {
+                    if (!agent.socket || typeof agent.socket.emit !== 'function') {
+                        states[agentName] = { error: 'agent disconnected' };
+                        continue;
+                    }
                     try {
                         const state = await new Promise((resolve) => {
-                            agent.socket.emit('get-full-state', (s) => resolve(s));
+                            const done = (payload) => resolve(payload);
+                            const timer = setTimeout(() => resolve({ error: 'state request timeout' }), 1200);
+                            try {
+                                agent.socket.emit('get-full-state', (s) => {
+                                  clearTimeout(timer);
+                                  done(s);
+                                });
+                            } catch (error) {
+                              clearTimeout(timer);
+                              done({ error: String(error) });
+                            }
                         });
                         states[agentName] = state;
                     } catch (e) {
@@ -769,14 +791,21 @@ function addListener(listener_socket) {
                 }
             }
             for (let listener of agent_listeners) {
-                listener.emit('state-update', states);
+                if (listener && listener.connected) {
+                    try {
+                        listener.emit('state-update', states);
+                    } catch { /* ignore */ }
+                }
             }
         }, 1000);
     }
 }
 
 function removeListener(listener_socket) {
-    agent_listeners.splice(agent_listeners.indexOf(listener_socket), 1);
+    const idx = agent_listeners.indexOf(listener_socket);
+    if (idx >= 0) {
+        agent_listeners.splice(idx, 1);
+    }
     if (agent_listeners.length === 0) {
         clearInterval(listenerInterval);
         listenerInterval = null;

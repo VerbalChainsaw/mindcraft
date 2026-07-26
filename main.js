@@ -56,8 +56,9 @@ function normalizeNumber(value, fallback) {
 function normalizeBoolean(value, fallback) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
-    if (value === 'true') return true;
-    if (value === 'false') return false;
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
   }
   return fallback;
 }
