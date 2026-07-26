@@ -381,6 +381,8 @@
     </div>
     <div id="agents"></div>
 
+    <div id="healthBanner" style="display:none; margin: 10px 0; padding: 12px 16px; border-radius: 8px; border: 1px solid #d29922; background: rgba(210,153,34,.08); color: #e3b341; font-size: 13px; line-height: 1.6;"></div>
+
     <div class="page-footer">
         <div>
             <button id="openCreateAgentBtn" class="start-btn">New Agent</button>
@@ -445,6 +447,29 @@
     <script>
         const socket = io({ path: window.location.pathname + 'socket.io' })
         const agentsDiv = document.getElementById('agents');
+
+        // --- Health banner: explains WHY bots aren't working ---
+        async function refreshHealth() {
+            try {
+                const res = await fetch('api/health');
+                const h = await res.json();
+                const banner = document.getElementById('healthBanner');
+                if (!h.success) return;
+                if (h.ok) { banner.style.display = 'none'; return; }
+                banner.style.display = 'block';
+                banner.textContent = '';
+                const title = document.createElement('b');
+                title.textContent = '⚠ Not ready yet — fix these to get your bot in-game:';
+                banner.appendChild(title);
+                for (const p of h.problems) {
+                    const line = document.createElement('div');
+                    line.textContent = '• ' + p;
+                    banner.appendChild(line);
+                }
+            } catch { /* server down; msStatus badge already covers that */ }
+        }
+        refreshHealth();
+        setInterval(refreshHealth, 7000);
         let settingsSpec = {};
         let profileData = null;
         const agentSettings = {};

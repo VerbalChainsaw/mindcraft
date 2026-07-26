@@ -98,6 +98,35 @@ check('/api/agents responds', r.status === 200 && Array.isArray(r.json.agents));
 r = await api('/api/swarm');
 check('swarm API intact', r.status === 200 && r.json.success);
 
+// 11. health endpoint
+r = await api('/api/health');
+check('/api/health responds', r.status === 200 && r.json.success);
+check('health reports problems array', Array.isArray(r.json.problems));
+check('health flags missing MC server', r.json.checks && typeof r.json.checks.minecraftReachable === 'boolean');
+
+// 12. keys endpoint: validation + write + presence + no-leak
+r = await api('/api/keys', {});
+check('keys empty body -> 400', r.status === 400);
+const fsMod = await import('fs');
+const keysPath = new URL('./keys.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const hadKeys = fsMod.existsSync(keysPath);
+const backup = hadKeys ? fsMod.readFileSync(keysPath, 'utf8') : null;
+r = await api('/api/keys', { OPENAI_API_KEY: 'sk-test-verify-123' });
+check('keys save ok', r.status === 200 && r.json.success);
+check('keys response never echoes value', !JSON.stringify(r.json).includes('sk-test-verify-123'));
+const written = JSON.parse(fsMod.readFileSync(keysPath, 'utf8'));
+check('keys.json actually written', written.OPENAI_API_KEY === 'sk-test-verify-123');
+// restore original state so verification never pollutes real config
+if (hadKeys) fsMod.writeFileSync(keysPath, backup, 'utf8');
+else fsMod.unlinkSync(keysPath);
+check('keys.json restored to pre-test state', fsMod.existsSync(keysPath) === hadKeys);
+
+// 13. setup wizard page carries the key form
+const setupPage = await (await fetch(base + '/setup.html')).text();
+check('setup wizard has key form', setupPage.includes('saveKeyBtn') && setupPage.includes('/api/keys'));
+const idx2 = await (await fetch(base + '/')).text();
+check('dashboard has health banner', idx2.includes('healthBanner') && idx2.includes('api/health'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 director.shutdown();
 server.close(() => process.exit(fail ? 1 : 0));

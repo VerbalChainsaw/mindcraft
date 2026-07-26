@@ -1,0 +1,22 @@
+{
+  "mindserver_port": 8080,
+  "mindserver_host_public": false,
+  "auto_open_ui": true,
+  "auto_start": true,
+  "port_scan_start": 8080,
+  "port_scan_max": 20,
+  "profiles": [
+    "./andy.json"
+  ],
+  "agent_defaults": {
+    "host": "127.0.0.1",
+    "port": 55916,
+    "auth": "offline",
+    "minecraft_version": "auto",
+    "base_profile": "assistant",
+    "init_message": "Respond with hello world and your name",
+    "load_memory": false,
+    "speak": false,
+    "chat_ingame": true
+  }
+}

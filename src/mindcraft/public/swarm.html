@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Swarm Control — MindCraft</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --panel2:#1c2430; --line:#2a3340; --txt:#d6dee8; --muted:#8b97a7; --accent:#f0883e; --good:#3fb950; --bad:#f85149; --warn:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; letter-spacing:.3px; }
+  header .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); padding:2px 8px; border-radius:20px; }
+  .wrap { padding:20px; max-width:1100px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns: 320px 1fr; gap:20px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  input, select, textarea { width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--txt); border-radius:7px; padding:8px 10px; font:inherit; }
+  textarea { min-height:60px; resize:vertical; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  button { cursor:pointer; border:1px solid var(--line); border-radius:7px; padding:9px 12px; font:inherit; background:var(--panel2); color:var(--txt); transition:.15s; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#1a1206; font-weight:600; }
+  button.sm { padding:5px 9px; font-size:12px; }
+  .helpers { display:flex; flex-direction:column; gap:10px; }
+  .helper { border:1px solid var(--line); border-radius:9px; padding:12px; background:var(--panel2); }
+  .helper .top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .helper .name { font-weight:600; }
+  .helper .id { font-size:11px; color:var(--muted); }
+  .pill { font-size:10px; padding:2px 8px; border-radius:20px; border:1px solid var(--line); text-transform:uppercase; letter-spacing:.4px; }
+  .pill.active { color:var(--good); border-color:var(--good); }
+  .pill.stale { color:var(--warn); border-color:var(--warn); }
+  .pill.error { color:var(--bad); border-color:var(--bad); }
+  .pill.stopped { color:var(--muted); }
+  .helper .meta { font-size:12px; color:var(--muted); margin-top:6px; word-break:break-all; }
+  .helper .meta code { color:var(--txt); background:rgba(255,255,255,.05); padding:1px 5px; border-radius:4px; }
+  .helper .actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .beat { height:5px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:8px; }
+  .beat > span { display:block; height:100%; background:var(--good); transition:width .4s; }
+  .heart { color:var(--bad); }
+  .empty { color:var(--muted); font-style:italic; padding:12px; text-align:center; }
+  .hint { font-size:11px; color:var(--muted); margin-top:4px; }
+  .brain { font-size:10px; color:var(--accent); border:1px solid var(--accent); padding:1px 6px; border-radius:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐝 Angry Swarm</h1>
+  <span class="tag">realtime helpers · heartbeat · cycle · mobility</span>
+  <span style="margin-left:auto"><a href="index.html" style="color:var(--muted);text-decoration:none">← Dashboard</a></span>
+</header>
+
+<div class="wrap">
+  <div class="grid">
+    <div class="card">
+      <h2>Deploy Helper</h2>
+      <label>Name</label>
+      <input id="name" placeholder="scout-1" value="scout-1" />
+      <label>Command (runs each cycle at cwd)</label>
+      <textarea id="command">echo "[swarm] scout-1 alive @ $(date)"</textarea>
+      <label>Working dir (cwd) — where it moves to</label>
+      <input id="cwd" value="." placeholder="relative or absolute path" />
+      <div class="row">
+        <div>
+          <label>Location</label>
+          <select id="location">
+            <option value="in-process">in-process</option>
+            <option value="child">child</option>
+            <option value="remote">remote (stub)</option>
+          </select>
+        </div>
+        <div>
+          <label>Cycle (ms)</label>
+          <input id="cycle" type="number" value="15000" min="1000" step="1000" />
+        </div>
+      </div>
+      <label>Heartbeat (ms)</label>
+      <input id="heartbeat" type="number" value="5000" min="1000" step="500" />
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;color:var(--muted);font-size:12px">Optional LLM brain</summary>
+        <label class="hint">Enables a reasoning hook per cycle (uses keys.json / env). Off by default.</label>
+        <div class="row">
+          <div>
+            <label>Provider</label>
+            <select id="brainProvider">
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+              <option value="gemini">gemini</option>
+              <option value="xai">xai</option>
+              <option value="qwen">qwen</option>
+              <option value="openrouter">openrouter</option>
+            </select>
+          </div>
+          <div>
+            <label>Model</label>
+            <input id="brainModel" placeholder="gpt-4o-mini" value="gpt-4o-mini" />
+          </div>
+        </div>
+        <label>Enabled</label>
+        <select id="brainEnabled">
+          <option value="false" selected>false</option>
+          <option value="true">true</option>
+        </select>
+      </details>
+      <button id="deploy" class="primary" style="width:100%;margin-top:14px">🚀 Deploy Helper</button>
+      <p class="hint">Helpers run on a fixed cycle and emit a heartbeat. Stale helpers are auto-recalled after a grace period.</p>
+    </div>
+
+    <div class="card">
+      <h2>Deployed Swarm <span id="count" class="tag" style="margin-left:6px">0</span>
+        <button id="refresh" class="sm" style="float:right">Refresh</button>
+      </h2>
+      <div id="helpers" class="helpers">
+        <div class="empty">No helpers deployed. Deploy one on the left.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  const $ = (id) => document.getElementById(id);
+
+  function beatPct(ageMs, staleAfter) {
+    const pct = Math.max(0, Math.min(100, 100 - (ageMs / staleAfter) * 100));
+    return pct;
+  }
+
+  function render(list) {
+    $('count').textContent = list.length;
+    const box = $('helpers');
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">No helpers deployed. Deploy one on the left.</div>';
+      return;
+    }
+    box.innerHTML = '';
+    for (const h of list) {
+      const el = document.createElement('div');
+      el.className = 'helper';
+      const brain = h.hasBrain ? `<span class="brain">🧠 ${h.brain.provider}</span>` : '';
+      const staleAfter = h.staleAfterMs || 30000;
+      const pct = beatPct(h.ageMs || 0, staleAfter);
+      const heart = h.status === 'stale' ? '💔' : '💚';
+      el.innerHTML = `
+        <div class="top">
+          <div><span class="name">${escapeHtml(h.name)}</span> ${brain}</div>
+          <span class="pill ${h.status}">${h.status}</span>
+        </div>
+        <div class="id">${h.id} · ${h.location}@${h.host}</div>
+        <div class="meta">cwd: <code>${escapeHtml(h.cwd)}</code></div>
+        <div class="meta">cmd: <code>${escapeHtml(h.command)}</code></div>
+        <div class="meta">cycles: ${h.cycleCount} · age: ${Math.round((h.ageMs||0)/1000)}s ${heart}</div>
+        ${h.lastError ? `<div class="meta" style="color:var(--bad)">err: ${escapeHtml(h.lastError)}</div>` : ''}
+        ${h.lastResult && h.lastResult.stdout ? `<div class="meta">out: ${escapeHtml(truncate(h.lastResult.stdout,120))}</div>` : ''}
+        <div class="beat"><span style="width:${pct}%"></span></div>
+        <div class="actions">
+          <button class="sm" onclick="pulse('${h.id}')">♥ Pulse</button>
+          <button class="sm" onclick="relocate('${h.id}')">📦 Relocate</button>
+          <button class="sm" onclick="recall('${h.id}')">✖ Recall</button>
+        </div>`;
+      box.appendChild(el);
+    }
+  }
+
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+
+  async function load() {
+    const r = await fetch('/api/swarm');
+    const j = await r.json();
+    if (j.success) render(j.helpers);
+  }
+
+  window.pulse = async (id) => { await fetch(`/api/swarm/pulse/${id}`, { method:'POST' }); load(); };
+  window.recall = async (id) => { await fetch(`/api/swarm/recall/${id}`, { method:'POST' }); load(); };
+  window.relocate = async (id) => {
+    const cwd = prompt('Relocate helper to cwd:', '.');
+    if (cwd === null) return;
+    await fetch(`/api/swarm/relocate/${id}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cwd }) });
+    load();
+  };
+
+  $('deploy').addEventListener('click', async () => {
+    const enabled = $('brainEnabled').value === 'true';
+    const spec = {
+      name: $('name').value || undefined,
+      command: $('command').value,
+      cwd: $('cwd').value || '.',
+      location: $('location').value,
+      cycleIntervalMs: Number($('cycle').value),
+      heartbeatIntervalMs: Number($('heartbeat').value),
+      brain: enabled ? { provider: $('brainProvider').value, model: $('brainModel').value, enabled: true } : null,
+    };
+    const r = await fetch('/api/swarm/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(spec) });
+    const j = await r.json();
+    if (j.success) { $('name').value = ''; load(); }
+    else alert('Deploy failed: ' + (j.error || 'unknown'));
+  });
+
+  $('refresh').addEventListener('click', load);
+
+  // Live updates
+  socket.on('swarm-update', render);
+  socket.on('swarm-event', (e) => { console.log('swarm event', e); load(); });
+
+  load();
+</script>
+</body>
+</html>

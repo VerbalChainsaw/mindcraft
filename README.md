@@ -35,13 +35,35 @@ Do not connect this bot to public servers with coding enabled. This project allo
 
 2. Download the [latest release](https://github.com/mindcraft-bots/mindcraft/releases/latest) and unzip it, or clone the repository.
 
-3. Rename `keys.example.json` to `keys.json` and fill in your API keys (you only need one). The desired model is set in `andy.json` or other profiles. For other models refer to the table below.
+3. Put your API keys in `keys.json`.
+   - Easiest: double-click `start-mindcraft.bat` and it will copy `keys.example.json` to `keys.json` for you.
+   - Or manually rename and edit `keys.example.json` to `keys.json`.
 
-4. In terminal/command prompt, run `npm install` from the installed directory
+4. One-click launch (Windows):
 
-5. Start a minecraft world and open it to LAN on localhost port `55916`
+   - Double-click `start-mindcraft.bat`
 
-6. Run `node main.js` from the installed directory
+   Or install and run manually:
+
+   - Run `npm install` from the installed directory
+   - Run `node main.js`
+
+5. Configure launch defaults in a user-friendly way:
+
+   - Open [`/setup.html`](/src/mindcraft/public/setup.html) from the dashboard root for a web-based setup wizard.
+   - This writes to `launcher-config.json` with settings like:
+     - Mindserver port + automatic port-scan fallback
+     - Auto-start behavior
+     - Default agent connection profile settings
+     - Simple API-key presence dashboard
+   - You can also edit [`launcher-config.json`](/launcher-config.json) directly.
+   - After saving, click **Restart Launcher** on the setup page to apply changes immediately (the server respawns on the same port; no manual reboot needed).
+
+6. Start a minecraft world and open it to LAN on localhost port `55916` (or set a custom host/port in setup)
+
+7. Configure your bot profile in `andy.json` (or another profile) and `settings.js`.
+
+If you need CLI-free setup and startup, `start-mindcraft.bat` + `setup.html` is the full path for Windows users.
 
 If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](minecollab.md#installation)
 

@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Mindcraft Setup Wizard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #1a1a1a;
+      color: #e8e8e8;
+    }
+    h1, h2 { margin: 0 0 10px 0; }
+    .card {
+      background: #2d2d2d;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 14px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    label {
+      color: #cfcfcf;
+      font-size: 0.9em;
+    }
+    input, textarea {
+      background: #262626;
+      border: 1px solid #555;
+      color: #e8e8e8;
+      border-radius: 4px;
+      padding: 6px;
+    }
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+    .key-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
+    }
+    .key-badge {
+      background: #3a3a3a;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 0.9em;
+    }
+    .key-badge.ok { color: #7ee08a; }
+    .key-badge.missing { color: #f7a6aa; }
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    button {
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    .primary { background: #2196F3; }
+    .secondary { background: #505050; }
+    .success { color: #9cffa8; }
+    .error { color: #ff9ea4; }
+    .muted { color: #9f9f9f; font-size: 0.9em; }
+    a { color: #90caf9; }
+  </style>
+</head>
+<body>
+  <h1>Mindcraft Setup Wizard</h1>
+  <p class="muted">Use this page to adjust launch defaults and startup profiles in one place.</p>
+
+  <div class="card">
+    <h2>Runtime Settings</h2>
+    <div class="row">
+      <div class="field">
+        <label for="mindserver_port">Mindserver port</label>
+        <input id="mindserver_port" type="number" min="1024" max="65535" />
+      </div>
+      <div class="field">
+        <label for="port_scan_start">Port scan start</label>
+        <input id="port_scan_start" type="number" min="1024" max="65535" />
+      </div>
+      <div class="field">
+        <label for="port_scan_max">Port scan attempts</label>
+        <input id="port_scan_max" type="number" min="1" max="120" />
+      </div>
+      <div class="field">
+        <label for="mindserver_host_public">Expose on LAN</label>
+        <input id="mindserver_host_public" type="checkbox" />
+      </div>
+      <div class="field">
+        <label for="auto_open_ui">Auto-open UI on startup</label>
+        <input id="auto_open_ui" type="checkbox" />
+      </div>
+      <div class="field">
+        <label for="auto_start">Auto-start agents from profiles</label>
+        <input id="auto_start" type="checkbox" />
+      </div>
+    </div>
+    <div class="field" style="margin-top: 8px;">
+      <label for="profiles">Profiles to start (one path per line)</label>
+      <textarea id="profiles"></textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Default Agent Settings</h2>
+    <div class="row">
+      <div class="field">
+        <label for="agent_host">Minecraft host</label>
+        <input id="agent_host" type="text" />
+      </div>
+      <div class="field">
+        <label for="agent_port">Minecraft port</label>
+        <input id="agent_port" type="number" min="1" max="65535" />
+      </div>
+      <div class="field">
+        <label for="agent_auth">Auth type (offline / microsoft)</label>
+        <input id="agent_auth" type="text" />
+      </div>
+      <div class="field">
+        <label for="agent_minecraft_version">Minecraft version</label>
+        <input id="agent_minecraft_version" type="text" />
+      </div>
+      <div class="field">
+        <label for="agent_base_profile">Base profile</label>
+        <input id="agent_base_profile" type="text" />
+      </div>
+      <div class="field">
+        <label for="agent_model">Default model</label>
+        <input id="agent_model" type="text" />
+      </div>
+      <div class="field">
+        <label for="agent_init_message">Initial bot message</label>
+        <input id="agent_init_message" type="text" />
+      </div>
+      <div class="field">
+        <label for="agent_load_memory">Load memory on start</label>
+        <input id="agent_load_memory" type="checkbox" />
+      </div>
+      <div class="field">
+        <label for="agent_speak">Speak in voice</label>
+        <input id="agent_speak" type="checkbox" />
+      </div>
+      <div class="field">
+        <label for="agent_chat_ingame">Chat in game</label>
+        <input id="agent_chat_ingame" type="checkbox" />
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>API Keys</h2>
+    <p class="muted">Paste a key and click Save Keys — it's written to <code>keys.json</code>. Values are never displayed back. At least one key is required to run a bot.</p>
+    <div class="row">
+      <div class="field">
+        <label for="key_provider">Provider</label>
+        <select id="key_provider" style="background:#262626;border:1px solid #555;color:#e8e8e8;border-radius:4px;padding:6px;"></select>
+      </div>
+      <div class="field">
+        <label for="key_value">Key value</label>
+        <input id="key_value" type="password" placeholder="sk-..." autocomplete="off" />
+      </div>
+    </div>
+    <div class="actions" style="margin-top:10px;">
+      <button id="saveKeyBtn" class="primary">Save Key</button>
+      <span id="keyResult"></span>
+    </div>
+    <p class="muted" style="margin-top:8px;">Status (presence only):</p>
+    <div id="keyStatus" class="key-grid"></div>
+  </div>
+
+  <div class="actions">
+    <button id="saveBtn" class="primary">Save Launch Config</button>
+    <button id="refreshBtn" class="secondary">Reload</button>
+    <button id="restartBtn" class="secondary">Restart Launcher</button>
+    <button id="openDashboardBtn" class="secondary">Open Dashboard</button>
+    <span id="result"></span>
+  </div>
+
+  <p class="muted">Changes are written to <code>launcher-config.json</code>. Use <b>Restart Launcher</b> to apply them immediately.</p>
+
+  <script>
+    const resultEl = document.getElementById('result');
+
+    function getVal(id, fallback) {
+      const el = document.getElementById(id);
+      if (!el) return fallback;
+      if (el.type === 'checkbox') return Boolean(el.checked);
+      if (el.type === 'number') {
+        const v = Number(el.value);
+        return Number.isFinite(v) ? v : fallback;
+      }
+      if (el.value !== undefined && el.value !== null) {
+        return String(el.value).trim();
+      }
+      return fallback;
+    }
+
+    function setVal(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === 'checkbox') {
+        el.checked = Boolean(value);
+      } else {
+        el.value = value ?? '';
+      }
+    }
+
+    function renderKeys(keys = {}) {
+      const container = document.getElementById('keyStatus');
+      container.innerHTML = '';
+      const names = Object.keys(keys).sort();
+      names.forEach((name) => {
+        const div = document.createElement('div');
+        div.className = `key-badge ${keys[name] ? 'ok' : 'missing'}`;
+        div.textContent = `${name}: ${keys[name] ? 'present' : 'missing'}`;
+        container.appendChild(div);
+      });
+      // populate provider dropdown once
+      const sel = document.getElementById('key_provider');
+      if (sel && sel.options.length === 0) {
+        names.forEach((name) => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          sel.appendChild(opt);
+        });
+      }
+    }
+
+    async function saveKey() {
+      const keyResult = document.getElementById('keyResult');
+      const provider = document.getElementById('key_provider').value;
+      const value = document.getElementById('key_value').value.trim();
+      if (!provider || !value) {
+        keyResult.textContent = 'Pick a provider and paste a key first.';
+        keyResult.className = 'error';
+        return;
+      }
+      keyResult.textContent = 'Saving…';
+      keyResult.className = '';
+      try {
+        const res = await fetch('/api/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [provider]: value }),
+        });
+        const payload = await res.json();
+        if (payload.success) {
+          document.getElementById('key_value').value = '';
+          keyResult.textContent = `Saved ${provider}. Restart Launcher to apply.`;
+          keyResult.className = 'success';
+          renderKeys(payload.providerKeys || {});
+        } else {
+          keyResult.textContent = payload.error || 'Save failed';
+          keyResult.className = 'error';
+        }
+      } catch (e) {
+        keyResult.textContent = 'Save failed: ' + e;
+        keyResult.className = 'error';
+      }
+    }
+
+    async function loadConfig() {
+      const res = await fetch('/api/launcher-config');
+      const payload = await res.json();
+      if (!payload.success) {
+        resultEl.textContent = payload.error || 'Failed to load config';
+        resultEl.className = 'error';
+        return;
+      }
+      const config = payload.config || {};
+      setVal('mindserver_port', config.mindserver_port);
+      setVal('port_scan_start', config.port_scan_start);
+      setVal('port_scan_max', config.port_scan_max);
+      setVal('mindserver_host_public', config.mindserver_host_public);
+      setVal('auto_open_ui', config.auto_open_ui);
+      setVal('auto_start', config.auto_start);
+      const profiles = Array.isArray(config.profiles) ? config.profiles : [];
+      document.getElementById('profiles').value = profiles.join('\n');
+
+      const d = config.agent_defaults || {};
+      setVal('agent_host', d.host);
+      setVal('agent_port', d.port);
+      setVal('agent_auth', d.auth);
+      setVal('agent_minecraft_version', d.minecraft_version);
+      setVal('agent_base_profile', d.base_profile);
+      setVal('agent_model', d.model || d.model_name || '');
+      setVal('agent_init_message', d.init_message);
+      setVal('agent_load_memory', d.load_memory);
+      setVal('agent_speak', d.speak);
+      setVal('agent_chat_ingame', d.chat_ingame);
+
+      renderKeys(payload.providerKeys || {});
+      resultEl.textContent = `Current UI: ${config.runtime?.host || 'localhost'}:${config.runtime?.port || config.mindserver_port}`;
+      resultEl.className = 'success';
+    }
+
+    async function saveConfig() {
+      resultEl.textContent = 'Saving...';
+      resultEl.className = '';
+
+      const mindserverPort = Number(getVal('mindserver_port'));
+      const scanStart = Number(getVal('port_scan_start'));
+      const scanMax = Number(getVal('port_scan_max'));
+      const agentPort = Number(getVal('agent_port'));
+
+      const errors = [];
+      if (!Number.isFinite(mindserverPort) || mindserverPort < 1024 || mindserverPort > 65535) {
+        errors.push('Mindserver port must be between 1024 and 65535.');
+      }
+      if (!Number.isFinite(scanStart) || scanStart < 1024 || scanStart > 65535) {
+        errors.push('Port scan start must be between 1024 and 65535.');
+      }
+      if (!Number.isFinite(scanMax) || scanMax < 1 || scanMax > 120) {
+        errors.push('Port scan attempts must be between 1 and 120.');
+      }
+      if (!Number.isFinite(agentPort) || agentPort < 1 || agentPort > 65535) {
+        errors.push('Minecraft port must be between 1 and 65535.');
+      }
+      const auth = String(getVal('agent_auth')).toLowerCase();
+      if (auth && auth !== 'offline' && auth !== 'microsoft') {
+        errors.push('Auth type must be "offline" or "microsoft".');
+      }
+      const profiles = document.getElementById('profiles').value
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (profiles.length === 0) {
+        errors.push('Add at least one profile path (e.g. ./andy.json).');
+      }
+
+      if (errors.length > 0) {
+        resultEl.textContent = 'Cannot save: ' + errors.join(' ');
+        resultEl.className = 'error';
+        return;
+      }
+
+      const payload = {
+        mindserver_port: mindserverPort,
+        port_scan_start: scanStart,
+        port_scan_max: scanMax,
+        mindserver_host_public: getVal('mindserver_host_public'),
+        auto_open_ui: getVal('auto_open_ui'),
+        auto_start: getVal('auto_start'),
+        profiles,
+        agent_defaults: {
+          host: getVal('agent_host'),
+          port: agentPort,
+          auth,
+          minecraft_version: getVal('agent_minecraft_version'),
+          base_profile: getVal('agent_base_profile'),
+          init_message: getVal('agent_init_message'),
+          load_memory: getVal('agent_load_memory'),
+          speak: getVal('agent_speak'),
+          chat_ingame: getVal('agent_chat_ingame'),
+        },
+      };
+
+      const currentModel = getVal('agent_model');
+      if (currentModel) {
+        payload.agent_defaults.model = currentModel;
+      }
+
+      const res = await fetch('/api/launcher-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) {
+        resultEl.textContent = body.error || 'Save failed';
+        resultEl.className = 'error';
+        return;
+      }
+      resultEl.textContent = 'Saved. Use Restart Launcher to apply.';
+      resultEl.className = 'success';
+      renderKeys(body.providerKeys || {});
+      if (body.config?.runtime) {
+        resultEl.textContent += ` (runtime: ${body.config.runtime.host}:${body.config.runtime.port})`;
+      }
+    }
+
+    document.getElementById('saveBtn').addEventListener('click', saveConfig);
+    document.getElementById('saveKeyBtn').addEventListener('click', saveKey);
+    document.getElementById('key_value').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKey(); });
+    document.getElementById('refreshBtn').addEventListener('click', loadConfig);
+    document.getElementById('openDashboardBtn').addEventListener('click', () => {
+      window.location.href = '/';
+    });
+
+    document.getElementById('restartBtn').addEventListener('click', async () => {
+      resultEl.textContent = 'Restarting launcher...';
+      resultEl.className = '';
+      try {
+        const res = await fetch('/api/restart', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok || !body.success) {
+          resultEl.textContent = body.error || 'Restart failed';
+          resultEl.className = 'error';
+          return;
+        }
+        resultEl.textContent = 'Restarting. The page will reload shortly...';
+        resultEl.className = 'success';
+        setTimeout(() => window.location.reload(), 2500);
+      } catch (err) {
+        resultEl.textContent = String(err.message || err);
+        resultEl.className = 'error';
+      }
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>

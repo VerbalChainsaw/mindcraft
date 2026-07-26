@@ -1,6 +1,7 @@
 import { Server } from 'socket.io';
 import express from 'express';
 import http from 'http';
+import net from 'net';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -144,6 +145,86 @@ export function createMindServer(host_public = false, port = 8080) {
       res.json({
         success: true,
         providerKeys: getProviderKeyStatus(),
+      });
+    });
+
+    // Save API keys from the setup wizard. Values are written to keys.json
+    // (created from scratch if missing); presence-only is ever reported back.
+    app.post('/api/keys', async (req, res) => {
+      try {
+        const body = req.body || {};
+        const fsMod = await import('fs');
+        const keysPath = path.join(process.cwd(), 'keys.json');
+        let current = {};
+        try { current = JSON.parse(fsMod.readFileSync(keysPath, 'utf8')); } catch { /* fresh file */ }
+        let changed = 0;
+        for (const name of LAUNCHER_KEY_PROVIDERS) {
+          const v = body[name];
+          if (typeof v === 'string') {
+            const trimmed = v.trim();
+            if (trimmed.length > 0) { current[name] = trimmed; changed++; }
+            else if (v === '' && body[`${name}__clear`] === true) { delete current[name]; changed++; }
+          }
+        }
+        if (changed === 0) {
+          return res.status(400).json({ success: false, error: 'No key values provided' });
+        }
+        fsMod.writeFileSync(keysPath, JSON.stringify(current, null, 2), 'utf8');
+        res.json({
+          success: true,
+          changed,
+          note: 'Keys saved. Restart the launcher to apply them to new agents.',
+          providerKeys: getProviderKeyStatus(),
+        });
+      } catch (error) {
+        res.status(500).json({ success: false, error: String(error.message || error) });
+      }
+    });
+
+    // Health: single endpoint the dashboard polls to explain "why isn't my bot working".
+    app.get('/api/health', async (_req, res) => {
+      const config = loadLauncherConfig({}, getLauncherConfigPath());
+      const keys = getProviderKeyStatus();
+      const anyKey = Object.values(keys).some(Boolean);
+      // keys.json file presence (env vars also count as keys)
+      let keysFileExists = false;
+      try {
+        const fsMod = await import('fs');
+        keysFileExists = fsMod.existsSync(path.join(process.cwd(), 'keys.json'));
+      } catch { /* ignore */ }
+      // Probe the configured Minecraft server (raw TCP; fast + version-agnostic)
+      const mcHost = config.agent_defaults.host || '127.0.0.1';
+      const mcPort = config.agent_defaults.port || 55916;
+      const mcReachable = await new Promise((resolve) => {
+        const netMod = net;
+        const sock = netMod.createConnection({ host: mcHost, port: mcPort, timeout: 1200 }, () => {
+          sock.end(); resolve(true);
+        });
+        sock.on('error', () => resolve(false));
+        sock.on('timeout', () => { sock.destroy(); resolve(false); });
+      });
+      const agents = [];
+      for (const agentName in agent_connections) {
+        const conn = agent_connections[agentName];
+        agents.push({ name: agentName, in_game: conn.in_game, socket_connected: !!conn.socket });
+      }
+      const problems = [];
+      if (!anyKey) problems.push('No API key configured — add one in the Setup Wizard (API Keys card).');
+      if (!mcReachable) problems.push(`Minecraft server unreachable at ${mcHost}:${mcPort} — open a world to LAN on that port, or change it in Setup.`);
+      if (agents.length === 0) problems.push('No agents registered — start one from the dashboard or enable auto_start.');
+      else if (!agents.some(a => a.in_game)) problems.push('Agent(s) registered but none are in-game yet.');
+      res.json({
+        success: true,
+        ok: problems.length === 0,
+        checks: {
+          anyApiKey: anyKey,
+          keysFileExists,
+          minecraftReachable: mcReachable,
+          minecraftTarget: `${mcHost}:${mcPort}`,
+          agentsRegistered: agents.length,
+          agentsInGame: agents.filter(a => a.in_game).length,
+        },
+        problems,
       });
     });
 
@@ -549,6 +630,8 @@ export function createMindServer(host_public = false, port = 8080) {
 
         socket.on('shutdown', () => {
             console.log('Shutting down');
+            try { director.shutdown(); } catch { /* ignore */ }
+            try { swarm.stop(); } catch { /* ignore */ }
             for (let agentName in agent_connections) {
                 mindcraft.stopAgent(agentName);
             }
