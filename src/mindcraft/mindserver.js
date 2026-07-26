@@ -20,6 +20,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let io;
 let server;
+const serverSockets = new Set();
 const agent_connections = {};
 const agent_listeners = [];
 let mindserverHost = 'localhost';
@@ -111,6 +112,12 @@ export function createMindServer(host_public = false, port = 8080) {
     const app = express();
     server = http.createServer(app);
     io = new Server(server);
+    server.on('connection', (socket) => {
+        serverSockets.add(socket);
+        socket.on('close', () => {
+            serverSockets.delete(socket);
+        });
+    });
 
     // Serve static files
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -383,18 +390,18 @@ export function createMindServer(host_public = false, port = 8080) {
       const entry = resolveLauncherEntry();
       const childArgs = [entry, ...forwardedArgs];
 
-      // Close this server first so the child can bind the port cleanly.
-      let closed = false;
-      const doClose = () => new Promise((resolve) => {
-        if (closed) return resolve();
-        closed = true;
-        try { server.close(() => resolve()); } catch { resolve(); }
-      });
+      const closeServerSockets = () => {
+        for (const socket of serverSockets) {
+          try {
+            socket.destroy();
+          } catch { /* best-effort cleanup */ }
+        }
+      };
 
-      // Respond before shutting down so the UI gets a clean ack.
-      res.json({ success: true, message: 'Restarting launcher' });
-
-      doClose().then(() => {
+      let launching = false;
+      const spawnReplacement = () => {
+        if (launching) return;
+        launching = true;
         const child = spawn(process.execPath, childArgs, {
           cwd: process.cwd(),
           env: {
@@ -409,6 +416,31 @@ export function createMindServer(host_public = false, port = 8080) {
         child.unref();
         // Hand off and exit; the detached child runs its own server on the same port.
         setTimeout(() => process.exit(0), 400);
+      };
+
+      // Close this server first so the child can bind the port cleanly.
+      let closed = false;
+      const doClose = () => new Promise((resolve) => {
+        if (closed) return resolve();
+        closed = true;
+        closeServerSockets();
+        try { server.close(() => resolve()); } catch { resolve(); }
+      });
+
+      // Respond before shutting down so the UI gets a clean ack.
+      res.json({ success: true, message: 'Restarting launcher' });
+
+      const fallbackSpawn = setTimeout(() => {
+        if (!launching) {
+          console.log('Restart close timeout reached; forcing launcher spawn.');
+          closeServerSockets();
+          spawnReplacement();
+        }
+      }, 2500);
+
+      doClose().then(() => {
+        clearTimeout(fallbackSpawn);
+        spawnReplacement();
       });
     });
 
