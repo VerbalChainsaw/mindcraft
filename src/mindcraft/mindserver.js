@@ -71,6 +71,23 @@ function getProviderKeyStatus() {
   return out;
 }
 
+function normalizeHostName(host) {
+  return String(host || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[/, '')
+    .replace(/\](:\d+)?$/, '');
+}
+
+function isSameOrLoopbackOrigin(reqHost, originHost) {
+  const req = normalizeHostName(reqHost);
+  const origin = normalizeHostName(originHost);
+  if (!req || !origin) return false;
+  if (req === origin) return true;
+  const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1', '0:0:0:0:0:0:0:1']);
+  return loopbackHosts.has(req) && loopbackHosts.has(origin);
+}
+
 function safeMergeLauncherConfig(body = {}) {
   return writeLauncherConfig(body, getLauncherConfigPath());
 }
@@ -159,15 +176,20 @@ export function createMindServer(host_public = false, port = 8080) {
     // changing endpoints. Same-origin pages and non-browser clients (no
     // Origin header, e.g. curl) are allowed. (Outside review CRIT-1/3.)
     const originGuard = (req, res, next) => {
-      const origin = req.headers.origin;
-      if (!origin) return next(); // curl / same-origin fetch without Origin
-      try {
-        const o = new URL(origin);
-        const hostHeader = String(req.headers.host || '');
-        if (`${o.host}` === hostHeader) return next();
-      } catch { /* malformed origin -> reject */ }
-      return res.status(403).json({ success: false, error: 'Cross-origin request blocked' });
-    };
+    const origin = req.headers.origin;
+    if (!origin) return next(); // curl / same-origin fetch without Origin
+    try {
+      const o = new URL(origin);
+      const reqHost = req.hostname || req.headers.host;
+      if (isSameOrLoopbackOrigin(reqHost, o.hostname)) return next();
+    } catch { /* malformed origin -> reject */ }
+    console.warn('[api] Blocked cross-origin request', {
+      origin,
+      host: req.headers.host,
+      path: req.path,
+    });
+    return res.status(403).json({ success: false, error: 'Cross-origin request blocked' });
+  };
     app.use('/api', (req, res, next) => {
       if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
       return originGuard(req, res, next);

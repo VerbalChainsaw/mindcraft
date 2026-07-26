@@ -119,9 +119,11 @@
   </div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script src="socket.io/socket.io.js"></script>
 <script>
-  const socket = io();
+  const basePath = window.location.pathname.replace(/[^/]*$/, '');
+  const apiBase = `${basePath}api`;
+  const socket = io({ path: basePath + 'socket.io' });
   const $ = (id) => document.getElementById(id);
 
   function beatPct(ageMs, staleAfter) {
@@ -169,17 +171,17 @@
   function truncate(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
 
   async function load() {
-    const r = await fetch('/api/swarm');
+    const r = await fetch(`${apiBase}/swarm`);
     const j = await r.json();
     if (j.success) render(j.helpers);
   }
 
-  window.pulse = async (id) => { await fetch(`/api/swarm/pulse/${id}`, { method:'POST' }); load(); };
-  window.recall = async (id) => { await fetch(`/api/swarm/recall/${id}`, { method:'POST' }); load(); };
+  window.pulse = async (id) => { await fetch(`${apiBase}/swarm/pulse/${id}`, { method:'POST' }); load(); };
+  window.recall = async (id) => { await fetch(`${apiBase}/swarm/recall/${id}`, { method:'POST' }); load(); };
   window.relocate = async (id) => {
     const cwd = prompt('Relocate helper to cwd:', '.');
     if (cwd === null) return;
-    await fetch(`/api/swarm/relocate/${id}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cwd }) });
+    await fetch(`${apiBase}/swarm/relocate/${id}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cwd }) });
     load();
   };
 
@@ -194,7 +196,7 @@
       heartbeatIntervalMs: Number($('heartbeat').value),
       brain: enabled ? { provider: $('brainProvider').value, model: $('brainModel').value, enabled: true } : null,
     };
-    const r = await fetch('/api/swarm/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(spec) });
+    const r = await fetch(`${apiBase}/swarm/deploy`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(spec) });
     const j = await r.json();
     if (j.success) { $('name').value = ''; load(); }
     else alert('Deploy failed: ' + (j.error || 'unknown'));

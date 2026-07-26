@@ -190,10 +190,13 @@
     <span id="result"></span>
   </div>
 
-  <p class="muted">Changes are written to <code>launcher-config.json</code>. Use <b>Restart Launcher</b> to apply them immediately.</p>
+    <p class="muted">Changes are written to <code>launcher-config.json</code>. Use <b>Restart Launcher</b> to apply them immediately.</p>
 
   <script>
     const resultEl = document.getElementById('result');
+    const basePath = window.location.pathname.replace(/[^/]*$/, '');
+    const apiBase = `${basePath}api`;
+    const dashboardPath = `${basePath}index.html`;
 
     function getVal(id, fallback) {
       const el = document.getElementById(id);
@@ -253,7 +256,7 @@
       keyResult.textContent = 'Saving…';
       keyResult.className = '';
       try {
-        const res = await fetch('/api/keys', {
+        const res = await fetch(`${apiBase}/keys`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ [provider]: value }),
@@ -275,7 +278,7 @@
     }
 
     async function loadConfig() {
-      const res = await fetch('/api/launcher-config');
+      const res = await fetch(`${apiBase}/launcher-config`);
       const payload = await res.json();
       if (!payload.success) {
         resultEl.textContent = payload.error || 'Failed to load config';
@@ -339,8 +342,9 @@
         .split('\n')
         .map((s) => s.trim())
         .filter(Boolean);
-      if (profiles.length === 0) {
-        errors.push('Add at least one profile path (e.g. ./andy.json).');
+      const autoStart = getVal('auto_start');
+      if (profiles.length === 0 && autoStart) {
+        errors.push('Add at least one profile path (e.g. ./andy.json) when auto-start is enabled.');
       }
 
       if (errors.length > 0) {
@@ -375,7 +379,7 @@
         payload.agent_defaults.model = currentModel;
       }
 
-      const res = await fetch('/api/launcher-config', {
+      const res = await fetch(`${apiBase}/launcher-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -399,14 +403,14 @@
     document.getElementById('key_value').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKey(); });
     document.getElementById('refreshBtn').addEventListener('click', loadConfig);
     document.getElementById('openDashboardBtn').addEventListener('click', () => {
-      window.location.href = '/';
+      window.location.href = dashboardPath;
     });
 
     document.getElementById('restartBtn').addEventListener('click', async () => {
       resultEl.textContent = 'Restarting launcher...';
       resultEl.className = '';
       try {
-        const res = await fetch('/api/restart', { method: 'POST' });
+        const res = await fetch(`${apiBase}/restart`, { method: 'POST' });
         const body = await res.json();
         if (!res.ok || !body.success) {
           resultEl.textContent = body.error || 'Restart failed';

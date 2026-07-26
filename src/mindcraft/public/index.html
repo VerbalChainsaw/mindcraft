@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>Mindcraft</title>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="socket.io/socket.io.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -386,9 +386,9 @@
     <div class="page-footer">
         <div>
             <button id="openCreateAgentBtn" class="start-btn">New Agent</button>
-            <a href="/setup.html" class="neutral-btn" style="text-decoration:none; margin-left: 6px;">Setup Wizard</a>
-            <a href="/director.html" class="neutral-btn" style="text-decoration:none; margin-left: 6px;">🎬 Director</a>
-            <a href="/swarm.html" class="neutral-btn" style="text-decoration:none; margin-left: 6px;">🐝 Swarm</a>
+        <a href="setup.html" class="neutral-btn" style="text-decoration:none; margin-left: 6px;">Setup Wizard</a>
+        <a href="director.html" class="neutral-btn" style="text-decoration:none; margin-left: 6px;">🎬 Director</a>
+        <a href="swarm.html" class="neutral-btn" style="text-decoration:none; margin-left: 6px;">🐝 Swarm</a>
         </div>
         <div style="display:flex; gap:12px;">
             <button class="stop-btn" onclick="disconnectAllAgents()">Disconnect All Agents</button>
@@ -406,6 +406,10 @@
             <div class="modal-body">
                 <div id="createAgentSection">
                     <div id="profileStatus" style="margin:6px 0;">Profile: Not uploaded</div>
+                    <div id="profileHint" style="margin:6px 0 10px; color:#b9c2ce; font-size: 12px; background: rgba(255,255,255,.03); border:1px solid #2f455d; border-radius: 6px; padding: 8px;">
+                        Use profile JSON to set identity, model, prompts, task/objective, and startup behavior. Launcher settings below control how the bot connects to the server.
+                    </div>
+                    <textarea id="profileJsonInput" style="width:100%; min-height:130px; background:#10171f; color:#e8eef5; border:1px solid #3a3a3a; border-radius: 6px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" placeholder='Paste profile JSON or upload a .json file here (must include "name").'></textarea>
                     <div id="settingsForm"></div>
                     <div id="createError" style="color:#f44336;margin-top:10px;"></div>
                     <input type="file" id="profileFileInput" accept=".json,application/json" style="display:none">
@@ -445,7 +449,9 @@
     </div>
 
     <script>
-        const socket = io({ path: window.location.pathname.replace(/[^/]*$/, '') + 'socket.io' })
+        const basePath = window.location.pathname.replace(/[^/]*$/, '');
+        const settingsPath = `${basePath}settings_spec.json`;
+        const socket = io({ path: basePath + 'socket.io' });
         const agentsDiv = document.getElementById('agents');
 
         // --- Health banner: explains WHY bots aren't working ---
@@ -472,6 +478,8 @@
         setInterval(refreshHealth, 7000);
         let settingsSpec = {};
         let profileData = null;
+        const profileJsonInput = document.getElementById('profileJsonInput');
+        const profileHint = document.getElementById('profileHint');
         const agentSettings = {};
         const agentLastMessage = {};
         const inventoryOpen = {};
@@ -566,7 +574,7 @@
             updateStatus(false);
         });
 
-        fetch('/settings_spec.json')
+        fetch(settingsPath)
             .then(r => r.json())
             .then(spec => {
                 settingsSpec = spec;
@@ -617,28 +625,62 @@
             document.getElementById('profileFileInput').click();
         });
 
+        function syncProfileState(rawText) {
+            const value = (rawText || '').trim();
+            const createBtn = document.getElementById('submitCreateAgentBtn');
+            const errorEl = document.getElementById('createError');
+            const statusEl = document.getElementById('profileStatus');
+            if (!value) {
+                profileData = null;
+                createBtn.disabled = true;
+                profileHint.textContent = 'Upload or paste profile JSON (must include `name`) before creating an agent.';
+                statusEl.textContent = 'Profile: Not uploaded';
+                return;
+            }
+            try {
+                const parsed = JSON.parse(value);
+                if (!parsed || typeof parsed !== 'object') {
+                    throw new Error('Profile must be a JSON object');
+                }
+                profileData = parsed;
+                if (!profileData.name) {
+                    createBtn.disabled = true;
+                    statusEl.textContent = 'Profile: Missing name';
+                    profileHint.textContent = 'Add a `name` field in profile JSON.';
+                    errorEl.textContent = 'Profile is missing required `name`.';
+                    return;
+                }
+                statusEl.textContent = `Profile: ${profileData.name}`;
+                profileHint.textContent = 'Identity and behavior are driven by this profile JSON. Launcher settings below control server connection and runtime policy.';
+                errorEl.textContent = '';
+                createBtn.disabled = false;
+            } catch (err) {
+                profileData = null;
+                createBtn.disabled = true;
+                profileHint.textContent = 'Profile JSON is invalid.';
+                errorEl.textContent = 'Invalid profile JSON: ' + err.message;
+                statusEl.textContent = 'Profile: Not uploaded';
+            }
+        }
+
+        profileJsonInput.addEventListener('input', () => {
+            syncProfileState(profileJsonInput.value);
+        });
+
         document.getElementById('profileFileInput').addEventListener('change', e => {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = ev => {
-                try {
-                    profileData = JSON.parse(ev.target.result);
-                    document.getElementById('submitCreateAgentBtn').disabled = false;
-                    document.getElementById('profileStatus').textContent = `Profile: ${profileData.name || 'Uploaded'}`;
-                    document.getElementById('createError').textContent = '';
-                } catch (err) {
-                    document.getElementById('createError').textContent = 'Invalid profile JSON: ' + err.message;
-                    profileData = null;
-                    document.getElementById('submitCreateAgentBtn').disabled = true;
-                    document.getElementById('profileStatus').textContent = 'Profile: Not uploaded';
-                }
+                profileJsonInput.value = ev.target.result || '';
+                syncProfileState(profileJsonInput.value);
             };
             reader.readAsText(file);
             e.target.value = '';
         });
 
         document.getElementById('submitCreateAgentBtn').addEventListener('click', () => {
+            syncProfileState(profileJsonInput.value);
             if (!profileData) return;
             const settings = { profile: profileData };
             Object.keys(settingsSpec).forEach(key => {
@@ -661,6 +703,8 @@
                 } else {
                     // reset on success
                     profileData = null;
+                    profileJsonInput.value = '';
+                    profileHint.textContent = 'Upload or paste profile JSON (must include `name`) before creating an agent.';
                     document.getElementById('submitCreateAgentBtn').disabled = true;
                     document.getElementById('profileStatus').textContent = 'Profile: Not uploaded';
                     document.getElementById('createError').textContent = '';
@@ -673,6 +717,12 @@
         const modalBackdrop = document.getElementById('createAgentModal');
         document.getElementById('openCreateAgentBtn').addEventListener('click', () => {
             buildSettingsForm();
+            profileJsonInput.value = '';
+            profileHint.textContent = 'Upload or paste profile JSON (must include `name`) before creating an agent.';
+            document.getElementById('profileStatus').textContent = 'Profile: Not uploaded';
+            profileData = null;
+            document.getElementById('submitCreateAgentBtn').disabled = true;
+            document.getElementById('createError').textContent = '';
             modalBackdrop.style.display = 'flex';
         });
         function hideCreateAgentModal() {

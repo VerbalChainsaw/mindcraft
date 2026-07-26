@@ -116,9 +116,11 @@
   </div>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script src="socket.io/socket.io.js"></script>
 <script>
-const socket = io({ path: window.location.pathname.replace(/director\.html$/, '') + 'socket.io' });
+const basePath = window.location.pathname.replace(/[^/]*$/, '');
+const apiBase = `${basePath}api`;
+const socket = io({ path: basePath + 'socket.io' });
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
 
@@ -131,12 +133,22 @@ function log(msg, cls) {
 }
 
 function agent() { return $('agentSelect').value; }
+function activeAgent() {
+  const name = agent();
+  if (!name) {
+    log('No agent selected. Start one from the dashboard first.', 'err');
+    return '';
+  }
+  return name;
+}
 
 async function api(path, body) {
+  const normalizedPath = path.startsWith('/api') ? path.slice('/api'.length) : path;
+  const endpoint = `${apiBase}${normalizedPath}`;
   const opts = body
     ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
     : {};
-  const res = await fetch(path, opts);
+  const res = await fetch(endpoint, opts);
   return res.json().catch(() => ({ success: false, error: 'bad json' }));
 }
 
@@ -161,36 +173,44 @@ api('/api/agents').then(r => { if (r.success) renderAgents(r.agents); });
 
 // --- command ---
 $('sendCmd').onclick = async () => {
+  const target = activeAgent();
+  if (!target) return;
   const message = $('cmdInput').value.trim();
   if (!message) return;
-  const r = await api('/api/director/command', { agent: agent(), message });
-  log(r.success ? `command → ${agent()}: ${message}` : `command failed: ${r.error}`, r.success ? 'ok' : 'err');
+  const r = await api('/api/director/command', { agent: target, message });
+  log(r.success ? `command → ${target}: ${message}` : `command failed: ${r.error}`, r.success ? 'ok' : 'err');
 };
 $('cmdInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('sendCmd').click(); });
 document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => { $('cmdInput').value = b.dataset.cmd; });
 
 // --- leash ---
 $('attachLeash').onclick = async () => {
+  const target = activeAgent();
+  if (!target) return;
   const r = await api('/api/director/leash', {
-    agent: agent(), message: $('leashMsg').value.trim(), intervalMs: Number($('leashInterval').value),
+    agent: target, message: $('leashMsg').value.trim(), intervalMs: Number($('leashInterval').value),
   });
-  log(r.success ? `leash attached to ${agent()}` : `leash failed: ${r.error}`, r.success ? 'ok' : 'err');
+  log(r.success ? `leash attached to ${target}` : `leash failed: ${r.error}`, r.success ? 'ok' : 'err');
   refresh();
 };
 $('releaseLeash').onclick = async () => {
-  const r = await api('/api/director/unleash', { agent: agent() });
-  log(r.success ? `leash released from ${agent()}` : `unleash: ${r.error}`, r.success ? 'ok' : 'err');
+  const target = activeAgent();
+  if (!target) return;
+  const r = await api('/api/director/unleash', { agent: target });
+  log(r.success ? `leash released from ${target}` : `unleash: ${r.error}`, r.success ? 'ok' : 'err');
   refresh();
 };
 
 // --- program ---
 $('startProg').onclick = async () => {
+  const target = activeAgent();
+  if (!target) return;
   const steps = $('progSteps').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
     const [message, delay] = l.split('|').map(s => s.trim());
     return { message, delayMs: Number(delay) || 5000 };
   });
   const r = await api('/api/director/program', {
-    agent: agent(), name: $('progName').value.trim(), steps, loop: $('progLoop').checked,
+    agent: target, name: $('progName').value.trim(), steps, loop: $('progLoop').checked,
   });
   log(r.success ? `program ${r.program.name} started (${steps.length} steps)` : `program failed: ${r.error}`, r.success ? 'ok' : 'err');
   refresh();
