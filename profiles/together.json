@@ -1,0 +1,19 @@
+{
+    "name": "together",
+    "model": {
+        "api": "openai_compatible",
+        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "url": "https://api.together.xyz/v1",
+        "params": {
+            "api_key_env": "TOGETHER_API_KEY"
+        }
+    },
+    "embedding": {
+        "api": "openai_compatible",
+        "model": "BAAI/bge-large-en-v1.5",
+        "url": "https://api.together.xyz/v1",
+        "params": {
+            "api_key_env": "TOGETHER_API_KEY"
+        }
+    }
+}

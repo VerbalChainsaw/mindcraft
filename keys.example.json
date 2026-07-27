@@ -15,5 +15,10 @@
     "NOVITA_API_KEY": "",
     "OPENROUTER_API_KEY": "",
     "CEREBRAS_API_KEY": "",
-    "MERCURY_API_KEY":""
+    "MERCURY_API_KEY": "",
+    "OPENAI_COMPATIBLE_API_KEY": "",
+    "NVIDIA_API_KEY": "",
+    "TOGETHER_API_KEY": "",
+    "FIREWORKS_API_KEY": "",
+    "DEEPINFRA_API_KEY": ""
 }
