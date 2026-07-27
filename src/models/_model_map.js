@@ -1,6 +1,10 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import {
+    DEFAULT_OPENAI_COMPATIBLE_API_KEY_ENV,
+    isValidOpenAICompatibleApiKeyEnv,
+} from './openai_compatible.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +33,30 @@ const apiMap = await (async () => {
     }
     return map;
 })();
+
+const credentialAlternativesByProvider = {
+    anthropic: ['ANTHROPIC_API_KEY'],
+    azure: ['AZURE_OPENAI_API_KEY', 'OPENAI_API_KEY'],
+    cerebras: ['CEREBRAS_API_KEY'],
+    deepseek: ['DEEPSEEK_API_KEY'],
+    glhf: ['GHLF_API_KEY'],
+    google: ['GEMINI_API_KEY'],
+    groq: ['GROQCLOUD_API_KEY'],
+    huggingface: ['HUGGINGFACE_API_KEY'],
+    hyperbolic: ['HYPERBOLIC_API_KEY'],
+    lmstudio: [],
+    mercury: ['MERCURY_API_KEY'],
+    mistral: ['MISTRAL_API_KEY'],
+    novita: ['NOVITA_API_KEY'],
+    ollama: [],
+    openai: ['OPENAI_API_KEY'],
+    openai_compatible: [],
+    openrouter: ['OPENROUTER_API_KEY'],
+    qwen: ['QWEN_API_KEY'],
+    replicate: ['REPLICATE_API_KEY'],
+    vllm: [],
+    xai: ['XAI_API_KEY'],
+};
 
 export function selectAPI(profile) {
     if (typeof profile === 'string' || profile instanceof String) {
@@ -75,8 +103,65 @@ export function selectAPI(profile) {
     return profile;
 }
 
+export function describeModelProvider(profile) {
+    try {
+        const clonedProfile = typeof profile === 'string' || profile instanceof String
+            ? String(profile)
+            : JSON.parse(JSON.stringify(profile));
+        const resolvedProfile = selectAPI(clonedProfile);
+        if (resolvedProfile.api === 'openai_compatible') {
+            if (typeof resolvedProfile.url !== 'string' || resolvedProfile.url.trim().length === 0) {
+                return {
+                    ok: false,
+                    provider: 'openai_compatible',
+                    credentialAlternatives: [],
+                    error: 'openai_compatible requires an explicit non-empty URL.',
+                };
+            }
+            const params = resolvedProfile.params;
+            const apiKeyEnv = params && Object.hasOwn(params, 'api_key_env')
+                ? params.api_key_env
+                : DEFAULT_OPENAI_COMPATIBLE_API_KEY_ENV;
+            if (!isValidOpenAICompatibleApiKeyEnv(apiKeyEnv)) {
+                return {
+                    ok: false,
+                    provider: 'openai_compatible',
+                    credentialAlternatives: [],
+                    error: 'Invalid openai_compatible api_key_env.',
+                };
+            }
+            return {
+                ok: true,
+                provider: 'openai_compatible',
+                credentialAlternatives: [apiKeyEnv],
+            };
+        }
+        const credentialAlternatives = credentialAlternativesByProvider[resolvedProfile.api];
+        if (!credentialAlternatives) {
+            return {
+                ok: false,
+                provider: resolvedProfile.api || null,
+                credentialAlternatives: [],
+                error: 'Unsupported model provider.',
+            };
+        }
+        return {
+            ok: true,
+            provider: resolvedProfile.api,
+            credentialAlternatives: [...credentialAlternatives],
+        };
+    } catch {
+        return {
+            ok: false,
+            provider: null,
+            credentialAlternatives: [],
+            error: 'Unsupported model provider.',
+        };
+    }
+}
+
 export function createModel(profile) {
-    if (!!apiMap[profile.model]) {
+    if (apiMap[profile.model]) {
         // if the model value is an api (instead of a specific model name)
         // then set model to null so it uses the default model for that api
         profile.model = null;
