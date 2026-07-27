@@ -44,6 +44,10 @@
     "scripts": {
         "postinstall": "patch-package",
         "start": "node main.js",
+        "test:repair": "node --test tests/repair-regressions.test.js",
+        "test:control-plane": "node --test tests/control-plane/mindserver-public-bind.test.js tests/control-plane/openai-compatible-readiness.test.js",
+        "lint:control-plane": "eslint main.js src/process/agent_process.js src/models/_model_map.js src/models/openai_compatible.js src/mindcraft/health-status.js src/mindcraft/launcher-config.js src/mindcraft/profile-preflight.js src/mindcraft/runtime-config.js src/mindcraft/mindcraft.js src/mindcraft/mindserver.js tests/control-plane/agent-finalization.test.js tests/control-plane/agent-lifecycle.test.js tests/control-plane/health-readiness.test.js tests/control-plane/mindserver-public-bind.test.js tests/control-plane/mindserver-readiness.test.js tests/control-plane/openai-compatible.test.js tests/control-plane/openai-compatible-readiness.test.js tests/control-plane/profile-preflight.test.js tests/control-plane/runtime-config.test.js",
+        "check:control-plane": "npm run test:control-plane && npm run lint:control-plane",
         "reinstall": "npm run clean:modules && npm install",
         "clean:modules": "node -e \"const fs=require('fs');const p=require('path');['node_modules','package-lock.json'].forEach(f=>{if(fs.existsSync(f)){if(fs.lstatSync(f).isDirectory()){fs.rmSync(f,{recursive:true,force:true});}else{fs.unlinkSync(f);}}});\""
     },

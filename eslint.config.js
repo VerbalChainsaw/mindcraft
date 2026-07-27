@@ -3,6 +3,30 @@ import globals from "globals";
 import pluginJs from "@eslint/js";
 import noFloatingPromise from "eslint-plugin-no-floating-promise";
 
+const CONTROL_PLANE_FILES = [
+  "main.js",
+  "src/mindcraft/launcher-config.js",
+  "src/mindcraft/health-status.js",
+  "src/mindcraft/mindcraft.js",
+  "src/mindcraft/profile-preflight.js",
+  "src/mindcraft/runtime-config.js",
+  "src/mindcraft/mindserver.js",
+  "src/models/_model_map.js",
+  "src/models/openai_compatible.js",
+  "tests/control-plane/**/*.js",
+];
+
+const NODE_TEST_GLOBALS = {
+  after: "readonly",
+  afterEach: "readonly",
+  before: "readonly",
+  beforeEach: "readonly",
+  describe: "readonly",
+  it: "readonly",
+  suite: "readonly",
+  test: "readonly",
+};
+
 /** @type {import('eslint').Linter.Config[]} */
 export default [
   // First, import the recommended configuration
@@ -26,6 +50,25 @@ export default [
       "no-unreachable": "off",          // Disable warnings for unreachable code.
       "require-await": "error",         // Disallow async functions which have no await expression
       "no-floating-promise/no-floating-promise": "error", // Disallow Promises without error handling or awaiting
+    },
+  },
+  {
+    files: CONTROL_PLANE_FILES,
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...NODE_TEST_GLOBALS,
+      },
+      ecmaVersion: "latest",
+      sourceType: "module",
+    },
+  },
+  {
+    // Existing empty catch handlers in mindserver.js are out of scope for
+    // this focused gate; do not require a legacy-wide lint cleanup here.
+    files: ["src/mindcraft/mindserver.js"],
+    rules: {
+      "no-empty": "off",
     },
   },
 ];
