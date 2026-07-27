@@ -2,8 +2,13 @@
 // Qwen is also compatible with the OpenAI API format;
 
 import OpenAIApi from 'openai';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class VLLM {
     static prefix = 'vllm';
@@ -61,9 +66,8 @@ export class VLLM {
 
     async saveToFile(logFile, logEntry) {
         let task_id = this.agent.task.task_id;
-        console.log(task_id)
         let logDir;
-        if (this.task_id === null) {
+        if (task_id == null) {
             logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs`);
         } else {
             logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs/${task_id}`);

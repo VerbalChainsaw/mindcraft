@@ -20,7 +20,7 @@ const blacklist = [
 ]
 
 
-class ItemNode {
+export class ItemNode {
     constructor(manager, wrapper, name) {
         this.manager = manager;
         this.wrapper = wrapper;
@@ -160,7 +160,7 @@ class ItemNode {
             await skills.smeltItem(this.manager.agent.bot, to_smelt_name, to_smelt_quantity);
         } else if (this.type === 'hunt') {
             for (let i=0; i<quantity; i++) {
-                res = await skills.attackNearest(this.manager.agent.bot, this.source);
+                let res = await skills.attackNearest(this.manager.agent.bot, this.source);
                 if (!res || this.manager.agent.bot.interrupt_code)
                     break;
             }
