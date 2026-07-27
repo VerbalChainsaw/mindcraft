@@ -45,7 +45,7 @@
 <header>
   <h1>🎬 Director Console</h1>
   <span class="tag">command · program · leash</span>
-  <span style="margin-left:auto"><a href="index.html" style="color:var(--muted);text-decoration:none">← Dashboard</a></span>
+  <span style="margin-left:auto"><a id="dashboardLink" href="index.html" style="color:var(--muted);text-decoration:none">← Dashboard</a></span>
 </header>
 
 <div class="wrap">
@@ -118,11 +118,18 @@
 
 <script src="socket.io/socket.io.js"></script>
 <script>
-const basePath = window.location.pathname.replace(/[^/]*$/, '');
+function getBasePath() {
+  const pathname = window.location.pathname;
+  return pathname.endsWith('/') ? pathname : pathname.slice(0, pathname.lastIndexOf('/') + 1);
+}
+
+const basePath = getBasePath();
 const apiBase = `${basePath}api`;
+const dashboardPath = `${basePath}index.html`;
 const socket = io({ path: basePath + 'socket.io' });
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
+document.getElementById('dashboardLink').href = dashboardPath;
 
 function log(msg, cls) {
   const line = document.createElement('div');
