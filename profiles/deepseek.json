@@ -3,5 +3,5 @@
 
     "model": "deepseek-chat",
 
-    "embedding": "openai"
+    "embedding": "deepseek"
 }

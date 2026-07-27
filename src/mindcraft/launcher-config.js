@@ -50,12 +50,21 @@ function asBoolean(value, fallback = false) {
   return fallback;
 }
 
+export class MindServerPublicBindError extends Error {}
+
+export function assertMindServerLoopbackOnly(hostPublic) {
+  if (asBoolean(hostPublic, false)) {
+    throw new MindServerPublicBindError('mindserver_host_public: true is not supported because MindServer has no authentication. Keep MindServer loopback-only: set mindserver_host_public to false.');
+  }
+}
+
 function asNonEmptyString(value, fallback) {
   return typeof value === 'string' && value.trim().length > 0 ? value : fallback;
 }
 
 function asStringArray(value, fallback = []) {
   if (!Array.isArray(value)) return fallback;
+  if (value.length === 0) return [];
   const values = value
     .filter((entry) => typeof entry === 'string')
     .map((entry) => entry.trim())
@@ -63,42 +72,54 @@ function asStringArray(value, fallback = []) {
   return values.length > 0 ? values : fallback;
 }
 
-function sanitizeAgentDefaults(value) {
+function sanitizeAgentDefaults(value, fallback = DEFAULT_AGENT_DEFAULTS) {
+  const base = {
+    ...DEFAULT_AGENT_DEFAULTS,
+    ...fallback,
+  };
+
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { ...DEFAULT_AGENT_DEFAULTS };
+    return { ...base };
   }
 
   return {
-    ...DEFAULT_AGENT_DEFAULTS,
-    host: asNonEmptyString(value.host, DEFAULT_AGENT_DEFAULTS.host),
-    port: asNumber(value.port, DEFAULT_AGENT_DEFAULTS.port),
-    auth: asNonEmptyString(value.auth, DEFAULT_AGENT_DEFAULTS.auth),
-    minecraft_version: asNonEmptyString(value.minecraft_version, DEFAULT_AGENT_DEFAULTS.minecraft_version),
-    base_profile: asNonEmptyString(value.base_profile, DEFAULT_AGENT_DEFAULTS.base_profile),
-    model: asNonEmptyString(value.model, DEFAULT_AGENT_DEFAULTS.model),
-    init_message: asNonEmptyString(value.init_message, DEFAULT_AGENT_DEFAULTS.init_message),
-    load_memory: asBoolean(value.load_memory, DEFAULT_AGENT_DEFAULTS.load_memory),
-    speak: asBoolean(value.speak, DEFAULT_AGENT_DEFAULTS.speak),
-    chat_ingame: asBoolean(value.chat_ingame, DEFAULT_AGENT_DEFAULTS.chat_ingame),
+    ...base,
+    host: asNonEmptyString(value.host, base.host),
+    port: asNumber(value.port, base.port),
+    auth: asNonEmptyString(value.auth, base.auth),
+    minecraft_version: asNonEmptyString(value.minecraft_version, base.minecraft_version),
+    base_profile: asNonEmptyString(value.base_profile, base.base_profile),
+    model: asNonEmptyString(value.model, base.model),
+    init_message: asNonEmptyString(value.init_message, base.init_message),
+    load_memory: asBoolean(value.load_memory, base.load_memory),
+    speak: asBoolean(value.speak, base.speak),
+    chat_ingame: asBoolean(value.chat_ingame, base.chat_ingame),
   };
 }
 
 function sanitizeLauncherConfig(raw = {}, baseSettings = {}) {
+  assertMindServerLoopbackOnly(raw.mindserver_host_public);
+
+  const baseAgentDefaults = {
+    ...DEFAULT_AGENT_DEFAULTS,
+    host: asNonEmptyString(baseSettings.host, DEFAULT_AGENT_DEFAULTS.host),
+    port: baseSettings.port ?? DEFAULT_AGENT_DEFAULTS.port,
+    auth: asNonEmptyString(baseSettings.auth, DEFAULT_AGENT_DEFAULTS.auth),
+    minecraft_version: asNonEmptyString(baseSettings.minecraft_version, DEFAULT_AGENT_DEFAULTS.minecraft_version),
+    base_profile: asNonEmptyString(baseSettings.base_profile, DEFAULT_AGENT_DEFAULTS.base_profile),
+    model: asNonEmptyString(baseSettings.model, DEFAULT_AGENT_DEFAULTS.model),
+    init_message: asNonEmptyString(baseSettings.init_message, DEFAULT_AGENT_DEFAULTS.init_message),
+    load_memory: asBoolean(baseSettings.load_memory, DEFAULT_AGENT_DEFAULTS.load_memory),
+    speak: asBoolean(baseSettings.speak, DEFAULT_AGENT_DEFAULTS.speak),
+    chat_ingame: asBoolean(baseSettings.chat_ingame, DEFAULT_AGENT_DEFAULTS.chat_ingame),
+  };
   const base = {
     ...DEFAULT_LAUNCHER_CONFIG,
     mindserver_port: baseSettings.mindserver_port || DEFAULT_LAUNCHER_CONFIG.mindserver_port,
-    agent_defaults: {
-      ...DEFAULT_AGENT_DEFAULTS,
-      host: baseSettings.host || DEFAULT_AGENT_DEFAULTS.host,
-      port: asNumber(baseSettings.port, DEFAULT_AGENT_DEFAULTS.port),
-      auth: asNonEmptyString(baseSettings.auth, DEFAULT_AGENT_DEFAULTS.auth),
-      minecraft_version: asNonEmptyString(baseSettings.minecraft_version, DEFAULT_AGENT_DEFAULTS.minecraft_version),
-      base_profile: asNonEmptyString(baseSettings.base_profile, DEFAULT_AGENT_DEFAULTS.base_profile),
-      init_message: asNonEmptyString(baseSettings.init_message, DEFAULT_AGENT_DEFAULTS.init_message),
-      load_memory: asBoolean(baseSettings.load_memory, DEFAULT_AGENT_DEFAULTS.load_memory),
-      speak: asBoolean(baseSettings.speak, DEFAULT_AGENT_DEFAULTS.speak),
-      chat_ingame: asBoolean(baseSettings.chat_ingame, DEFAULT_AGENT_DEFAULTS.chat_ingame),
-    },
+    auto_open_ui: asBoolean(baseSettings.auto_open_ui, DEFAULT_LAUNCHER_CONFIG.auto_open_ui),
+    auto_start: asBoolean(baseSettings.auto_start, DEFAULT_LAUNCHER_CONFIG.auto_start),
+    profiles: asStringArray(baseSettings.profiles, DEFAULT_LAUNCHER_CONFIG.profiles),
+    agent_defaults: baseAgentDefaults,
   };
 
   return {
@@ -110,7 +131,7 @@ function sanitizeLauncherConfig(raw = {}, baseSettings = {}) {
     port_scan_start: asNumber(raw.port_scan_start, base.port_scan_start),
     port_scan_max: Math.max(1, Math.min(80, asNumber(raw.port_scan_max, base.port_scan_max))),
     profiles: asStringArray(raw.profiles, base.profiles),
-    agent_defaults: sanitizeAgentDefaults(raw.agent_defaults),
+    agent_defaults: sanitizeAgentDefaults(raw.agent_defaults, base.agent_defaults),
   };
 }
 
@@ -124,6 +145,9 @@ export function loadLauncherConfig(baseSettings = {}, configPath) {
     const raw = JSON.parse(readFileSync(path, 'utf8'));
     return sanitizeLauncherConfig(raw, baseSettings);
   } catch (err) {
+    if (err instanceof MindServerPublicBindError) {
+      throw err;
+    }
     if (err.code !== 'ENOENT') {
       console.warn('Invalid launcher-config.json. Falling back to defaults.');
       console.warn(err.message);

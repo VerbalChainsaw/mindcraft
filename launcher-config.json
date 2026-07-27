@@ -6,7 +6,7 @@
   "port_scan_start": 8080,
   "port_scan_max": 20,
   "profiles": [
-    "./andy.json"
+    "./profiles/deepseek.json"
   ],
   "agent_defaults": {
     "host": "127.0.0.1",
