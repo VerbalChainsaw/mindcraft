@@ -5,10 +5,11 @@ import net from 'net';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import * as mindcraft from './mindcraft.js';
 import { hasKey } from '../utils/keys.js';
-import { loadLauncherConfig, writeLauncherConfig, getLauncherConfigPath } from './launcher-config.js';
+import { buildHealthStatus } from './health-status.js';
+import { assertMindServerLoopbackOnly, loadLauncherConfig, writeLauncherConfig, getLauncherConfigPath } from './launcher-config.js';
 import { swarm, defaultBrainHook } from './swarm/swarm.js';
 import { director } from './director.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,11 @@ const LAUNCHER_KEY_PROVIDERS = [
   'MERCURY_API_KEY',
   'VLLM_API_KEY',
   'CEREBRAS_API_KEY',
+  'OPENAI_COMPATIBLE_API_KEY',
+  'NVIDIA_API_KEY',
+  'TOGETHER_API_KEY',
+  'FIREWORKS_API_KEY',
+  'DEEPINFRA_API_KEY',
 ];
 
 function getLauncherConfigSummary() {
@@ -99,6 +105,21 @@ function resolveLauncherEntry() {
   return path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate);
 }
 
+function profileProvider(profile, model) {
+  if (typeof profile?.provider === 'string' && profile.provider.trim()) return profile.provider.trim();
+  if (typeof profile?.api === 'string' && profile.api.trim()) return profile.api.trim();
+  const modelText = String(model || '').toLowerCase();
+  const prefix = modelText.split('/')[0];
+  if (modelText.includes('claude')) return 'anthropic';
+  if (modelText.includes('gemini')) return 'google';
+  if (modelText.includes('grok')) return 'xai';
+  if (modelText.includes('deepseek')) return 'deepseek';
+  if (modelText.includes('mistral')) return 'mistral';
+  if (modelText.includes('qwen')) return 'qwen';
+  if (modelText.includes('gpt') || modelText.includes('/o1') || modelText.includes('/o3')) return 'openai';
+  return prefix && modelText.includes('/') ? prefix : '';
+}
+
 class AgentConnection {
     constructor(settings, viewer_port) {
         this.socket = null;
@@ -117,19 +138,74 @@ export function registerAgent(settings, viewer_port) {
     agent_connections[settings.profile.name] = agentConnection;
 }
 
+export function unregisterAgent(agentName) {
+    if (!agent_connections[agentName]) return;
+    delete agent_connections[agentName];
+    agentsStatusUpdate();
+}
+
 export function logoutAgent(agentName) {
     if (agent_connections[agentName]) {
         agent_connections[agentName].in_game = false;
-        agentsStatusUpdate();
     }
 }
 
+export function broadcastAgentStatus() {
+    agentsStatusUpdate();
+}
+
+export function waitForMindServerListening(server, port) {
+    return new Promise((resolve, reject) => {
+        const cleanup = () => {
+            server.off('error', onError);
+            server.off('listening', onListening);
+        };
+        const onError = (error) => {
+            cleanup();
+            reject(error);
+        };
+        const onListening = () => {
+            cleanup();
+            resolve(server);
+        };
+
+        server.once('error', onError);
+        server.once('listening', onListening);
+        try {
+            server.listen(port, 'localhost');
+        } catch (error) {
+            cleanup();
+            reject(error);
+        }
+    });
+}
+
 // Initialize the server
-export function createMindServer(host_public = false, port = 8080) {
+export function createMindServer(host_public = false, port = 8080, portScanMax = 1) {
+    assertMindServerLoopbackOnly(host_public);
+    return createMindServerWithRetries(port, portScanMax);
+}
+
+async function createMindServerWithRetries(port, portScanMax) {
+    const scanAttempts = Math.max(1, Math.trunc(Number(portScanMax) || 1));
+
+    for (let attempt = 0; attempt < scanAttempts; attempt += 1) {
+        try {
+            return await createMindServerAtPort(port + attempt);
+        } catch (error) {
+            if (error?.code !== 'EADDRINUSE' || attempt === scanAttempts - 1) {
+                throw error;
+            }
+        }
+    }
+}
+
+async function createMindServerAtPort(port) {
+
     const app = express();
-    server = http.createServer(app);
-    io = new Server(server);
-    server.on('connection', (socket) => {
+    const candidateServer = http.createServer(app);
+    const candidateIo = new Server(candidateServer);
+    candidateServer.on('connection', (socket) => {
         serverSockets.add(socket);
         socket.on('close', () => {
             serverSockets.delete(socket);
@@ -141,6 +217,38 @@ export function createMindServer(host_public = false, port = 8080) {
     app.use(express.json({ limit: '1mb' }));
     app.use(express.urlencoded({ extended: true, limit: '1mb' }));
     app.use(express.static(path.join(__dirname, 'public')));
+
+    // Read-only profile catalogue for the setup picker. Only direct children
+    // returned by readdir are used, so request input can never affect paths.
+    app.get('/api/profiles', (_req, res) => {
+      try {
+        const profilesDir = path.join(process.cwd(), 'profiles');
+        const profiles = readdirSync(profilesDir, { withFileTypes: true })
+          .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+          .map((entry) => {
+            const file = `./profiles/${entry.name}`;
+            try {
+              const data = JSON.parse(readFileSync(path.join(profilesDir, entry.name), 'utf8'));
+              const rawModel = data?.model;
+              const model = typeof rawModel === 'string' ? rawModel : rawModel?.model || '';
+              return {
+                file,
+                name: typeof data?.name === 'string' && data.name.trim() ? data.name.trim() : entry.name.replace(/\.json$/i, ''),
+                model: String(model),
+                provider: profileProvider(data, model),
+              };
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.name.localeCompare(b.name));
+        res.json({ success: true, profiles });
+      } catch (error) {
+        if (error?.code === 'ENOENT') return res.json({ success: true, profiles: [] });
+        res.status(500).json({ success: false, error: String(error.message || error) });
+      }
+    });
 
     // Launcher configuration APIs (for Simple Setup UI)
     app.get('/api/launcher-config', (_req, res) => {
@@ -272,24 +380,14 @@ export function createMindServer(host_public = false, port = 8080) {
         const conn = agent_connections[agentName];
         agents.push({ name: agentName, in_game: conn.in_game, socket_connected: !!conn.socket });
       }
-      const problems = [];
-      if (!anyKey) problems.push('No API key configured — add one in the Setup Wizard (API Keys card).');
-      if (!mcReachable) problems.push(`Minecraft server unreachable at ${mcHost}:${mcPort} — open a world to LAN on that port, or change it in Setup.`);
-      if (agents.length === 0) problems.push('No agents registered — start one from the dashboard or enable auto_start.');
-      else if (!agents.some(a => a.in_game)) problems.push('Agent(s) registered but none are in-game yet.');
-      res.json({
-        success: true,
-        ok: problems.length === 0,
-        checks: {
-          anyApiKey: anyKey,
-          keysFileExists,
-          minecraftReachable: mcReachable,
-          minecraftTarget: `${mcHost}:${mcPort}`,
-          agentsRegistered: agents.length,
-          agentsInGame: agents.filter(a => a.in_game).length,
-        },
-        problems,
-      });
+      res.json(buildHealthStatus({
+        anyApiKey: anyKey,
+        keysFileExists,
+        minecraftReachable: mcReachable,
+        minecraftTarget: mcTarget,
+        agents,
+        selectedProfiles: mindcraft.getSelectedProfileReadiness(),
+      }));
     });
 
     // ----- Realtime agent swarm (angry helpers) -----
@@ -380,11 +478,14 @@ export function createMindServer(host_public = false, port = 8080) {
       const agents = [];
       for (const agentName in agent_connections) {
         const conn = agent_connections[agentName];
+        const agentProcess = mindcraft.getAgentProcess(agentName);
         agents.push({
           name: agentName,
           in_game: conn.in_game,
           viewerPort: conn.viewer_port,
           socket_connected: !!conn.socket,
+          state: agentProcess?.state || 'unknown',
+          lastError: agentProcess?.lastError || null,
         });
       }
       res.json({ success: true, agents });
@@ -526,7 +627,7 @@ export function createMindServer(host_public = false, port = 8080) {
     });
 
     // Socket.io connection handling
-    io.on('connection', (socket) => {
+    candidateIo.on('connection', (socket) => {
         let curAgentName = null;
         console.log('Client connected');
 
@@ -551,17 +652,13 @@ export function createMindServer(host_public = false, port = 8080) {
                 }
             }
             if (settings.profile?.name) {
-                if (settings.profile.name in agent_connections) {
+                const existingProcess = mindcraft.getAgentProcess(settings.profile.name);
+                if (existingProcess && (existingProcess.isActive?.() || existingProcess.running)) {
                     callback({ success: false, error: 'Agent already exists' });
                     return;
                 }
                 let returned = await mindcraft.createAgent(settings);
                 callback({ success: returned.success, error: returned.error });
-                let name = settings.profile.name;
-                if (!returned.success && agent_connections[name]) {
-                    mindcraft.destroyAgent(name);
-                    delete agent_connections[name];
-                }
                 agentsStatusUpdate();
             }
             else {
@@ -598,7 +695,7 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('disconnect', () => {
-            if (agent_connections[curAgentName]) {
+            if (agent_connections[curAgentName]?.socket === socket) {
                 console.log(`Agent ${curAgentName} disconnected`);
                 agent_connections[curAgentName].in_game = false;
                 agent_connections[curAgentName].socket = null;
@@ -633,25 +730,33 @@ export function createMindServer(host_public = false, port = 8080) {
             }
         });
 
-        socket.on('restart-agent', (agentName) => {
+        socket.on('restart-agent', async (agentName, callback) => {
             console.log(`Restarting agent: ${agentName}`);
             const conn = agent_connections[agentName];
-            if (conn && conn.socket) conn.socket.emit('restart-agent');
-            else console.warn(`Cannot restart '${agentName}': not registered or no live socket`);
+            let result;
+            if (conn && conn.socket) {
+                conn.socket.emit('restart-agent');
+                result = { success: true, error: null };
+            } else {
+                result = await mindcraft.startAgent(agentName);
+            }
+            if (typeof callback === 'function') callback(result);
+            agentsStatusUpdate();
         });
 
         socket.on('stop-agent', (agentName) => {
             mindcraft.stopAgent(agentName);
         });
 
-        socket.on('start-agent', (agentName) => {
-            mindcraft.startAgent(agentName);
+        socket.on('start-agent', async (agentName, callback) => {
+            const result = await mindcraft.startAgent(agentName);
+            if (typeof callback === 'function') callback(result);
+            agentsStatusUpdate();
         });
 
         socket.on('destroy-agent', (agentName) => {
             if (agent_connections[agentName]) {
                 mindcraft.destroyAgent(agentName);
-                delete agent_connections[agentName];
             }
             agentsStatusUpdate();
         });
@@ -755,15 +860,13 @@ export function createMindServer(host_public = false, port = 8080) {
         });
     });
 
-    const host = host_public ? '0.0.0.0' : 'localhost';
+    const host = 'localhost';
+    await waitForMindServerListening(candidateServer, port);
+    server = candidateServer;
+    io = candidateIo;
     mindserverHost = host;
-    mindserverPort = port;
-    if (host_public) {
-        console.log('Public hosting enabled: binding 0.0.0.0. This server is LAN reachable.');
-    }
-    server.listen(port, host, () => {
-        console.log(`MindServer running on port ${port} on host ${host}`);
-    });
+    mindserverPort = candidateServer.address().port;
+    console.log(`MindServer running on port ${mindserverPort} on host ${host}`);
 
     // Start the realtime agent swarm (heartbeat + cycle + mobility).
     swarm.setBrainHook(defaultBrainHook);
@@ -789,21 +892,25 @@ export function createMindServer(host_public = false, port = 8080) {
     director.on('program', (e) => { try { io.emit('director-event', { type: 'program', ...e }); } catch {} });
     director.on('leash', (e) => { try { io.emit('director-event', { type: 'leash', ...e }); } catch {} });
 
-    return server;
+    return candidateServer;
 }
 
 function agentsStatusUpdate(socket) {
     if (!socket) {
         socket = io;
     }
+    if (!socket || typeof socket.emit !== 'function') return;
     let agents = [];
     for (let agentName in agent_connections) {
         const conn = agent_connections[agentName];
+        const agentProcess = mindcraft.getAgentProcess(agentName);
         agents.push({
             name: agentName, 
             in_game: conn.in_game,
             viewerPort: conn.viewer_port,
-            socket_connected: !!conn.socket
+            socket_connected: !!conn.socket,
+            state: agentProcess?.state || 'unknown',
+            lastError: agentProcess?.lastError || null,
         });
     };
     socket.emit('agents-status', agents);
