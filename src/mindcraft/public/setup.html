@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mindcraft Setup Wizard</title>
   <style>
     body {
@@ -28,12 +29,15 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
+      min-width: 0;
     }
     label {
       color: #cfcfcf;
       font-size: 0.9em;
     }
-    input, textarea {
+    input, select, textarea {
+      box-sizing: border-box;
+      max-width: 100%;
       background: #262626;
       border: 1px solid #555;
       color: #e8e8e8;
@@ -75,6 +79,43 @@
     .error { color: #ff9ea4; }
     .muted { color: #9f9f9f; font-size: 0.9em; }
     a { color: #90caf9; }
+    input[type="checkbox"] { accent-color: #62e6c8; }
+    .profile-picker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-top: 8px; }
+    .profile-panel { background: #252525; border: 1px solid #444; border-radius: 6px; padding: 10px; min-height: 150px; }
+    .profile-panel h3 { color: #8cebd6; font-family: monospace; font-size: 0.95em; margin: 0 0 8px; }
+    .available-hint { color: #9f9f9f; font-size: 0.78em; margin: -3px 0 7px; }
+    .profile-list { display: grid; gap: 7px; }
+    .profile-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #303030; border-left: 3px solid #38bdf8; border-radius: 4px; padding: 8px; }
+    .profile-info { min-width: 0; }
+    .profile-name { color: #f1f1f1; font-weight: bold; }
+    .profile-file { color: #888; font: 0.78em monospace; margin-top: 3px; overflow-wrap: anywhere; }
+    .model-badge { display: inline-block; color: #9ff5dc; background: #16463d; border-radius: 10px; font: 0.75em monospace; margin-top: 4px; padding: 2px 7px; }
+    .profile-item button { flex: 0 0 auto; padding: 5px 8px; font-size: 0.82em; }
+    .add-profile { background: #167c70; }
+    .remove-profile { background: #7a4148; }
+    .move-profile { background: #505050; padding: 5px 7px !important; }
+    .profile-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+    .empty-profiles { color: #9f9f9f; font-size: 0.88em; padding: 12px 4px; }
+    .profile-announcement { min-height: 1.2em; margin-top: 7px; }
+    .setup-actions { display: grid; grid-template-columns: auto auto auto auto; gap: 10px; align-items: center; }
+    .setup-actions button { min-height: 40px; }
+    .setup-actions #result { grid-column: 1 / -1; min-height: 1.3em; }
+    @media (max-width: 700px) {
+      .row { grid-template-columns: 1fr; }
+      .profile-picker { grid-template-columns: 1fr; }
+      .profile-panel.available-panel { order: 2; max-height: 280px; overflow-y: auto; scrollbar-color: #38bdf8 #252525; }
+      .profile-panel.selected-panel { order: 1; }
+      .profile-panel.available-panel::after { content: '↓ more profiles below'; display: block; color: #8ddcff; font-size: .76em; text-align: center; padding-top: 8px; border-top: 1px solid #3f5961; }
+      .profile-item { align-items: flex-start; }
+      .profile-item button { min-height: 38px; }
+      .profile-actions { gap: 6px; }
+      .profile-actions .move-profile { flex: 1 1 110px; }
+      .profile-actions .remove-profile { flex-basis: 100%; }
+      .setup-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .setup-actions #saveBtn { grid-column: 1 / -1; }
+      .setup-actions #result { grid-column: 1 / -1; border-top: 1px solid #444; padding-top: 8px; }
+      .setup-actions button { min-height: 44px; }
+    }
   </style>
 </head>
 <body>
@@ -97,8 +138,8 @@
         <input id="port_scan_max" type="number" min="1" max="120" />
       </div>
       <div class="field">
-        <label for="mindserver_host_public">Expose on LAN</label>
-        <input id="mindserver_host_public" type="checkbox" />
+        <label for="mindserver_host_public">Expose on LAN (unavailable)</label>
+        <input id="mindserver_host_public" type="checkbox" disabled />
       </div>
       <div class="field">
         <label for="auto_open_ui">Auto-open UI on startup</label>
@@ -109,9 +150,22 @@
         <input id="auto_start" type="checkbox" />
       </div>
     </div>
+    <p class="muted">MindServer stays loopback-only. Use the local dashboard URL shown after startup; public or LAN dashboard binding is not supported.</p>
     <div class="field" style="margin-top: 8px;">
-      <label for="profiles">Profiles to start (one path per line)</label>
-      <textarea id="profiles"></textarea>
+      <label>Startup profiles</label>
+      <input type="hidden" id="profiles" />
+      <div class="profile-picker">
+        <section class="profile-panel available-panel" aria-labelledby="availableProfilesHeading">
+          <h3 id="availableProfilesHeading">Available Profiles</h3>
+          <div class="available-hint">Scroll to browse all profiles</div>
+          <div id="availableProfiles" class="profile-list"></div>
+        </section>
+        <section class="profile-panel selected-panel" aria-labelledby="selectedProfilesHeading">
+          <h3 id="selectedProfilesHeading">Selected Profiles</h3>
+          <div id="selectedProfiles" class="profile-list"></div>
+        </section>
+      </div>
+      <div id="profileAnnouncement" class="muted profile-announcement" aria-live="polite" aria-atomic="true"></div>
     </div>
   </div>
 
@@ -163,7 +217,7 @@
 
   <div class="card">
     <h2>API Keys</h2>
-    <p class="muted">Paste a key and click Save Keys — it's written to <code>keys.json</code>. Values are never displayed back. At least one key is required to run a bot.</p>
+    <p class="muted">Paste a key and click Save Keys — it's written to <code>keys.json</code>. Values are never displayed back. Ollama, LM Studio, and vLLM local profiles do not need an API key. A cloud-backed profile requires its provider's API key.</p>
     <div class="row">
       <div class="field">
         <label for="key_provider">Provider</label>
@@ -182,19 +236,33 @@
     <div id="keyStatus" class="key-grid"></div>
   </div>
 
-  <div class="actions">
+  <div class="card">
+    <h2>Live Readiness</h2>
+    <ol class="muted">
+      <li>Select a profile, then confirm its model provider is reachable. Save the matching cloud key only when that profile needs one.</li>
+      <li>Set the Minecraft host, port, authentication mode, and supported version for the target server.</li>
+      <li>For a local single-player world, open a world to LAN and use the announced port. For a dedicated server, ensure its host and port accept TCP connections.</li>
+      <li>Save Launch Config, restart the launcher, then use the dashboard health banner for the exact remaining blocker.</li>
+    </ol>
+  </div>
+
+  <div class="setup-actions">
     <button id="saveBtn" class="primary">Save Launch Config</button>
     <button id="refreshBtn" class="secondary">Reload</button>
     <button id="restartBtn" class="secondary">Restart Launcher</button>
     <button id="openDashboardBtn" class="secondary">Open Dashboard</button>
-    <span id="result"></span>
+    <span id="result" role="status" aria-live="polite"></span>
   </div>
 
     <p class="muted">Changes are written to <code>launcher-config.json</code>. Use <b>Restart Launcher</b> to apply them immediately.</p>
 
   <script>
     const resultEl = document.getElementById('result');
-    const basePath = window.location.pathname.replace(/[^/]*$/, '');
+    function getBasePath() {
+      const pathname = window.location.pathname;
+      return pathname.endsWith('/') ? pathname : pathname.slice(0, pathname.lastIndexOf('/') + 1);
+    }
+    const basePath = getBasePath();
     const apiBase = `${basePath}api`;
     const dashboardPath = `${basePath}index.html`;
 
@@ -220,6 +288,126 @@
       } else {
         el.value = value ?? '';
       }
+    }
+
+    let profileCatalog = [];
+    let selectedProfileFiles = [];
+
+    function syncSelectedProfiles() {
+      document.getElementById('profiles').value = selectedProfileFiles.join('\n');
+    }
+
+    function announceProfileChange(message) {
+      document.getElementById('profileAnnouncement').textContent = message;
+    }
+
+    function profileDetails(file) {
+      return profileCatalog.find((profile) => profile.file === file) || {
+        file,
+        name: file.split('/').pop().replace(/\.json$/i, ''),
+        model: '',
+        provider: '',
+      };
+    }
+
+    function profileCard(profile, selected, index) {
+      const item = document.createElement('div');
+      item.className = 'profile-item';
+      const info = document.createElement('div');
+      info.className = 'profile-info';
+      const name = document.createElement('div');
+      name.className = 'profile-name';
+      name.textContent = profile.name;
+      info.appendChild(name);
+      const badge = document.createElement('span');
+      badge.className = 'model-badge';
+      badge.textContent = profile.model ? `${profile.provider ? profile.provider + ' · ' : ''}${profile.model}` : 'No model set';
+      info.appendChild(badge);
+      const file = document.createElement('div');
+      file.className = 'profile-file';
+      file.textContent = profile.file;
+      info.appendChild(file);
+      item.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'profile-actions';
+      if (selected) {
+        const remove = document.createElement('button');
+        remove.className = 'remove-profile';
+        remove.textContent = '✕ Remove';
+        remove.title = 'Remove';
+        remove.setAttribute('aria-label', `Remove profile ${profile.name}`);
+        remove.addEventListener('click', () => {
+          selectedProfileFiles.splice(index, 1);
+          announceProfileChange(`${profile.name} removed from selected profiles.`);
+          renderProfilePicker();
+        });
+        actions.appendChild(remove);
+        [['↑ Move Up', -1], ['↓ Move Down', 1]].forEach(([label, direction]) => {
+          const move = document.createElement('button');
+          move.className = 'move-profile';
+          move.textContent = label;
+          move.title = label.replace(/^[↑↓] /, '');
+          move.setAttribute('aria-label', `${label.replace(/^[↑↓] /, '')} ${profile.name}`);
+          move.disabled = direction < 0 ? index === 0 : index === selectedProfileFiles.length - 1;
+          move.addEventListener('click', () => {
+            const target = index + direction;
+            [selectedProfileFiles[index], selectedProfileFiles[target]] = [selectedProfileFiles[target], selectedProfileFiles[index]];
+            announceProfileChange(`${profile.name} moved ${direction < 0 ? 'up' : 'down'}.`);
+            renderProfilePicker();
+          });
+          actions.appendChild(move);
+        });
+      } else {
+        const add = document.createElement('button');
+        add.className = 'add-profile';
+        add.textContent = 'Add →';
+        add.setAttribute('aria-label', `Add profile ${profile.name}`);
+        add.addEventListener('click', () => {
+          selectedProfileFiles.push(profile.file);
+          announceProfileChange(`${profile.name} added to selected profiles.`);
+          renderProfilePicker();
+        });
+        actions.appendChild(add);
+      }
+      item.appendChild(actions);
+      return item;
+    }
+
+    function renderProfilePicker() {
+      syncSelectedProfiles();
+      const available = document.getElementById('availableProfiles');
+      const selected = document.getElementById('selectedProfiles');
+      available.innerHTML = '';
+      selected.innerHTML = '';
+      profileCatalog.filter((profile) => !selectedProfileFiles.includes(profile.file)).forEach((profile) => {
+        available.appendChild(profileCard(profile, false, 0));
+      });
+      selectedProfileFiles.forEach((file, index) => selected.appendChild(profileCard(profileDetails(file), true, index)));
+      if (selectedProfileFiles.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-profiles';
+        empty.textContent = 'No profiles selected. Add some from the left panel.';
+        selected.appendChild(empty);
+      }
+      if (available.children.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-profiles';
+        empty.textContent = 'No profiles available.';
+        available.appendChild(empty);
+      }
+    }
+
+    async function loadProfiles() {
+      try {
+        const res = await fetch(`${apiBase}/profiles`);
+        const payload = await res.json();
+        if (payload.success) profileCatalog = Array.isArray(payload.profiles) ? payload.profiles : [];
+      } catch (error) {
+        resultEl.textContent = 'Failed to load profiles: ' + error;
+        resultEl.className = 'error';
+      }
+      renderProfilePicker();
     }
 
     function renderKeys(keys = {}) {
@@ -292,8 +480,8 @@
       setVal('mindserver_host_public', config.mindserver_host_public);
       setVal('auto_open_ui', config.auto_open_ui);
       setVal('auto_start', config.auto_start);
-      const profiles = Array.isArray(config.profiles) ? config.profiles : [];
-      document.getElementById('profiles').value = profiles.join('\n');
+      selectedProfileFiles = Array.isArray(config.profiles) ? config.profiles : [];
+      renderProfilePicker();
 
       const d = config.agent_defaults || {};
       setVal('agent_host', d.host);
@@ -426,6 +614,7 @@
       }
     });
 
+    loadProfiles();
     loadConfig();
   </script>
 </body>
