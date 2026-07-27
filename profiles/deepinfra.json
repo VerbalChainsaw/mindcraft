@@ -1,0 +1,19 @@
+{
+    "name": "deepinfra",
+    "model": {
+        "api": "openai_compatible",
+        "model": "meta-llama/Llama-3.3-70B-Instruct",
+        "url": "https://api.deepinfra.com/v1/openai",
+        "params": {
+            "api_key_env": "DEEPINFRA_API_KEY"
+        }
+    },
+    "embedding": {
+        "api": "openai_compatible",
+        "model": "BAAI/bge-base-en-v1.5",
+        "url": "https://api.deepinfra.com/v1/openai",
+        "params": {
+            "api_key_env": "DEEPINFRA_API_KEY"
+        }
+    }
+}

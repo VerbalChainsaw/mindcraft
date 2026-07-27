@@ -1,0 +1,20 @@
+{
+    "name": "nvidia-nim",
+    "model": {
+        "api": "openai_compatible",
+        "model": "nvidia/llama-3.1-nemotron-70b-instruct",
+        "url": "https://integrate.api.nvidia.com/v1",
+        "params": {
+            "api_key_env": "NVIDIA_API_KEY"
+        }
+    },
+    "embedding": {
+        "api": "openai_compatible",
+        "model": "nvidia/nv-embed-v1",
+        "url": "https://integrate.api.nvidia.com/v1",
+        "params": {
+            "api_key_env": "NVIDIA_API_KEY",
+            "input_type": "passage"
+        }
+    }
+}
