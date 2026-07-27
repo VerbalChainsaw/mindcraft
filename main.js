@@ -4,14 +4,28 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
-import net from 'net';
+import { fileURLToPath } from 'url';
 import { loadLauncherConfig } from './src/mindcraft/launcher-config.js';
+import { buildProfileSettings, prepareProfiles } from './src/mindcraft/profile-preflight.js';
+import {
+  cloneSettings,
+  normalizeProfilePaths,
+  normalizeString,
+  resolveLauncherSettings,
+} from './src/mindcraft/runtime-config.js';
+import { hasKey } from './src/utils/keys.js';
+
+export { resolveLauncherSettings } from './src/mindcraft/runtime-config.js';
 
 function parseArguments() {
   return yargs(hideBin(process.argv))
     .option('profiles', {
       type: 'array',
       describe: 'List of agent profile paths'
+    })
+    .option('profile', {
+      type: 'string',
+      describe: 'Agent profile path (converted to --profiles)'
     })
     .option('task_path', {
       type: 'string',
@@ -32,72 +46,6 @@ function safeParseJson(raw, fallback = undefined) {
   } catch {
     return fallback;
   }
-}
-
-function normalizeProfilePaths(profiles = []) {
-  if (!Array.isArray(profiles)) {
-    return [];
-  }
-  return profiles
-    .filter((entry) => typeof entry === 'string')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function normalizeString(value, fallback) {
-  return typeof value === 'string' && value.trim().length > 0 ? value : fallback;
-}
-
-function normalizeNumber(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? Math.trunc(parsed) : fallback;
-}
-
-function normalizeBoolean(value, fallback) {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
-    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
-  }
-  return fallback;
-}
-
-function isPortBusy(port, host = '127.0.0.1') {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once('error', (error) => {
-      resolve(error && error.code === 'EADDRINUSE');
-    });
-    srv.once('listening', () => {
-      srv.close(() => resolve(false));
-    });
-    srv.listen(port, host);
-  });
-}
-
-// Check both IPv4 and IPv6 loopback families. The mindserver binds to
-// `localhost`, which Node may resolve to ::1 (IPv6); a pure IPv4 probe would
-// miss an IPv6-bound listener and report a false "free" port.
-async function isPortBusyAnyFamily(port) {
-  const [v4, v6] = await Promise.all([
-    isPortBusy(port, '127.0.0.1'),
-    isPortBusy(port, '::1').catch(() => false),
-  ]);
-  return v4 || v6;
-}
-
-async function resolveFreePort(startPort, attempts, host = '127.0.0.1') {
-  const start = normalizeNumber(startPort, 8080);
-  const total = normalizeNumber(attempts, 20);
-  for (let index = 0; index < total; index += 1) {
-    const candidate = start + index;
-    const busy = await isPortBusyAnyFamily(candidate);
-    if (!busy) {
-      return candidate;
-    }
-  }
-  throw new Error(`No free port available in range ${start}-${start + total - 1}`);
 }
 
 function readTask(settingsObj, taskPath, taskId) {
@@ -125,30 +73,35 @@ function readTask(settingsObj, taskPath, taskId) {
   settingsObj.task_path = taskPath;
 }
 
-function cloneSettings(source) {
-  return JSON.parse(JSON.stringify(source));
+function loadSelectedProfiles(profilePaths) {
+  return profilePaths.map((profilePath) => {
+    try {
+      const resolvedProfilePath = path.resolve(process.cwd(), profilePath);
+      const profile = safeParseJson(readFileSync(resolvedProfilePath, 'utf8'), null);
+      return profile && typeof profile === 'object' && !Array.isArray(profile)
+        ? { profile }
+        : { loadError: 'Malformed selected profile.' };
+    } catch {
+      return { loadError: 'Malformed selected profile.' };
+    }
+  });
 }
 
-async function launchProfile(profilePath, baseSettings) {
-  const resolvedProfilePath = path.resolve(process.cwd(), profilePath);
-  const profileJson = safeParseJson(readFileSync(resolvedProfilePath, 'utf8'), null);
-  if (!profileJson) {
-    console.error(`[launcher] Skipping profile. Cannot parse JSON: ${profilePath}`);
-    return;
-  }
-
-  const agentSettings = {
+function createBlockedSettings(baseSettings, descriptor, profileEntry) {
+  if (profileEntry?.profile) return buildProfileSettings(baseSettings, profileEntry.profile);
+  return {
     ...cloneSettings(baseSettings),
-    profile: profileJson,
+    profile: { name: descriptor.name },
   };
+}
 
-  if (!agentSettings.profile.model && agentSettings.model) {
-    agentSettings.profile.model = agentSettings.model;
-  }
+async function launchProfile(descriptor, profileEntries, baseSettings) {
+  const profileEntry = profileEntries[descriptor.index];
+  const agentSettings = buildProfileSettings(baseSettings, profileEntry.profile);
   delete agentSettings.auto_start;
 
   if (!agentSettings.profile?.name) {
-    console.error(`[launcher] Profile missing name property: ${profilePath}`);
+    console.error('[launcher] Profile missing name property.');
     return;
   }
 
@@ -158,119 +111,69 @@ async function launchProfile(profilePath, baseSettings) {
   }
 }
 
-(async () => {
+export async function runLauncher() {
   const args = parseArguments();
   const launcherConfig = loadLauncherConfig(settings);
-
-  if (args.profiles) {
-    settings.profiles = normalizeProfilePaths(args.profiles);
-  } else if (Array.isArray(launcherConfig.profiles) && launcherConfig.profiles.length > 0) {
-    settings.profiles = normalizeProfilePaths(launcherConfig.profiles);
-  }
-
-
+  const runtimeSettings = resolveLauncherSettings({
+    defaults: settings,
+    launcherConfig,
+    settingsJson: process.env.SETTINGS_JSON,
+    environment: process.env,
+    args,
+  });
   if (args.task_path) {
-    readTask(settings, normalizeString(args.task_path, ''), normalizeString(args.task_id, ''));
+    readTask(runtimeSettings, normalizeString(args.task_path, ''), normalizeString(args.task_id, ''));
   }
 
-  if (process.env.SETTINGS_JSON) {
-    try {
-      Object.assign(settings, safeParseJson(process.env.SETTINGS_JSON, {}));
-    } catch (err) {
-      console.error('Failed to parse SETTINGS_JSON:', err.message);
-    }
-  }
+  const profilesToLaunch = runtimeSettings.auto_start
+    ? normalizeProfilePaths(runtimeSettings.profiles)
+    : [];
+  const selectedProfiles = runtimeSettings.auto_start ? loadSelectedProfiles(profilesToLaunch) : [];
+  const profilePreflight = runtimeSettings.auto_start
+    ? prepareProfiles(selectedProfiles, runtimeSettings, { hasKey })
+    : { ready: [], blocked: [] };
 
-  settings.mindserver_port = normalizeNumber(launcherConfig.mindserver_port, settings.mindserver_port);
-  settings.auto_open_ui = normalizeBoolean(launcherConfig.auto_open_ui, settings.auto_open_ui);
-  settings.auto_start = normalizeBoolean(launcherConfig.auto_start, settings.auto_start ?? true);
-
-  settings.host = normalizeString(launcherConfig.agent_defaults.host, settings.host);
-  settings.port = normalizeNumber(launcherConfig.agent_defaults.port, settings.port);
-  settings.auth = normalizeString(launcherConfig.agent_defaults.auth, settings.auth);
-  settings.minecraft_version = normalizeString(launcherConfig.agent_defaults.minecraft_version, settings.minecraft_version);
-  settings.base_profile = normalizeString(launcherConfig.agent_defaults.base_profile, settings.base_profile);
-  settings.model = normalizeString(launcherConfig.agent_defaults.model, settings.model);
-  settings.init_message = normalizeString(launcherConfig.agent_defaults.init_message, settings.init_message);
-  settings.load_memory = normalizeBoolean(launcherConfig.agent_defaults.load_memory, settings.load_memory);
-  settings.speak = normalizeBoolean(launcherConfig.agent_defaults.speak, settings.speak);
-  settings.chat_ingame = normalizeBoolean(launcherConfig.agent_defaults.chat_ingame, settings.chat_ingame);
-
-  // Environment override layer
-  if (process.env.MINECRAFT_PORT) {
-    settings.port = normalizeNumber(process.env.MINECRAFT_PORT, settings.port);
-  }
-
-  if (process.env.MINDSERVER_PORT) {
-    settings.mindserver_port = normalizeNumber(process.env.MINDSERVER_PORT, settings.mindserver_port);
-  }
-
-  if (process.env.PROFILES) {
-    const parsed = safeParseJson(process.env.PROFILES, null);
-    const parsedProfiles = normalizeProfilePaths(parsed);
-    if (parsedProfiles.length > 0) {
-      settings.profiles = parsedProfiles;
-    }
-  }
-
-  if (process.env.INSECURE_CODING) {
-    settings.allow_insecure_coding = true;
-  }
-
-  if (process.env.BLOCKED_ACTIONS) {
-    const parsed = safeParseJson(process.env.BLOCKED_ACTIONS, null);
-    if (Array.isArray(parsed)) {
-      settings.blocked_actions = parsed;
-    }
-  }
-
-  if (process.env.MAX_MESSAGES) {
-    settings.max_messages = normalizeNumber(process.env.MAX_MESSAGES, settings.max_messages);
-  }
-
-  if (process.env.NUM_EXAMPLES) {
-    settings.num_examples = normalizeNumber(process.env.NUM_EXAMPLES, settings.num_examples);
-  }
-
-  if (process.env.LOG_ALL) {
-    settings.log_all_prompts = normalizeBoolean(process.env.LOG_ALL, settings.log_all_prompts);
-  }
-
-  const hostPublic = normalizeBoolean(launcherConfig.mindserver_host_public, false);
   // Honor port_scan_start when it differs from the mindserver port; otherwise
   // scan starting at the configured mindserver port.
   const scanBase = launcherConfig.port_scan_start && launcherConfig.port_scan_start !== 8080
     ? launcherConfig.port_scan_start
-    : settings.mindserver_port;
-  const resolvedPort = await resolveFreePort(
+    : runtimeSettings.mindserver_port;
+  const resolvedPort = await Mindcraft.init(
+    false,
     scanBase,
+    runtimeSettings.auto_open_ui,
     launcherConfig.port_scan_max,
   );
 
-  if (resolvedPort !== settings.mindserver_port) {
-    console.log(`[launcher] Port ${settings.mindserver_port} was occupied. Using next free port: ${resolvedPort}`);
-    settings.mindserver_port = resolvedPort;
+  if (resolvedPort !== runtimeSettings.mindserver_port) {
+    console.log(`[launcher] Port ${runtimeSettings.mindserver_port} was occupied. Using next free port: ${resolvedPort}`);
+    runtimeSettings.mindserver_port = resolvedPort;
   }
 
-  await Mindcraft.init(hostPublic, settings.mindserver_port, settings.auto_open_ui);
-
-  if (!settings.auto_start) {
+  if (!runtimeSettings.auto_start) {
     console.log('[launcher] auto_start is disabled. Use the web UI to start agents manually.');
     return;
   }
 
-  const profilesToLaunch = normalizeProfilePaths(settings.profiles);
   if (profilesToLaunch.length === 0) {
     console.log('[launcher] auto_start is enabled, but no profiles were configured.');
     return;
   }
 
-  const startupSettings = cloneSettings(settings);
-
-  for (const profile of profilesToLaunch) {
-    await launchProfile(profile, startupSettings);
+  for (const descriptor of profilePreflight.blocked) {
+    const agentSettings = createBlockedSettings(runtimeSettings, descriptor, selectedProfiles[descriptor.index]);
+    delete agentSettings.auto_start;
+    Mindcraft.registerBlockedAgent(agentSettings, descriptor, { hasKey });
   }
-})().catch((err) => {
-  console.error('[launcher] Fatal startup error:', err && err.message ? err.message : err);
-  process.exit(1);
-});
+
+  for (const descriptor of profilePreflight.ready) {
+    await launchProfile(descriptor, selectedProfiles, runtimeSettings);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runLauncher().catch((err) => {
+    console.error('[launcher] Fatal startup error:', err && err.message ? err.message : err);
+    process.exit(1);
+  });
+}
