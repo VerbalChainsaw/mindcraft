@@ -40,7 +40,7 @@ export const queryList = [
         description: "Inspect your body, movement, current action, nearby hazards, entities, dropped items, useful blocks, tools, and reflex modes.",
         perform: function (agent) {
             const state = getFullState(agent, { deep: true });
-            const { gameplay, action, body, surroundings, inventory, perception, modes } = state;
+            const { gameplay, action, body, surroundings, inventory, perception, modes, progression } = state;
             const position = gameplay.position;
             const describe = (entries, empty = 'none') => entries.length > 0
                 ? entries.map(entry => {
@@ -77,6 +77,14 @@ export const queryList = [
             res += `\n- Hazards: ${describe(perception.hazards)}`;
             res += `\n- Useful blocks/resources: ${describe(perception.usefulBlocks)}`;
             res += `\n- Reflex modes: ${modeState}`;
+            res += `\n- Survival progression: ${progression.completedMilestones}/${progression.totalMilestones} prerequisites evidenced; current stage=${progression.currentStage}`;
+            res += `\n- Next required milestone: ${progression.nextMilestone}`;
+            res += `\n- Missing prerequisites: ${progression.missingPrerequisites.join(', ') || 'none'}`;
+            res += `\n- Order of operations: ${progression.nextOperation}`;
+            res += `\n- Next deterministic command: ${progression.recommendedCommand || 'none; stop and report the blocker'}`;
+            if (progression.blocker) {
+                res += `\n- Progression blocker: ${progression.blocker}`;
+            }
             if (action.goalDirector?.goal) {
                 const goal = action.goalDirector.goal;
                 const target = goal.target?.family || goal.target?.canonicalName || 'item';

@@ -2074,6 +2074,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             log(bot, `Don't have right tools to harvest ${blockType}.`);
             return false;
         }
+        let beforeTargetDropCount = null;
         try {
             let success = false;
             if (isLiquid) {
@@ -2100,17 +2101,49 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 success = true;
             }
             else {
-                const beforeDropCount = inventoryCountByTypes(bot, expectedDropTypes);
-                // The plugin requires canDig=true even for its explicit target
-                // and mutates the supplied policy. Scope that permission to this
-                // exact block, then restore ordinary non-digging movement.
-                bot.collectBlock.movements = targetScopedCollectionMovements(bot, block);
+                beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                bot.modes.pause('unstuck');
+                bot.modes.pause('elbow_room');
                 try {
-                    await bot.collectBlock.collect(block);
+                    let liveTarget = bot.blockAt(block.position);
+                    let directReach = liveTarget?.type === block.type
+                        && bot.entity.position.distanceTo(block.position) <= 4.5
+                        && bot.canSeeBlock?.(liveTarget);
+                    if (!directReach) {
+                        const reached = await goToPosition(
+                            bot,
+                            block.position.x,
+                            block.position.y,
+                            block.position.z,
+                            4,
+                        );
+                        liveTarget = bot.blockAt(block.position);
+                        directReach = reached
+                            && liveTarget?.type === block.type
+                            && bot.entity.position.distanceTo(block.position) <= 4.5
+                            && bot.canSeeBlock?.(liveTarget);
+                    }
+                    if (directReach) {
+                        await bot.dig(liveTarget);
+                        await new Promise(resolve => setTimeout(resolve, 250));
+                        await pickupNearbyItems(bot);
+                    } else {
+                        // The plugin requires canDig=true even for its explicit
+                        // target and mutates the supplied policy. Scope that
+                        // permission to this exact block, then restore ordinary
+                        // non-digging movement.
+                        bot.collectBlock.movements = targetScopedCollectionMovements(bot, block);
+                        try {
+                            await bot.collectBlock.collect(block);
+                        } finally {
+                            const routeMovements = safeMovements(bot);
+                            bot.collectBlock.movements = routeMovements;
+                            bot.pathfinder.setMovements(routeMovements);
+                        }
+                    }
                 } finally {
-                    const routeMovements = safeMovements(bot);
-                    bot.collectBlock.movements = routeMovements;
-                    bot.pathfinder.setMovements(routeMovements);
+                    bot.modes.unpause('unstuck');
+                    bot.modes.unpause('elbow_room');
                 }
                 if (bot.interrupt_code) {
                     setActionEvidence(bot, {
@@ -2150,12 +2183,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     return false;
                 }
                 const afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
-                if (expectedDropTypes.size > 0 && afterDropCount <= beforeDropCount) {
+                if (expectedDropTypes.size > 0 && afterDropCount <= beforeTargetDropCount) {
                     setActionEvidence(bot, {
                         kind: 'collect',
                         outcome: 'not_collected',
                         target,
-                        beforeCount: beforeDropCount,
+                        beforeCount: beforeTargetDropCount,
                         afterCount: afterDropCount,
                         retryable: true,
                     });
@@ -2174,6 +2207,35 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             await autoLight(bot);
         }
         catch (err) {
+            // mineflayer-collectblock can time out while finalizing its path
+            // after Minecraft has already broken the target and delivered the
+            // drop. Reconcile against both facts before reporting failure or
+            // retrying a now-stale block position.
+            const remaining = bot.blockAt(block.position);
+            const afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+            if (
+                !isLiquid
+                && beforeTargetDropCount !== null
+                && remaining
+                && remaining.type !== block.type
+                && afterDropCount > beforeTargetDropCount
+            ) {
+                collected += 1;
+                if (!lowestCollectedTarget || target.y < lowestCollectedTarget.y) {
+                    lowestCollectedTarget = target;
+                }
+                setActionEvidence(bot, {
+                    kind: 'collect',
+                    outcome: 'collected',
+                    target,
+                    count: 1,
+                    retryable: false,
+                    recoveredFrom: collectionErrorOutcome(err),
+                });
+                log(bot, `Collected ${block.name}; reconciled the verified drop after the path helper timed out.`);
+                await autoLight(bot);
+                continue;
+            }
             if (err.name === 'NoChests') {
                 setActionEvidence(bot, { kind: 'collect', outcome: 'inventory_full', target, retryable: true });
                 log(bot, `Failed to collect ${blockType}: Inventory full, no place to deposit.`);
@@ -2308,14 +2370,17 @@ export async function pickupNearbyItems(bot) {
     }
     while (nearestItem) {
         const target = { name: nearestItem.displayName || nearestItem.name || 'item', id: nearestItem.id };
-        const reached = await goToGoal(bot, new pf.goals.GoalFollow(nearestItem, 1));
+        const reached = await goToGoal(bot, new pf.goals.GoalFollow(nearestItem, 0));
         if (!reached) {
             const outcome = bot.lastActionEvidence?.outcome || 'unreachable';
             setActionEvidence(bot, { kind: 'pickup', outcome, target, count: pickedUp, retryable: true });
             return false;
         }
-        await new Promise(resolve => setTimeout(resolve, 200));
         let prev = nearestItem;
+        const pickupDeadline = Date.now() + 1_200;
+        while (bot.entities?.[prev.id] === prev && Date.now() < pickupDeadline) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
         nearestItem = getNearestItem(bot);
         if (bot.entities?.[prev.id] === prev) {
             setActionEvidence(bot, { kind: 'pickup', outcome: 'not_collected', target, count: pickedUp, retryable: true });

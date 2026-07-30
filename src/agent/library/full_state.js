@@ -9,6 +9,7 @@ import convoManager from '../conversation.js';
 import * as mc from '../../utils/mcdata.js';
 import { actionResultToTelemetry } from '../runtime/action-result.js';
 import { identityToTelemetry } from '../runtime/identity-config.js';
+import { evaluateGameplayProgression } from '../runtime/gameplay-progression.js';
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 const HAZARD_BLOCKS = new Set([
@@ -712,5 +713,6 @@ export function getFullState(agent, { deep = false } = {}) {
         }
     };
 
+    state.progression = evaluateGameplayProgression(state);
     return state;
 }
