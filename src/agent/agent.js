@@ -435,8 +435,13 @@ export class Agent {
     requestInterrupt() {
         this.bot.interrupt_code = true;
         try { this.bot.stopDigging(); } catch { /* no active dig */ }
-        try { this.bot.collectBlock.cancelTask(); } catch { /* no collection task */ }
-        try { this.bot.pathfinder.stop(); } catch { /* no pathfinder goal */ }
+        try {
+            const cancellation = this.bot.collectBlock?.cancelTask?.();
+            if (cancellation && typeof cancellation.catch === 'function') {
+                void cancellation.catch(() => { /* best-effort collection cancellation */ });
+            }
+        } catch { /* no collection task */ }
+        try { this.bot.pathfinder.setGoal(null); } catch { /* no pathfinder goal */ }
         try { this.bot.pvp.stop(); } catch { /* no combat target */ }
         try { this.bot.deactivateItem(); } catch { /* no active item */ }
         try { this.bot.clearControlStates(); } catch { /* disconnected body */ }

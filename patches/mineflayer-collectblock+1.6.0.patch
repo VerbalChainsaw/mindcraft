@@ -1,0 +1,54 @@
+diff --git a/node_modules/mineflayer-collectblock/lib/CollectBlock.js b/node_modules/mineflayer-collectblock/lib/CollectBlock.js
+index 445df38..b9259d5 100644
+--- a/node_modules/mineflayer-collectblock/lib/CollectBlock.js
++++ b/node_modules/mineflayer-collectblock/lib/CollectBlock.js
+@@ -38,16 +38,25 @@ function collectAll(bot, options) {
+                     if (!closest.isValid)
+                         break;
+                     const tempEvents = new TemporarySubscriber_1.TemporarySubscriber(bot);
++                    let finishPickupWait;
+                     const waitForPickup = new Promise(resolve => {
++                        finishPickupWait = resolve;
+                         tempEvents.subscribeTo('entityGone', (entity) => {
+                             if (entity === closest) {
+-                                tempEvents.cleanup();
+                                 resolve();
+                             }
+                         });
+                     });
+-                    yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
+-                    yield waitForPickup;
++                    const cancelPickupWait = () => finishPickupWait();
++                    bot.once('collectBlock_cancelled', cancelPickupWait);
++                    try {
++                        yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
++                        yield waitForPickup;
++                    }
++                    finally {
++                        tempEvents.cleanup();
++                        bot.removeListener('collectBlock_cancelled', cancelPickupWait);
++                    }
+                     break;
+                 }
+                 default: {
+@@ -242,12 +251,14 @@ class CollectBlock {
+                     cb();
+                 return yield Promise.resolve();
+             }
+-            this.bot.pathfinder.stop();
+-            if (cb != null) {
+-                // @ts-expect-error
+-                this.bot.once('collectBlock_finished', cb);
+-            }
+-            yield (0, events_1.once)(this.bot, 'collectBlock_finished');
++            const finished = (0, events_1.once)(this.bot, 'collectBlock_finished');
++            this.targets.clear();
++            this.bot.emit('collectBlock_cancelled');
++            this.bot.pathfinder.setGoal(null);
++            this.bot.stopDigging();
++            yield finished;
++            if (cb != null)
++                cb();
+         });
+     }
+ }

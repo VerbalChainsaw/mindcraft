@@ -5520,7 +5520,7 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
     const startOxygen = Number(bot.oxygenLevel);
     const target = bot.entity?.position?.floored?.() || null;
     try {
-        try { bot.pathfinder?.stop?.(); } catch { /* best-effort movement preemption */ }
+        try { bot.pathfinder?.setGoal?.(null); } catch { /* best-effort immediate movement preemption */ }
         try { bot.clearControlStates(); } catch { /* best-effort control reset */ }
         bot.setControlState('jump', true);
         const surfaced = await waitForWorldCondition(bot, () => {
