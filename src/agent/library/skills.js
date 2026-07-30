@@ -17,6 +17,11 @@ import { rankCollectionCandidates } from '../runtime/collection-candidate-select
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import {
+    isWaterPotion,
+    potionFingerprint,
+    resolveBrewingPlan,
+} from '../runtime/brewing-plan.js';
+import {
     entityRequiresSaddle,
     isRideableEntityName,
     matchesRideableEntity,
@@ -81,6 +86,8 @@ const PORTAL_DESTINATION_SETTLE_MS = 5_000;
 const PORTAL_EXIT_TIMEOUT_MS = 5_000;
 const EXPLORATION_STALL_TIMEOUT_MS = 20_000;
 const EXPLORATION_LEG_TIMEOUT_MS = 90_000;
+const BREW_STAGE_TIMEOUT_MS = 28_000;
+const BREW_POLL_MS = 100;
 const EXPLORATION_LANDMARK_BLOCKS = Object.freeze([
     'gold_block',
     'emerald_block',
@@ -1740,6 +1747,262 @@ export async function smeltItem(bot, itemName, num=1) {
             }
             if (finalEvidence) setActionEvidence(bot, { ...finalEvidence, cleanup });
         }
+    }
+}
+
+async function moveOneWindowItem(bot, sourceSlot, destinationSlot) {
+    const window = bot.currentWindow;
+    if (!window) throw new Error('Container closed while moving an item.');
+    if (!window.slots[sourceSlot]) throw new Error(`Source slot ${sourceSlot} is empty.`);
+    if (window.slots[destinationSlot]) throw new Error(`Destination slot ${destinationSlot} is occupied.`);
+    await bot.clickWindow(sourceSlot, 0, 0);
+    await bot.clickWindow(destinationSlot, 1, 0);
+    await bot.clickWindow(sourceSlot, 0, 0);
+}
+
+function findWindowInventorySlot(window, predicate) {
+    for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
+        if (predicate(window.slots[slot])) return slot;
+    }
+    return null;
+}
+
+async function returnBrewingContents(bot, window) {
+    if (!window || bot.currentWindow !== window) return;
+    for (let slot = 0; slot <= 4; slot += 1) {
+        if (!window.slots[slot]) continue;
+        try {
+            await bot.putAway(slot);
+        } catch (error) {
+            console.warn(`[brewing] Could not return slot ${slot}: ${String(error?.message || error).slice(0, 180)}`);
+        }
+    }
+}
+
+export async function brewPotion(bot, requestedTarget, num=1) {
+    /**
+     * Brews one to three drinkable, splash, or lingering potions through a
+     * real brewing stand and verifies every ingredient-driven state change.
+     * @param {MinecraftBot} bot Mineflayer bot.
+     * @param {string} requestedTarget Target such as strength,
+     * strong_strength, long_fire_resistance, splash_healing, or
+     * lingering_poison.
+     * @param {number} num Number of bottles, from one to three.
+     * @returns {Promise<boolean>} true only after the output bottles are back
+     * in inventory with changed potion state.
+     */
+    const plan = resolveBrewingPlan(requestedTarget);
+    const amount = Math.max(1, Math.min(3, Math.floor(Number(num) || 1)));
+    const target = { name: String(requestedTarget || '').trim().toLowerCase(), count: amount };
+    let stand = null;
+    let standBlock = null;
+    let temporaryStand = null;
+    let contentsOwned = false;
+    let finalEvidence = null;
+    const finish = (success, outcome, detail = {}) => {
+        finalEvidence = {
+            kind: 'brew',
+            outcome,
+            target,
+            recipe: plan?.target || null,
+            output: plan?.outputItem || null,
+            requested: amount,
+            retryable: !success,
+            ...detail,
+        };
+        setActionEvidence(bot, finalEvidence);
+        return success;
+    };
+
+    if (!plan) {
+        log(bot, `Unsupported potion target '${target.name || 'unknown'}'.`);
+        return finish(false, 'unsupported_potion', { retryable: false });
+    }
+
+    try {
+        standBlock = world.getNearestBlock(bot, 'brewing_stand', 16);
+        if (!standBlock && inventoryCount(bot, 'brewing_stand') < 1) {
+            await craftRecipe(bot, 'brewing_stand', 1);
+        }
+        if (!standBlock && inventoryCount(bot, 'brewing_stand') > 0) {
+            const position = world.getNearestFreeSpace(bot, 1, 8);
+            if (!position) {
+                log(bot, 'There is no safe local space to place the brewing stand.');
+                return finish(false, 'no_brewing_stand_space');
+            }
+            const inventoryBeforePlacement = inventoryCount(bot, 'brewing_stand');
+            if (!await placeBlock(bot, 'brewing_stand', position.x, position.y, position.z)) {
+                return finish(false, 'brewing_stand_not_placed');
+            }
+            standBlock = bot.blockAt(new Vec3(
+                Math.floor(position.x),
+                Math.floor(position.y),
+                Math.floor(position.z),
+            ));
+            if (standBlock?.name !== 'brewing_stand') {
+                return finish(false, 'brewing_stand_not_confirmed');
+            }
+            temporaryStand = {
+                position: standBlock.position.clone(),
+                inventoryBeforePlacement,
+            };
+        }
+        if (!standBlock) {
+            log(bot, 'There is no reachable brewing stand and no carried stand could be prepared.');
+            return finish(false, 'missing_brewing_stand');
+        }
+
+        if (bot.entity.position.distanceTo(standBlock.position) > 4.5) {
+            const reached = await goToPosition(
+                bot,
+                standBlock.position.x,
+                standBlock.position.y,
+                standBlock.position.z,
+                3,
+            );
+            if (!reached || bot.entity.position.distanceTo(standBlock.position) > 4.5) {
+                return finish(false, 'brewing_stand_unreachable');
+            }
+        }
+        if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
+
+        bot.modes.pause('unstuck');
+        await bot.lookAt(standBlock.position);
+        stand = await bot.openBlock(standBlock);
+        if (stand?.type !== 'minecraft:brewing_stand' || stand.inventoryStart !== 5) {
+            return finish(false, 'unexpected_brewing_window', {
+                observed: stand?.type || 'closed',
+                retryable: false,
+            });
+        }
+        if ([0, 1, 2, 3].some(slot => stand.slots[slot])) {
+            log(bot, 'The brewing stand already contains bottles or an ingredient; it was left untouched.');
+            return finish(false, 'brewing_stand_busy');
+        }
+
+        const waterSlots = [];
+        for (let slot = stand.inventoryStart; slot < stand.inventoryEnd; slot += 1) {
+            if (isWaterPotion(stand.slots[slot])) waterSlots.push(slot);
+        }
+        if (waterSlots.length < amount) {
+            log(bot, `Need ${amount} verified water bottle(s), but found ${waterSlots.length}.`);
+            return finish(false, 'missing_water_bottles', { available: waterSlots.length });
+        }
+
+        const required = new Map([['blaze_powder', 1]]);
+        for (const ingredient of plan.ingredients) {
+            required.set(ingredient, (required.get(ingredient) || 0) + 1);
+        }
+        for (const [itemName, count] of required) {
+            const available = inventoryCount(bot, itemName);
+            if (available < count) {
+                log(bot, `Need ${count} ${itemName}, but only ${available} is available.`);
+                return finish(false, 'missing_brewing_ingredient', {
+                    ingredient: itemName,
+                    required: count,
+                    available,
+                });
+            }
+        }
+
+        for (let bottleSlot = 0; bottleSlot < amount; bottleSlot += 1) {
+            const inventorySlot = findWindowInventorySlot(stand, isWaterPotion);
+            if (inventorySlot === null) {
+                return finish(false, 'water_bottle_transfer_failed');
+            }
+            await bot.moveSlotItem(inventorySlot, bottleSlot);
+        }
+        const fuelSlot = findWindowInventorySlot(stand, item => item?.name === 'blaze_powder');
+        if (fuelSlot === null) return finish(false, 'missing_brewing_fuel');
+        await moveOneWindowItem(bot, fuelSlot, 4);
+        contentsOwned = true;
+
+        let completedStages = 0;
+        for (const ingredient of plan.ingredients) {
+            if (bot.interrupt_code) {
+                return finish(false, 'interrupted', { completedStages, retryable: false });
+            }
+            const before = Array.from(
+                { length: amount },
+                (_, slot) => potionFingerprint(stand.slots[slot]),
+            );
+            const ingredientSlot = findWindowInventorySlot(
+                stand,
+                item => item?.name === ingredient,
+            );
+            if (ingredientSlot === null) {
+                return finish(false, 'brewing_ingredient_transfer_failed', {
+                    ingredient,
+                    completedStages,
+                });
+            }
+            await moveOneWindowItem(bot, ingredientSlot, 3);
+            const brewed = await waitForWorldCondition(
+                bot,
+                () => (
+                    bot.currentWindow === stand
+                    && !stand.slots[3]
+                    && before.every((fingerprint, slot) => (
+                        stand.slots[slot]
+                        && potionFingerprint(stand.slots[slot]) !== fingerprint
+                    ))
+                ),
+                BREW_STAGE_TIMEOUT_MS,
+                BREW_POLL_MS,
+            );
+            if (!brewed) {
+                return finish(false, bot.interrupt_code ? 'interrupted' : 'brew_stage_timeout', {
+                    ingredient,
+                    completedStages,
+                    retryable: !bot.interrupt_code,
+                });
+            }
+            completedStages += 1;
+        }
+
+        const observed = Array.from({ length: amount }, (_, slot) => stand.slots[slot]?.name || null);
+        if (observed.some(name => name !== plan.outputItem)) {
+            return finish(false, 'brew_output_unverified', {
+                observed,
+                completedStages: plan.ingredients.length,
+            });
+        }
+        for (let bottleSlot = 0; bottleSlot < amount; bottleSlot += 1) {
+            const destination = stand.firstEmptyInventorySlot();
+            if (destination === null) {
+                return finish(false, 'brew_inventory_full', {
+                    completedStages: plan.ingredients.length,
+                });
+            }
+            await bot.moveSlotItem(bottleSlot, destination);
+        }
+        contentsOwned = false;
+        log(bot, `Brewed ${amount} ${plan.target.replace(/_/g, ' ')} potion${amount === 1 ? '' : 's'}.`);
+        return finish(true, 'brewed', {
+            count: amount,
+            ingredients: [...plan.ingredients],
+            retryable: false,
+        });
+    } catch (error) {
+        const message = String(error?.message || error).slice(0, 240);
+        log(bot, `Could not brew ${plan.target}: ${message}.`);
+        return finish(false, 'brew_blocked', { error: message });
+    } finally {
+        if (contentsOwned) await returnBrewingContents(bot, stand);
+        await closeContainerQuietly(stand);
+        bot.modes.unpause('unstuck');
+        if (temporaryStand?.position) {
+            const block = bot.blockAt(temporaryStand.position);
+            if (block?.name === 'brewing_stand') {
+                await breakBlockAt(
+                    bot,
+                    temporaryStand.position.x,
+                    temporaryStand.position.y,
+                    temporaryStand.position.z,
+                );
+            }
+        }
+        if (finalEvidence) setActionEvidence(bot, finalEvidence);
     }
 }
 

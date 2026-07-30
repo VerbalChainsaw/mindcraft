@@ -7,18 +7,20 @@
   },
   "runtime": {
     "role": "companion",
-    "autonomy": "command",
+    "autonomy": "balanced",
     "reflexes": { "combat": "defend" },
     "survival": {
-      "mode": "basic",
-      "eatAt": 18,
+      "mode": "full",
+      "eatAt": 14,
       "criticalFood": 6,
-      "reserveFoodPoints": 0,
-      "sleep": "off",
-      "shelter": "off"
+      "reserveFoodPoints": 12,
+      "sleep": "safe",
+      "shelter": "emergency",
+      "armor": "upgrade",
+      "usefulDrops": "collect"
     },
     "jobs": { "mode": "resumable" },
-    "reactions": { "mode": "minimal", "maxSpeechPerMinute": 2, "maxGesturesPerMinute": 2 },
+    "reactions": { "mode": "natural", "maxSpeechPerMinute": 4, "maxGesturesPerMinute": 8 },
     "memory": { "personal": true, "team": "off" }
   },
   "modes": {
@@ -26,9 +28,9 @@
     "unstuck": true,
     "cowardice": false,
     "self_defense": true,
-    "hunting": false,
-    "item_collecting": false,
-    "torch_placing": false,
+    "hunting": true,
+    "item_collecting": true,
+    "torch_placing": true,
     "elbow_room": true,
     "idle_staring": true,
     "cheat": false

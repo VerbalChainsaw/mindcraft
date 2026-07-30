@@ -607,42 +607,38 @@ test('Given plugin auto-eat, when survival ownership is configured, then unsuper
   assert.equal(bot.autoEat.options.bannedFood.includes('rotten_flesh'), true);
 });
 
-test('Given an idle behavior cycle, when the agent updates, then preservation runs before autonomy and jobs', async () => {
+test('Given an agent update, when the coordinated arbiter exists, then Agent delegates the tick once', async () => {
   const calls = [];
   const fakeAgent = {
-    bot: { modes: { update() { calls.push('modes'); } } },
-    survival_director: {
-      update() { calls.push('survival'); },
-      blocksLowerPriority: () => false,
+    behavior_arbiter: {
+      update(delta) {
+        calls.push(`arbiter:${delta}`);
+        return { selectedLane: 'idle' };
+      },
     },
-    self_prompter: { update(delta) { calls.push(`prompt:${delta}`); } },
-    job_director: { update() { calls.push('job'); } },
-    reaction_director: { update() { calls.push('reaction'); } },
-    checkTaskDone() { calls.push('task'); },
   };
 
-  await Agent.prototype.update.call(fakeAgent, 25);
+  const result = await Agent.prototype.update.call(fakeAgent, 25);
 
-  assert.deepEqual(calls, ['modes', 'survival', 'prompt:25', 'job', 'reaction', 'task']);
+  assert.deepEqual(calls, ['arbiter:25']);
+  assert.equal(result.selectedLane, 'idle');
 });
 
-test('Given survival upkeep reports a bodily blocker, the behavior cycle does not start autonomous job work', async () => {
+test('Given the arbiter suppresses lower lanes, when Agent updates, then that decision is preserved', async () => {
   const calls = [];
   const fakeAgent = {
-    bot: { modes: { update() { calls.push('modes'); } } },
-    survival_director: {
-      update() { calls.push('survival'); },
-      blocksLowerPriority: () => true,
+    behavior_arbiter: {
+      update() {
+        calls.push('arbiter');
+        return { selectedLane: 'basic_survival', lowerLanesSuppressed: true };
+      },
     },
-    self_prompter: { update() { calls.push('prompt'); } },
-    job_director: { update() { calls.push('job'); } },
-    reaction_director: { update() { calls.push('reaction'); } },
-    checkTaskDone() { calls.push('task'); },
   };
 
-  await Agent.prototype.update.call(fakeAgent, 25);
+  const result = await Agent.prototype.update.call(fakeAgent, 25);
 
-  assert.deepEqual(calls, ['modes', 'survival', 'prompt', 'reaction', 'task']);
+  assert.deepEqual(calls, ['arbiter']);
+  assert.equal(result.lowerLanesSuppressed, true);
 });
 
 test('Given runtime-configured role bots, when legacy default-goal seeding is evaluated, then role autonomy keeps control and self-prompt bootstrap stays off', () => {

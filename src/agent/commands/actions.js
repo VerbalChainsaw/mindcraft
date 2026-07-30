@@ -831,6 +831,17 @@ export const actionsList = [
         })
     },
     {
+        name: '!brewPotion',
+        description: 'Brew one to three verified potions in a real brewing stand. Targets include strength, fire_resistance, healing, swiftness, regeneration, night_vision, water_breathing, slow_falling, poison, leaping, turtle_master, and weakness. Prefix a target with long_, strong_, splash_, or lingering_ when that vanilla combination exists.',
+        params: {
+            'potion': { type: 'string', description: 'Potion target such as strength, strong_strength, long_fire_resistance, splash_healing, or lingering_poison.' },
+            'num': { type: 'int', description: 'Number of water bottles to brew in this batch.', domain: [1, 3, '[]'] },
+        },
+        perform: runAsAction(async (agent, potion, num) => {
+            return await skills.brewPotion(agent.bot, potion, num);
+        }, false, 10),
+    },
+    {
         name: '!clearFurnace',
         description: 'Take all items out of the nearest furnace.',
         params: { },

@@ -17,6 +17,8 @@ test('Given explicit behavior policies, normalization preserves bounded survival
         reserveFoodPoints: 12,
         sleep: 'safe',
         shelter: 'emergency',
+        armor: 'upgrade',
+        usefulDrops: 'collect',
       },
       jobs: {
         mode: 'resumable',
@@ -42,6 +44,8 @@ test('Given explicit behavior policies, normalization preserves bounded survival
     reserveFoodPoints: 12,
     sleep: 'safe',
     shelter: 'emergency',
+    armor: 'upgrade',
+    usefulDrops: 'collect',
   });
   assert.deepEqual(runtime.jobs, {
     mode: 'resumable',

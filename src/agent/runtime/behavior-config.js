@@ -19,6 +19,8 @@ const TEAM_MEMORY_MODES = new Set(['off', 'explicit']);
 const SURVIVAL_MODES = new Set(['off', 'basic', 'full']);
 const SLEEP_POLICIES = new Set(['off', 'safe']);
 const SHELTER_POLICIES = new Set(['off', 'seek', 'emergency']);
+const ARMOR_POLICIES = new Set(['off', 'upgrade']);
+const USEFUL_DROP_POLICIES = new Set(['ignore', 'collect']);
 const JOB_MODES = new Set(['off', 'simple', 'resumable']);
 const DEPOSIT_POLICIES = new Set(['inventory', 'leader', 'assigned']);
 const REACTION_MODES = new Set(['off', 'minimal', 'natural']);
@@ -123,6 +125,8 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
       reserveFoodPoints: boundedInteger(survival.reserveFoodPoints, 12, 0, 40),
       sleep: enumValue(survival.sleep, SLEEP_POLICIES, 'safe'),
       shelter: enumValue(survival.shelter, SHELTER_POLICIES, hasExplicitRuntime ? 'emergency' : 'seek'),
+      armor: enumValue(survival.armor, ARMOR_POLICIES, 'upgrade'),
+      usefulDrops: enumValue(survival.usefulDrops, USEFUL_DROP_POLICIES, 'collect'),
     }),
     jobs: Object.freeze({
       mode: enumValue(jobs.mode, JOB_MODES, hasExplicitRuntime ? 'resumable' : 'simple'),

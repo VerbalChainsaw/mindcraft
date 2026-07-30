@@ -171,6 +171,29 @@ test('Given a stronger unequipped armor piece, full survival policy equips it wh
   });
 });
 
+test('Given armor and drop upkeep disabled, survival policy leaves those optional actions alone', () => {
+  const intent = chooseSurvivalIntent({
+    held: false,
+    idle: true,
+    health: 20,
+    hunger: 20,
+    recentDamage: false,
+    urgentDanger: false,
+    food: [],
+    armor: [{ name: 'iron_boots', slot: 'feet', score: 4, equipped: false }],
+    usefulDrops: [{ name: 'diamond', id: 7, distance: 2 }],
+    timeOfDay: 6000,
+    dimension: 'overworld',
+    weather: 'Clear',
+  }, {
+    ...POLICY,
+    armor: 'off',
+    usefulDrops: 'ignore',
+  });
+
+  assert.equal(intent, null);
+});
+
 test('Given dangerous weather without a safe shelter, emergency policy emits a bounded shelter work order intent', () => {
   const intent = chooseSurvivalIntent({
     held: false,

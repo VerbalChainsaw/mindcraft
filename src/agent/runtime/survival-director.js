@@ -10,6 +10,8 @@ import { chooseSurvivalIntent } from './survival-policy.js';
 const SUCCESS_COOLDOWN_MS = 2_000;
 const FAILURE_COOLDOWN_MS = 10_000;
 const BLOCKED_COOLDOWN_MS = 15_000;
+const SURVIVAL_ENVIRONMENT_TTL_MS = 1_000;
+const survivalEnvironmentCache = new WeakMap();
 const UNSAFE_DROP_FOOD = new Set([
   'chicken',
   'poisonous_potato',
@@ -210,7 +212,46 @@ function bedCandidates(bot) {
     .filter(Boolean);
 }
 
-export function summarizeSurvivalSituation(agent) {
+function environmentalSituation(bot, now) {
+  const position = bot.entity?.position;
+  const dimension = dimensionName(bot.game?.dimension);
+  const cached = survivalEnvironmentCache.get(bot);
+  const moved = !cached
+    || !position
+    || Math.hypot(
+      Number(position.x) - cached.x,
+      Number(position.y) - cached.y,
+      Number(position.z) - cached.z,
+    ) > 2;
+  if (
+    cached
+    && !moved
+    && cached.dimension === dimension
+    && now < cached.nextRefreshAt
+  ) {
+    return cached.value;
+  }
+  const value = {
+    beds: bedCandidates(bot),
+    usefulDrops: usefulDropCandidates(bot),
+    ...shelterSituation(bot),
+  };
+  survivalEnvironmentCache.set(bot, {
+    x: Number(position?.x) || 0,
+    y: Number(position?.y) || 0,
+    z: Number(position?.z) || 0,
+    dimension,
+    nextRefreshAt: now + SURVIVAL_ENVIRONMENT_TTL_MS,
+    value,
+  });
+  return value;
+}
+
+export function clearSurvivalSituationCache(bot) {
+  if (bot && typeof bot === 'object') survivalEnvironmentCache.delete(bot);
+}
+
+export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
   const bot = agent.bot;
   const modeStatus = bot.modes?.getStatus?.() || [];
   const urgentDanger = modeStatus.some(mode => (
@@ -228,10 +269,8 @@ export function summarizeSurvivalSituation(agent) {
     timeOfDay: Number(bot.time?.timeOfDay || 0),
     dimension: dimensionName(bot.game?.dimension),
     weather: bot.thunderState > 0 ? 'Thunderstorm' : bot.rainState > 0 ? 'Rain' : 'Clear',
-    beds: bedCandidates(bot),
     armor: armorInventory(bot),
-    usefulDrops: usefulDropCandidates(bot),
-    ...shelterSituation(bot),
+    ...environmentalSituation(bot, now),
   };
 }
 

@@ -25,6 +25,24 @@ const SHELTER_POLICIES = [
   { value: 'seek', label: 'Seek existing shelter' },
   { value: 'off', label: 'No autonomous shelter' },
 ];
+const COMBAT_REFLEX_POLICIES = [
+  { value: 'role', label: 'Use role policy' },
+  { value: 'defend', label: 'Defend when threatened' },
+  { value: 'avoid', label: 'Avoid combat' },
+  { value: 'off', label: 'No combat reflex' },
+];
+const SLEEP_POLICIES = [
+  { value: 'safe', label: 'Sleep when safely reachable' },
+  { value: 'off', label: 'Do not sleep autonomously' },
+];
+const ARMOR_POLICIES = [
+  { value: 'upgrade', label: 'Equip verified upgrades' },
+  { value: 'off', label: 'Keep current equipment' },
+];
+const USEFUL_DROP_POLICIES = [
+  { value: 'collect', label: 'Collect useful nearby drops' },
+  { value: 'ignore', label: 'Ignore optional drops' },
+];
 const JOB_MODES = [
   { value: 'resumable', label: 'Resumable role jobs' },
   { value: 'simple', label: 'Simple role loop' },
@@ -250,8 +268,15 @@ export class BotLibraryPanel {
     controls.style = input('libraryStyle', 'text', runtimeIdentity.style || '');
     controls.specialties = input('librarySpecialties', 'text', (runtimeIdentity.specialties || []).join(', '));
     controls.autonomy = select('libraryAutonomy', AUTONOMY, runtime.autonomy || 'balanced');
+    controls.combatReflex = select('libraryCombatReflex', COMBAT_REFLEX_POLICIES, runtime.reflexes?.combat || 'role');
     controls.survivalMode = select('librarySurvivalMode', SURVIVAL_MODES, runtime.survival?.mode || 'full');
     controls.shelterPolicy = select('libraryShelterPolicy', SHELTER_POLICIES, runtime.survival?.shelter || 'emergency');
+    controls.sleepPolicy = select('librarySleepPolicy', SLEEP_POLICIES, runtime.survival?.sleep || 'safe');
+    controls.armorPolicy = select('libraryArmorPolicy', ARMOR_POLICIES, runtime.survival?.armor || 'upgrade');
+    controls.usefulDrops = select('libraryUsefulDrops', USEFUL_DROP_POLICIES, runtime.survival?.usefulDrops || 'collect');
+    controls.eatAt = input('libraryEatAt', 'number', runtime.survival?.eatAt ?? 14);
+    controls.criticalFood = input('libraryCriticalFood', 'number', runtime.survival?.criticalFood ?? 6);
+    controls.reserveFood = input('libraryReserveFood', 'number', runtime.survival?.reserveFoodPoints ?? 12);
     controls.jobMode = select('libraryJobMode', JOB_MODES, runtime.jobs?.mode || 'resumable');
     controls.stockpileLimit = input('libraryStockpileLimit', 'number', runtime.jobs?.stockpileLimit || 128);
     controls.depositPolicy = select('libraryDepositPolicy', DEPOSIT_POLICIES, runtime.jobs?.deposit || 'inventory');
@@ -425,7 +450,14 @@ export class BotLibraryPanel {
       gridField('Specialties', controls.specialties, 'Comma-separated gameplay strengths.'),
       gridField('Vision policy', controls.visionMode, 'Hybrid uses structured state first and model vision only when needed.'),
       gridField('Squad memory', controls.teamMemory, 'Only explicit mission/world facts are shared.'),
+      gridField('Combat reflex', controls.combatReflex, 'Role follows the selected character type; avoid, defend, and off are hard overrides.'),
+      gridField('Eat at hunger', controls.eatAt, 'Starts normal food upkeep at this hunger level (1–20).'),
+      gridField('Critical hunger', controls.criticalFood, 'May preempt lower-priority work at or below this level (0–20).'),
+      gridField('Food reserve points', controls.reserveFood, 'Keeps this many carried food points before optional work (0–40).'),
+      gridField('Sleep policy', controls.sleepPolicy, 'Safe sleep uses only a reachable bed without a nearby threat.'),
       gridField('Shelter policy', controls.shelterPolicy, 'Emergency permits only the fixed validated survival shelter blueprint.'),
+      gridField('Armor policy', controls.armorPolicy, 'Upgrade equips only a stronger verified carried armor piece.'),
+      gridField('Useful drops', controls.usefulDrops, 'Controls optional pickup of nearby food, tools, armor, and resources.'),
       gridField('Stockpile target', controls.stockpileLimit, 'Builders balance planks and cobblestone; miners and lumberjacks keep role materials.'),
       gridField('Delivery policy', controls.depositPolicy, 'Keep output, hand it to the leader, or use one exact assigned container.'),
       gridField('Leader name', controls.leader, 'Used by delivery and squad assignment policies.'),
@@ -508,11 +540,17 @@ export class BotLibraryPanel {
         schemaVersion: 1,
          role: controls.type.value,
          autonomy: controls.autonomy.value,
-         reflexes: current.runtime?.reflexes || { combat: 'role' },
+         reflexes: { combat: controls.combatReflex.value },
          survival: {
            ...(current.runtime?.survival || {}),
            mode: controls.survivalMode.value,
+           eatAt: Number(controls.eatAt.value),
+           criticalFood: Number(controls.criticalFood.value),
+           reserveFoodPoints: Number(controls.reserveFood.value),
+           sleep: controls.sleepPolicy.value,
            shelter: controls.shelterPolicy.value,
+           armor: controls.armorPolicy.value,
+           usefulDrops: controls.usefulDrops.value,
          },
          jobs: {
            ...(current.runtime?.jobs || {}),

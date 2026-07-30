@@ -14,7 +14,7 @@ import { createModel, resolveConfiguredModel } from './_model_map.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ACTION_REQUEST_PATTERN = /\b(?:attack|break|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
+const ACTION_REQUEST_PATTERN = /\b(?:attack|break|brew|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
 const GAMEPLAY_OPERATING_RULES = [
     'GAMEPLAY OPERATING RULES:',
     'Treat SITUATIONAL_AWARENESS, INVENTORY, command results, and the connected Minecraft registry as authoritative.',
@@ -34,11 +34,24 @@ function ensurePromptContext(template, placeholders) {
     return result;
 }
 
-function latestMessageRequestsAction(messages) {
-    const latest = messages?.slice().reverse().find(message => message.role === 'user');
+export function latestMessageRequestsAction(messages) {
+    const latestUserIndex = messages?.findLastIndex(message => message.role === 'user') ?? -1;
+    const latest = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
     if (!latest?.content) return false;
     const content = latest.content.replace(/^[^:]{1,64}:\s*/, '').trim();
     if (/^(?:how|what|where|when|why)\b/i.test(content)) return false;
+    const laterTurns = messages.slice(latestUserIndex + 1);
+    const commandIndex = laterTurns.findIndex(message =>
+        message.role === 'assistant' && containsCommand(message.content)
+    );
+    if (commandIndex >= 0) {
+        const hasActionOutcome = laterTurns.slice(commandIndex + 1).some(message =>
+            message.role === 'system'
+            && message.content
+            && !/^Command \S+ does not exist\.$/.test(message.content)
+        );
+        if (hasActionOutcome) return false;
+    }
     return ACTION_REQUEST_PATTERN.test(content);
 }
 
@@ -79,6 +92,7 @@ export class Prompter {
         this.cooldown = this.profile.cooldown ? this.profile.cooldown : 0;
         this.last_prompt_time = 0;
         this.awaiting_coding = false;
+        this.command_docs_cache = { key: null, compact: '' };
 
         // for backwards compatibility, move max_tokens to params
         let max_tokens = null;
@@ -240,8 +254,16 @@ export class Prompter {
         if (prompt.includes('$ACTION')) {
             prompt = prompt.replaceAll('$ACTION', this.agent.actions.currentActionLabel);
         }
-        if (prompt.includes('$COMMAND_DOCS'))
-            prompt = prompt.replaceAll('$COMMAND_DOCS', getCommandDocs(this.agent));
+        if (prompt.includes('$COMMAND_DOCS')) {
+            const key = [...(this.agent.blocked_actions || [])].sort().join('\u0000');
+            if (this.command_docs_cache.key !== key) {
+                this.command_docs_cache = {
+                    key,
+                    compact: getCommandDocs(this.agent, { compact: true }),
+                };
+            }
+            prompt = prompt.replaceAll('$COMMAND_DOCS', this.command_docs_cache.compact);
+        }
         if (prompt.includes('$CODE_DOCS')) {
             const code_task_content = messages.slice().reverse().find(msg =>
                 msg.role !== 'system' && msg.content.includes('!newAction(')

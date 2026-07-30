@@ -138,7 +138,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
       retryable: true,
     };
   }
-  if (policy.mode === 'full') {
+  if (policy.mode === 'full' && policy.armor !== 'off') {
     const armor = Array.isArray(situation.armor) ? situation.armor : [];
     const equippedBySlot = new Map(
       armor
@@ -233,7 +233,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
       retryable: true,
     };
   }
-  if (policy.mode === 'full') {
+  if (policy.mode === 'full' && policy.usefulDrops !== 'ignore') {
     const usefulDrop = (Array.isArray(situation.usefulDrops) ? situation.usefulDrops : [])
       .filter(candidate => typeof candidate?.name === 'string' && numeric(candidate.distance, Infinity) <= 12)
       .sort((left, right) => numeric(left.distance, Infinity) - numeric(right.distance, Infinity))[0];

@@ -29,11 +29,15 @@ test('Given installed Ollama models, when local quickstart is planned, then it c
     },
   });
 
-  assert.deepEqual(plan.profile, {
-    name: 'MindcraftBot',
-    model: 'ollama/qwen2.5:3b',
-    embedding: 'ollama/nomic-embed-text:latest',
-  });
+  assert.equal(plan.profile.name, 'MindcraftBot');
+  assert.equal(plan.profile.model, 'ollama/qwen2.5:3b');
+  assert.equal(plan.profile.embedding, 'ollama/nomic-embed-text:latest');
+  assert.equal(plan.profile.runtime.autonomy, 'balanced');
+  assert.equal(plan.profile.runtime.survival.mode, 'full');
+  assert.equal(plan.profile.runtime.jobs.mode, 'resumable');
+  assert.equal(plan.profile.runtime.reactions.mode, 'natural');
+  assert.equal(plan.profile.modes.self_preservation, true);
+  assert.equal(plan.profile.modes.item_collecting, true);
   assert.deepEqual(plan.configUpdate.profiles, [LOCAL_QUICKSTART_PROFILE]);
   assert.equal(plan.configUpdate.auto_open_ui, true);
   assert.equal(plan.configUpdate.auto_start, true);
