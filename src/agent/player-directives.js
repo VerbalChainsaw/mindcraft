@@ -153,6 +153,18 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
+    const typedGoal = parseItemGoalRequest(playerName, message, context.bot);
+    if (typedGoal) {
+        const target = typedGoal.target.family || typedGoal.target.requestedName;
+        return {
+            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)})`,
+            response: typedGoal.kind === 'deliver'
+                ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
+                : `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`,
+            releasesHold: true,
+        };
+    }
+
     const tool = requestedTool(text);
     if (
         tool
@@ -169,18 +181,6 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         return {
             command: '!pickupUsefulItems(12)',
             response: 'I will pick up useful nearby supplies while the area is safe.',
-            releasesHold: true,
-        };
-    }
-
-    const typedGoal = parseItemGoalRequest(playerName, message, context.bot);
-    if (typedGoal) {
-        const target = typedGoal.target.family || typedGoal.target.requestedName;
-        return {
-            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)})`,
-            response: typedGoal.kind === 'deliver'
-                ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
-                : `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`,
             releasesHold: true,
         };
     }

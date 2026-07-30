@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { inspectGameObject } from '../library/game_knowledge.js';
+import * as mc from '../../utils/mcdata.js';
 
 const GOAL_KINDS = new Set(['acquire', 'deliver']);
 const GOAL_PHASES = new Set([
@@ -86,6 +87,16 @@ function canonicalName(value) {
     .toLowerCase()
     .replace(/[\s-]+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
+}
+
+function hasBlockDropSource(bot, name) {
+  const itemId = bot?.registry?.itemsByName?.[name]?.id;
+  if (!Number.isInteger(itemId)) return false;
+  return Object.values(bot?.registry?.blocks || {}).some(block => (
+    block?.diggable === true
+    && Array.isArray(block.drops)
+    && block.drops.includes(itemId)
+  ));
 }
 
 function normalizeMessage(value) {
@@ -236,6 +247,9 @@ export function resolveItemGoalTarget(bot, requestedName) {
     acquisitionKind = 'prepare_material';
   } else if (isCollectibleBlock) acquisitionKind = 'collect_block';
   else if (knowledge.recipes?.length > 0) acquisitionKind = 'craft';
+  else if (mc.getItemSmeltingIngredient(canonical) || hasBlockDropSource(bot, canonical)) {
+    acquisitionKind = 'planned';
+  }
 
   return Object.freeze({
     requestedName: requested,
@@ -268,7 +282,7 @@ function normalizeTarget(raw) {
   if (target.family !== null && !Object.hasOwn(FAMILY_ALIASES, target.family)) {
     throw new TypeError('Goal target family is unsupported.');
   }
-  if (!['collect_family', 'collect_block', 'prepare_tool', 'prepare_material', 'craft'].includes(target.acquisitionKind)) {
+  if (!['collect_family', 'collect_block', 'prepare_tool', 'prepare_material', 'craft', 'planned'].includes(target.acquisitionKind)) {
     throw new TypeError('Goal target does not have a deterministic acquisition path.');
   }
   return Object.freeze(target);
@@ -305,6 +319,14 @@ function normalizeSubgoal(raw, index) {
     actionId: boundedText(raw.actionId, 96) || null,
     code: boundedText(raw.code, 80) || null,
     detail: boundedText(raw.detail, 280),
+    targetName: canonicalName(raw.targetName) || null,
+    targetFamily: ['logs', 'planks'].includes(canonicalName(raw.targetFamily))
+      ? canonicalName(raw.targetFamily)
+      : null,
+    expectedIncrease: finiteInteger(raw.expectedIncrease, 0, 0, 100_000),
+    targetInventoryBefore: finiteInteger(raw.targetInventoryBefore, 0, 0, 100_000),
+    targetInventoryAfter: finiteInteger(raw.targetInventoryAfter, 0, 0, 100_000),
+    reason: boundedText(raw.reason, 280),
     inventoryBefore: finiteInteger(raw.inventoryBefore, 0, 0, 100_000),
     inventoryAfter: finiteInteger(raw.inventoryAfter, 0, 0, 100_000),
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
@@ -395,7 +417,7 @@ export function createItemGoalContract({
     phase: 'assess',
     attempts: 0,
     maxAttempts: 4,
-    maxSubgoals: Math.min(MAX_SUBGOALS, Math.max(12, Math.ceil(numericQuantity / 32) * 4 + 8)),
+    maxSubgoals: Math.min(MAX_SUBGOALS, Math.max(32, Math.ceil(numericQuantity / 32) * 4 + 8)),
     subgoals: [],
     checkpoint: {
       baselineInventory,

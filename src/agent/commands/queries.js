@@ -92,6 +92,13 @@ export const queryList = [
                     ? `${goal.checkpoint?.delivered || 0}/${goal.quantity} delivered`
                     : `${Math.max(0, (goal.checkpoint?.targetInventory || 0) - (goal.checkpoint?.baselineInventory || 0))} requested`;
                 res += `\n- Typed goal: ${goal.phase}; ${goal.kind} ${goal.quantity} ${target}; ${progress}; attempts ${goal.attempts}/${goal.maxAttempts}`;
+                const plan = action.goalDirector.plan;
+                if (plan?.nextStep) {
+                    res += `\n- Causal next step: ${plan.nextStep.reason}`;
+                    res += `\n- Planned verified command: ${plan.nextStep.command}`;
+                } else if (plan?.blocker) {
+                    res += `\n- Causal plan blocker: ${plan.blocker}; ${plan.detail}`;
+                }
             }
             return pad(res);
         }

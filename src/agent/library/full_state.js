@@ -326,6 +326,7 @@ export function getGoalDirectorState(agent) {
     }
     if (!status || typeof status !== 'object') return null;
     const goal = status.goal;
+    const plan = status.plan;
     return {
         phase: String(status.phase || 'unknown').slice(0, 24),
         code: String(status.code || 'unknown').slice(0, 80),
@@ -333,6 +334,25 @@ export function getGoalDirectorState(agent) {
         retryable: status.retryable === true,
         inFlight: status.inFlight === true,
         nextAttemptAt: Number.isFinite(status.nextAttemptAt) ? status.nextAttemptAt : null,
+        plan: plan && typeof plan === 'object' && !Array.isArray(plan)
+            ? {
+                status: String(plan.status || 'unknown').slice(0, 24),
+                code: String(plan.code || 'unknown').slice(0, 80),
+                detail: String(plan.detail || '').slice(0, 280),
+                target: String(plan.target || '').slice(0, 80),
+                quantity: Math.max(0, Number(plan.quantity) || 0),
+                blocker: plan.blocker ? String(plan.blocker).slice(0, 80) : null,
+                exploredNodes: Math.max(0, Number(plan.exploredNodes) || 0),
+                nextStep: plan.nextStep && typeof plan.nextStep === 'object'
+                    ? {
+                        kind: String(plan.nextStep.kind || '').slice(0, 32),
+                        target: String(plan.nextStep.target || '').slice(0, 80),
+                        command: String(plan.nextStep.command || '').slice(0, 240),
+                        reason: String(plan.nextStep.reason || '').slice(0, 280),
+                    }
+                    : null,
+            }
+            : null,
         goal: goal && typeof goal === 'object' && !Array.isArray(goal)
             ? {
                 id: String(goal.id || '').slice(0, 96),

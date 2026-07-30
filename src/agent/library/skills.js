@@ -32,6 +32,7 @@ const TABLE_DROP_SEARCH_RADIUS = 4;
 const TABLE_DROP_APPEAR_TIMEOUT_MS = 1_500;
 const TABLE_PICKUP_TIMEOUT_MS = 1_500;
 const INVENTORY_POLL_MS = 100;
+const COLLECTION_DROP_TIMEOUT_MS = 4_000;
 const DOOR_SEARCH_RADIUS = 16;
 const DOOR_INTERACTION_REACH = 4.5;
 const DOOR_STATE_SETTLE_MS = 150;
@@ -368,6 +369,42 @@ function inventoryCountByTypes(bot, itemTypes) {
         (total, item) => total + (itemTypes.has(item.type) ? item.count : 0),
         0,
     );
+}
+
+async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=COLLECTION_DROP_TIMEOUT_MS) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && !bot.interrupt_code) {
+        if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
+        const expectedDrop = Object.values(bot.entities || {}).find(entity => {
+            if (entity?.name !== 'item' || !entity.position) return false;
+            if (bot.entity.position.distanceTo(entity.position) > 8) return false;
+            try {
+                return itemTypes.has(entity.getDroppedItem?.()?.type);
+            } catch {
+                return false;
+            }
+        });
+        if (expectedDrop && Math.abs(expectedDrop.position.y - bot.entity.position.y) <= 2.5) {
+            const remaining = Math.max(100, Math.min(1_500, deadline - Date.now()));
+            let timeout = null;
+            const reached = await Promise.race([
+                goToGoal(bot, new pf.goals.GoalFollow(expectedDrop, 1)),
+                new Promise(resolve => {
+                    timeout = setTimeout(() => {
+                        try { bot.pathfinder.stop(); } catch { /* bounded pickup cleanup */ }
+                        resolve(false);
+                    }, remaining);
+                }),
+            ]);
+            if (timeout) clearTimeout(timeout);
+            if (!reached) {
+                try { bot.pathfinder.stop(); } catch { /* bounded pickup cleanup */ }
+            }
+            if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
+        }
+        await new Promise(resolve => setTimeout(resolve, INVENTORY_POLL_MS));
+    }
+    return inventoryCountByTypes(bot, itemTypes) > beforeCount;
 }
 
 function hasInventoryRoomFor(bot, itemName) {
@@ -2076,6 +2113,9 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         }
         let beforeTargetDropCount = null;
         try {
+            if (!isLiquid) {
+                beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+            }
             let success = false;
             if (isLiquid) {
                 success = await useToolOnBlock(bot, 'bucket', block);
@@ -2094,14 +2134,13 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     log(bot, `Could not verify that ${block.name} was collected.`);
                     return false;
                 }
-                if (!await pickupNearbyItems(bot)) {
+                if (!await waitForExpectedDropPickup(bot, expectedDropTypes, beforeTargetDropCount)) {
                     setActionEvidence(bot, { kind: 'collect', outcome: 'not_collected', target, retryable: true });
                     return false;
                 }
                 success = true;
             }
             else {
-                beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
                 bot.modes.pause('unstuck');
                 bot.modes.pause('elbow_room');
                 try {
@@ -2125,8 +2164,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     }
                     if (directReach) {
                         await bot.dig(liveTarget);
-                        await new Promise(resolve => setTimeout(resolve, 250));
-                        await pickupNearbyItems(bot);
+                        await waitForExpectedDropPickup(bot, expectedDropTypes, beforeTargetDropCount);
                     } else {
                         // The plugin requires canDig=true even for its explicit
                         // target and mutates the supplied policy. Scope that
@@ -2182,7 +2220,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         : `Collection returned without breaking ${block.name}.`);
                     return false;
                 }
-                const afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                let afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                if (expectedDropTypes.size > 0 && afterDropCount <= beforeTargetDropCount) {
+                    await waitForExpectedDropPickup(bot, expectedDropTypes, beforeTargetDropCount);
+                    afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                }
                 if (expectedDropTypes.size > 0 && afterDropCount <= beforeTargetDropCount) {
                     setActionEvidence(bot, {
                         kind: 'collect',

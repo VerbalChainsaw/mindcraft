@@ -17,6 +17,7 @@ const SAFE_COMMANDS = new Set([
   '!prepareMaterial',
   '!prepareTool',
   '!craftRecipe',
+  '!smeltItem',
   '!giveFamilyToPlayer',
   '!givePlayer',
   '!moveAway',

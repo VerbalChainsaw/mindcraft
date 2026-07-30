@@ -141,6 +141,7 @@ function overworldBuildCommands() {
     setblock(commands, 1031, 100, 1014, 'coal_ore');
     setblock(commands, 1034, 100, 1014, 'iron_ore');
     setblock(commands, 1037, 100, 1014, 'iron_ore');
+    setblock(commands, 1040, 100, 1014, 'iron_ore');
     fill(commands, 1044, 100, 1023, 1052, 100, 1031, 'water');
     fill(commands, 1043, 100, 1022, 1053, 100, 1022, 'sand');
     fill(commands, 1043, 100, 1032, 1053, 100, 1032, 'sand');

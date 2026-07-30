@@ -9,6 +9,7 @@ import {
   inventoryCountForGoalTarget,
   normalizeGoalContract,
 } from './goal-contract.js';
+import { buildPrerequisitePlan, plannedInventoryCount } from './prerequisite-planner.js';
 import { isSafeProcedureCommand, ProcedureStore } from './procedure-store.js';
 
 const STORE_VERSION = 1;
@@ -159,7 +160,7 @@ function recoveryCommand(goal) {
   const code = String(goal.evidence?.code || '');
   if (
     /(?:not_found|no_safe|unreachable|search|resource|no_path|path_|stuck)/.test(code)
-    && !/(?:missing_material|missing_item|missing_tool|invalid_)/.test(code)
+    && !/(?:missing_material|missing_item|missing_tool|invalid_|table_unreachable|furnace_unreachable)/.test(code)
   ) return '!moveAway(32)';
   return null;
 }
@@ -178,6 +179,7 @@ export class GoalDirector {
     this.procedures = procedures || new ProcedureStore(agent.name);
     this.activeGoal = null;
     this.lastGoal = null;
+    this.lastPlan = null;
     this.inFlight = false;
     this.nextAttemptAt = 0;
     this.status = {
@@ -215,6 +217,7 @@ export class GoalDirector {
       ...this.status,
       inFlight: this.inFlight,
       nextAttemptAt: this.nextAttemptAt,
+      plan: this.lastPlan,
       goal: goal ? {
         id: goal.id,
         kind: goal.kind,
@@ -252,17 +255,11 @@ export class GoalDirector {
     }
     try {
       let goal = normalizeGoalContract(raw);
-      if (goal.target.acquisitionKind === 'prepare_tool' && goal.quantity !== 1) {
-        return {
-          accepted: false,
-          code: 'unsupported_tool_quantity',
-          detail: 'Deterministic tool preparation currently supports one requested tool per goal.',
-        };
-      }
       const procedure = this.procedures.find(goal);
       if (procedure) goal = normalizeGoalContract({ ...goal, procedureId: procedure.id });
       this.activeGoal = goal;
       this.lastGoal = null;
+      this.lastPlan = null;
       this.nextAttemptAt = 0;
       this.store.save(goal, null);
       this.setStatus('assess', 'goal_accepted', `Accepted typed goal: ${goalContractDescription(goal)}.`, true);
@@ -430,8 +427,11 @@ export class GoalDirector {
     };
   }
 
-  appendActingSubgoal(kind, command) {
+  appendActingSubgoal(kind, command, step = null) {
     const now = this.now();
+    const targetInventory = step?.expectedName
+      ? plannedInventoryCount(this.agent.bot, step.expectedName, step.expectedFamily)
+      : 0;
     const subgoal = {
       id: `${this.activeGoal.id}:subgoal-${this.activeGoal.subgoals.length + 1}`,
       kind,
@@ -441,6 +441,12 @@ export class GoalDirector {
       actionId: null,
       code: null,
       detail: '',
+      targetName: step?.expectedName || null,
+      targetFamily: step?.expectedFamily || null,
+      expectedIncrease: step?.expectedIncrease || 0,
+      targetInventoryBefore: targetInventory,
+      targetInventoryAfter: targetInventory,
+      reason: step?.reason || '',
       inventoryBefore: this.currentInventory(),
       inventoryAfter: this.currentInventory(),
       startedAt: now,
@@ -458,12 +464,16 @@ export class GoalDirector {
     const index = subgoals.length - 1;
     if (index < 0) return this.activeGoal;
     const current = subgoals[index];
+    const targetInventoryAfter = current.targetName
+      ? plannedInventoryCount(this.agent.bot, current.targetName, current.targetFamily)
+      : current.targetInventoryAfter;
     subgoals[index] = {
       ...current,
       state: result.phase === 'succeeded' ? 'succeeded' : 'failed',
       actionId: result.actionId || null,
       code: result.code || 'unknown',
       detail: result.detail || '',
+      targetInventoryAfter,
       inventoryAfter: this.currentInventory(),
       finishedAt: this.now(),
     };
@@ -486,6 +496,9 @@ export class GoalDirector {
     if (!this.activeGoal) return;
     const actingSubgoal = this.activeGoal.subgoals.at(-1);
     const inventoryAfter = this.currentInventory(this.activeGoal);
+    const plannedTargetAfter = actingSubgoal?.targetName
+      ? plannedInventoryCount(this.agent.bot, actingSubgoal.targetName, actingSubgoal.targetFamily)
+      : 0;
     const skillBeforeFinish = actionResultEvidence(result);
     const transferredBeforeFinish = Math.max(0, Math.floor(Number(skillBeforeFinish?.transferred) || 0));
     let effectiveResult = result;
@@ -501,6 +514,21 @@ export class GoalDirector {
         detail: result.detail
           ? `${result.detail} The typed goal observed no required inventory increase.`
           : 'The command resolved but the typed goal observed no required inventory increase.',
+        retryable: true,
+      };
+    } else if (
+      result.phase === 'succeeded'
+      && kind === 'plan'
+      && actingSubgoal?.targetName
+      && plannedTargetAfter <= Math.max(0, Number(actingSubgoal.targetInventoryBefore) || 0)
+    ) {
+      effectiveResult = {
+        ...result,
+        phase: 'failed',
+        code: 'planned_effect_unverified',
+        detail: result.detail
+          ? `${result.detail} The causal planner did not observe the expected ${actingSubgoal.targetName} inventory increase.`
+          : `The action resolved without the expected ${actingSubgoal.targetName} inventory increase.`,
         retryable: true,
       };
     } else if (result.phase === 'succeeded' && kind === 'deliver' && transferredBeforeFinish < 1) {
@@ -544,6 +572,7 @@ export class GoalDirector {
       this.persist({
         ...goal,
         checkpoint,
+        attempts: effectiveResult.phase === 'succeeded' ? 0 : goal.attempts,
         phase: acquired ? (goal.kind === 'deliver' ? 'deliver' : 'verify_complete') : 'assess',
         updatedAt: this.now(),
       });
@@ -578,7 +607,7 @@ export class GoalDirector {
     );
   }
 
-  dispatch(kind, command) {
+  dispatch(kind, command, step = null) {
     if (!this.activeGoal || this.inFlight) return false;
     if (this.activeGoal.subgoals.length >= this.activeGoal.maxSubgoals) {
       this.fail('subgoal_budget_exhausted', `Goal reached its ${this.activeGoal.maxSubgoals}-subgoal safety limit.`);
@@ -595,7 +624,7 @@ export class GoalDirector {
     }
 
     const previousActionId = this.agent.last_action_result?.actionId || null;
-    this.appendActingSubgoal(kind, command);
+    this.appendActingSubgoal(kind, command, step);
     this.inFlight = true;
     this.setStatus('acting', `goal_${kind}`, `Executing ${selectedName} through the deterministic command path.`, true);
     void Promise.resolve(this.executeGoalCommand(this.agent, command, { owner: 'player' }))
@@ -728,6 +757,17 @@ export class GoalDirector {
           this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
           return;
         }
+        if (goal.subgoals.at(-1)?.kind === 'plan') {
+          this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
+          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+          this.setStatus(
+            'waiting',
+            'causal_replan',
+            `The last prerequisite changed or failed (${goal.evidence?.code || 'unknown'}); live inventory and world state will be planned again.`,
+            true,
+          );
+          return;
+        }
         this.fail(
           'no_deterministic_recovery',
           `No safe deterministic recovery exists for ${goal.evidence?.code || 'the last failure'}: ${goal.evidence?.detail || 'no detail'}`,
@@ -736,6 +776,41 @@ export class GoalDirector {
       }
 
       if (goal.phase === 'acquire') {
+        if (!goal.target.family) {
+          const plan = buildPrerequisitePlan(this.agent.bot, {
+            target: goal.target.inventoryName,
+            quantity: required,
+            range: 64,
+          });
+          this.lastPlan = {
+            ...plan,
+            actions: (plan.actions || []).slice(0, 12),
+            plannedAt: this.now(),
+          };
+          if (plan.status === 'complete') {
+            this.persist({
+              ...goal,
+              phase: goal.kind === 'deliver' ? 'deliver' : 'verify_complete',
+              updatedAt: this.now(),
+            });
+            continue;
+          }
+          if (plan.status === 'blocked' || !plan.nextStep) {
+            this.fail(
+              plan.code || 'causal_plan_blocked',
+              `${plan.detail || `No causal plan exists for ${goal.target.inventoryName}.`}${plan.blocker ? ` Blocking prerequisite: ${plan.blocker}.` : ''}`,
+            );
+            return;
+          }
+          this.setStatus(
+            'planning',
+            plan.code || 'causal_plan_ready',
+            `${plan.detail} ${plan.nextStep.reason}`.slice(0, 280),
+            true,
+          );
+          this.dispatch('plan', plan.nextStep.command, plan.nextStep);
+          return;
+        }
         const shortage = Math.max(1, required - current);
         const command = acquisitionCommand(goal, shortage, procedure);
         if (!command) {
