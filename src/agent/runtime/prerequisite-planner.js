@@ -4,6 +4,7 @@ const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
 const DEFAULT_MAX_NODES = 384;
 const DEFAULT_MAX_ACTIONS = 64;
+const WORKSTATION_RANGE = 16;
 const TOOL_TIER = Object.freeze({
   wooden: 1,
   golden: 2,
@@ -85,7 +86,9 @@ function fuelOutput(name) {
 }
 
 export function plannedInventoryCount(bot, name, family = null) {
-  const items = bot.inventory?.items?.() || [];
+  const items = Array.isArray(bot.inventory?.slots)
+    ? bot.inventory.slots.filter(Boolean)
+    : bot.inventory?.items?.() || [];
   if (family === 'logs') {
     return items.reduce((total, item) => total + (isLog(String(item?.name || '')) ? Math.max(0, Number(item.count) || 0) : 0), 0);
   }
@@ -253,7 +256,7 @@ function reserveFuel(context, amount, trail) {
 }
 
 function ensurePersistentItem(bot, context, name, trail) {
-  if (ledgerCount(context, name) > 0 || nearbyBlock(bot, name, 4)) return null;
+  if (ledgerCount(context, name) > 0 || nearbyBlock(bot, name, WORKSTATION_RANGE)) return null;
   return ensureItem(bot, context, name, 1, trail);
 }
 

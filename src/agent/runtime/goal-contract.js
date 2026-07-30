@@ -504,7 +504,9 @@ export function parseItemGoalRequest(requester, message, bot) {
 }
 
 export function inventoryCountForGoalTarget(bot, target) {
-  const items = bot?.inventory?.items?.() || [];
+  const items = Array.isArray(bot?.inventory?.slots)
+    ? bot.inventory.slots.filter(Boolean)
+    : bot?.inventory?.items?.() || [];
   if (target?.family === 'logs') {
     return items.reduce((total, item) => (
       /_(?:log|stem)$/.test(String(item?.name || ''))

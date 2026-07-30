@@ -654,22 +654,36 @@ export async function craftRecipe(bot, itemName, num=1) {
     } finally {
         if (temporaryTable) {
             let cleanup;
-            try {
-                cleanup = await recoverLocalCraftingTable(bot, temporaryTable);
-            } catch (error) {
+            const target = {
+                name: 'crafting_table',
+                x: temporaryTable.position.x,
+                y: temporaryTable.position.y,
+                z: temporaryTable.position.z,
+            };
+            if (bot.blockAt(temporaryTable.position)?.name === 'crafting_table') {
                 cleanup = {
-                    outcome: 'table_cleanup_failed',
-                    target: {
-                        name: 'crafting_table',
-                        x: temporaryTable.position.x,
-                        y: temporaryTable.position.y,
-                        z: temporaryTable.position.z,
-                    },
-                    error: String(error?.message || error).slice(0, 240),
-                    retryable: true,
+                    outcome: 'retained_as_workstation',
+                    target,
+                    retryable: false,
                 };
+                log(bot, `Retained crafting_table at (${target.x}, ${target.y}, ${target.z}) for later crafting steps.`);
+            } else {
+                try {
+                    cleanup = await recoverLocalCraftingTable(bot, temporaryTable);
+                } catch (error) {
+                    cleanup = {
+                        outcome: 'table_cleanup_failed',
+                        target,
+                        error: String(error?.message || error).slice(0, 240),
+                        retryable: true,
+                    };
+                }
             }
-            if (cleanup.outcome !== 'recovered' && cleanup.outcome !== 'already_recovered') {
+            if (
+                cleanup.outcome !== 'retained_as_workstation'
+                && cleanup.outcome !== 'recovered'
+                && cleanup.outcome !== 'already_recovered'
+            ) {
                 console.warn(`[craft] Temporary crafting table cleanup ended as ${cleanup.outcome}.`);
             }
             if (finalEvidence) setActionEvidence(bot, { ...finalEvidence, cleanup });

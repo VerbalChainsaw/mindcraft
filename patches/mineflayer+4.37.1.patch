@@ -1,3 +1,47 @@
+diff --git a/node_modules/mineflayer/lib/plugins/craft.js b/node_modules/mineflayer/lib/plugins/craft.js
+index a5fe563..3ecd881 100644
+--- a/node_modules/mineflayer/lib/plugins/craft.js
++++ b/node_modules/mineflayer/lib/plugins/craft.js
+@@ -39,6 +39,7 @@ function inject (bot) {
+         bot.activateBlock(craftingTable)
+         const [window] = await once(bot, 'windowOpen')
+         windowCraftingTable = window
++        await bot.waitForTicks(1)
+       }
+       if (!windowCraftingTable.type.startsWith('minecraft:crafting')) {
+         throw new Error('crafting: non craftingTable used as craftingTable: ' + windowCraftingTable.type)
+@@ -92,10 +93,14 @@ function inject (bot) {
+         if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
+           (ingredient.metadata != null &&
+             window.selectedItem.metadata !== ingredient.metadata)) {
++          if (window.selectedItem) {
++            await bot.putSelectedItemRange(window.inventoryStart, window.inventoryEnd, window, originalSourceSlot)
++            await bot.waitForTicks(1)
++          }
+           // we are not holding the item we need. click it.
+           const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata)
+           if (!sourceItem) throw new Error('missing ingredient')
+-          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot
++          originalSourceSlot = sourceItem.slot
+           await bot.clickWindow(sourceItem.slot, 0, 0)
+         }
+         await bot.clickWindow(destSlot, 1, 0)
+@@ -108,10 +113,14 @@ function inject (bot) {
+         if (!window.selectedItem || window.selectedItem.type !== ingredient.id ||
+           (ingredient.metadata != null &&
+             window.selectedItem.metadata !== ingredient.metadata)) {
++          if (window.selectedItem) {
++            await bot.putSelectedItemRange(window.inventoryStart, window.inventoryEnd, window, originalSourceSlot)
++            await bot.waitForTicks(1)
++          }
+           // we are not holding the item we need. click it.
+           const sourceItem = window.findInventoryItem(ingredient.id, ingredient.metadata)
+           if (!sourceItem) throw new Error('missing ingredient')
+-          if (originalSourceSlot == null) originalSourceSlot = sourceItem.slot
++          originalSourceSlot = sourceItem.slot
+           await bot.clickWindow(sourceItem.slot, 0, 0)
+         }
+         await bot.clickWindow(destSlot, 1, 0)
 diff --git a/node_modules/mineflayer/lib/plugins/place_block.js b/node_modules/mineflayer/lib/plugins/place_block.js
 index fdaec6b..08983b6 100644
 --- a/node_modules/mineflayer/lib/plugins/place_block.js
