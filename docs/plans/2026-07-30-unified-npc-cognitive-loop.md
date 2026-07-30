@@ -126,13 +126,37 @@ functional block matchers are first called with palette-only blocks that have
 no world position. Position-dependent exclusion now treats that call as a
 section precheck and applies exact coordinates only during the full block scan.
 
-### Slice 2 — candidate scoring
+### Slice 2 — candidate scoring — implemented
 
-- Produce several feasible targets or methods rather than committing to the
-  nearest raw candidate.
-- Score distance, known reachability, setup cost, danger, tool wear, and recent
-  outcomes.
-- Keep scoring deterministic and bounded.
+- Collection now evaluates at most six safe observed block instances instead
+  of committing to the nearest raw match.
+- Each candidate receives a bounded, read-only pathfinder probe that requires
+  a reachable interaction position with line of sight to the exact block.
+- A pure deterministic scorer combines confirmed reachability, route cost,
+  geometric distance, vertical effort, local hazards, and break time. Stable
+  coordinate tie-breaks make equivalent decisions reproducible.
+- Confirmed unreachable candidates are rejected before physical action;
+  partial, timed-out, and failed probes remain bounded, penalized uncertainty
+  rather than false proof of impossibility.
+- Existing `GoalDirector` failed-target exclusions supply recent-outcome
+  memory, and the selected score/rationale travels with collection evidence.
+
+Physical proof completed on Paper 1.21.11 with `MindcraftBot`:
+
+- A nearer oak log at `(1028,100,1028)` was completely sealed in bedrock.
+- A farther oak log at `(1038,99,1032)` was exposed across open ground.
+- `!collectWoodInRange(1, 16)` selected the farther target with a successful
+  route score, walked to it, broke it, and verified one log in inventory.
+- Server predicates confirmed the nearer sealed log remained intact and the
+  farther selected log became air.
+- A typed acquire goal reused the normal procedure path, dispatched
+  `!collectBlocksInRange("oak_log", 1, 64)`, made the same physical choice, and
+  completed only after the inventory count reached one.
+
+The live run also rejected `GoalNear` as insufficient evidence: a sealed block
+can be geometrically near while offering no interactable face. The implemented
+probe uses `GoalLookAtBlock`, so reachability means the bot can stand somewhere
+that can actually interact with the selected block.
 
 ### Slice 3 — world-state construction goals
 

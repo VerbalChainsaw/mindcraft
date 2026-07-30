@@ -12,6 +12,7 @@ import {
 } from '../runtime/gameplay-safety.js';
 import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-target.js';
 import { companionContextFor, normalizePlayerDistance } from '../runtime/companion-context.js';
+import { rankCollectionCandidates } from '../runtime/collection-candidate-selector.js';
 import {
     entityRequiresSaddle,
     isRideableEntityName,
@@ -61,6 +62,10 @@ const ANIMAL_TRAVEL_PER_TICK = 0.14;
 const RIDE_STALL_TIMEOUT_MS = 8_000;
 const RIDE_MAX_DURATION_MS = 120_000;
 const RIDE_PROGRESS_DISTANCE = 0.35;
+const MAX_COLLECTION_CANDIDATES = 6;
+const COLLECTION_ROUTE_PROBE_TIMEOUT_MS = 75;
+const COLLECTION_ROUTE_PROBE_TICK_MS = 15;
+const MAX_COLLECTION_ROUTE_SLICES = 8;
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -491,6 +496,152 @@ function targetScopedCollectionMovements(bot, targetBlock) {
         && safetyGuard.safeToBreak(candidate)
     );
     return movements;
+}
+
+function sameBlockPosition(left, right) {
+    return Boolean(
+        left?.position
+        && right?.position
+        && left.position.x === right.position.x
+        && left.position.y === right.position.y
+        && left.position.z === right.position.z
+    );
+}
+
+function collectionHazardObservation(bot, targetBlock) {
+    const hazards = new Set();
+    let score = 0;
+    for (let x = -2; x <= 2; x++) {
+        for (let y = -1; y <= 2; y++) {
+            for (let z = -2; z <= 2; z++) {
+                if (x === 0 && y === 0 && z === 0) continue;
+                const nearby = bot.blockAt(targetBlock.position.offset(x, y, z));
+                if (!isHazardousGameplayBlock(nearby)) continue;
+                hazards.add(nearby.name);
+                score += Math.max(Math.abs(x), Math.abs(y), Math.abs(z)) <= 1 ? 3 : 1;
+            }
+        }
+    }
+    return {
+        score,
+        blocks: [...hazards].sort(),
+    };
+}
+
+function collectionBreakTime(bot, block) {
+    try {
+        const tool = bot.pathfinder.bestHarvestTool?.(block);
+        const digTime = block.digTime(
+            tool?.type ?? null,
+            false,
+            false,
+            false,
+            [],
+            bot.entity?.effects || {},
+        );
+        return Number.isFinite(digTime) ? digTime : 0;
+    } catch {
+        return 0;
+    }
+}
+
+function probeCollectionRoute(bot, block, movements) {
+    const distance = bot.entity.position.distanceTo(block.position);
+    if (
+        distance <= 4.5
+        && bot.canSeeBlock?.(block)
+    ) {
+        return {
+            routeStatus: 'direct',
+            routeCost: 0,
+            routeLength: 0,
+            routeTimeMs: 0,
+        };
+    }
+
+    try {
+        const goal = new pf.goals.GoalLookAtBlock(
+            block.position,
+            bot.world,
+            {
+                reach: 4.5,
+                entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+            },
+        );
+        const generator = bot.pathfinder.getPathFromTo(
+            movements,
+            bot.entity.position,
+            goal,
+            {
+                timeout: COLLECTION_ROUTE_PROBE_TIMEOUT_MS,
+                tickTimeout: COLLECTION_ROUTE_PROBE_TICK_MS,
+                searchRadius: Math.max(8, Math.ceil(distance) + 8),
+            },
+        );
+        let result = null;
+        for (let slice = 0; slice < MAX_COLLECTION_ROUTE_SLICES; slice++) {
+            const next = generator.next();
+            result = next?.value?.result || result;
+            if (next.done || result?.status !== 'partial') break;
+        }
+        return {
+            routeStatus: result?.status || 'unknown',
+            routeCost: Number.isFinite(result?.cost) ? result.cost : 0,
+            routeLength: Array.isArray(result?.path) ? result.path.length : 0,
+            routeTimeMs: Number.isFinite(result?.time) ? result.time : 0,
+        };
+    } catch (error) {
+        return {
+            routeStatus: 'probe_error',
+            routeCost: 0,
+            routeLength: 0,
+            routeTimeMs: 0,
+            routeError: String(error?.message || error).slice(0, 160),
+        };
+    }
+}
+
+function selectCollectionCandidate(bot, blocks) {
+    const routeMovements = safeMovements(bot);
+    const observations = blocks.map(block => {
+        const hazard = collectionHazardObservation(bot, block);
+        return {
+            block,
+            position: block.position,
+            distance: bot.entity.position.distanceTo(block.position),
+            verticalDelta: Math.abs(bot.entity.position.y - block.position.y),
+            hazardScore: hazard.score,
+            hazards: hazard.blocks,
+            breakTimeMs: collectionBreakTime(bot, block),
+            ...probeCollectionRoute(bot, block, routeMovements),
+        };
+    });
+    const ranked = rankCollectionCandidates(observations);
+    return {
+        selected: ranked.find(candidate => candidate.reachable) || null,
+        ranked,
+    };
+}
+
+function collectionDecisionEvidence(selection) {
+    const selected = selection?.selected;
+    return {
+        considered: selection?.ranked?.length || 0,
+        unreachable: selection?.ranked?.filter(candidate => !candidate.reachable).length || 0,
+        routeStatus: selected?.routeStatus || null,
+        routeCost: Number.isFinite(selected?.routeCost)
+            ? Math.round(selected.routeCost * 100) / 100
+            : null,
+        distance: Number.isFinite(selected?.distance)
+            ? Math.round(selected.distance * 100) / 100
+            : null,
+        verticalDelta: Number.isFinite(selected?.verticalDelta)
+            ? Math.round(selected.verticalDelta * 100) / 100
+            : null,
+        hazards: selected?.hazards || [],
+        score: Number.isFinite(selected?.score) ? selected.score : null,
+        scoreBreakdown: selected?.scoreBreakdown || null,
+    };
 }
 
 export function log(bot, message) {
@@ -2061,7 +2212,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
     bot.pathfinder.setMovements(safeMovements(bot));
 
     for (let i=0; i<num; i++) {
-        let blocks = world.getNearestBlocksWhere(bot, block => {
+        const blocks = world.getNearestBlocksWhere(bot, block => {
             if (!blocktypes.includes(block?.name)) {
                 return false;
             }
@@ -2082,7 +2233,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             }
             
             return selectionMovements.safeToBreak(block);
-        }, searchRange, 1);
+        }, searchRange, MAX_COLLECTION_CANDIDATES);
 
         if (blocks.length === 0) {
             if (collected === 0) {
@@ -2100,8 +2251,37 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 log(bot, `No more ${blockType} nearby to collect.`);
             break;
         }
-        const block = blocks[0];
-        const target = { name: block.name, x: block.position.x, y: block.position.y, z: block.position.z };
+        const selection = selectCollectionCandidate(bot, blocks);
+        if (!selection.selected) {
+            setActionEvidence(bot, {
+                kind: 'collect',
+                outcome: 'unreachable',
+                target: {
+                    name: blockType,
+                    decision: collectionDecisionEvidence(selection),
+                },
+                retryable: true,
+            });
+            log(bot, `Found ${blocks.length} ${blockType} candidate${blocks.length === 1 ? '' : 's'}, but none has a safe reachable route.`);
+            break;
+        }
+        const block = selection.selected.block;
+        const nearest = blocks[0];
+        const decision = collectionDecisionEvidence(selection);
+        const target = {
+            name: block.name,
+            x: block.position.x,
+            y: block.position.y,
+            z: block.position.z,
+            decision,
+        };
+        if (!sameBlockPosition(block, nearest)) {
+            log(
+                bot,
+                `Selected ${block.name} at ${target.x}, ${target.y}, ${target.z} over the nearer candidate `
+                + `(${decision.routeStatus} route, score ${decision.score}).`,
+            );
+        }
         const expectedDropTypes = new Set(
             (Array.isArray(block.drops) ? block.drops : [])
                 .filter(type => Number.isInteger(type)),
@@ -2407,7 +2587,7 @@ const WOOD_BLOCK_TYPES = Object.freeze([
 export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=null) {
     const allowed = blockTypes instanceof Set ? blockTypes : new Set(blockTypes);
     const movements = collectionSafetyMovements(bot);
-    return world.getNearestBlocksWhere(
+    const blocks = world.getNearestBlocksWhere(
         bot,
         (block) => {
             if (!allowed.has(block?.name)) return false;
@@ -2423,8 +2603,9 @@ export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=n
             );
         },
         Math.max(1, Math.min(512, Number(range) || 64)),
-        1,
-    ).find(Boolean) || null;
+        MAX_COLLECTION_CANDIDATES,
+    ).filter(Boolean);
+    return selectCollectionCandidate(bot, blocks).selected?.block || null;
 }
 
 export async function collectWood(bot, num=1, range=64, exclude=null) {
