@@ -285,6 +285,43 @@ Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
 - The next explicit progression blocker is exploration, landmark memory, and
   death/item recovery.
 
+#### Exploration and death recovery — implemented
+
+CodePlan compared inline route choice inside the physical skill with a pure
+landmark selector feeding one bounded composite skill. The pure selector won
+because distinct landmark selection and ordering stay deterministic and
+testable while ActionManager, movement skills, persistent personal memory, and
+inventory skills retain their existing ownership.
+
+- `!completeExplorationRoute(item, landmarks, range)` records its entrance,
+  selects distinct loaded landmark types, physically visits and verifies each
+  block, remembers only reached coordinates, recovers the requested cache item,
+  and returns to the saved entrance.
+- Each exploration leg has a bounded unique-cell progress watchdog. The generic
+  unstuck reflex is suspended only while this composite owns movement and is
+  restored afterward; safety and combat reflexes remain authoritative.
+- The death lifecycle now retains a throttled last-alive inventory snapshot
+  because Paper clears the client inventory before Mineflayer emits `death`.
+  Position, dimension, item counts, and recovery status persist in personal
+  memory.
+- `!recoverDeathItems()` rejects missing, cross-dimension, or already-recovered
+  records; walks to the death site; collects physical item entities; and
+  succeeds only when inventory deltas restore every recorded count.
+- Survival progression exposes landmark and recovery verification from
+  persistent memory and recommends the same deterministic commands used by
+  direct and natural-language requests.
+
+Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
+
+- From `(1031.57,100,1079.43)`, the bot reached emerald `(1030,100,1103)`,
+  gold `(1000,100,1120)`, and diamond `(1060,100,1085)` landmarks, withdrew
+  one echo shard at `(1059,100,1120)`, and returned to `(1031.51,100,1080.40)`.
+  The terminal result was `skill_route_completed`.
+- A real death at `(1048.5,100,1118.5)` persisted a pre-death manifest of one
+  echo shard, five gold ingots, and three cooked beef. From the station
+  entrance, recovery walked back and restored all nine items exactly. The
+  terminal result was `skill_items_recovered`.
+
 ## Slice 1 acceptance contract
 
 - A navigation attempt that makes no meaningful physical progress terminates

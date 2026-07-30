@@ -77,6 +77,15 @@ function commandReleasesOperatorHold(commandName) {
     return isAction(commandName) && !HOLD_SAFE_COMMANDS.has(commandName);
 }
 
+function inventorySnapshot(bot) {
+    const counts = {};
+    for (const slot of bot?.inventory?.slots || []) {
+        if (!slot?.name || !Number.isFinite(slot.count) || slot.count <= 0) continue;
+        counts[slot.name] = (counts[slot.name] || 0) + slot.count;
+    }
+    return counts;
+}
+
 function identityMatchKeys(identity) {
     const value = String(identity || '');
     if (!value) return [];
@@ -171,6 +180,8 @@ export class Agent {
         this._idleResumeTimer = null;
         this._spawnTimeoutTimer = null;
         this._deathCleanupPromise = null;
+        this._lastAliveInventorySnapshot = {};
+        this._lastAliveInventorySnapshotAt = 0;
 
         const nameCheck = validateNameFormat(settings?.profile?.name);
         if (!nameCheck.success) {
@@ -918,6 +929,15 @@ export class Agent {
     }
 
     startEvents() {
+        const refreshAliveInventorySnapshot = () => {
+            if (Number(this.bot.health) <= 0) return;
+            const now = Date.now();
+            if (now - this._lastAliveInventorySnapshotAt < 250) return;
+            this._lastAliveInventorySnapshot = inventorySnapshot(this.bot);
+            this._lastAliveInventorySnapshotAt = now;
+        };
+        refreshAliveInventorySnapshot();
+        this.bot.on('physicsTick', refreshAliveInventorySnapshot);
         // Custom events
         this.bot.on('time', () => {
             if (this.bot.time.timeOfDay == 0) {
@@ -984,9 +1004,21 @@ export class Agent {
         });
         this.bot.on('death', () => {
             const position = this.bot.entity?.position;
+            const dimension = this.bot.game?.dimension;
+            const observedInventory = inventorySnapshot(this.bot);
+            const inventory = Object.keys(observedInventory).length > 0
+                ? observedInventory
+                : { ...this._lastAliveInventorySnapshot };
+            if (position) {
+                this.memory_bank.rememberDeath(position, dimension, inventory);
+            }
             this.publishBehaviorEvent({
                 type: 'self.died',
                 target: position ? { name: 'death', x: position.x, y: position.y, z: position.z } : { name: 'death' },
+                evidence: {
+                    dimension,
+                    recoverableItems: Object.values(inventory).reduce((total, count) => total + count, 0),
+                },
                 salience: 5,
             });
             void this.cleanupAfterDeath();
@@ -1068,14 +1100,15 @@ export class Agent {
         this.bot.on('messagestr', async (message, _, jsonMsg) => {
             if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
                 console.log('Agent died: ', message);
-                let death_pos = this.bot.entity.position;
-                this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+                const death = this.memory_bank.recallDeath();
+                const death_pos = death?.position;
                 let death_pos_text = null;
                 if (death_pos) {
                     death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
                 }
-                let dimention = this.bot.game.dimension;
-                this.handleMessage('system', `You died at position ${death_pos_text || "unknown"} in the ${dimention} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. Previous actions were stopped and you have respawned.`);
+                const dimension = death?.dimension || this.bot.game.dimension;
+                const recoverable = Object.values(death?.inventory || {}).reduce((total, count) => total + count, 0);
+                this.handleMessage('system', `You died at position ${death_pos_text || "unknown"} in the ${dimension} dimension with ${recoverable} recorded recoverable items and the final message: '${message}'. Use !recoverDeathItems() after respawn to return physically and verify pickup. Previous actions were stopped.`);
             }
         });
         this.bot.on('idle', () => {

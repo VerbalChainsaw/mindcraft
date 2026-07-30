@@ -654,6 +654,14 @@ export function getFullState(agent, { deep = false } = {}) {
         activity = { current: 'Idle', kind: 'idle' };
     }
 
+    const deathMemory = agent.memory_bank?.recallDeath?.() || null;
+    const deathManifestCount = Object.values(deathMemory?.inventory || {})
+        .reduce((total, count) => total + Math.max(0, Number(count) || 0), 0);
+    const deathRecoveryPending = Boolean(
+        deathMemory
+        && !deathMemory.recoveredAt
+        && deathManifestCount > 0
+    );
     const state = {
         _meta: {
             sampledAt,
@@ -754,7 +762,15 @@ export function getFullState(agent, { deep = false } = {}) {
         modes: {
             summary: bot.modes.getMiniDocs(),
             status: bot.modes.getStatus?.() || [],
-        }
+        },
+        memory: {
+            explorationRouteVerified: Boolean(agent.memory_bank?.recallFact?.('exploration_route_verified')),
+            deathRecoveryVerified: Boolean(
+                agent.memory_bank?.recallFact?.('death_recovery_verified')
+                && !deathRecoveryPending
+            ),
+            deathRecoveryPending,
+        },
     };
 
     state.progression = evaluateGameplayProgression(state);

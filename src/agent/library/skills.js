@@ -15,6 +15,7 @@ import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-tar
 import { companionContextFor, normalizePlayerDistance } from '../runtime/companion-context.js';
 import { rankCollectionCandidates } from '../runtime/collection-candidate-selector.js';
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
+import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import {
     entityRequiresSaddle,
     isRideableEntityName,
@@ -78,6 +79,16 @@ const PORTAL_SEARCH_MIN_DISTANCE = 4;
 const PORTAL_TRANSITION_TIMEOUT_MS = 30_000;
 const PORTAL_DESTINATION_SETTLE_MS = 5_000;
 const PORTAL_EXIT_TIMEOUT_MS = 5_000;
+const EXPLORATION_STALL_TIMEOUT_MS = 20_000;
+const EXPLORATION_LEG_TIMEOUT_MS = 90_000;
+const EXPLORATION_LANDMARK_BLOCKS = Object.freeze([
+    'gold_block',
+    'emerald_block',
+    'diamond_block',
+    'beacon',
+    'lodestone',
+]);
+const EXPLORATION_CONTAINER_BLOCKS = Object.freeze(['chest', 'trapped_chest', 'barrel']);
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -3485,6 +3496,70 @@ function normalizedDimension(value) {
     return dimension;
 }
 
+async function goToExplorationPosition(bot, position, distance=2) {
+    const startedAt = Date.now();
+    let lastPosition = bot.entity.position.clone();
+    const visitedCells = new Set([
+        `${Math.floor(lastPosition.x)}:${Math.floor(lastPosition.y)}:${Math.floor(lastPosition.z)}`,
+    ]);
+    let lastProgressAt = Date.now();
+    let stalled = false;
+    const interval = setInterval(() => {
+        const current = bot.entity?.position;
+        if (!current) return;
+        lastPosition = current.clone();
+        const cell = `${Math.floor(current.x)}:${Math.floor(current.y)}:${Math.floor(current.z)}`;
+        if (!visitedCells.has(cell)) {
+            visitedCells.add(cell);
+            lastProgressAt = Date.now();
+            return;
+        }
+        if (
+            Date.now() - lastProgressAt < EXPLORATION_STALL_TIMEOUT_MS
+            && Date.now() - startedAt < EXPLORATION_LEG_TIMEOUT_MS
+        ) return;
+        stalled = true;
+        try {
+            bot.pathfinder.setGoal(null);
+        } catch {
+            try { bot.pathfinder.stop(); } catch { /* best-effort bounded leg cleanup */ }
+        }
+    }, NAVIGATION_PROGRESS_POLL_MS);
+    try {
+        const reached = await goToPosition(
+            bot,
+            position.x,
+            position.y,
+            position.z,
+            distance,
+        );
+        if (!stalled) return reached;
+        setActionEvidence(bot, {
+            kind: 'exploration_movement',
+            outcome: 'path_stalled',
+            target: {
+                x: position.x,
+                y: position.y,
+                z: position.z,
+            },
+            progress: {
+                elapsedMs: Date.now() - startedAt,
+                stalledMs: Date.now() - lastProgressAt,
+                visitedCells: visitedCells.size,
+                lastPosition: {
+                    x: lastPosition.x,
+                    y: lastPosition.y,
+                    z: lastPosition.z,
+                },
+            },
+            retryable: true,
+        });
+        return false;
+    } finally {
+        clearInterval(interval);
+    }
+}
+
 function botIsInsideNetherPortal(bot) {
     const feet = bot.entity?.position?.floored?.();
     if (!feet) return false;
@@ -4560,6 +4635,289 @@ export async function completeNetherQuartzRun(bot, quartzCount=1) {
     }
 }
 
+export async function completeExplorationRoute(
+    bot,
+    memoryBank,
+    targetItem='echo_shard',
+    landmarkCount=3,
+    range=96,
+) {
+    const itemName = String(targetItem || '').trim().toLowerCase().replace(/^minecraft:/, '');
+    const requestedLandmarks = Math.max(1, Math.min(8, Math.floor(Number(landmarkCount) || 0)));
+    const searchRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 0)));
+    const start = bot.entity?.position?.clone?.();
+    const dimension = normalizedDimension(bot.game?.dimension);
+    const target = start
+        ? { name: 'exploration_route', x: start.x, y: start.y, z: start.z }
+        : { name: 'exploration_route' };
+    const finish = (success, outcome, detail={}) => {
+        setActionEvidence(bot, {
+            kind: 'exploration_route',
+            outcome,
+            target,
+            requestedLandmarks,
+            targetItem: itemName || null,
+            dimension,
+            retryable: !success && !bot.interrupt_code,
+            ...detail,
+        });
+        if (success) {
+            log(
+                bot,
+                `Exploration route verified ${detail.landmarks?.length || 0} landmarks, secured ${detail.recovered || 0} ${itemName}, and returned to its entrance.`,
+            );
+        } else if (outcome !== 'interrupted') {
+            log(bot, `Exploration route stopped (${outcome.replaceAll('_', ' ')}).`);
+        }
+        return success;
+    };
+
+    if (!start || ![start.x, start.y, start.z].every(Number.isFinite)) {
+        return finish(false, 'invalid_start', { retryable: false });
+    }
+    if (!memoryBank?.rememberPlace || !memoryBank?.rememberFact) {
+        return finish(false, 'memory_unavailable', { retryable: false });
+    }
+    if (!itemName || requestedLandmarks < 1 || searchRange < 16) {
+        return finish(false, 'invalid_request', { retryable: false });
+    }
+
+    memoryBank.rememberPlace(
+        'exploration_route_start',
+        start.x,
+        start.y,
+        start.z,
+        dimension,
+    );
+    const landmarkBlocks = world.getNearestBlocks(
+        bot,
+        EXPLORATION_LANDMARK_BLOCKS,
+        searchRange,
+        64,
+    ).filter(block => block?.position && EXPLORATION_LANDMARK_BLOCKS.includes(block.name));
+    const route = chooseExplorationRoute({
+        origin: start,
+        landmarkCount: requestedLandmarks,
+        candidates: landmarkBlocks.map(block => ({
+            name: block.name,
+            position: {
+                x: block.position.x,
+                y: block.position.y,
+                z: block.position.z,
+            },
+        })),
+    });
+    if (route.outcome !== 'route_selected') {
+        return finish(false, route.outcome, {
+            considered: route.considered,
+            distinctTypes: route.distinctTypes,
+        });
+    }
+
+    const verifiedLandmarks = [];
+    for (const [index, landmark] of route.selected.entries()) {
+        if (bot.interrupt_code) return finish(false, 'interrupted', { landmarks: verifiedLandmarks, retryable: false });
+        const position = landmark.position;
+        if (!await goToExplorationPosition(bot, position, 2)) {
+            return finish(false, 'landmark_unreachable', {
+                landmarks: verifiedLandmarks,
+                failedLandmark: landmark,
+            });
+        }
+        const observed = bot.blockAt(new Vec3(position.x, position.y, position.z));
+        if (
+            observed?.name !== landmark.name
+            || bot.entity.position.distanceTo(observed.position) > 3.5
+        ) {
+            return finish(false, 'landmark_unverified', {
+                landmarks: verifiedLandmarks,
+                failedLandmark: landmark,
+                observed: observed?.name || null,
+            });
+        }
+        const rememberedAs = `exploration_landmark_${index + 1}_${landmark.name}`;
+        if (!memoryBank.rememberPlace(
+            rememberedAs,
+            position.x,
+            position.y,
+            position.z,
+            dimension,
+        )) {
+            return finish(false, 'landmark_memory_failed', {
+                landmarks: verifiedLandmarks,
+                failedLandmark: landmark,
+                retryable: false,
+            });
+        }
+        verifiedLandmarks.push({ ...landmark, rememberedAs });
+    }
+
+    const containers = world.getNearestBlocks(
+        bot,
+        EXPLORATION_CONTAINER_BLOCKS,
+        searchRange,
+        16,
+    ).filter(block => block?.position && EXPLORATION_CONTAINER_BLOCKS.includes(block.name));
+    containers.sort((left, right) => (
+        bot.entity.position.distanceTo(left.position)
+        - bot.entity.position.distanceTo(right.position)
+    ));
+    const itemBefore = inventoryCount(bot, itemName);
+    let recovered = 0;
+    let recoveredFrom = null;
+    for (const container of containers) {
+        if (bot.interrupt_code) return finish(false, 'interrupted', { landmarks: verifiedLandmarks, retryable: false });
+        if (!await goToExplorationPosition(bot, container.position, 2)) continue;
+        const taken = await takeFromChest(bot, itemName, 1, container.position);
+        recovered = Math.max(0, inventoryCount(bot, itemName) - itemBefore);
+        if (taken && recovered >= 1) {
+            recoveredFrom = {
+                name: container.name,
+                x: container.position.x,
+                y: container.position.y,
+                z: container.position.z,
+            };
+            break;
+        }
+    }
+    if (recovered < 1) {
+        return finish(false, containers.length ? 'target_item_not_recovered' : 'container_not_found', {
+            landmarks: verifiedLandmarks,
+            containersChecked: containers.length,
+            recovered,
+        });
+    }
+
+    if (!await goToExplorationPosition(bot, start, 1)) {
+        return finish(false, 'return_unreachable', {
+            landmarks: verifiedLandmarks,
+            recovered,
+            recoveredFrom,
+        });
+    }
+    const returnDistance = bot.entity.position.distanceTo(start);
+    const returned = (
+        normalizedDimension(bot.game?.dimension) === dimension
+        && returnDistance <= 2
+    );
+    if (!returned) {
+        return finish(false, 'return_unverified', {
+            landmarks: verifiedLandmarks,
+            recovered,
+            recoveredFrom,
+            returnDistance,
+        });
+    }
+
+    const routeEvidence = {
+        verifiedAt: Date.now(),
+        dimension,
+        landmarkCount: verifiedLandmarks.length,
+        targetItem: itemName,
+        recovered,
+        returned: true,
+    };
+    if (!memoryBank.rememberFact('exploration_route_verified', JSON.stringify(routeEvidence))) {
+        return finish(false, 'route_memory_failed', {
+            landmarks: verifiedLandmarks,
+            recovered,
+            recoveredFrom,
+            returnDistance,
+            retryable: false,
+        });
+    }
+    memoryBank.personal?.rememberEpisode?.(
+        `Explored ${verifiedLandmarks.length} landmarks, recovered ${recovered} ${itemName}, and returned to the saved route entrance.`,
+        'verified',
+    );
+    return finish(true, 'route_completed', {
+        landmarks: verifiedLandmarks,
+        recovered,
+        recoveredFrom,
+        returnDistance,
+        retryable: false,
+    });
+}
+
+export async function recoverDeathItems(bot, deathRecord) {
+    const position = deathRecord?.position;
+    const expected = deathRecord?.inventory && typeof deathRecord.inventory === 'object'
+        ? Object.fromEntries(Object.entries(deathRecord.inventory)
+            .filter(([name, count]) => name && Number.isFinite(count) && count > 0)
+            .map(([name, count]) => [name, Math.floor(count)]))
+        : {};
+    const dimension = normalizedDimension(deathRecord?.dimension);
+    const target = position && [position.x, position.y, position.z].every(Number.isFinite)
+        ? { name: 'last_death_position', x: position.x, y: position.y, z: position.z }
+        : { name: 'last_death_position' };
+    const finish = (success, outcome, detail={}) => {
+        setActionEvidence(bot, {
+            kind: 'death_recovery',
+            outcome,
+            target,
+            dimension,
+            retryable: !success && !bot.interrupt_code,
+            ...detail,
+        });
+        if (success) {
+            log(bot, `Returned to the death site and recovered ${detail.recovered || 0} dropped items.`);
+        } else if (outcome !== 'interrupted') {
+            log(bot, `Death-item recovery stopped (${outcome.replaceAll('_', ' ')}).`);
+        }
+        return success;
+    };
+
+    if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+        return finish(false, 'death_position_missing', { retryable: false });
+    }
+    if (deathRecord?.recoveredAt) {
+        return finish(false, 'death_already_recovered', { retryable: false });
+    }
+    if (Object.keys(expected).length === 0) {
+        return finish(false, 'death_manifest_missing', { retryable: false });
+    }
+    const observedDimension = normalizedDimension(bot.game?.dimension);
+    if (!dimension || observedDimension !== dimension) {
+        return finish(false, 'wrong_dimension', {
+            observedDimension,
+            retryable: true,
+        });
+    }
+
+    const before = world.getInventoryCounts(bot);
+    if (!await goToPosition(bot, position.x, position.y, position.z, 2)) {
+        return finish(false, 'death_position_unreachable');
+    }
+    if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
+
+    await pickupNearbyItems(bot);
+    const after = world.getInventoryCounts(bot);
+    const recoveredByItem = {};
+    let recovered = 0;
+    let missing = 0;
+    for (const [name, expectedCount] of Object.entries(expected)) {
+        const gained = Math.max(0, (after[name] || 0) - (before[name] || 0));
+        recoveredByItem[name] = gained;
+        recovered += Math.min(expectedCount, gained);
+        missing += Math.max(0, expectedCount - (after[name] || 0));
+    }
+    if (missing > 0 || recovered < 1) {
+        return finish(false, recovered > 0 ? 'items_partially_recovered' : 'items_not_recovered', {
+            expected,
+            recoveredByItem,
+            recovered,
+            missing,
+        });
+    }
+    return finish(true, 'items_recovered', {
+        expected,
+        recoveredByItem,
+        recovered,
+        missing: 0,
+        retryable: false,
+    });
+}
+
 export async function placeNearPlayer(bot, username, blockType, num=1) {
     const requested = Math.max(1, Math.min(16, Math.floor(Number(num) || 1)));
     let resolution = resolvePhysicalPlayer(bot, username);
@@ -5095,7 +5453,7 @@ export async function depositInventoryOverflowAt(bot, role, protectedName, reser
     return success;
 }
 
-export async function takeFromChest(bot, itemName, num=-1) {
+export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
     /**
      * Take the given item from the nearest chest, potentially from multiple slots.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -5106,7 +5464,29 @@ export async function takeFromChest(bot, itemName, num=-1) {
      * await skills.takeFromChest(bot, "oak_log");
      * **/
     itemName = String(itemName || '').trim();
-    let chest = world.getNearestBlock(bot, 'chest', 32);
+    let chest = exactPosition && [exactPosition.x, exactPosition.y, exactPosition.z].every(Number.isFinite)
+        ? bot.blockAt(new Vec3(
+            Math.floor(exactPosition.x),
+            Math.floor(exactPosition.y),
+            Math.floor(exactPosition.z),
+        ))
+        : world.getNearestBlock(bot, 'chest', 32);
+    if (exactPosition && !EXPLORATION_CONTAINER_BLOCKS.includes(chest?.name)) {
+        setActionEvidence(bot, {
+            kind: 'chest_transfer',
+            outcome: chest ? 'assigned_container_invalid' : 'assigned_container_unloaded',
+            target: {
+                name: 'assigned_withdrawal',
+                x: Math.floor(exactPosition.x),
+                y: Math.floor(exactPosition.y),
+                z: Math.floor(exactPosition.z),
+            },
+            observed: chest?.name || null,
+            retryable: true,
+        });
+        log(bot, 'The assigned withdrawal is not a loaded chest, trapped chest, or barrel.');
+        return false;
+    }
     if (!chest) {
         setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'chest_not_found', target: { name: itemName || 'item' }, retryable: true });
         log(bot, 'Could not find a chest nearby.');

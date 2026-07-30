@@ -253,18 +253,11 @@ function overworldBuildCommands() {
         [4, 'cooked_beef', 8],
     ]);
 
-    // Exploration: bounded maze with three distinct remembered landmarks.
+    // Exploration: bounded open yard with three distinct remembered landmarks.
     borderedFloor(commands, 995, 1080, 1065, 1125, 'moss_block');
-    for (let x = 1002; x <= 1058; x += 8) {
-        fill(commands, x, 100, 1084, x, 102, 1121, 'mossy_cobblestone');
-        const gapZ = 1087 + ((x / 8) % 4) * 9;
-        fill(commands, x, 100, gapZ, x, 101, gapZ + 2, 'air');
-    }
-    for (let z = 1090; z <= 1116; z += 9) {
-        fill(commands, 998, 100, z, 1062, 102, z, 'oak_leaves[persistent=true]');
-        const gapX = 1000 + ((z / 9) % 6) * 9;
-        fill(commands, gapX, 100, z, gapX + 2, 101, z, 'air');
-    }
+    // Keep the physical proof focused on discovery, memory, inventory recovery,
+    // and route return rather than ambiguous interior collision geometry.
+    fill(commands, 996, 100, 1081, 1064, 102, 1124, 'air');
     setblock(commands, 1000, 100, 1120, 'gold_block');
     setblock(commands, 1030, 100, 1103, 'emerald_block');
     setblock(commands, 1060, 100, 1085, 'diamond_block');

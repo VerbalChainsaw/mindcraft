@@ -325,6 +325,43 @@ export const actionsList = [
         })
     },
     {
+        name: '!completeExplorationRoute',
+        description: 'Visit and remember distinct observed landmarks, recover a target item from a bounded container search, and physically return to the saved entrance.',
+        params: {
+            'target_item': { type: 'ItemName', description: 'The item to recover during exploration.' },
+            'landmark_count': { type: 'int', description: 'Number of distinct landmark types to visit.', domain: [1, 8] },
+            'search_range': { type: 'int', description: 'Maximum loaded search radius for landmarks and containers.', domain: [16, 128] },
+        },
+        perform: runAsAction(async (agent, target_item, landmark_count, search_range) => {
+            const unstuckWasEnabled = agent.bot.modes?.isOn?.('unstuck') === true;
+            if (unstuckWasEnabled) agent.bot.modes.setOn('unstuck', false);
+            try {
+                return await skills.completeExplorationRoute(
+                    agent.bot,
+                    agent.memory_bank,
+                    target_item,
+                    landmark_count,
+                    search_range,
+                );
+            } finally {
+                if (unstuckWasEnabled) agent.bot.modes.setOn('unstuck', true);
+            }
+        }, false, 10)
+    },
+    {
+        name: '!recoverDeathItems',
+        description: 'Return to the recorded death site in the same dimension, collect the recorded dropped inventory, and verify the recovered item counts.',
+        params: {},
+        perform: runAsAction(async (agent) => {
+            const death = agent.memory_bank.recallDeath();
+            const recovered = await skills.recoverDeathItems(agent.bot, death);
+            if (recovered) {
+                agent.memory_bank.markDeathRecovered(agent.bot.lastActionEvidence);
+            }
+            return recovered;
+        }, false, 10)
+    },
+    {
         name: '!givePlayer',
         description: 'Give the specified item to the given player.',
         params: { 

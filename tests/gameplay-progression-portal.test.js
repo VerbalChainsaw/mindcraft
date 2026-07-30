@@ -56,7 +56,7 @@ test('an active portal preserves consumed material and assembly milestones', () 
     });
 
     assert.equal(progression.currentStage, 'nether_round_trip');
-    assert.equal(progression.completedMilestones, progression.totalMilestones - 2);
+    assert.equal(progression.completedMilestones, progression.totalMilestones - 4);
     assert.equal(progression.recommendedCommand, '!completeNetherQuartzRun(1)');
 });
 
@@ -130,12 +130,12 @@ test('quartz carried alive in the Overworld completes the round trip milestone',
     });
 
     assert.equal(progression.currentStage, 'tactical_combat');
-    assert.equal(progression.completedMilestones, progression.totalMilestones - 1);
+    assert.equal(progression.completedMilestones, progression.totalMilestones - 3);
     assert.equal(progression.recommendedCommand, '!resolveTacticalCombat(16)');
     assert.equal(progression.blocker, null);
 });
 
-test('a verified tactical combat action advances progression to exploration recovery', () => {
+test('a verified tactical combat action advances progression to landmark exploration', () => {
     const progression = evaluateGameplayProgression({
         gameplay: {
             health: 20,
@@ -174,9 +174,92 @@ test('a verified tactical combat action advances progression to exploration reco
         },
     });
 
-    assert.equal(progression.currentStage, 'exploration_recovery');
+    assert.equal(progression.currentStage, 'exploration_route');
+    assert.equal(progression.completedMilestones, progression.totalMilestones - 2);
+    assert.equal(progression.recommendedCommand, '!completeExplorationRoute("echo_shard", 3, 96)');
+    assert.equal(progression.blocker, null);
+});
+
+test('verified landmark memory advances progression to pending death recovery', () => {
+    const progression = evaluateGameplayProgression({
+        gameplay: {
+            health: 20,
+            hunger: 20,
+            dimension: 'overworld',
+        },
+        inventory: {
+            counts: {
+                oak_planks: 4,
+                crafting_table: 1,
+                stone_pickaxe: 1,
+                furnace: 1,
+                coal: 2,
+                torch: 4,
+                iron_ingot: 4,
+                iron_pickaxe: 1,
+                quartz: 1,
+                diamond_pickaxe: 1,
+                shield: 1,
+                bucket: 1,
+            },
+        },
+        perception: {
+            hostiles: [],
+            hazards: [],
+            usefulBlocks: [
+                { name: 'nether_portal', count: 6 },
+            ],
+        },
+        memory: {
+            explorationRouteVerified: true,
+            deathRecoveryVerified: true,
+            deathRecoveryPending: true,
+        },
+    });
+
+    assert.equal(progression.currentStage, 'death_recovery');
+    assert.equal(progression.recommendedCommand, '!recoverDeathItems()');
+});
+
+test('verified death-item recovery completes the operational progression', () => {
+    const progression = evaluateGameplayProgression({
+        gameplay: {
+            health: 20,
+            hunger: 20,
+            dimension: 'overworld',
+        },
+        inventory: {
+            counts: {
+                oak_planks: 4,
+                crafting_table: 1,
+                stone_pickaxe: 1,
+                furnace: 1,
+                coal: 2,
+                torch: 4,
+                iron_ingot: 4,
+                iron_pickaxe: 1,
+                quartz: 1,
+                diamond_pickaxe: 1,
+                shield: 1,
+                bucket: 1,
+            },
+        },
+        perception: {
+            hostiles: [],
+            hazards: [],
+            usefulBlocks: [
+                { name: 'nether_portal', count: 6 },
+            ],
+        },
+        memory: {
+            explorationRouteVerified: true,
+            deathRecoveryVerified: true,
+        },
+    });
+
+    assert.equal(progression.currentStage, 'operational');
     assert.equal(progression.completedMilestones, progression.totalMilestones);
-    assert.match(progression.blocker, /landmark memory/);
+    assert.equal(progression.recommendedCommand, null);
 });
 
 test('an already-secure tactical check does not claim a hostile encounter', () => {

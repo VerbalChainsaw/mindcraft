@@ -14,7 +14,7 @@ import { createModel, resolveConfiguredModel } from './_model_map.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ACTION_REQUEST_PATTERN = /\b(?:attack|break|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|run|search|stay|stop|turn|use|walk|wait)\b/i;
+const ACTION_REQUEST_PATTERN = /\b(?:attack|break|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
 const GAMEPLAY_OPERATING_RULES = [
     'GAMEPLAY OPERATING RULES:',
     'Treat SITUATIONAL_AWARENESS, INVENTORY, command results, and the connected Minecraft registry as authoritative.',

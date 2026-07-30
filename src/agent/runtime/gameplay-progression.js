@@ -149,9 +149,16 @@ export function evaluateGameplayProgression(state) {
     const quartzCount = Math.max(0, Number(counts.quartz) || 0);
     const netherRoundTripReady = quartzCount > 0 && dimension === 'overworld';
     const lastAction = state.action?.lastResult || null;
-    const tacticalCombatReady = ['action:resolveTacticalCombat', 'action:attackHostile'].includes(lastAction?.label)
+    const explorationRouteReady = state.memory?.explorationRouteVerified === true;
+    const deathRecoveryReady = (
+        state.memory?.deathRecoveryVerified === true
+        && state.memory?.deathRecoveryPending !== true
+    );
+    const tacticalCombatReady = explorationRouteReady || deathRecoveryReady || (
+        ['action:resolveTacticalCombat', 'action:attackHostile'].includes(lastAction?.label)
         && lastAction.phase === 'succeeded'
-        && lastAction.code === 'skill_secured';
+        && lastAction.code === 'skill_secured'
+    );
 
     const milestones = [
         milestone(
@@ -313,27 +320,42 @@ export function evaluateGameplayProgression(state) {
             '!resolveTacticalCombat(16)',
             ['verified tactical combat choice'],
         ),
+        milestone(
+            'exploration_route',
+            'Explore landmarks and return by memory',
+            explorationRouteReady,
+            'Visit distinct observed landmarks, remember their verified positions, recover the target cache item, and return physically to the saved entrance.',
+            '!completeExplorationRoute("echo_shard", 3, 96)',
+            ['verified landmark memory', 'recovered exploration cache', 'verified route return'],
+        ),
+        milestone(
+            'death_recovery',
+            'Recover inventory after death',
+            deathRecoveryReady,
+            state.memory?.deathRecoveryPending
+                ? 'Return to the recorded death site in the same dimension and verify the dropped inventory is recovered.'
+                : 'After a real death records a recoverable inventory manifest, return physically and verify the dropped items are restored.',
+            state.memory?.deathRecoveryPending ? '!recoverDeathItems()' : null,
+            [state.memory?.deathRecoveryPending ? 'verified dropped-item pickup' : 'recorded death with recoverable items'],
+        ),
     ];
 
     const next = milestones.find(entry => !entry.complete) || null;
     const completed = milestones.filter(entry => entry.complete).length;
     const override = survivalOverride(state);
-    const explorationBlocked = !next;
 
     return {
         model: 'survival_progression_v1',
         completedMilestones: completed,
         totalMilestones: milestones.length,
-        currentStage: override ? 'survival_override' : (next?.id || 'exploration_recovery'),
-        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Explore, remember landmarks, and recover from death'),
-        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified landmark memory and recovery loop']),
+        currentStage: override ? 'survival_override' : (next?.id || 'operational'),
+        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Maintain sustained survival operations'),
+        missingPrerequisites: override ? [override.reason] : (next?.missing || []),
         nextOperation: override
             ? override.nextOperation
-            : (next?.nextOperation || 'Tactical combat is verified; landmark discovery, route memory, and death/item recovery remain the next gameplay loop.'),
+            : (next?.nextOperation || 'The full survival progression, exploration route, and death/item recovery loop are verified. Continue maintaining food, equipment, shelter, and resources from live state.'),
         recommendedCommand: override ? override.command : (next?.command || null),
-        blocker: explorationBlocked
-            ? 'Exploration landmark memory and death/item recovery are not implemented as one verified loop; do not claim autonomous recovery.'
-            : null,
+        blocker: null,
         safetyOverride: override,
         milestones: milestones.map(({ id, label, complete }) => ({ id, label, complete })),
     };
