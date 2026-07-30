@@ -64,7 +64,8 @@ For independent survival progression, the bot must obey this dependency chain:
 10. three diamonds, then a diamond pickaxe;
 11. ten obsidian and an ignition item;
 12. verified portal assembly and ignition;
-13. Nether entry, quartz collection, and a live Overworld return.
+13. Nether entry, quartz collection, and a live Overworld return;
+14. one verified tactical hostile encounter.
 
 The bot may reuse valid equipment or nearby workstations. Higher-tier equipment
 is valid evidence that its lower-tier prerequisites were previously satisfied.
@@ -72,7 +73,10 @@ It may not claim a later operation from intention alone. Portal assembly now
 uses the verified `!buildNetherPortal` command. The paired
 `!completeNetherQuartzRun` command owns cross-dimensional entry, quartz
 collection, safe return, and final world-state verification as one bounded
-physical loop.
+physical loop. `!resolveTacticalCombat` owns live threat priority, shield/range
+choice, retreat, verified hits, and final safety. The compatible
+`!attackHostile` command and natural-language hostile requests use that same
+tactical skill.
 
 ## Course stations and physical pass conditions
 

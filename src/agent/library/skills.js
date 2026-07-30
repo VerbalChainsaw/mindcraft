@@ -14,6 +14,7 @@ import {
 import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-target.js';
 import { companionContextFor, normalizePlayerDistance } from '../runtime/companion-context.js';
 import { rankCollectionCandidates } from '../runtime/collection-candidate-selector.js';
+import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import {
     entityRequiresSaddle,
     isRideableEntityName,
@@ -37,6 +38,11 @@ const MAX_PVP_ENGAGEMENT_MS = 30_000;
 const MAX_MELEE_REACH = 3.2;
 const ATTACK_CONFIRM_TIMEOUT_MS = 900;
 const ATTACK_INTERRUPT_POLL_MS = 50;
+const MAX_TACTICAL_COMBAT_STEPS = 24;
+const TACTICAL_COMBAT_RANGE = 16;
+const TACTICAL_BOW_CHARGE_MS = 900;
+const TACTICAL_SHOT_CONFIRM_MS = 1_500;
+const TACTICAL_SHIELD_WINDOW_MS = 450;
 const TABLE_DROP_SEARCH_RADIUS = 4;
 const TABLE_DROP_APPEAR_TIMEOUT_MS = 1_500;
 const TABLE_PICKUP_TIMEOUT_MS = 1_500;
@@ -1783,6 +1789,350 @@ export async function clearNearestFurnace(bot) {
         return false;
     } finally {
         await closeContainerQuietly(furnace);
+    }
+}
+
+
+function combatEquipmentSnapshot(bot) {
+    const inventoryItems = bot.inventory?.items?.() || [];
+    const equipped = [
+        bot.heldItem,
+        equippedItemAt(bot, 'off-hand'),
+    ].filter(Boolean);
+    const items = [...inventoryItems, ...equipped];
+    const names = new Set(items.map(item => item?.name).filter(Boolean));
+    const melee = items.some(item => (
+        (
+            item?.name?.includes('sword')
+            || (item?.name?.includes('axe') && !item.name.includes('pickaxe'))
+            || item?.name?.includes('pickaxe')
+            || item?.name?.includes('shovel')
+        )
+        && toolDurability(bot, item).healthy
+    ));
+    return {
+        melee,
+        shield: names.has('shield'),
+        bow: names.has('bow'),
+        arrows: (inventoryCount(bot, 'arrow') + inventoryCount(bot, 'spectral_arrow')) > 0,
+    };
+}
+
+function tacticalCombatSnapshot(bot, range, attributedEntityId=null) {
+    const hostiles = world.getNearbyEntities(bot, range)
+        .filter(entity => entity?.position && mc.isHostile(entity))
+        .map(entity => ({
+            id: entity.id,
+            name: entity.name,
+            distance: bot.entity.position.distanceTo(entity.position),
+            disposition: mc.getThreatDisposition(entity),
+            attributed: Number.isFinite(attributedEntityId) && entity.id === attributedEntityId,
+        }));
+    return {
+        health: bot.health,
+        hunger: bot.food,
+        equipment: combatEquipmentSnapshot(bot),
+        hostiles,
+    };
+}
+
+async function waitCombatWindow(bot, durationMs) {
+    const deadline = Date.now() + Math.max(0, Number(durationMs) || 0);
+    while (!bot.interrupt_code && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(50, deadline - Date.now())));
+    }
+    return !bot.interrupt_code;
+}
+
+async function equipCombatShield(bot) {
+    const equipped = equippedItemAt(bot, 'off-hand');
+    if (equipped?.name === 'shield') return true;
+    const shield = bot.inventory?.items?.().find(item => item?.name === 'shield');
+    if (!shield) return false;
+    try {
+        await bot.equip(shield, 'off-hand');
+    } catch (error) {
+        log(bot, `Could not equip shield for combat: ${error?.message || error}.`);
+        return false;
+    }
+    return equippedItemAt(bot, 'off-hand')?.name === 'shield';
+}
+
+async function holdShield(bot, durationMs) {
+    if (!await equipCombatShield(bot)) return false;
+    let activated = false;
+    try {
+        bot.activateItem(true);
+        activated = true;
+        return await waitCombatWindow(bot, durationMs);
+    } catch (error) {
+        log(bot, `Could not raise shield: ${error?.message || error}.`);
+        return false;
+    } finally {
+        if (activated) {
+            try { bot.deactivateItem(); } catch { /* best-effort shield release */ }
+        }
+    }
+}
+
+async function closeWithShield(bot, entity) {
+    if (!entity?.position || !await equipCombatShield(bot)) return false;
+    let activated = false;
+    try {
+        bot.activateItem(true);
+        activated = true;
+        if (bot.entity.position.distanceTo(entity.position) <= MAX_MELEE_REACH) return true;
+        return await goToGoal(bot, new pf.goals.GoalFollow(entity, MAX_MELEE_REACH - 0.4));
+    } catch (error) {
+        log(bot, `Could not close safely behind the shield: ${error?.message || error}.`);
+        return false;
+    } finally {
+        if (activated) {
+            try { bot.deactivateItem(); } catch { /* best-effort shield release */ }
+        }
+    }
+}
+
+async function closeForMelee(bot, entity) {
+    if (!entity?.position) return false;
+    if (bot.entity.position.distanceTo(entity.position) <= MAX_MELEE_REACH - 0.2) return true;
+    try {
+        return await goToGoal(bot, new pf.goals.GoalFollow(entity, MAX_MELEE_REACH - 0.4));
+    } catch (error) {
+        log(bot, `Could not close melee distance: ${error?.message || error}.`);
+        return false;
+    }
+}
+
+function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_MS) {
+    return new Promise(resolve => {
+        let settled = false;
+        let released = false;
+        let timeout = null;
+        let interruptPoll = null;
+        const targetId = entity?.id;
+        const cleanup = () => {
+            if (timeout) clearTimeout(timeout);
+            if (interruptPoll) clearInterval(interruptPoll);
+            try { bot.removeListener?.('entityHurt', onEntityHurt); } catch { /* best-effort listener cleanup */ }
+            try { bot.removeListener?.('entityDead', onEntityDead); } catch { /* best-effort listener cleanup */ }
+            if (!released) {
+                try { bot.deactivateItem(); } catch { /* best-effort bow release */ }
+            }
+        };
+        const finish = result => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(result);
+        };
+        const onEntityHurt = hurtEntity => {
+            if (hurtEntity?.id === targetId) finish({ confirmed: true, outcome: 'ranged_hit_observed' });
+        };
+        const onEntityDead = deadEntity => {
+            if (deadEntity?.id === targetId) finish({ confirmed: true, outcome: 'target_died_after_ranged_attack' });
+        };
+
+        bot.on('entityHurt', onEntityHurt);
+        bot.on('entityDead', onEntityDead);
+        timeout = setTimeout(() => finish({
+            confirmed: false,
+            outcome: bot.interrupt_code ? 'interrupted' : 'ranged_damage_unconfirmed',
+        }), timeoutMs + TACTICAL_BOW_CHARGE_MS);
+        interruptPoll = setInterval(() => {
+            if (bot.interrupt_code) finish({ confirmed: false, outcome: 'interrupted' });
+        }, ATTACK_INTERRUPT_POLL_MS);
+
+        void (async () => {
+            try {
+                const targetHeight = Number.isFinite(entity?.height)
+                    ? Math.max(0.5, entity.height * 0.55)
+                    : 0.9;
+                await bot.lookAt(entity.position.offset(0, targetHeight, 0), true);
+                bot.activateItem(false);
+                if (!await waitCombatWindow(bot, TACTICAL_BOW_CHARGE_MS)) {
+                    finish({ confirmed: false, outcome: 'interrupted' });
+                    return;
+                }
+                bot.deactivateItem();
+                released = true;
+            } catch (error) {
+                finish({
+                    confirmed: false,
+                    outcome: 'ranged_attack_blocked',
+                    error: String(error?.message || error).slice(0, 240),
+                });
+            }
+        })();
+    });
+}
+
+async function fireTacticalBow(bot, entity, desiredRange) {
+    if (!entity?.position) return { confirmed: false, outcome: 'target_lost' };
+    let distance = bot.entity.position.distanceTo(entity.position);
+    if (distance < desiredRange - 1) {
+        if (!await moveAwayFromEntity(bot, entity, desiredRange)) {
+            return { confirmed: false, outcome: bot.lastActionEvidence?.outcome || 'range_control_blocked' };
+        }
+    } else if (distance > Math.max(desiredRange + 5, 14)) {
+        if (!await goToGoal(bot, new pf.goals.GoalFollow(entity, desiredRange + 1))) {
+            return { confirmed: false, outcome: bot.lastActionEvidence?.outcome || 'range_control_blocked' };
+        }
+    }
+    if (!entity?.position || !bot.entities?.[entity.id]) {
+        return { confirmed: false, outcome: 'target_lost' };
+    }
+    distance = bot.entity.position.distanceTo(entity.position);
+    if (distance < desiredRange - 1.5) {
+        return { confirmed: false, outcome: 'target_too_close' };
+    }
+    if (!await equip(bot, 'bow', 'hand')) {
+        return { confirmed: false, outcome: 'missing_ranged_weapon' };
+    }
+    return await performVerifiedRangedShot(bot, entity);
+}
+
+export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, attributedEntityId=null) {
+    const requestedRange = Math.max(4, Math.min(32, Math.floor(Number(range) || TACTICAL_COMBAT_RANGE)));
+    const startedHealth = Math.max(0, Number(bot.health) || 0);
+    const decisions = [];
+    let verifiedHits = 0;
+    let rangedShots = 0;
+    let shieldWindows = 0;
+    let retreats = 0;
+    let steps = 0;
+    let lastTarget = null;
+    const finish = (success, outcome, detail = {}) => {
+        const evidence = {
+            kind: 'tactical_combat',
+            outcome,
+            target: lastTarget,
+            considered: decisions.at(-1)?.considered || 0,
+            decisions,
+            verifiedHits,
+            rangedShots,
+            shieldWindows,
+            retreats,
+            healthBefore: startedHealth,
+            healthAfter: Math.max(0, Number(bot.health) || 0),
+            alive: (Number(bot.health) || 0) > 0,
+            retryable: !success && !bot.interrupt_code,
+            ...detail,
+        };
+        setActionEvidence(bot, evidence);
+        return success;
+    };
+
+    bot.modes.pause('self_defense');
+    bot.modes.pause('cowardice');
+    try {
+        while (!bot.interrupt_code && steps < MAX_TACTICAL_COMBAT_STEPS && (Number(bot.health) || 0) > 0) {
+            const snapshot = tacticalCombatSnapshot(bot, requestedRange, attributedEntityId);
+            const decision = chooseTacticalCombatDecision(snapshot);
+            if (!decision.selected) {
+                log(bot, verifiedHits > 0
+                    ? `Area secured after ${verifiedHits} verified combat hit${verifiedHits === 1 ? '' : 's'}.`
+                    : 'No loaded hostile requires a tactical response.');
+                return finish(true, verifiedHits > 0 ? 'secured' : 'area_already_secure', { steps });
+            }
+
+            const selected = decision.selected;
+            const entity = bot.entities?.[selected.id];
+            lastTarget = { name: selected.name, id: selected.id };
+            decisions.push({
+                target: lastTarget,
+                response: decision.response,
+                reason: decision.reason,
+                distance: Math.round(selected.distance * 10) / 10,
+                considered: decision.considered,
+            });
+            log(bot, `Tactical choice: ${decision.response} against ${selected.name} (${decision.reason}).`);
+            if (!entity?.position) {
+                steps += 1;
+                continue;
+            }
+
+            if (decision.response === 'retreat') {
+                const before = bot.entity.position.distanceTo(entity.position);
+                const retreated = await moveAwayFromEntity(bot, entity, selected.desiredRange);
+                const after = entity.position
+                    ? bot.entity.position.distanceTo(entity.position)
+                    : selected.desiredRange;
+                if (!retreated || after <= before + 0.5) {
+                    log(bot, `Could not establish safer spacing from ${selected.name}.`);
+                    return finish(false, bot.lastActionEvidence?.outcome || 'retreat_blocked', {
+                        steps,
+                        retreatDistanceBefore: before,
+                        retreatDistanceAfter: after,
+                    });
+                }
+                retreats += 1;
+                log(bot, `Retreated from ${selected.name}; spacing increased from ${before.toFixed(1)} to ${after.toFixed(1)} blocks.`);
+                return finish(true, 'retreated', {
+                    steps: steps + 1,
+                    retreatDistanceBefore: before,
+                    retreatDistanceAfter: after,
+                });
+            }
+
+            let attack = null;
+            if (decision.response === 'ranged') {
+                attack = await fireTacticalBow(bot, entity, selected.desiredRange);
+                if (attack.confirmed) rangedShots += 1;
+            } else {
+                if (decision.response === 'shield_melee') {
+                    if (!await closeWithShield(bot, entity)) {
+                        return finish(false, 'shielded_approach_blocked', { steps });
+                    }
+                    shieldWindows += 1;
+                } else if (!await closeForMelee(bot, entity)) {
+                    return finish(false, 'melee_approach_blocked', { steps });
+                }
+                const attacked = await attackEntity(bot, entity, false);
+                attack = {
+                    confirmed: attacked,
+                    outcome: bot.lastActionEvidence?.outcome || (attacked ? 'hit_observed' : 'melee_blocked'),
+                };
+                if (attacked && decision.response === 'shield_melee' && bot.entities?.[entity.id]) {
+                    if (await holdShield(bot, TACTICAL_SHIELD_WINDOW_MS)) shieldWindows += 1;
+                }
+            }
+
+            if (!attack.confirmed) {
+                if (!bot.entities?.[selected.id]) {
+                    steps += 1;
+                    continue;
+                }
+                if ([
+                    'out_of_reach',
+                    'target_lost',
+                    'target_obscured',
+                    'unreachable',
+                ].includes(attack.outcome)) {
+                    steps += 1;
+                    await waitCombatWindow(bot, 150);
+                    continue;
+                }
+                log(bot, `Tactical ${decision.response} against ${selected.name} was not verified (${attack.outcome}).`);
+                return finish(false, attack.outcome || 'attack_unverified', { steps });
+            }
+            verifiedHits += 1;
+            steps += 1;
+            if (bot.entities?.[selected.id]) {
+                await waitCombatWindow(bot, DEFENSE_SWING_INTERVAL_MS);
+            }
+        }
+
+        if (bot.interrupt_code) {
+            return finish(false, 'interrupted', { steps, retryable: false });
+        }
+        if ((Number(bot.health) || 0) <= 0) {
+            return finish(false, 'died', { steps, retryable: false });
+        }
+        return finish(false, 'combat_limit_reached', { steps });
+    } finally {
+        try { bot.deactivateItem(); } catch { /* best-effort combat cleanup */ }
+        try { bot.pvp?.stop?.(); } catch { /* best-effort combat cleanup */ }
     }
 }
 

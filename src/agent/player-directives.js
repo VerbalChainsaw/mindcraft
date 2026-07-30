@@ -104,7 +104,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     if (/^(?:please\s+)?(?:attack|fight|engage|defend us from)\s+(?:the\s+)?(?:nearest\s+)?(?:enemy|enemies|hostile|hostiles|monster|monsters|mob|mobs|them|that)\b/.test(text)) {
         return {
             command: '!attackHostile',
-            response: 'I will engage the nearest combat-safe hostile and report the real outcome.',
+            response: 'I will choose a safe tactical response to the live hostile and report the real outcome.',
             releasesHold: true,
         };
     }

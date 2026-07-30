@@ -371,7 +371,7 @@ const modes_list = [
                     : `Fighting ${enemy.name}!`);
                 void execute(this, agent, async () => {
                     try {
-                        return await skills.defendSelf(
+                        return await skills.resolveTacticalCombat(
                             agent.bot,
                             SELF_DEFENSE_RANGE,
                             protectionThreat?.id ?? null,

@@ -853,11 +853,21 @@ export const actionsList = [
     },
     {
         name: '!attackHostile',
-        description: 'Engage nearby combat-safe hostile mobs and stop when the area is secure or the bounded defense attempt fails.',
+        description: 'Resolve nearby hostiles through the tactical combat loop, including threat priority, shield/range choice, retreat, and verified physical outcomes.',
         params: {},
         perform: runAsAction(async (agent) => {
-            return await skills.defendSelf(agent.bot, 16);
+            return await skills.resolveTacticalCombat(agent.bot, 16);
         })
+    },
+    {
+        name: '!resolveTacticalCombat',
+        description: 'Choose and execute one bounded tactical response loop from live health, equipment, hostile type, and distance. Prioritizes urgent threats, retreats when unsafe, uses bows against explosives, shields against projectile attackers, and verifies the physical outcome.',
+        params: {
+            'range': { type: 'int', description: 'Maximum loaded-hostile decision range.', domain: [4, 32, '[]'] },
+        },
+        perform: runAsAction(async (agent, range) => {
+            return await skills.resolveTacticalCombat(agent.bot, range);
+        }, false, 3)
     },
     {
         name: '!attackPlayer',

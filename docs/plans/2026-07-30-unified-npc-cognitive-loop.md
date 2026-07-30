@@ -237,8 +237,53 @@ Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
 - Structured action state reported `phase=succeeded`,
   `code=skill_completed`, and target `nether_quartz_ore`; independent Paper
   state reported dimension `minecraft:overworld` and one carried quartz.
-- The next explicit progression blocker is tactical combat choice rather than
-  dimension traversal.
+- Tactical combat is now implemented below.
+
+#### Tactical combat decision quality — implemented
+
+CodePlan compared an inline combat heuristic, a pure decision selector feeding
+one composite skill, and a persistent plugin-backed combat controller. The pure
+selector plus composite skill won (`45/50`) because threat priority and response
+choice are directly testable while ActionManager and the existing skills remain
+the only physical owner.
+
+- `chooseTacticalCombatDecision` ranks every loaded hostile by disposition,
+  explosive/projectile/melee class, distance, attributed damage, and current
+  health. It returns one bounded response without owning Minecraft state.
+- `!resolveTacticalCombat(range)` repeatedly refreshes live entities and chooses
+  melee, shielded close, ranged standoff, or retreat. It verifies each hit,
+  retains emergency interruption, and stops at a bounded step limit.
+- Creepers use a bow when arrows are available. Without a ranged option the bot
+  establishes ten blocks of verified spacing instead of attempting unsafe
+  melee.
+- Skeletons and other projectile attackers use an equipped off-hand shield
+  during the approach and between verified melee hits.
+- Critical health and avoid-only threats select retreat. Retreat succeeds only
+  when the measured entity distance increases to the requested safe spacing.
+- `!attackHostile`, natural-language hostile directives, role combat, and the
+  self-defense reflex now route through the same deterministic tactical skill.
+  The older combat command name remains compatible; no second combat brain was
+  introduced.
+- Progression advances only after `skill_secured`; checking an already-empty
+  area reports `skill_area_already_secure` and does not claim a combat pass.
+
+Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
+
+- Against a zombie, the loop selected melee, completed repeated verified hits,
+  removed the entity, collected rotten flesh, and finished at full health.
+- Against a skeleton, it repeatedly selected `shield_melee`, closed behind the
+  shield, removed the entity, collected two bones, and remained alive at 18/20
+  before normal post-fight eating.
+- Against a creeper, it selected `ranged / explosive_standoff`, consumed five
+  arrows, removed the entity, and returned structured
+  `phase=succeeded / code=skill_secured` at 20/20 health.
+- With no bow, it selected retreat and increased live creeper spacing from
+  5.0 to 10.1 blocks, returning `phase=succeeded / code=skill_retreated`.
+- Certification mobs were frozen only during bounded pre-fight setup and
+  released immediately after ActionManager accepted each command. No creative
+  mode, teleport, command damage, or command kill occurred during engagement.
+- The next explicit progression blocker is exploration, landmark memory, and
+  death/item recovery.
 
 ## Slice 1 acceptance contract
 

@@ -55,10 +55,12 @@ function survivalOverride(state) {
         return {
             code: 'critical_health',
             reason: `health is ${health}/20`,
-            nextOperation: food
-                ? `Disengage, reach cover, then eat carried ${food}; verify health is regenerating before resuming.`
-                : 'Disengage and reach cover; obtain safe food only after immediate danger is clear.',
-            command: food ? `!consume("${food}")` : null,
+            nextOperation: nearestHostile
+                ? `Retreat from the immediate ${nearestHostile.name}, then eat only after safe spacing is verified.`
+                : food
+                    ? `Reach cover, then eat carried ${food}; verify health is regenerating before resuming.`
+                    : 'Reach cover; obtain safe food only after immediate danger is clear.',
+            command: nearestHostile ? '!resolveTacticalCombat(16)' : food ? `!consume("${food}")` : null,
         };
     }
     if (nearestHostile && nearestHostile.distance <= 6) {
@@ -66,7 +68,7 @@ function survivalOverride(state) {
             code: 'immediate_hostile',
             reason: `${nearestHostile.name} is ${nearestHostile.distance} blocks ${nearestHostile.direction}`,
             nextOperation: 'Resolve or escape the immediate hostile before gathering, crafting, mining, or building.',
-            command: null,
+            command: '!resolveTacticalCombat(16)',
         };
     }
     if (nearestHazard && nearestHazard.distance <= 2) {
@@ -146,6 +148,10 @@ export function evaluateGameplayProgression(state) {
     const dimension = normalizedDimension(state.gameplay?.dimension);
     const quartzCount = Math.max(0, Number(counts.quartz) || 0);
     const netherRoundTripReady = quartzCount > 0 && dimension === 'overworld';
+    const lastAction = state.action?.lastResult || null;
+    const tacticalCombatReady = ['action:resolveTacticalCombat', 'action:attackHostile'].includes(lastAction?.label)
+        && lastAction.phase === 'succeeded'
+        && lastAction.code === 'skill_secured';
 
     const milestones = [
         milestone(
@@ -299,26 +305,34 @@ export function evaluateGameplayProgression(state) {
                 dimension === 'overworld' ? null : 'verified Overworld return',
             ].filter(Boolean),
         ),
+        milestone(
+            'tactical_combat',
+            'Resolve a tactical hostile encounter',
+            tacticalCombatReady,
+            'Inspect live health, equipment, hostile type, and spacing; then execute the selected melee, shielded, ranged, or retreat response and verify the physical outcome.',
+            '!resolveTacticalCombat(16)',
+            ['verified tactical combat choice'],
+        ),
     ];
 
     const next = milestones.find(entry => !entry.complete) || null;
     const completed = milestones.filter(entry => entry.complete).length;
     const override = survivalOverride(state);
-    const tacticalCombatBlocked = !next;
+    const explorationBlocked = !next;
 
     return {
         model: 'survival_progression_v1',
         completedMilestones: completed,
         totalMilestones: milestones.length,
-        currentStage: override ? 'survival_override' : (next?.id || 'tactical_combat'),
-        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Choose and execute tactical combat responses'),
-        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified tactical combat choice']),
+        currentStage: override ? 'survival_override' : (next?.id || 'exploration_recovery'),
+        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Explore, remember landmarks, and recover from death'),
+        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified landmark memory and recovery loop']),
         nextOperation: override
             ? override.nextOperation
-            : (next?.nextOperation || 'Dimension progression is verified; bounded threat prioritization, shield use, range choice, and retreat remain the next gameplay loop.'),
+            : (next?.nextOperation || 'Tactical combat is verified; landmark discovery, route memory, and death/item recovery remain the next gameplay loop.'),
         recommendedCommand: override ? override.command : (next?.command || null),
-        blocker: tacticalCombatBlocked
-            ? 'General tactical combat selection is not implemented as one verified decision loop; do not claim autonomous combat judgment.'
+        blocker: explorationBlocked
+            ? 'Exploration landmark memory and death/item recovery are not implemented as one verified loop; do not claim autonomous recovery.'
             : null,
         safetyOverride: override,
         milestones: milestones.map(({ id, label, complete }) => ({ id, label, complete })),
