@@ -84,10 +84,23 @@ function normalizeBlueprint(blueprint) {
     ) throw new TypeError('Blueprint cell coordinates are invalid.');
     const material = boundedText(cell.material, 64);
     if (!CANONICAL_NAME.test(material)) throw new TypeError('Blueprint material must be canonical.');
+    const hasStage = Number.isFinite(cell.stage);
+    const stage = finiteInteger(cell.stage, 0, 0, 16);
+    const cellFunction = cell.function == null ? '' : boundedText(cell.function, 64);
+    if (cellFunction && !CANONICAL_NAME.test(cellFunction)) {
+      throw new TypeError('Blueprint cell function must be canonical.');
+    }
     const key = `${cell.x}:${cell.y}:${cell.z}`;
     if (occupied.has(key)) throw new TypeError('Blueprint contains a duplicate cell.');
     occupied.add(key);
-    return Object.freeze({ x: cell.x, y: cell.y, z: cell.z, material });
+    return Object.freeze({
+      x: cell.x,
+      y: cell.y,
+      z: cell.z,
+      material,
+      ...(hasStage ? { stage } : {}),
+      ...(cellFunction ? { function: cellFunction } : {}),
+    });
   });
   return Object.freeze({ id, width, depth, height, cells: Object.freeze(cells) });
 }

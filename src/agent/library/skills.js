@@ -2854,7 +2854,11 @@ export async function placeBlock(
 
     for (let d of dirs) {
         const block = bot.blockAt(target_dest.plus(d));
-        if (block && !empty_blocks.includes(block.name)) {
+        if (
+            block
+            && !empty_blocks.includes(block.name)
+            && !block.name.endsWith('_door')
+        ) {
             buildOffBlock = block;
             faceVec = new Vec3(-d.x, -d.y, -d.z); // invert
             break;

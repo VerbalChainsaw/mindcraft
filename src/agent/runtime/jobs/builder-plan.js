@@ -14,6 +14,77 @@ const PLAYER_SHELTER_BLUEPRINT = Object.freeze({
   }))),
 });
 
+function canonicalBuildingMaterial(value) {
+  const material = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (!/^[a-z0-9_]{1,64}$/.test(material)) {
+    throw new TypeError('Building material must be a canonical block name.');
+  }
+  return material;
+}
+
+function createFunctionalShelterBlueprint(material) {
+  const wallMaterial = canonicalBuildingMaterial(material);
+  const width = 5;
+  const depth = 5;
+  const height = 4;
+  const doorZ = Math.floor(depth / 2);
+  const cells = [];
+
+  // Foundation first: every later component has known support.
+  for (let x = 0; x < width; x += 1) {
+    for (let z = 0; z < depth; z += 1) {
+      cells.push({ x, y: 0, z, material: wallMaterial, stage: 0, function: 'foundation' });
+    }
+  }
+  // Two-block-high perimeter with a two-block doorway on the west side.
+  for (let y = 1; y <= 2; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      for (let z = 0; z < depth; z += 1) {
+        const perimeter = x === 0 || x === width - 1 || z === 0 || z === depth - 1;
+        const doorway = x === 0 && z === doorZ;
+        if (perimeter && !doorway) {
+          cells.push({ x, y, z, material: wallMaterial, stage: y, function: 'enclosure' });
+        }
+      }
+    }
+  }
+  // Access and utilities are world predicates, not narration.
+  cells.push({ x: 0, y: 1, z: doorZ, material: 'oak_door', stage: 3, function: 'access' });
+  // Roof last so the builder retains an open vertical escape during assembly.
+  for (let x = 0; x < width; x += 1) {
+    for (let z = 0; z < depth; z += 1) {
+      cells.push({ x, y: 3, z, material: wallMaterial, stage: 4, function: 'weather_cover' });
+    }
+  }
+  cells.push({ x: width - 2, y: 1, z: 1, material: 'chest', stage: 5, function: 'storage' });
+  cells.push({ x: width - 2, y: 1, z: depth - 2, material: 'furnace', stage: 5, function: 'smelting' });
+  cells.push({ x: width - 2, y: 1, z: doorZ, material: 'crafting_table', stage: 5, function: 'crafting' });
+  cells.push({ x: 1, y: 1, z: doorZ, material: 'torch', stage: 5, function: 'interior_light' });
+
+  return Object.freeze({
+    id: `functional_shelter_${wallMaterial}`.slice(0, 64),
+    version: 1,
+    width,
+    depth,
+    height,
+    entrance: Object.freeze({ x: 0, y: 1, z: doorZ, width: 1, height: 2 }),
+    functions: Object.freeze([
+      'supported_foundation',
+      'enclosure',
+      'usable_access',
+      'weather_cover',
+      'interior_light',
+      'storage',
+      'crafting',
+      'smelting',
+    ]),
+    cells: Object.freeze(cells.map(cell => Object.freeze(cell))),
+  });
+}
+
 function count(snapshot, name) {
   if (name === 'planks') {
     return Object.entries(snapshot?.inventory || {}).reduce(
@@ -91,6 +162,32 @@ export function createBuilderShelterOrder({
   });
 }
 
+export function createBuilderFunctionalShelterOrder({
+  x,
+  y,
+  z,
+  material = 'cobblestone',
+  requester = 'player',
+  constraints,
+} = {}) {
+  const blueprint = createFunctionalShelterBlueprint(material);
+  return createWorkOrder({
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester,
+    target: {
+      name: 'functional_shelter',
+      x,
+      y,
+      z,
+    },
+    quota: blueprint.cells.length,
+    blueprint,
+    constraints,
+  });
+}
+
 export function nextBuilderStep(order, snapshot = {}) {
   if (order.kind === 'build' && order.source !== 'player') {
     return { terminal: true, code: 'construction_not_authorized', retryable: false };
@@ -148,6 +245,14 @@ export function nextBuilderStep(order, snapshot = {}) {
 
   const audit = snapshot.blueprintAudit;
   if (!audit || audit.valid !== true) {
+    if (audit?.code === 'occupied') {
+      return {
+        blocked: true,
+        code: 'blueprint_occupied',
+        detail: 'A world entity occupies an unfinished blueprint cell; waiting for it to clear.',
+        retryable: true,
+      };
+    }
     return {
       terminal: true,
       code: `unsafe_blueprint_${audit?.code || 'not_audited'}`,
@@ -191,7 +296,8 @@ export function nextBuilderStep(order, snapshot = {}) {
       .filter(candidate => candidate.supported !== false)
       .slice()
       .sort((left, right) => (
-        left.y - right.y
+        (left.stage ?? 0) - (right.stage ?? 0)
+        || left.y - right.y
         || (left.index ?? 0) - (right.index ?? 0)
       ))[0];
     if (!cell) {
@@ -211,6 +317,9 @@ export function nextBuilderStep(order, snapshot = {}) {
         verifiedCount: Math.max(0, Number(audit.correct) || 0),
         nextCell: Math.max(0, Number(cell.index) || 0),
       },
+      reason: cell.function
+        ? `Place ${cell.function.replaceAll('_', ' ')} after its prerequisite stages are supported.`
+        : 'Place the next supported blueprint cell.',
     };
   }
   if (order.phase === 'verify') {

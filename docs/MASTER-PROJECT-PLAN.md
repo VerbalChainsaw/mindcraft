@@ -165,6 +165,8 @@ Primary evidence:
 - [x] Miner work uses game knowledge, tool preparation, safe resource targeting, and no-dig cave relocation.
 - [x] Lumberjack work understands log families, tool preparation, quota, return, and deposit stages.
 - [x] Player-authorized shelter work has a playable command entry point.
+- [x] Functional shelter work follows explicit prerequisite stages: foundation, enclosure, access, weather cover, then light, storage, crafting, and smelting.
+- [x] Builder audits ignore the executing bot, wait on transient foreign occupants, and resume from verified cells instead of abandoning or duplicating the structure.
 - [x] Legacy NPC item/build callbacks preserve actual skill success and cannot mark blocked structures complete.
 
 Primary evidence:

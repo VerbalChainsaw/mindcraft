@@ -233,6 +233,7 @@ function replantSituation(agent, order, inventory) {
 
 function entityOccupies(bot, x, y, z) {
   return Object.values(bot.entities || {}).some(entity => {
+    if (entity?.id === bot.entity?.id) return false;
     const position = entity?.position;
     return position
       && Math.floor(position.x) === x
@@ -298,7 +299,16 @@ function auditBlueprint(bot, order, inventory) {
     if (!supported && !plannedSupport) {
       return { valid: false, code: 'unsupported', missing: [], incorrect: [] };
     }
-    missing.push({ x, y, z, material: expected, index, supported });
+    missing.push({
+      x,
+      y,
+      z,
+      material: expected,
+      index,
+      supported,
+      stage: cell.stage,
+      function: cell.function || null,
+    });
   }
   const botX = Math.floor(bot.entity?.position?.x ?? Infinity);
   const botY = Math.floor(bot.entity?.position?.y ?? Infinity);

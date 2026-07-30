@@ -4,7 +4,11 @@ import convoManager from '../conversation.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
 import { createWorkOrder } from '../runtime/work-order.js';
-import { createBuilderShelterOrder, createBuilderStockpileOrder } from '../runtime/jobs/builder-plan.js';
+import {
+    createBuilderFunctionalShelterOrder,
+    createBuilderShelterOrder,
+    createBuilderStockpileOrder,
+} from '../runtime/jobs/builder-plan.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import {
     createItemGoalContract,
@@ -725,6 +729,35 @@ export const actionsList = [
                 return submitRoleOrder(agent, 'builder', order);
             } catch (error) {
                 return `Shelter work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!assignFunctionalShelterJob',
+        description: 'Build a verified 5x5 functional shelter beside the bot from one solid wall material, in causal order: supported foundation, enclosure, door, roof, then interior light, storage, crafting table, and furnace.',
+        params: {
+            'wall_material': { type: 'BlockName', description: 'Solid full block used consistently for foundation, walls, and roof.' },
+        },
+        perform: persistentJobCommand(async function (agent, wall_material) {
+            try {
+                const material = String(wall_material || '').trim().toLowerCase();
+                const block = agent.bot?.registry?.blocksByName?.[material];
+                const item = agent.bot?.registry?.itemsByName?.[material];
+                if (!block || !item || block.boundingBox !== 'block') {
+                    return `Functional shelter work order was not accepted: ${material || 'the requested material'} is not a carried/placeable full support block in the connected registry.`;
+                }
+                const position = agent.bot?.entity?.position;
+                if (!position) return 'Functional shelter work order was not accepted: Minecraft spawn state is unavailable.';
+                const order = createBuilderFunctionalShelterOrder({
+                    x: Math.floor(position.x) + 2,
+                    y: Math.floor(position.y),
+                    z: Math.floor(position.z) - 2,
+                    material,
+                    requester: 'player',
+                });
+                return submitRoleOrder(agent, 'builder', order);
+            } catch (error) {
+                return `Functional shelter work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
             }
         }),
     },

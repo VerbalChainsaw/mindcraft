@@ -38,7 +38,7 @@ test('Given an autonomous idle Builder, the default order stockpiles and never g
   assert.equal(step.code, 'construction_not_authorized');
 });
 
-test('Given a hazardous or trapping worksite, Builder assessment fails before placement', () => {
+test('Given a hazardous, occupied, or trapping worksite, Builder chooses the safe bounded outcome', () => {
   const order = createWorkOrder({
     id: 'hazard-build',
     role: 'builder',
@@ -55,13 +55,19 @@ test('Given a hazardous or trapping worksite, Builder assessment fails before pl
     },
   });
 
-  for (const hazard of ['protected', 'liquid', 'occupied', 'unsupported', 'trapped_exit']) {
+  for (const hazard of ['protected', 'liquid', 'unsupported', 'trapped_exit']) {
     const step = nextBuilderStep(order, {
       blueprintAudit: { valid: false, code: hazard, missing: [], incorrect: [] },
     });
     assert.equal(step.terminal, true);
     assert.equal(step.code, `unsafe_blueprint_${hazard}`);
   }
+  const occupied = nextBuilderStep(order, {
+    blueprintAudit: { valid: false, code: 'occupied', missing: [], incorrect: [] },
+  });
+  assert.equal(occupied.blocked, true);
+  assert.equal(occupied.code, 'blueprint_occupied');
+  assert.equal(occupied.retryable, true);
 });
 
 test('Given verified cells and inventory, Builder places only the next missing cell and completes only after an exact audit', () => {

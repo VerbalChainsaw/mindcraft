@@ -217,8 +217,8 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
 
     if (/\b(?:build|construct|make|put up)\b.{0,32}\b(?:shelter|hut|small house|safe house)\b/.test(text)) {
         return {
-            command: '!assignShelterJob',
-            response: 'I will gather what I need and build one small verified shelter here.',
+            command: '!assignFunctionalShelterJob("cobblestone")',
+            response: 'I will gather what I need and build a supported, enclosed, lit shelter with access, storage, crafting, and smelting utilities.',
             releasesHold: true,
         };
     }
