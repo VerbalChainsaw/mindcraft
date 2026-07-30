@@ -8,6 +8,7 @@ import {
     isHazardousGameplayBlock,
     isLiquidGameplayBlock,
     isProtectedGameplayBlock,
+    isReplaceableGameplayBlock,
     isSafeGameplaySupport,
 } from '../runtime/gameplay-safety.js';
 import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-target.js';
@@ -66,6 +67,8 @@ const MAX_COLLECTION_CANDIDATES = 6;
 const COLLECTION_ROUTE_PROBE_TIMEOUT_MS = 75;
 const COLLECTION_ROUTE_PROBE_TICK_MS = 15;
 const MAX_COLLECTION_ROUTE_SLICES = 8;
+const PORTAL_ACTIVATION_TIMEOUT_MS = 3_000;
+const PORTAL_SEARCH_MIN_DISTANCE = 4;
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -2881,6 +2884,205 @@ export async function breakBlockAt(bot, x, y, z) {
     return true;
 }
 
+const PORTAL_FRAME_CELLS = Object.freeze([
+    Object.freeze({ width: 1, height: 0 }),
+    Object.freeze({ width: 2, height: 0 }),
+    Object.freeze({ width: 0, height: 1 }),
+    Object.freeze({ width: 0, height: 2 }),
+    Object.freeze({ width: 0, height: 3 }),
+    Object.freeze({ width: 3, height: 1 }),
+    Object.freeze({ width: 3, height: 2 }),
+    Object.freeze({ width: 3, height: 3 }),
+    Object.freeze({ width: 1, height: 4 }),
+    Object.freeze({ width: 2, height: 4 }),
+]);
+
+const PORTAL_INTERIOR_CELLS = Object.freeze([
+    Object.freeze({ width: 1, height: 1 }),
+    Object.freeze({ width: 2, height: 1 }),
+    Object.freeze({ width: 1, height: 2 }),
+    Object.freeze({ width: 2, height: 2 }),
+    Object.freeze({ width: 1, height: 3 }),
+    Object.freeze({ width: 2, height: 3 }),
+]);
+
+const PORTAL_CORNER_CELLS = Object.freeze([
+    Object.freeze({ width: 0, height: 0 }),
+    Object.freeze({ width: 3, height: 0 }),
+    Object.freeze({ width: 0, height: 4 }),
+    Object.freeze({ width: 3, height: 4 }),
+]);
+
+function carriedPortalScaffolds(bot) {
+    const preferred = [
+        'dirt',
+        'cobblestone',
+        'cobbled_deepslate',
+        'netherrack',
+        'stone',
+    ];
+    const items = bot.inventory.items()
+        .filter(item => (
+            preferred.includes(item.name)
+            || item.name.endsWith('_planks')
+        ))
+        .sort((left, right) => {
+            const leftRank = preferred.includes(left.name)
+                ? preferred.indexOf(left.name)
+                : preferred.length;
+            const rightRank = preferred.includes(right.name)
+                ? preferred.indexOf(right.name)
+                : preferred.length;
+            return leftRank - rightRank
+                || right.count - left.count
+                || left.name.localeCompare(right.name);
+        });
+    const scaffolds = [];
+    for (const item of items) {
+        for (let count = 0; count < item.count && scaffolds.length < 3; count++) {
+            scaffolds.push(item.name);
+        }
+        if (scaffolds.length >= 3) break;
+    }
+    return scaffolds;
+}
+
+function portalCellPosition(origin, axis, width, height, normal=0) {
+    return axis === 'x'
+        ? origin.offset(width, height, normal)
+        : origin.offset(normal, height, width);
+}
+
+function portalCellBlock(bot, site, cell, normal=0) {
+    return bot.blockAt(portalCellPosition(
+        site.origin,
+        site.axis,
+        cell.width,
+        cell.height,
+        normal,
+    ));
+}
+
+function portalCellIsClear(block) {
+    return Boolean(
+        block
+        && (
+            isReplaceableGameplayBlock(block)
+            || block.name === 'fire'
+            || block.name === 'soul_fire'
+            || block.name === 'nether_portal'
+        )
+    );
+}
+
+function portalSiteInspection(bot, origin, axis) {
+    const site = { origin, axis };
+    const frameBlocks = PORTAL_FRAME_CELLS.map(cell => portalCellBlock(bot, site, cell));
+    if (frameBlocks.some(block => !block)) return null;
+    if (frameBlocks.some(block => block.name !== 'obsidian' && !portalCellIsClear(block))) return null;
+
+    const existingFrameBlocks = frameBlocks.filter(block => block.name === 'obsidian').length;
+    const interiorBlocks = PORTAL_INTERIOR_CELLS.map(cell => portalCellBlock(bot, site, cell));
+    if (interiorBlocks.some(block => !portalCellIsClear(block))) return null;
+
+    const cornerBlocks = PORTAL_CORNER_CELLS.map(cell => portalCellBlock(bot, site, cell));
+    if (cornerBlocks.some(block => (
+        !portalCellIsClear(block)
+        && !(block?.name === 'obsidian' && existingFrameBlocks >= 2)
+    ))) return null;
+
+    for (let width = 0; width <= 3; width++) {
+        const support = bot.blockAt(portalCellPosition(origin, axis, width, -1));
+        if (!isSafeGameplaySupport(support)) return null;
+    }
+
+    const accessSigns = [1, -1].filter(sign => {
+        for (const width of [0, 1, 2, 3]) {
+            for (const normal of [sign, sign * 2]) {
+                const feet = bot.blockAt(portalCellPosition(origin, axis, width, 0, normal));
+                const head = bot.blockAt(portalCellPosition(origin, axis, width, 1, normal));
+                const support = bot.blockAt(portalCellPosition(origin, axis, width, -1, normal));
+                if (!portalCellIsClear(feet) || !portalCellIsClear(head) || !isSafeGameplaySupport(support)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    });
+    if (accessSigns.length === 0) return null;
+
+    const center = portalCellPosition(origin, axis, 1.5, 1.5);
+    const occupied = Object.values(bot.entities || {}).some(entity => (
+        entity?.id !== bot.entity?.id
+        && entity?.position
+        && Math.abs(entity.position.y - center.y) <= 3
+        && entity.position.distanceTo(center) < 3
+    ));
+    if (occupied) return null;
+
+    const preferredSign = accessSigns.sort((left, right) => {
+        const leftAccess = portalCellPosition(origin, axis, 1.5, 0, left * 2);
+        const rightAccess = portalCellPosition(origin, axis, 1.5, 0, right * 2);
+        return leftAccess.distanceTo(bot.entity.position) - rightAccess.distanceTo(bot.entity.position);
+    })[0];
+
+    return {
+        ...site,
+        accessSign: preferredSign,
+        existingFrameBlocks,
+        center,
+        distance: center.distanceTo(bot.entity.position),
+    };
+}
+
+function findPortalSite(bot, range) {
+    const base = bot.entity.position.floored();
+    const candidates = [];
+    for (const yOffset of [0, 1, -1]) {
+        for (const axis of ['x', 'z']) {
+            for (let xOffset = -range; xOffset <= range; xOffset++) {
+                for (let zOffset = -range; zOffset <= range; zOffset++) {
+                    const origin = base.offset(xOffset, yOffset, zOffset);
+                    const center = portalCellPosition(origin, axis, 1.5, 1.5);
+                    const horizontal = Math.hypot(
+                        center.x - bot.entity.position.x,
+                        center.z - bot.entity.position.z,
+                    );
+                    if (horizontal < PORTAL_SEARCH_MIN_DISTANCE || horizontal > range) continue;
+                    const inspected = portalSiteInspection(bot, origin, axis);
+                    if (inspected) candidates.push(inspected);
+                }
+            }
+        }
+    }
+    return candidates.sort((left, right) => (
+        right.existingFrameBlocks - left.existingFrameBlocks
+        || left.distance - right.distance
+        || left.origin.y - right.origin.y
+        || left.origin.x - right.origin.x
+        || left.origin.z - right.origin.z
+        || left.axis.localeCompare(right.axis)
+    ))[0] || null;
+}
+
+function portalFrameIsComplete(bot, site) {
+    return PORTAL_FRAME_CELLS.every(cell => portalCellBlock(bot, site, cell)?.name === 'obsidian');
+}
+
+function portalIsActive(bot, site) {
+    return PORTAL_INTERIOR_CELLS.some(cell => portalCellBlock(bot, site, cell)?.name === 'nether_portal');
+}
+
+function portalTarget(site) {
+    return {
+        name: 'nether_portal',
+        x: site.origin.x,
+        y: site.origin.y,
+        z: site.origin.z,
+        axis: site.axis,
+    };
+}
+
 
 export async function placeBlock(
     bot,
@@ -3127,6 +3329,292 @@ export async function placeBlock(
         log(bot, `Failed to place ${blockType} at ${target_dest}.`);
         return false;
     }
+}
+
+export async function buildNetherPortal(bot, range=12) {
+    const searchRange = Math.max(6, Math.min(16, Math.floor(Number(range) || 12)));
+    const nearbyPortal = world.getNearestBlock(bot, 'nether_portal', searchRange);
+    if (nearbyPortal) {
+        const target = {
+            name: 'nether_portal',
+            x: nearbyPortal.position.x,
+            y: nearbyPortal.position.y,
+            z: nearbyPortal.position.z,
+        };
+        setActionEvidence(bot, {
+            kind: 'portal_build',
+            outcome: 'already_active',
+            target,
+            retryable: false,
+        });
+        log(bot, `An active Nether portal already exists at ${target.x}, ${target.y}, ${target.z}.`);
+        return true;
+    }
+
+    let scaffoldItems = carriedPortalScaffolds(bot);
+    if (scaffoldItems.length < 3) {
+        const missing = 3 - scaffoldItems.length;
+        if (!await collectBlock(
+            bot,
+            'dirt',
+            missing,
+            null,
+            Math.max(16, searchRange * 2),
+        )) {
+            setActionEvidence(bot, {
+                kind: 'portal_build',
+                outcome: 'missing_scaffold',
+                target: { name: 'nether_portal' },
+                required: 3,
+                available: scaffoldItems.length,
+                retryable: true,
+            });
+            log(bot, 'Cannot build the portal frame without three expendable scaffold blocks.');
+            return false;
+        }
+        scaffoldItems = carriedPortalScaffolds(bot);
+    }
+    if (scaffoldItems.length < 3 || bot.interrupt_code) {
+        setActionEvidence(bot, {
+            kind: 'portal_build',
+            outcome: bot.interrupt_code ? 'interrupted' : 'missing_scaffold',
+            target: { name: 'nether_portal' },
+            required: 3,
+            available: scaffoldItems.length,
+            retryable: !bot.interrupt_code,
+        });
+        return false;
+    }
+
+    const site = findPortalSite(bot, searchRange);
+    if (!site) {
+        setActionEvidence(bot, {
+            kind: 'portal_build',
+            outcome: 'no_safe_site',
+            target: { name: 'nether_portal' },
+            searchRange,
+            retryable: true,
+        });
+        log(bot, `No clear, supported portal footprint was found within ${searchRange} blocks.`);
+        return false;
+    }
+
+    const target = portalTarget(site);
+    const access = portalCellPosition(
+        site.origin,
+        site.axis,
+        1.5,
+        0,
+        site.accessSign * 2,
+    );
+    log(
+        bot,
+        `Selected ${site.axis}-axis portal footprint at ${target.x}, ${target.y}, ${target.z} `
+        + `with access at ${access.x}, ${access.y}, ${access.z}.`,
+    );
+    const ignitionTool = inventoryCount(bot, 'flint_and_steel') > 0
+        ? 'flint_and_steel'
+        : inventoryCount(bot, 'fire_charge') > 0
+            ? 'fire_charge'
+            : null;
+    const availableObsidian = inventoryCount(bot, 'obsidian')
+        + site.existingFrameBlocks;
+    const needsConstruction = !portalFrameIsComplete(bot, site);
+    const progress = {
+        placed: 0,
+        reused: site.existingFrameBlocks,
+        scaffoldsPlaced: 0,
+    };
+    let portalModesPaused = false;
+    const restorePortalModes = () => {
+        if (!portalModesPaused) return;
+        bot.modes.unpause('unstuck');
+        bot.modes.unpause('elbow_room');
+        portalModesPaused = false;
+    };
+    const finish = (success, outcome, detail={}) => {
+        restorePortalModes();
+        setActionEvidence(bot, {
+            kind: 'portal_build',
+            outcome,
+            target,
+            frameComplete: portalFrameIsComplete(bot, site),
+            active: portalIsActive(bot, site),
+            ...progress,
+            retryable: !success,
+            ...detail,
+        });
+        if (success) {
+            log(bot, `Built and activated a Nether portal at ${target.x}, ${target.y}, ${target.z}.`);
+        } else if (outcome !== 'interrupted') {
+            log(bot, `Nether portal construction stopped (${outcome.replaceAll('_', ' ')}).`);
+        }
+        return success;
+    };
+
+    if (!ignitionTool) {
+        return finish(false, 'missing_ignition', {
+            missing: ['flint_and_steel_or_fire_charge'],
+        });
+    }
+    if (needsConstruction && availableObsidian < 10) {
+        return finish(false, 'missing_material', {
+            requiredObsidian: 10,
+            availableObsidian,
+        });
+    }
+    bot.modes.pause('unstuck');
+    bot.modes.pause('elbow_room');
+    portalModesPaused = true;
+    if (
+        needsConstruction
+        && !await goToPosition(bot, access.x, access.y, access.z, 1.5)
+    ) {
+        return finish(false, 'construction_access_unreachable');
+    }
+
+    const ensureObsidian = async (cell) => {
+        const position = portalCellPosition(site.origin, site.axis, cell.width, cell.height);
+        if (bot.blockAt(position)?.name === 'obsidian') return true;
+        if (bot.interrupt_code) return false;
+        const placed = await placeBlock(
+            bot,
+            'obsidian',
+            position.x,
+            position.y,
+            position.z,
+            'bottom',
+            true,
+            false,
+        );
+        if (placed) progress.placed += 1;
+        return placed && bot.blockAt(position)?.name === 'obsidian';
+    };
+    const ensureTemporaryCorner = async (cell) => {
+        const position = portalCellPosition(site.origin, site.axis, cell.width, cell.height);
+        const block = bot.blockAt(position);
+        if (block && !portalCellIsClear(block)) return true;
+        const scaffold = scaffoldItems.shift();
+        if (!scaffold) return false;
+        const placed = await placeBlock(
+            bot,
+            scaffold,
+            position.x,
+            position.y,
+            position.z,
+            'bottom',
+            true,
+            false,
+        );
+        if (placed) progress.scaffoldsPlaced += 1;
+        return placed;
+    };
+    const buildSupportedColumn = async (corner, column) => {
+        const missing = column.some(cell => portalCellBlock(bot, site, cell)?.name !== 'obsidian');
+        if (missing && !await ensureTemporaryCorner(corner)) return false;
+        for (const cell of column) {
+            if (!await ensureObsidian(cell)) return false;
+        }
+        return true;
+    };
+
+    if (!portalFrameIsComplete(bot, site)) {
+        for (const cell of PORTAL_FRAME_CELLS.filter(cell => cell.height === 0)) {
+            if (!await ensureObsidian(cell)) return finish(false, 'frame_placement_failed');
+        }
+        if (!await buildSupportedColumn(
+            { width: 0, height: 0 },
+            PORTAL_FRAME_CELLS.filter(cell => cell.width === 0),
+        )) return finish(false, 'left_column_failed');
+        if (!await buildSupportedColumn(
+            { width: 3, height: 0 },
+            PORTAL_FRAME_CELLS.filter(cell => cell.width === 3),
+        )) return finish(false, 'right_column_failed');
+
+        const topLeft = { width: 1, height: 4 };
+        if (portalCellBlock(bot, site, topLeft)?.name !== 'obsidian') {
+            const topCorner = { width: 0, height: 4 };
+            const topLeftAccess = portalCellPosition(
+                site.origin,
+                site.axis,
+                0,
+                0,
+                site.accessSign,
+            );
+            if (!await goToPosition(
+                bot,
+                topLeftAccess.x,
+                topLeftAccess.y,
+                topLeftAccess.z,
+                0.75,
+            )) return finish(false, 'top_access_unreachable');
+            if (!await ensureTemporaryCorner(topCorner) || !await ensureObsidian(topLeft)) {
+                return finish(false, 'top_support_failed');
+            }
+        }
+        const topRightAccess = portalCellPosition(
+            site.origin,
+            site.axis,
+            2,
+            0,
+            site.accessSign,
+        );
+        if (!await goToPosition(
+            bot,
+            topRightAccess.x,
+            topRightAccess.y,
+            topRightAccess.z,
+            0.75,
+        )) return finish(false, 'top_access_unreachable');
+        if (!await ensureObsidian({ width: 2, height: 4 })) {
+            return finish(false, 'top_row_failed');
+        }
+    }
+
+    if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
+    if (!portalFrameIsComplete(bot, site)) return finish(false, 'frame_verification_failed');
+
+    if (!await goToPosition(bot, access.x, access.y, access.z, 1.5)) {
+        return finish(false, 'ignition_position_unreachable');
+    }
+    if (!await equip(bot, ignitionTool)) {
+        return finish(false, 'ignition_equip_failed', { ignitionTool });
+    }
+
+    for (const width of [1, 2]) {
+        if (bot.interrupt_code) break;
+        const baseBlock = portalCellBlock(bot, site, { width, height: 0 });
+        if (baseBlock?.name !== 'obsidian') continue;
+        try {
+            await bot.lookAt(baseBlock.position.offset(0.5, 1, 0.5));
+            await bot.activateBlock(
+                baseBlock,
+                new Vec3(0, 1, 0),
+                new Vec3(0.5, 1, 0.5),
+            );
+        } catch (error) {
+            if (width === 2) {
+                return finish(false, 'ignition_failed', {
+                    ignitionTool,
+                    error: String(error?.message || error).slice(0, 240),
+                });
+            }
+            continue;
+        }
+        if (await waitForWorldCondition(
+            bot,
+            () => portalIsActive(bot, site),
+            PORTAL_ACTIVATION_TIMEOUT_MS,
+            100,
+        )) {
+            return finish(true, 'activated', { ignitionTool, retryable: false });
+        }
+    }
+
+    return finish(false, bot.interrupt_code ? 'interrupted' : 'activation_unverified', {
+        ignitionTool,
+        retryable: !bot.interrupt_code,
+    });
 }
 
 export async function placeNearPlayer(bot, username, blockType, num=1) {

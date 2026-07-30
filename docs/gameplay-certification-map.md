@@ -67,9 +67,9 @@ For independent survival progression, the bot must obey this dependency chain:
 
 The bot may reuse valid equipment or nearby workstations. Higher-tier equipment
 is valid evidence that its lower-tier prerequisites were previously satisfied.
-It may not claim a later operation from intention alone. The current bot
-reports portal assembly as blocked because it has no verified deterministic
-portal-construction command; the course makes that gap observable.
+It may not claim a later operation from intention alone. Portal assembly now
+uses the verified `!buildNetherPortal` command; cross-dimensional entry, quartz
+collection, and safe return remain separate physical gates.
 
 ## Course stations and physical pass conditions
 

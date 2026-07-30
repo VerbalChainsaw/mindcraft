@@ -824,6 +824,16 @@ export const actionsList = [
         })
     },
     {
+        name: '!buildNetherPortal',
+        description: 'Build and ignite one verified ten-obsidian Nether portal on a nearby clear supported footprint. Requires ten total frame obsidian, flint and steel or a fire charge, and three expendable scaffold blocks; missing dirt scaffolds are gathered through the normal collection skill.',
+        params: {
+            'range': { type: 'int', description: 'Maximum clear-site search radius.', domain: [6, 16, '[]'] },
+        },
+        perform: runAsAction(async (agent, range) => {
+            return await skills.buildNetherPortal(agent.bot, range);
+        }, false, 10)
+    },
+    {
         name: '!attack',
         description: 'Attack and kill the nearest entity of a given type.',
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},

@@ -132,6 +132,7 @@ export function evaluateGameplayProgression(state) {
     const diamondPickaxeReady = countToolsAtOrAbove(counts, 'pickaxe', 'diamond') > 0;
     const obsidianCount = Math.max(0, Number(counts.obsidian) || 0);
     const ignitionReady = (counts.flint_and_steel || 0) > 0 || (counts.fire_charge || 0) > 0;
+    const portalReady = hasNearby(state, 'nether_portal');
 
     const milestones = [
         milestone(
@@ -255,7 +256,7 @@ export function evaluateGameplayProgression(state) {
         milestone(
             'portal_materials',
             'Prepare Nether portal materials',
-            obsidianCount >= 10 && ignitionReady,
+            portalReady || (obsidianCount >= 10 && ignitionReady),
             obsidianCount < 10
                 ? 'Mine ten obsidian with a diamond-or-better pickaxe.'
                 : 'Craft flint and steel before constructing a portal.',
@@ -264,26 +265,34 @@ export function evaluateGameplayProgression(state) {
                 : '!craftRecipe("flint_and_steel", 1)',
             [obsidianCount < 10 ? `${10 - obsidianCount} more obsidian` : null, !ignitionReady ? 'flint and steel' : null].filter(Boolean),
         ),
+        milestone(
+            'portal_assembly',
+            'Construct and ignite a Nether portal',
+            portalReady,
+            'Select a clear supported footprint, construct the ten-obsidian frame, ignite it, and verify portal blocks in the world.',
+            '!buildNetherPortal(12)',
+            ['active Nether portal'],
+        ),
     ];
 
     const next = milestones.find(entry => !entry.complete) || null;
     const completed = milestones.filter(entry => entry.complete).length;
     const override = survivalOverride(state);
-    const portalAssemblyBlocked = !next;
+    const dimensionTraversalBlocked = !next;
 
     return {
         model: 'survival_progression_v1',
         completedMilestones: completed,
         totalMilestones: milestones.length,
-        currentStage: override ? 'survival_override' : (next?.id || 'portal_assembly'),
-        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Construct and ignite a Nether portal'),
-        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified portal construction capability']),
+        currentStage: override ? 'survival_override' : (next?.id || 'nether_entry'),
+        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Enter the Nether and return safely'),
+        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified Nether entry and return loop']),
         nextOperation: override
             ? override.nextOperation
-            : (next?.nextOperation || 'Portal materials are ready, but no verified deterministic portal-construction command exists.'),
+            : (next?.nextOperation || 'The portal is active; verified cross-dimensional entry, quartz collection, and return remain the next progression loop.'),
         recommendedCommand: override ? override.command : (next?.command || null),
-        blocker: portalAssemblyBlocked
-            ? 'Deterministic Nether portal frame construction and ignition are not implemented; do not claim portal completion.'
+        blocker: dimensionTraversalBlocked
+            ? 'Verified Nether entry and return are not implemented as one deterministic progression loop; do not claim dimension completion.'
             : null,
         safetyOverride: override,
         milestones: milestones.map(({ id, label, complete }) => ({ id, label, complete })),

@@ -171,6 +171,38 @@ Extend the same action contract and causal loop to food, farming, combat,
 exploration, equipment replacement, and dimension progression one verified
 mechanic at a time.
 
+#### Nether portal assembly — implemented
+
+- `!buildNetherPortal(range)` selects a nearby clear, supported 4x5 footprint
+  with a reachable work side and no occupying entity.
+- It pauses conflicting unstuck/elbow-room reflexes while it owns the
+  multi-step action, but remains interruptible by the authoritative stop path.
+- The minimal frame consumes exactly ten obsidian. Three carried expendable
+  blocks support the omitted corners; when necessary, missing dirt scaffolds
+  are acquired through the normal collection skill.
+- Top-row placement uses validated side-access squares inside Minecraft's 4.5
+  interaction reach instead of treating an occupied frame column as a
+  pathfinding destination.
+- Ignition targets the top face of the lower obsidian with flint and steel or
+  a fire charge, and completion requires observed `nether_portal` blocks.
+- An already-active nearby portal is reused. Progression treats the active
+  portal as durable proof of the consumed obsidian and ignition milestones.
+
+Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
+
+- The bot began with ten obsidian, three dirt supports, a diamond pickaxe, and
+  flint and steel on an empty supported floor.
+- It placed the two lower frame blocks, both three-block side columns, and the
+  two top blocks; no obsidian remained in inventory.
+- Three dirt supports occupied the omitted lower-left, lower-right, and
+  upper-left corners.
+- Paper predicates confirmed active portal blocks at both lower and upper
+  interior coordinates.
+- Repeating `!buildNetherPortal(12)` detected and reused the active portal
+  without consuming more material.
+- The next explicit progression blocker is now verified Nether entry, quartz
+  collection, and safe return rather than portal construction.
+
 ## Slice 1 acceptance contract
 
 - A navigation attempt that makes no meaningful physical progress terminates
