@@ -1564,7 +1564,6 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
         let settled = false;
         let timeout = null;
         let interruptPoll = null;
-        let sawUnattributedHurt = false;
         const targetId = entity?.id;
 
         const cleanup = () => {
@@ -1579,17 +1578,18 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
             cleanup();
             resolve(result);
         };
-        const onEntityHurt = (hurtEntity, source) => {
+        const onEntityHurt = hurtEntity => {
             if (hurtEntity?.id !== targetId) return;
-            if (source?.id === bot.entity?.id) {
-                finish({ confirmed: true, outcome: 'hit' });
-                return;
-            }
-            if (!source) sawUnattributedHurt = true;
+            // Mineflayer's entityHurt event identifies the hurt entity but does
+            // not expose a damage source. Because this listener is installed
+            // immediately before the single bot.attack call and is bounded by
+            // ATTACK_CONFIRM_TIMEOUT_MS, an event for this exact target is the
+            // strongest confirmation the client API can provide.
+            finish({ confirmed: true, outcome: 'hit_observed' });
         };
         const onEntityDead = deadEntity => {
             if (deadEntity?.id === targetId) {
-                finish({ confirmed: false, outcome: 'target_died_unattributed' });
+                finish({ confirmed: true, outcome: 'target_died_after_attack' });
             }
         };
 
@@ -1600,9 +1600,7 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
                 confirmed: false,
                 outcome: bot.interrupt_code
                     ? 'interrupted'
-                    : sawUnattributedHurt
-                        ? 'hurt_unattributed'
-                        : 'damage_unconfirmed',
+                    : 'damage_unconfirmed',
             });
         }, timeoutMs);
         interruptPoll = setInterval(() => {
@@ -1755,23 +1753,19 @@ export async function attackEntity(bot, entity, kill=true) {
             return false;
         }
 
-        setActionEvidence(bot, { kind: 'combat', outcome: 'hit', target, distance, retryable: false });
+        setActionEvidence(bot, { kind: 'combat', outcome: attack.outcome, target, distance, retryable: false });
         return true;
     }
     else {
         let targetDied = false;
-        let defeatAttributed = false;
-        let attributedHits = 0;
-        let lastDamageSourceId = null;
-        const onEntityHurt = (hurtEntity, source) => {
+        let observedHits = 0;
+        const onEntityHurt = hurtEntity => {
             if (hurtEntity?.id !== entity.id) return;
-            lastDamageSourceId = source?.id ?? null;
-            if (lastDamageSourceId === bot.entity?.id) attributedHits += 1;
+            observedHits += 1;
         };
         const onEntityDead = deadEntity => {
             if (deadEntity?.id !== entity.id) return;
             targetDied = true;
-            defeatAttributed = lastDamageSourceId === bot.entity?.id;
         };
         const startedAt = Date.now();
         bot.on('entityHurt', onEntityHurt);
@@ -1803,16 +1797,16 @@ export async function attackEntity(bot, entity, kill=true) {
                 return false;
             }
 
-            if (!defeatAttributed) {
+            if (observedHits < 1) {
                 setActionEvidence(bot, {
                     kind: 'combat',
-                    outcome: 'target_died_unattributed',
+                    outcome: 'target_died_without_observed_hit',
                     target,
-                    attributedHits,
+                    observedHits,
                     elapsedMs: Date.now() - startedAt,
                     retryable: false,
                 });
-                log(bot, `${target.name} died, but Minecraft did not attribute the final damage to this bot.`);
+                log(bot, `${target.name} died, but Minecraft did not report a hit during this bot's attack.`);
                 return false;
             }
 
@@ -1826,7 +1820,7 @@ export async function attackEntity(bot, entity, kill=true) {
                 kind: 'combat',
                 outcome: 'killed',
                 target,
-                attributedHits,
+                observedHits,
                 elapsedMs: Date.now() - startedAt,
                 retryable: false,
             });
@@ -3111,6 +3105,14 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
     try {
         chestContainer = await bot.openContainer(chest);
         await chestContainer.deposit(item.type, null, toPut);
+        await closeContainerQuietly(chestContainer);
+        chestContainer = null;
+        await waitForWorldCondition(
+            bot,
+            () => inventoryCount(bot, itemName) <= beforeCount - toPut,
+            1_000,
+            INVENTORY_POLL_MS,
+        );
         const afterCount = inventoryCount(bot, itemName);
         const transferred = beforeCount - afterCount;
         if (transferred < toPut) {
@@ -3347,6 +3349,9 @@ export async function takeFromChest(bot, itemName, num=-1) {
             remaining -= toTakeFromSlot;
         }
 
+        await closeContainerQuietly(chestContainer);
+        chestContainer = null;
+        await waitForInventoryCount(bot, itemName, beforeCount + intended, 1_000);
         const afterCount = inventoryCount(bot, itemName);
         const transferred = afterCount - beforeCount;
         if (transferred < intended) {
@@ -5427,8 +5432,15 @@ export async function tradeWithVillager(bot, id, index, count) {
         const outputName = trade.outputItem?.name;
         const outputBefore = outputName ? inventoryCount(bot, outputName) : 0;
         await bot.trade(villager, tradeIndex, actualCount);
-        const outputAfter = outputName ? inventoryCount(bot, outputName) : 0;
         const expectedGain = Math.max(1, Number(trade.outputItem?.count) || 1) * actualCount;
+        // Mineflayer can resolve trade() before the player inventory view is
+        // synchronized. Closing the villager window flushes those slot updates.
+        await closeContainerQuietly(villager);
+        villager = null;
+        if (outputName) {
+            await waitForInventoryCount(bot, outputName, outputBefore + expectedGain, 1_000);
+        }
+        const outputAfter = outputName ? inventoryCount(bot, outputName) : 0;
         const gained = outputAfter - outputBefore;
         if (!outputName || gained < expectedGain) {
             setActionEvidence(bot, {

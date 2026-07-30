@@ -594,7 +594,7 @@ export class Agent {
             const user_command_name = containsCommand(message);
                 if (user_command_name) {
                     if (!commandExists(user_command_name)) {
-                    this.routeResponse(source, `Command '${user_command_name}' does not exist.`);
+                    this.routeResponse(source, `Command ${user_command_name.substring(1)} is unavailable for this bot profile.`);
                     return false;
                 }
                 console.log(`${source} invoked ${user_command_name}.`);
