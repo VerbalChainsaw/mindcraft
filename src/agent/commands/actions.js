@@ -1,6 +1,16 @@
 import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
+import { sendSquadRadio } from '../mindserver_proxy.js';
+import { actionResultToMessage } from '../runtime/action-result.js';
+import { createWorkOrder } from '../runtime/work-order.js';
+import { createBuilderShelterOrder, createBuilderStockpileOrder } from '../runtime/jobs/builder-plan.js';
+import { resolvePlayerTarget } from '../player-target.js';
+import {
+    createItemGoalContract,
+    inventoryCountForGoalTarget,
+    resolveItemGoalTarget,
+} from '../runtime/goal-contract.js';
 
 
 function runAsAction (actionFn, resume = false, timeout = -1) {
@@ -13,19 +23,89 @@ function runAsAction (actionFn, resume = false, timeout = -1) {
             actionLabel = actionObj.name.substring(1); // Remove the ! prefix
         }
 
-        const actionFnWithAgent = async () => {
-            await actionFn(agent, ...args);
-        };
+        const actionFnWithAgent = async () => actionFn(agent, ...args);
         const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout, resume });
         if (code_return.interrupted && !code_return.timedout)
             return;
-        return code_return.message;
+        if (code_return.result?.phase && code_return.result.phase !== 'succeeded') {
+            return actionResultToMessage(code_return.result);
+        }
+        return code_return.message || (code_return.result ? actionResultToMessage(code_return.result) : undefined);
     }
+    // Direct player/dashboard use of a world skill is an explicit ownership
+    // change. Agent.handleMessage reads this metadata before it starts the
+    // action, so an older autonomous goal cannot wake up and compete with it.
+    // Query/configuration/vision commands use different wrappers and retain
+    // their existing non-takeover behavior.
+    wrappedAction.manualAutonomyTakeover = true;
 
     return wrappedAction;
 }
 
+function setCompanionDirective(agent, directive, playerName) {
+    agent.companion_context?.setDirective?.(directive, playerName);
+    if (directive !== 'guard' && agent.runtime?.reflexes?.combat === 'off') {
+        agent.bot?.modes?.setOn?.('self_defense', false);
+    }
+}
+
+function submitRoleOrder(agent, expectedRole, order) {
+    const director = agent.job_director;
+    if (!director || typeof director.submit !== 'function') {
+        return `Work order was not accepted: ${expectedRole} job director unavailable.`;
+    }
+    const result = director.submit(order);
+    if (result?.accepted !== true) {
+        return `Work order was not accepted: ${result?.code || 'job director unavailable'}.`;
+    }
+    const defaultRole = agent.runtime?.role || 'companion';
+    const roleContext = defaultRole === expectedRole
+        ? ''
+        : ` while keeping ${defaultRole} as the default role`;
+    return `Accepted resumable ${expectedRole} work order ${result.id}${roleContext}.`;
+}
+
+function persistentJobCommand(commandFn) {
+    commandFn.persistentJobAssignment = true;
+    return commandFn;
+}
+
+function persistentGoalCommand(commandFn) {
+    commandFn.persistentJobAssignment = true;
+    commandFn.persistentGoalAssignment = true;
+    commandFn.manualAutonomyTakeover = true;
+    return commandFn;
+}
+
+async function runVisionAction(agent, actionLabel, request) {
+    if (!agent.vision_interpreter) {
+        return 'Vision has not initialized yet. Structured game-state sensing is still available.';
+    }
+    let response = '';
+    const result = await agent.actions.runAction(actionLabel, async () => {
+        response = await request();
+        return agent.vision_interpreter.lastOutcome?.success === true;
+    });
+    if (result.result?.phase && result.result.phase !== 'succeeded') {
+        return response || actionResultToMessage(result.result);
+    }
+    return response || result.message || (result.result ? actionResultToMessage(result.result) : undefined);
+}
+
 export const actionsList = [
+    {
+        name: '!squadRadio',
+        description: 'Send a short status, request, or warning to the other live members of your squad through MindServer.',
+        params: {
+            'message': { type: 'string', description: 'A concise squad update, request, or warning.' },
+        },
+        perform: async function (_agent, message) {
+            const result = await sendSquadRadio(String(message || '').slice(0, 1200), 'status');
+            return result.success
+                ? `Squad radio delivered to ${result.delivered} member(s).`
+                : `Squad radio failed: ${result.error || 'no live squad members.'}`;
+        },
+    },
     {
         name: '!newAction',
         description: 'Perform new and unknown custom behaviors that are not available as a command.', 
@@ -54,14 +134,17 @@ export const actionsList = [
         name: '!stop',
         description: 'Force stop all actions and commands that are currently executing.',
         perform: async function (agent) {
-            await agent.actions.stop();
+            const holdGeneration = agent.holdPosition('operator stop command');
+            const stopOutcome = await agent.actions.stop({
+                continueWhile: () => agent.isCurrentOperatorHold(holdGeneration),
+            });
+            if (stopOutcome.superseded) return null;
             agent.clearBotLogs();
             agent.actions.cancelResume();
-            agent.bot.emit('idle');
-            let msg = 'Agent stopped.';
-            if (agent.self_prompter.isActive())
-                msg += ' Self-prompting still active.';
-            return msg;
+            if (!stopOutcome.stopped) {
+                return 'The bot is held, but its current action did not yield to Stop yet. It will not start another action; use an explicit restart only if it remains unresponsive.';
+            }
+            return 'Agent stopped. It will remain held until you give a new command or goal.';
         }
     },
     {
@@ -96,7 +179,8 @@ export const actionsList = [
             'closeness': {type: 'float', description: 'How close to get to the player.', domain: [0, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, closeness) => {
-            await skills.goToPlayer(agent.bot, player_name, closeness);
+            setCompanionDirective(agent, null, player_name);
+            return await skills.goToPlayer(agent.bot, player_name, closeness);
         })
     },
     {
@@ -107,7 +191,21 @@ export const actionsList = [
             'follow_dist': {type: 'float', description: 'The distance to follow from.', domain: [0, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, follow_dist) => {
-            await skills.followPlayer(agent.bot, player_name, follow_dist);
+            setCompanionDirective(agent, 'follow', player_name);
+            return await skills.followPlayer(agent.bot, player_name, follow_dist);
+        }, true)
+    },
+    {
+        name: '!guardPlayer',
+        description: 'Stay close to a player and keep the existing self-defense reflex enabled while following them.',
+        params: {
+            'player_name': {type: 'string', description: 'name of the player to guard.'},
+            'guard_dist': {type: 'float', description: 'distance to keep from the guarded player.', domain: [1, Infinity]}
+        },
+        perform: runAsAction(async (agent, player_name, guard_dist) => {
+            setCompanionDirective(agent, 'guard', player_name);
+            agent.bot.modes.setOn('self_defense', true);
+            return await skills.followPlayer(agent.bot, player_name, guard_dist);
         }, true)
     },
     {
@@ -120,7 +218,7 @@ export const actionsList = [
             'closeness': {type: 'float', description: 'How close to get to the location.', domain: [0, Infinity]}
         },
         perform: runAsAction(async (agent, x, y, z, closeness) => {
-            await skills.goToPosition(agent.bot, x, y, z, closeness);
+            return await skills.goToPosition(agent.bot, x, y, z, closeness);
         })
     },
     {
@@ -135,8 +233,19 @@ export const actionsList = [
                 skills.log(agent.bot, `Minimum search range is 32.`);
                 range = 32;
             }
-            await skills.goToNearestBlock(agent.bot, block_type, 4, range);
+            return await skills.goToNearestBlock(agent.bot, block_type, 4, range);
         })
+    },
+    {
+        name: '!goToMiningDepth',
+        description: 'Use existing safe cave and stair routes to reach a productive mining depth without breaking unrelated route blocks.',
+        params: {
+            'target_y': { type: 'int', description: 'Productive target Y level.', domain: [-60, 300] },
+            'search_range': { type: 'int', description: 'Maximum loaded cave search radius.', domain: [16, 128] },
+        },
+        perform: runAsAction(async (agent, target_y, search_range) => {
+            return await skills.goToMiningDepth(agent.bot, target_y, search_range);
+        }, false, 10)
     },
     {
         name: '!searchForEntity',
@@ -146,7 +255,7 @@ export const actionsList = [
             'search_range': { type: 'float', description: 'The range to search for the entity.', domain: [32, 512] }
         },
         perform: runAsAction(async (agent, entity_type, range) => {
-            await skills.goToNearestEntity(agent.bot, entity_type, 4, range);
+            return await skills.goToNearestEntity(agent.bot, entity_type, 4, range);
         })
     },
     {
@@ -154,7 +263,7 @@ export const actionsList = [
         description: 'Move away from the current location in any direction by a given distance.',
         params: {'distance': { type: 'float', description: 'The distance to move away.', domain: [0, Infinity] }},
         perform: runAsAction(async (agent, distance) => {
-            await skills.moveAway(agent.bot, distance);
+            return await skills.moveAway(agent.bot, distance);
         })
     },
     {
@@ -174,10 +283,10 @@ export const actionsList = [
         perform: runAsAction(async (agent, name) => {
             const pos = agent.memory_bank.recallPlace(name);
             if (!pos) {
-            skills.log(agent.bot, `No location named "${name}" saved.`);
-            return;
+                skills.log(agent.bot, `No location named "${name}" saved.`);
+                return false;
             }
-            await skills.goToPosition(agent.bot, pos[0], pos[1], pos[2], 1);
+            return await skills.goToPosition(agent.bot, pos[0], pos[1], pos[2], 1);
         })
     },
     {
@@ -189,7 +298,19 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of items to give.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, player_name, item_name, num) => {
-            await skills.giveToPlayer(agent.bot, item_name, player_name, num);
+            return await skills.giveToPlayer(agent.bot, item_name, player_name, num);
+        })
+    },
+    {
+        name: '!giveFamilyToPlayer',
+        description: 'Deliver a verified quantity across every carried item type in a useful family, such as mixed logs, to a player.',
+        params: {
+            'family': { type: 'string', description: 'Supported family: logs, planks, food, ores, or building_blocks.' },
+            'player_name': { type: 'string', description: 'The player who should receive the items.' },
+            'num': { type: 'int', description: 'Maximum total family items to deliver.', domain: [1, 2304] },
+        },
+        perform: runAsAction(async (agent, family, player_name, num) => {
+            return await skills.giveFamilyToPlayer(agent.bot, family, player_name, num);
         })
     },
     {
@@ -197,7 +318,7 @@ export const actionsList = [
         description: 'Eat/drink the given item.',
         params: {'item_name': { type: 'ItemName', description: 'The name of the item to consume.' }},
         perform: runAsAction(async (agent, item_name) => {
-            await skills.consume(agent.bot, item_name);
+            return await skills.consume(agent.bot, item_name);
         })
     },
     {
@@ -205,7 +326,7 @@ export const actionsList = [
         description: 'Equip the given item.',
         params: {'item_name': { type: 'ItemName', description: 'The name of the item to equip.' }},
         perform: runAsAction(async (agent, item_name) => {
-            await skills.equip(agent.bot, item_name);
+            return await skills.equip(agent.bot, item_name);
         })
     },
     {
@@ -216,7 +337,58 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of items to put in the chest.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            await skills.putInChest(agent.bot, item_name, num);
+            return await skills.putInChest(agent.bot, item_name, num);
+        })
+    },
+    {
+        name: '!putInChestAt',
+        description: 'Deposit items into the exact assigned loaded chest or barrel and verify the inventory transfer.',
+        params: {
+            'item_name': { type: 'ItemName', description: 'The item to deposit.' },
+            'num': { type: 'int', description: 'The number of items to deposit.', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'x': { type: 'float', description: 'Assigned container x coordinate.' },
+            'y': { type: 'float', description: 'Assigned container y coordinate.' },
+            'z': { type: 'float', description: 'Assigned container z coordinate.' },
+        },
+        perform: runAsAction(async (agent, item_name, num, x, y, z) => {
+            return await skills.putInChestAt(agent.bot, item_name, num, x, y, z);
+        })
+    },
+    {
+        name: '!putFamilyInChestAt',
+        description: 'Deposit a verified total across every carried item type in a useful family into the exact assigned chest or barrel.',
+        params: {
+            'family': { type: 'string', description: 'Supported family: logs, planks, food, ores, or building_blocks.' },
+            'num': { type: 'int', description: 'Maximum total family items to deposit.', domain: [1, 2304] },
+            'x': { type: 'float', description: 'Assigned container x coordinate.' },
+            'y': { type: 'float', description: 'Assigned container y coordinate.' },
+            'z': { type: 'float', description: 'Assigned container z coordinate.' },
+        },
+        perform: runAsAction(async (agent, family, num, x, y, z) => {
+            return await skills.putFamilyInChestAt(agent.bot, family, num, x, y, z);
+        })
+    },
+    {
+        name: '!depositInventoryOverflowAt',
+        description: 'Free working slots at an assigned chest while preserving food, durable equipment, utility gear, and the current job target.',
+        params: {
+            'role': { type: 'string', description: 'Current job role.' },
+            'protected_item': { type: 'string', description: 'Exact item or family currently being gathered.' },
+            'reserve_slots': { type: 'int', description: 'Free slots required before work resumes.', domain: [1, 12] },
+            'x': { type: 'float', description: 'Assigned container x coordinate.' },
+            'y': { type: 'float', description: 'Assigned container y coordinate.' },
+            'z': { type: 'float', description: 'Assigned container z coordinate.' },
+        },
+        perform: runAsAction(async (agent, role, protected_item, reserve_slots, x, y, z) => {
+            return await skills.depositInventoryOverflowAt(
+                agent.bot,
+                role,
+                protected_item,
+                reserve_slots,
+                x,
+                y,
+                z,
+            );
         })
     },
     {
@@ -227,7 +399,7 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of items to take.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            await skills.takeFromChest(agent.bot, item_name, num);
+            return await skills.takeFromChest(agent.bot, item_name, num);
         })
     },
     {
@@ -235,7 +407,7 @@ export const actionsList = [
         description: 'View the items/counts of the nearest chest.',
         params: { },
         perform: runAsAction(async (agent) => {
-            await skills.viewChest(agent.bot);
+            return await skills.viewChest(agent.bot);
         })
     },
     {
@@ -246,10 +418,10 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of items to discard.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            const start_loc = agent.bot.entity.position;
-            await skills.moveAway(agent.bot, 5);
-            await skills.discard(agent.bot, item_name, num);
-            await skills.goToPosition(agent.bot, start_loc.x, start_loc.y, start_loc.z, 0);
+            const start_loc = agent.bot.entity.position.clone();
+            if (!await skills.moveAway(agent.bot, 5)) return false;
+            if (!await skills.discard(agent.bot, item_name, num)) return false;
+            return await skills.goToPosition(agent.bot, start_loc.x, start_loc.y, start_loc.z, 0);
         })
     },
     {
@@ -260,8 +432,94 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, type, num) => {
-            await skills.collectBlock(agent.bot, type, num);
+            return await skills.collectBlock(agent.bot, type, num);
         }, false, 10) // 10 minute timeout
+    },
+    {
+        name: '!pickupUsefulItems',
+        description: 'Pick up nearby food, equipment, resources, and work materials when it is safe and inventory has room.',
+        params: {
+            'range': { type: 'int', description: 'Maximum pickup radius.', domain: [4, 32, '[]'] },
+        },
+        perform: runAsAction(async (agent, range) => {
+            return await skills.pickupUsefulItems(agent.bot, range);
+        })
+    },
+    {
+        name: '!collectBlocksInRange',
+        description: 'Collect a bounded number of exact target blocks within an explicit work-order search radius.',
+        params: {
+            'type': { type: 'BlockName', description: 'The exact block type to collect.' },
+            'num': { type: 'int', description: 'Maximum number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
+        },
+        perform: runAsAction(async (agent, type, num, range) => {
+            return await skills.collectBlock(agent.bot, type, num, null, range);
+        }, false, 10)
+    },
+    {
+        name: '!prepareMaterial',
+        description: 'Survival-source useful building or mining supplies through verified gathering and crafting.',
+        params: {
+            'material_name': { type: 'string', description: 'Supported family or item: planks, a specific plank type, cobblestone, dirt, or torch.' },
+            'num': { type: 'int', description: 'Additional number of items to prepare.', domain: [1, 2304, '[]'] },
+            'range': { type: 'int', description: 'Maximum resource search radius.', domain: [16, 512, '[]'] },
+        },
+        perform: runAsAction(async (agent, material_name, num, range) => {
+            return await skills.prepareMaterial(agent.bot, material_name, num, range);
+        }, false, 10)
+    },
+    {
+        name: '!prepareFood',
+        description: 'Secure a safe food reserve by crafting carried ingredients, harvesting and replanting mature crops, cooking raw food, and sustainably hunting adult animals when needed.',
+        params: {
+            'target_food_points': { type: 'int', description: 'Safe carried food points to secure.', domain: [6, 160, '[]'] },
+            'range': { type: 'int', description: 'Maximum crop, animal, and resource search radius.', domain: [16, 128, '[]'] },
+        },
+        perform: runAsAction(async (agent, target_food_points, range) => {
+            return await skills.prepareFood(agent.bot, target_food_points, range);
+        }, false, 10)
+    },
+    {
+        name: '!prepareTool',
+        description: 'Survival-bootstrap and equip a durable wooden, stone, iron, or diamond pickaxe, axe, shovel, hoe, or sword, replacing worn tools before they break.',
+        params: {
+            'tool_name': { type: 'ItemName', description: 'Supported tool such as stone_pickaxe, iron_pickaxe, diamond_pickaxe, or an axe of the same tiers.' }
+        },
+        perform: runAsAction(async (agent, tool_name) => {
+            return await skills.prepareTool(agent.bot, tool_name);
+        }, false, 10)
+    },
+    {
+        name: '!prepareWoodenTool',
+        description: 'Compatibility command for survival-bootstrapping a supported wooden job tool.',
+        params: {
+            'tool_name': { type: 'ItemName', description: 'Supported tool: wooden_pickaxe or wooden_axe.' }
+        },
+        perform: runAsAction(async (agent, tool_name) => {
+            return await skills.prepareWoodenTool(agent.bot, tool_name);
+        }, false, 10)
+    },
+    {
+        name: '!collectWood',
+        description: 'Find nearby trees of any wood type and collect their logs.',
+        params: {
+            'num': { type: 'int', description: 'The number of logs to collect.', domain: [1, 64, '[]'] }
+        },
+        perform: runAsAction(async (agent, num) => {
+            return await skills.collectWood(agent.bot, num);
+        }, false, 10)
+    },
+    {
+        name: '!collectWoodInRange',
+        description: 'Collect a bounded number of safe reachable logs within an explicit work-order search radius.',
+        params: {
+            'num': { type: 'int', description: 'Maximum number of logs to collect.', domain: [1, 64, '[]'] },
+            'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
+        },
+        perform: runAsAction(async (agent, num, range) => {
+            return await skills.collectWood(agent.bot, num, range);
+        }, false, 10)
     },
     {
         name: '!craftRecipe',
@@ -271,8 +529,172 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of times to craft the recipe. This is NOT the number of output items, as it may craft many more items depending on the recipe.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, recipe_name, num) => {
-            await skills.craftRecipe(agent.bot, recipe_name, num);
+            return await skills.craftRecipe(agent.bot, recipe_name, num);
         })
+    },
+    {
+        name: '!requestItemGoal',
+        description: 'Start one typed, resumable physical goal that acquires an exact quantity or delivers it to a canonical player. Use kind "acquire" or "deliver"; all subgoals use existing deterministic commands and overall completion is verified from Minecraft state.',
+        params: {
+            'kind': { type: 'string', description: 'Goal kind: acquire or deliver.' },
+            'target': { type: 'string', description: 'Canonical item/block name or supported family: logs or planks.' },
+            'quantity': { type: 'int', description: 'Exact requested quantity.', domain: [1, 2304, '[]'] },
+            'requester_or_recipient': { type: 'string', description: 'Canonical requesting player name. For deliver goals this is also the recipient.' },
+        },
+        perform: persistentGoalCommand(function (agent, kind, targetName, quantity, requesterOrRecipient) {
+            const normalizedKind = String(kind || '').trim().toLowerCase();
+            if (!['acquire', 'deliver'].includes(normalizedKind)) {
+                return 'Typed item goal was not accepted: kind must be acquire or deliver.';
+            }
+            const target = resolveItemGoalTarget(agent.bot, targetName);
+            if (!target) {
+                return `Typed item goal was not accepted: '${String(targetName || '').slice(0, 80)}' is not a supported connected-registry target.`;
+            }
+            if (target.acquisitionKind === 'unsupported') {
+                return `Typed item goal was not accepted: ${target.requestedName} has no safe deterministic acquisition path.`;
+            }
+            const canonicalRequester = String(requesterOrRecipient || '').trim();
+            if (!canonicalRequester) {
+                return 'Typed item goal was not accepted: a canonical requesting player is required.';
+            }
+            const resolution = resolvePlayerTarget(agent.bot, canonicalRequester, {
+                knownBotNames: agent.getKnownAgentNames?.() || [],
+            });
+            if (resolution.ambiguous) {
+                return `Typed item goal was not accepted: player '${canonicalRequester}' is ambiguous.`;
+            }
+            if (resolution.canonical && resolution.canonical !== canonicalRequester) {
+                return `Typed item goal was not accepted: use canonical player '${resolution.canonical}'.`;
+            }
+            const baselineInventory = inventoryCountForGoalTarget(agent.bot, target);
+            const goal = createItemGoalContract({
+                kind: normalizedKind,
+                requester: canonicalRequester,
+                target,
+                quantity,
+                destinationPlayer: normalizedKind === 'deliver' ? canonicalRequester : null,
+                request: normalizedKind === 'deliver'
+                    ? `deliver ${quantity} ${target.requestedName} to ${canonicalRequester}`
+                    : `acquire ${quantity} ${target.requestedName}`,
+                source: 'player',
+                baselineInventory,
+            });
+            const accepted = agent.goal_director?.submit?.(goal);
+            if (!accepted?.accepted) {
+                return `Typed item goal was not accepted: ${accepted?.detail || accepted?.code || 'goal director unavailable'}.`;
+            }
+            const reused = accepted.procedureId
+                ? ` Reusing proven procedure ${accepted.procedureId}.`
+                : '';
+            return `Accepted typed goal ${accepted.id}: ${goal.kind} ${goal.quantity} ${goal.target.family || goal.target.canonicalName}${goal.kind === 'deliver' ? ` to ${goal.destination.player}` : ''}.${reused}`;
+        }),
+    },
+    {
+        name: '!assignMiningJob',
+        description: 'Assign this Miner a persistent, resumable resource quota using its full tool, safety, delivery, and recovery plan.',
+        params: {
+            'resource': { type: 'string', description: 'Canonical resource such as cobblestone, coal_ore, iron_ore, diamond_ore, or ancient_debris.' },
+            'quota': { type: 'int', description: 'Verified output quota.', domain: [1, 2304, '[]'] },
+        },
+        perform: persistentJobCommand(async function (agent, resource, quota) {
+            try {
+                const order = createWorkOrder({
+                    role: 'miner',
+                    kind: 'mine',
+                    source: 'player',
+                    requester: 'player',
+                    target: { name: String(resource || '').trim().toLowerCase() },
+                    quota,
+                });
+                return submitRoleOrder(agent, 'miner', order);
+            } catch (error) {
+                return `Mining work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!assignHarvestJob',
+        description: 'Assign this Lumberjack a persistent, resumable tree quota with tool preparation, safe collection, replanting, and delivery.',
+        params: {
+            'log': { type: 'string', description: 'Canonical log type such as oak_log, spruce_log, or the family name logs.' },
+            'quota': { type: 'int', description: 'Verified log quota.', domain: [1, 2304, '[]'] },
+        },
+        perform: persistentJobCommand(async function (agent, log, quota) {
+            try {
+                const order = createWorkOrder({
+                    role: 'lumberjack',
+                    kind: 'harvest',
+                    source: 'player',
+                    requester: 'player',
+                    target: { name: String(log || '').trim().toLowerCase() },
+                    quota,
+                });
+                return submitRoleOrder(agent, 'lumberjack', order);
+            } catch (error) {
+                return `Harvest work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!assignStockpileJob',
+        description: 'Assign this Builder a persistent material stockpile quota without authorizing construction.',
+        params: {
+            'material': { type: 'string', description: 'Supported stockpile material: planks, a specific plank type, cobblestone, or dirt.' },
+            'quota': { type: 'int', description: 'Inventory stockpile target.', domain: [1, 2304, '[]'] },
+        },
+        perform: persistentJobCommand(async function (agent, material, quota) {
+            try {
+                const order = createBuilderStockpileOrder({
+                    material: String(material || '').trim().toLowerCase(),
+                    quota,
+                    source: 'player',
+                    requester: 'player',
+                });
+                return submitRoleOrder(agent, 'builder', order);
+            } catch (error) {
+                return `Stockpile work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!assignShelterJob',
+        description: 'Build one small, verified survival shelter around the bot using gathered materials and a fixed safe doorway.',
+        params: {},
+        perform: persistentJobCommand(async function (agent) {
+            try {
+                const position = agent.bot?.entity?.position;
+                if (!position) return 'Shelter work order was not accepted: Minecraft spawn state is unavailable.';
+                const order = createBuilderShelterOrder({
+                    x: Math.floor(position.x) - 1,
+                    y: Math.floor(position.y),
+                    z: Math.floor(position.z) - 1,
+                    requester: 'player',
+                });
+                return submitRoleOrder(agent, 'builder', order);
+            } catch (error) {
+                return `Shelter work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!cancelJob',
+        description: 'Cancel this bot’s active resumable work order without releasing unrelated operator safety controls.',
+        params: {},
+        perform: async function (agent) {
+            return agent.job_director?.cancel?.('Cancelled by player.')
+                ? 'Active work order cancelled.'
+                : 'There is no active work order to cancel.';
+        },
+    },
+    {
+        name: '!cancelGoal',
+        description: 'Cancel the active typed gameplay goal and its remaining subgoals.',
+        params: {},
+        perform: function (agent) {
+            return agent.goal_director?.cancel?.('Cancelled by player.')
+                ? 'Active typed gameplay goal cancelled.'
+                : 'There is no active typed gameplay goal to cancel.';
+        },
     },
     {
         name: '!smeltItem',
@@ -283,11 +705,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, item_name, num) => {
             let success = await skills.smeltItem(agent.bot, item_name, num);
-            if (success) {
-                setTimeout(() => {
-                    agent.cleanKill('Safely restarting to update inventory.');
-                }, 500);
-            }
+            return success;
         })
     },
     {
@@ -295,16 +713,29 @@ export const actionsList = [
         description: 'Take all items out of the nearest furnace.',
         params: { },
         perform: runAsAction(async (agent) => {
-            await skills.clearNearestFurnace(agent.bot);
+            return await skills.clearNearestFurnace(agent.bot);
         })
     },
-        {
+    {
         name: '!placeHere',
         description: 'Place a given block in the current location. Do NOT use to build structures, only use for single blocks/torches.',
         params: {'type': { type: 'BlockOrItemName', description: 'The block type to place.' }},
         perform: runAsAction(async (agent, type) => {
             let pos = agent.bot.entity.position;
-            await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
+            return await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
+        })
+    },
+    {
+        name: '!placeBlockAt',
+        description: 'Place one block at an exact prevalidated blueprint coordinate without breaking any obstruction.',
+        params: {
+            'type': { type: 'BlockOrItemName', description: 'The exact block type to place.' },
+            'x': { type: 'float', description: 'The validated x coordinate.' },
+            'y': { type: 'float', description: 'The validated y coordinate.' },
+            'z': { type: 'float', description: 'The validated z coordinate.' },
+        },
+        perform: runAsAction(async (agent, type, x, y, z) => {
+            return await skills.placeBlock(agent.bot, type, x, y, z, 'bottom', true, false);
         })
     },
     {
@@ -312,7 +743,15 @@ export const actionsList = [
         description: 'Attack and kill the nearest entity of a given type.',
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},
         perform: runAsAction(async (agent, type) => {
-            await skills.attackNearest(agent.bot, type, true);
+            return await skills.attackNearest(agent.bot, type, true);
+        })
+    },
+    {
+        name: '!attackHostile',
+        description: 'Engage nearby combat-safe hostile mobs and stop when the area is secure or the bounded defense attempt fails.',
+        params: {},
+        perform: runAsAction(async (agent) => {
+            return await skills.defendSelf(agent.bot, 16);
         })
     },
     {
@@ -320,19 +759,27 @@ export const actionsList = [
         description: 'Attack a specific player until they die or run away. Remember this is just a game and does not cause real life harm.',
         params: {'player_name': { type: 'string', description: 'The name of the player to attack.'}},
         perform: runAsAction(async (agent, player_name) => {
-            let player = agent.bot.players[player_name]?.entity;
+            if (agent.runtime?.role === 'companion') {
+                skills.log(agent.bot, 'Companion policy does not permit targeting players.');
+                return false;
+            }
+            const resolution = resolvePlayerTarget(agent.bot, player_name, {
+                knownBotNames: convoManager.getInGameAgents(),
+                isBotIdentity: identity => convoManager.isOtherAgent(identity),
+            });
+            const player = resolution.entity;
             if (!player) {
                 skills.log(agent.bot, `Could not find player ${player_name}.`);
                 return false;
             }
-            await skills.attackEntity(agent.bot, player, true);
+            return await skills.attackEntity(agent.bot, player, true);
         })
     },
     {
         name: '!goToBed',
         description: 'Go to the nearest bed and sleep.',
         perform: runAsAction(async (agent) => {
-            await skills.goToBed(agent.bot);
+            return await skills.goToBed(agent.bot);
         })
     },
     {
@@ -340,7 +787,7 @@ export const actionsList = [
         description: 'Stay in the current location no matter what. Pauses all modes.',
         params: {'type': { type: 'int', description: 'The number of seconds to stay. -1 for forever.', domain: [-1, Number.MAX_SAFE_INTEGER] }},
         perform: runAsAction(async (agent, seconds) => {
-            await skills.stay(agent.bot, seconds);
+            return await skills.stay(agent.bot, seconds);
         })
     },
     {
@@ -361,25 +808,49 @@ export const actionsList = [
         }
     },
     {
+        name: '!setPersona',
+        description: 'Set your character, role, voice, and roleplay priorities while preserving truthful gameplay behavior.',
+        params: {
+            'persona': { type: 'string', description: 'A concise character and role description.' }
+        },
+        perform: async function (agent, persona) {
+            const applied = agent.setPersona(persona);
+            return applied
+                ? `Character role updated: ${applied}`
+                : 'Character role cleared.';
+        }
+    },
+    {
         name: '!goal',
         description: 'Set a goal prompt to endlessly work towards with continuous self-prompting.',
         params: {
             'selfPrompt': { type: 'string', description: 'The goal prompt.' },
         },
         perform: async function (agent, prompt) {
+            prompt = String(prompt || '').trim();
+            if (!prompt) {
+                return 'Goal was not started because it needs a non-empty instruction.';
+            }
+            agent.goal_director?.cancel?.('Superseded by a new conversational goal.');
+            agent.releaseOperatorHold('new goal');
             if (convoManager.inConversation()) {
                 agent.self_prompter.setPromptPaused(prompt);
+                convoManager.deferGoalUntilConversationEnd();
+                return 'Goal saved. It will resume after the current conversation ends.';
             }
-            else {
-                agent.self_prompter.start(prompt);
-            }
+            const result = agent.self_prompter.start(prompt);
+            return result.started
+                ? 'Goal started.'
+                : result.reason || 'Goal was not started.';
         }
     },
     {
         name: '!endGoal',
-        description: 'Call when you have accomplished your goal. It will stop self-prompting and the current action. ',
+        description: 'Request goal completion. Typed physical goals stop only when their deterministic Minecraft completion predicate is satisfied; legacy conversational goals stop self-prompting.',
         perform: async function (agent) {
-            agent.self_prompter.stop();
+            const typed = agent.goal_director?.requestCompletion?.();
+            if (typed?.handled) return typed.message;
+            await agent.self_prompter.stop();
             return 'Self-prompting stopped.';
         }
     },
@@ -388,7 +859,7 @@ export const actionsList = [
         description: 'Show trades of a specified villager.',
         params: {'id': { type: 'int', description: 'The id number of the villager that you want to trade with.' }},
         perform: runAsAction(async (agent, id) => {
-            await skills.showVillagerTrades(agent.bot, id);
+            return await skills.showVillagerTrades(agent.bot, id);
         })
     },
     {
@@ -400,7 +871,7 @@ export const actionsList = [
             'count': { type: 'int', description: 'How many times that trade should be executed.', domain: [1, Number.MAX_SAFE_INTEGER] },
         },
         perform: runAsAction(async (agent, id, index, count) => {
-            await skills.tradeWithVillager(agent.bot, id, index, count);
+            return await skills.tradeWithVillager(agent.bot, id, index, count);
         })
     },
     {
@@ -447,12 +918,8 @@ export const actionsList = [
             if (direction !== 'at' && direction !== 'with') {
                 return "Invalid direction. Use 'at' or 'with'.";
             }
-            let result = "";
-            const actionFn = async () => {
-                result = await agent.vision_interpreter.lookAtPlayer(player_name, direction);
-            };
-            await agent.actions.runAction('action:lookAtPlayer', actionFn);
-            return result;
+            return await runVisionAction(agent, 'action:lookAtPlayer', () =>
+                agent.vision_interpreter.lookAtPlayer(player_name, direction));
         }
     },
     {
@@ -464,20 +931,28 @@ export const actionsList = [
             'z': { type: 'int', description: 'z coordinate' }
         },
         perform: async function(agent, x, y, z) {
-            let result = "";
-            const actionFn = async () => {
-                result = await agent.vision_interpreter.lookAtPosition(x, y, z);
-            };
-            await agent.actions.runAction('action:lookAtPosition', actionFn);
-            return result;
+            return await runVisionAction(agent, 'action:lookAtPosition', () =>
+                agent.vision_interpreter.lookAtPosition(x, y, z));
         }
+    },
+    {
+        name: '!breakBlock',
+        description: 'Break the block at the given coordinates. Use !goToCoordinates first to get nearby.',
+        params: {
+            'x': {type: 'float', description: 'The x coordinate of the block to break.'},
+            'y': {type: 'float', description: 'The y coordinate of the block to break.'},
+            'z': {type: 'float', description: 'The z coordinate of the block to break.'},
+        },
+        perform: runAsAction(async (agent, x, y, z) => {
+            return await skills.breakBlockAt(agent.bot, x, y, z);
+        })
     },
     {
         name: '!digDown',
         description: 'Digs down a specified distance. Will stop if it reaches lava, water, or a fall of >=4 blocks below the bot.',
         params: {'distance': { type: 'int', description: 'Distance to dig down', domain: [1, Number.MAX_SAFE_INTEGER] }},
         perform: runAsAction(async (agent, distance) => {
-            await skills.digDown(agent.bot, distance)
+            return await skills.digDown(agent.bot, distance);
         })
     },
     {
@@ -485,18 +960,93 @@ export const actionsList = [
         description: 'Moves the bot to the highest block above it (usually the surface).',
         params: {},
         perform: runAsAction(async (agent) => {
-            await skills.goToSurface(agent.bot);
+            return await skills.goToSurface(agent.bot);
+        })
+    },
+    {
+        name: '!useItem',
+        description: 'Equip and activate any carried registered item in the main or off hand for a bounded duration, then release it. Use specialized skills when a stronger world outcome must be verified.',
+        params: {
+            'item_name': { type: 'ItemName', description: 'Canonical registered item name to activate.' },
+            'duration_ms': { type: 'int', description: 'Use duration: 0 for one-shot items, or up to 5000 ms for bows, shields, spyglasses, tridents, food, and other held-use items.', domain: [0, 5000, '[]'] },
+            'hand': { type: 'string', description: 'Equipment hand: "main" or "off".' },
+        },
+        perform: runAsAction(async (agent, item_name, duration_ms, hand) => {
+            return await skills.useItem(agent.bot, item_name, duration_ms, hand);
         })
     },
     {
         name: '!useOn',
-        description: 'Use (right click) the given tool on the nearest target of the given type.',
+        description: 'Use (right click) a carried tool or empty hand on the nearest block/entity target. Reports verified when Minecraft state changes, otherwise requested without claiming an effect.',
         params: {
             'tool_name': { type: 'string', description: 'Name of the tool to use, or "hand" for no tool.' },
             'target': { type: 'string', description: 'The target as an entity type, block type, or "nothing" for no target.' }
         },
         perform: runAsAction(async (agent, tool_name, target) => {
-            await skills.useToolOn(agent.bot, tool_name, target);
+            return await skills.useToolOn(agent.bot, tool_name, target);
+        })
+    },
+    {
+        name: '!come',
+        description: 'Come to the named player and stop within a comfortable companion distance. Use for requests such as "come here".',
+        params: {'player_name': { type: 'string', description: 'Name of the player to approach.' }},
+        perform: runAsAction(async (agent, player_name) => {
+            setCompanionDirective(agent, null, player_name);
+            return await skills.goToPlayer(agent.bot, player_name, 2);
+        })
+    },
+    {
+        name: '!follow',
+        description: 'Continuously follow the named player until stopped or replaced by another player action. Use for "follow me".',
+        params: {'player_name': { type: 'string', description: 'Name of the player to follow.' }},
+        perform: runAsAction(async (agent, player_name) => {
+            setCompanionDirective(agent, 'follow', player_name);
+            return await skills.followPlayer(agent.bot, player_name, 3);
+        }, true)
+    },
+    {
+        name: '!collect',
+        description: 'Collect a bounded quantity of a common block using the normal deterministic collection skill.',
+        params: {
+            'block_type': { type: 'BlockName', description: 'Canonical block name, such as oak_log.' },
+            'quantity': { type: 'int', description: 'Number to collect.', domain: [1, 65] },
+        },
+        perform: runAsAction(async (agent, block_type, quantity) => {
+            return await skills.collectBlock(agent.bot, block_type, quantity);
+        })
+    },
+    {
+        name: '!give',
+        description: 'Approach a player and give an exact inventory item quantity. Reports only a Minecraft-confirmed pickup as delivered.',
+        params: {
+            'player_name': { type: 'string', description: 'Name of the receiving player.' },
+            'item_name': { type: 'ItemName', description: 'Canonical inventory item name.' },
+            'quantity': { type: 'int', description: 'Number to give.', domain: [1, 2305] },
+        },
+        perform: runAsAction(async (agent, player_name, item_name, quantity) => {
+            return await skills.giveToPlayer(agent.bot, item_name, player_name, quantity);
+        })
+    },
+    {
+        name: '!defend',
+        description: 'Guard the named player and retaliate only against a fresh combat-safe hostile attributed by Minecraft as hurting them.',
+        params: {'player_name': { type: 'string', description: 'Name of the player to defend.' }},
+        perform: runAsAction(async (agent, player_name) => {
+            setCompanionDirective(agent, 'guard', player_name);
+            agent.bot.modes.setOn('self_defense', true);
+            return await skills.followPlayer(agent.bot, player_name, 3);
+        }, true)
+    },
+    {
+        name: '!place',
+        description: 'Place a small bounded quantity of carried torches or blocks on safe nearby ground around the named player.',
+        params: {
+            'player_name': { type: 'string', description: 'Name of the player to place near.' },
+            'block_type': { type: 'BlockOrItemName', description: 'Canonical block or placeable item name, such as torch.' },
+            'quantity': { type: 'int', description: 'Number to place.', domain: [1, 17] },
+        },
+        perform: runAsAction(async (agent, player_name, block_type, quantity) => {
+            return await skills.placeNearPlayer(agent.bot, player_name, block_type, quantity);
         })
     },
 ];

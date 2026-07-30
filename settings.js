@@ -28,6 +28,7 @@ const settings = {
 
     "load_memory": false, // load memory from previous session
     "init_message": "Respond with hello world and your name", // sends to all on spawn
+    "default_goal": "Gather materials, build a shelter, stock tools, and explore safely. Always drive progress with one best available !command.", // seed goal when no scripted task is set; empty string disables autonomous play
     "only_chat_with": [], // users that the bots listen to and send general messages to. if empty it will chat publicly
 
     "speak": false,

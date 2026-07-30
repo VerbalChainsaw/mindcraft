@@ -38,6 +38,7 @@ const credentialAlternativesByProvider = {
     anthropic: ['ANTHROPIC_API_KEY'],
     azure: ['AZURE_OPENAI_API_KEY', 'OPENAI_API_KEY'],
     cerebras: ['CEREBRAS_API_KEY'],
+    codex: [],
     deepseek: ['DEEPSEEK_API_KEY'],
     glhf: ['GHLF_API_KEY'],
     google: ['GEMINI_API_KEY'],
@@ -101,6 +102,57 @@ export function selectAPI(profile) {
     let model_name = profile.model.replace(profile.api + '/', ''); // remove prefix
     profile.model = model_name === "" ? null : model_name; // if model is empty, set to null
     return profile;
+}
+
+function cloneModelConfiguration(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    return JSON.parse(JSON.stringify(value));
+}
+
+function configuredPrimaryApi(profile) {
+    if (typeof profile?.api === 'string' && profile.api.trim()) return profile.api.trim();
+    try {
+        const primary = typeof profile?.model === 'object'
+            ? cloneModelConfiguration(profile.model)
+            : { model: profile?.model };
+        return selectAPI(primary).api;
+    } catch {
+        return null;
+    }
+}
+
+export function resolveConfiguredModel(profile, modelKey = 'model') {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+        throw new TypeError('Model profile must be an object.');
+    }
+    const source = profile[modelKey];
+    const candidate = source && typeof source === 'object' && !Array.isArray(source)
+        ? cloneModelConfiguration(source)
+        : { model: source };
+    const primary = modelKey === 'model';
+    if (primary && !candidate.api && typeof profile.api === 'string' && profile.api.trim()) {
+        candidate.api = profile.api.trim();
+    }
+    const resolved = selectAPI(candidate);
+    const primaryApi = configuredPrimaryApi(profile) || (primary ? resolved.api : null);
+    if (primary || resolved.api === primaryApi) {
+        if (!resolved.url && typeof profile.url === 'string' && profile.url.trim()) {
+            resolved.url = profile.url.trim();
+        }
+        const sharedParams = profile.params && typeof profile.params === 'object' && !Array.isArray(profile.params)
+            ? cloneModelConfiguration(profile.params)
+            : null;
+        const roleParams = resolved.params && typeof resolved.params === 'object' && !Array.isArray(resolved.params)
+            ? resolved.params
+            : null;
+        if (sharedParams || roleParams) {
+            resolved.params = {
+                ...(sharedParams || {}),
+                ...(roleParams || {}),
+            };
+        }
+    }
+    return resolved;
 }
 
 export function describeModelProvider(profile) {

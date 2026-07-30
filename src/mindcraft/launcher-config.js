@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync } from 'fs';
+import { writeJsonAtomicSync } from '../utils/atomic-file.js';
 
 const CONFIG_FILENAME = 'launcher-config.json';
 
@@ -13,6 +14,17 @@ const DEFAULT_AGENT_DEFAULTS = {
   load_memory: false,
   speak: false,
   chat_ingame: true,
+  allow_vision: false,
+  render_bot_view: false,
+};
+
+const DEFAULT_AGENT_TELEMETRY = {
+  intervalMs: 1000,
+  requestTimeoutMs: 1200,
+  maxConcurrent: 6,
+  heartbeatMs: 3000,
+  failureBackoffMs: 1500,
+  maxFailureBackoffMs: 15000,
 };
 
 const DEFAULT_LAUNCHER_CONFIG = {
@@ -24,6 +36,7 @@ const DEFAULT_LAUNCHER_CONFIG = {
   port_scan_max: 20,
   profiles: ['./andy.json'],
   agent_defaults: DEFAULT_AGENT_DEFAULTS,
+  telemetry: DEFAULT_AGENT_TELEMETRY,
 };
 
 function resolveConfigPath(configPath) {
@@ -48,6 +61,13 @@ function asBoolean(value, fallback = false) {
     if (value === 'false') return false;
   }
   return fallback;
+}
+
+function asBoundedNumber(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(minimum, Math.min(maximum, Math.trunc(parsed)))
+    : fallback;
 }
 
 export class MindServerPublicBindError extends Error {}
@@ -94,6 +114,35 @@ function sanitizeAgentDefaults(value, fallback = DEFAULT_AGENT_DEFAULTS) {
     load_memory: asBoolean(value.load_memory, base.load_memory),
     speak: asBoolean(value.speak, base.speak),
     chat_ingame: asBoolean(value.chat_ingame, base.chat_ingame),
+    allow_vision: asBoolean(value.allow_vision, base.allow_vision),
+    render_bot_view: asBoolean(value.render_bot_view, base.render_bot_view),
+  };
+}
+
+function sanitizeTelemetry(value, fallback = DEFAULT_AGENT_TELEMETRY) {
+  const base = {
+    ...DEFAULT_AGENT_TELEMETRY,
+    ...(fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {}),
+  };
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const failureBackoffMs = asBoundedNumber(
+    input.failureBackoffMs,
+    base.failureBackoffMs,
+    250,
+    120000,
+  );
+  return {
+    intervalMs: asBoundedNumber(input.intervalMs, base.intervalMs, 250, 30000),
+    requestTimeoutMs: asBoundedNumber(input.requestTimeoutMs, base.requestTimeoutMs, 250, 30000),
+    maxConcurrent: asBoundedNumber(input.maxConcurrent, base.maxConcurrent, 1, 12),
+    heartbeatMs: asBoundedNumber(input.heartbeatMs, base.heartbeatMs, 250, 30000),
+    failureBackoffMs,
+    maxFailureBackoffMs: asBoundedNumber(
+      input.maxFailureBackoffMs,
+      base.maxFailureBackoffMs,
+      failureBackoffMs,
+      120000,
+    ),
   };
 }
 
@@ -112,6 +161,8 @@ function sanitizeLauncherConfig(raw = {}, baseSettings = {}) {
     load_memory: asBoolean(baseSettings.load_memory, DEFAULT_AGENT_DEFAULTS.load_memory),
     speak: asBoolean(baseSettings.speak, DEFAULT_AGENT_DEFAULTS.speak),
     chat_ingame: asBoolean(baseSettings.chat_ingame, DEFAULT_AGENT_DEFAULTS.chat_ingame),
+    allow_vision: asBoolean(baseSettings.allow_vision, DEFAULT_AGENT_DEFAULTS.allow_vision),
+    render_bot_view: asBoolean(baseSettings.render_bot_view, DEFAULT_AGENT_DEFAULTS.render_bot_view),
   };
   const base = {
     ...DEFAULT_LAUNCHER_CONFIG,
@@ -120,6 +171,7 @@ function sanitizeLauncherConfig(raw = {}, baseSettings = {}) {
     auto_start: asBoolean(baseSettings.auto_start, DEFAULT_LAUNCHER_CONFIG.auto_start),
     profiles: asStringArray(baseSettings.profiles, DEFAULT_LAUNCHER_CONFIG.profiles),
     agent_defaults: baseAgentDefaults,
+    telemetry: sanitizeTelemetry(baseSettings.telemetry, DEFAULT_AGENT_TELEMETRY),
   };
 
   return {
@@ -132,6 +184,7 @@ function sanitizeLauncherConfig(raw = {}, baseSettings = {}) {
     port_scan_max: Math.max(1, Math.min(80, asNumber(raw.port_scan_max, base.port_scan_max))),
     profiles: asStringArray(raw.profiles, base.profiles),
     agent_defaults: sanitizeAgentDefaults(raw.agent_defaults, base.agent_defaults),
+    telemetry: sanitizeTelemetry(raw.telemetry, base.telemetry),
   };
 }
 
@@ -166,10 +219,14 @@ export function writeLauncherConfig(update, configPath) {
       ...existing.agent_defaults,
       ...(incoming?.agent_defaults || {}),
     },
+    telemetry: {
+      ...existing.telemetry,
+      ...(incoming?.telemetry || {}),
+    },
   };
   const normalized = sanitizeLauncherConfig(merged, {});
   const path = resolveConfigPath(configPath);
-  writeFileSync(path, JSON.stringify(normalized, null, 2), 'utf8');
+  writeJsonAtomicSync(path, normalized);
   return normalized;
 }
 
@@ -178,4 +235,4 @@ export function createLauncherConfigTemplate(baseSettings = {}) {
   return JSON.stringify(config, null, 2);
 }
 
-export { DEFAULT_LAUNCHER_CONFIG, DEFAULT_AGENT_DEFAULTS };
+export { DEFAULT_LAUNCHER_CONFIG, DEFAULT_AGENT_DEFAULTS, DEFAULT_AGENT_TELEMETRY };

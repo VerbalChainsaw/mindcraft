@@ -37,10 +37,14 @@ const argv = yargs(args)
     })
     .argv;
 
-(async () => {
+void (async () => {
     try {
+        const connectionToken = process.env.MINDCRAFT_AGENT_TOKEN;
+        if (!connectionToken) {
+            throw new Error('MindServer agent capability is missing.');
+        }
         console.log('Connecting to MindServer');
-        await serverProxy.connect(argv.name, argv.port);
+        await serverProxy.connect(argv.name, argv.port, connectionToken);
         console.log('Starting agent');
         const agent = new Agent();
         serverProxy.setAgent(agent);

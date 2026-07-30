@@ -1,4 +1,5 @@
 import { sendOutputToServer } from './mindserver_proxy.js';
+import { validateAgentName } from '../utils/agent-name.js';
 
 // Definitions of error types, keywords, and full human-readable messages.
 const ERROR_DEFINITIONS = {
@@ -85,12 +86,12 @@ export function handleDisconnection(agentName, reason) {
 
 // Validates name format.
 export function validateNameFormat(name) {
-    if (!name || !/^[a-zA-Z0-9_]{3,16}$/.test(name)) {
+    const result = validateAgentName(name);
+    if (!result.success) {
         return { 
             success: false, 
-            // Added [LoginGuard] prefix here for consistency
-            msg: `[LoginGuard] Invalid name '${name}'. Must be 3-16 alphanumeric/underscore characters.` 
+            msg: `[LoginGuard] ${result.error}`
         };
     }
-    return { success: true };
+    return { success: true, name: result.name };
 }

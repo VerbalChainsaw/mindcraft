@@ -402,7 +402,7 @@ export class Task {
             agentGoal += "You have to collaborate with other agents/bots, namely " + this.available_agents.filter(n => n !== this.name).join(', ') + " to complete the task as soon as possible by dividing the work among yourselves.";
             console.log(`Setting goal for agent ${this.agent.count_id}: ${agentGoal}`);
         }
-        await executeCommand(this.agent, `!goal("${agentGoal}")`);
+        await executeCommand(this.agent, `!goal("${agentGoal}")`, { owner: 'job' });
     }
 
     async initBotTask() {
@@ -503,7 +503,11 @@ export class Task {
                 console.log('No other agents found. Task unsuccessful.');
                 this.agent.killAll();
             }
-            await executeCommand(this.agent, `!startConversation("${other_name}", "${this.data.conversation}")`);
+            await executeCommand(
+                this.agent,
+                `!startConversation("${other_name}", "${this.data.conversation}")`,
+                { owner: 'job' },
+            );
         }
         await this.setAgentGoal();
     }

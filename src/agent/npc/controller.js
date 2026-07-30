@@ -66,6 +66,7 @@ export class NPCContoller {
         }
 
         this.agent.bot.on('idle', async () => {
+            if (this.agent.runtime?.autonomy === 'command') return;
             if (this.data.goals.length === 0 && !this.data.curr_goal) return;
             // Wait a while for inputs before acting independently
             await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -105,8 +106,8 @@ export class NPCContoller {
     async executeNext() {
         if (!this.agent.isIdle()) return;
         await this.agent.actions.runAction('npc:moveAway', async () => {
-            await skills.moveAway(this.agent.bot, 2);
-        });
+            return await skills.moveAway(this.agent.bot, 2);
+        }, { owner: 'job' });
 
         if (!this.data.do_routine || this.agent.bot.time.timeOfDay < 13000) { 
             // Exit any buildings
@@ -115,9 +116,10 @@ export class NPCContoller {
                 let door_pos = this.getBuildingDoor(building);
                 if (door_pos) {
                     await this.agent.actions.runAction('npc:exitBuilding', async () => {
-                        await skills.useDoor(this.agent.bot, door_pos);
-                        await skills.moveAway(this.agent.bot, 2); // If the bot is too close to the building it will try to enter again
-                    });
+                        const traversed = await skills.useDoor(this.agent.bot, door_pos);
+                        if (!traversed) return false;
+                        return await skills.moveAway(this.agent.bot, 2); // If the bot is too close to the building it will try to enter again
+                    }, { owner: 'job' });
                 }
             }
 
@@ -133,14 +135,14 @@ export class NPCContoller {
             if (this.data.home !== null && (building === null || building != this.data.home)) {
                 let door_pos = this.getBuildingDoor(this.data.home);
                 await this.agent.actions.runAction('npc:returnHome', async () => {
-                    await skills.useDoor(this.agent.bot, door_pos);
-                });
+                    return await skills.useDoor(this.agent.bot, door_pos);
+                }, { owner: 'job' });
             }
 
             // Go to bed
             await this.agent.actions.runAction('npc:bed', async () => {
-                await skills.goToBed(this.agent.bot);
-            });
+                return await skills.goToBed(this.agent.bot);
+            }, { owner: 'job' });
         }
 
         if (this.agent.isIdle())
@@ -178,13 +180,15 @@ export class NPCContoller {
                     );
                 } else {
                     res = await this.build_goal.executeNext(this.constructions[goal.name]);
-                    this.data.built[goal.name] = {
-                        name: goal.name,
-                        position: res.position,
-                        orientation: res.orientation
-                    };
+                    if (res.position) {
+                        this.data.built[goal.name] = {
+                            name: goal.name,
+                            position: res.position,
+                            orientation: res.orientation
+                        };
+                    }
                 }
-                if (Object.keys(res.missing).length === 0) {
+                if (res.complete === true) {
                     this.data.home = goal.name;
                 }
                 for (let block_name in res.missing) {
@@ -195,7 +199,7 @@ export class NPCContoller {
                 }
                 if (res.acted) {
                     acted = true;
-                    this.last_goals[goal.name] = Object.keys(res.missing).length === 0;
+                    this.last_goals[goal.name] = res.complete === true;
                     break;
                 }
             }

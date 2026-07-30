@@ -85,6 +85,8 @@ function applyLauncherConfig(defaults, launcherConfig) {
     load_memory: normalizeBoolean(agentDefaults.load_memory, defaults.load_memory),
     speak: normalizeBoolean(agentDefaults.speak, defaults.speak),
     chat_ingame: normalizeBoolean(agentDefaults.chat_ingame, defaults.chat_ingame),
+    allow_vision: normalizeBoolean(agentDefaults.allow_vision, defaults.allow_vision),
+    render_bot_view: normalizeBoolean(agentDefaults.render_bot_view, defaults.render_bot_view),
   };
 }
 

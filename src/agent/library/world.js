@@ -403,6 +403,23 @@ export async function isClearPath(bot, target) {
     return path.status === 'success';
 }
 
+export function hasLineOfSightToEntity(bot, entity) {
+    if (!bot?.entity?.position || !entity?.position || !bot.world?.raycast) return null;
+    if (!bot.blockAt?.(entity.position)) return null;
+
+    const origin = bot.entity.position.offset(0, Number(bot.entity.eyeHeight) || 1.62, 0);
+    const entityHeight = Math.max(0.6, Number(entity.height) || Number(entity.eyeHeight) || 1.8);
+    const samples = [0.2, 0.55, 0.9].map(ratio => entity.position.offset(0, entityHeight * ratio, 0));
+    for (const sample of samples) {
+        const direction = sample.minus(origin);
+        const distance = direction.norm();
+        if (!Number.isFinite(distance)) continue;
+        if (distance <= 0.25) return true;
+        if (!bot.world.raycast(origin, direction.scaled(1 / distance), distance)) return true;
+    }
+    return false;
+}
+
 export function shouldPlaceTorch(bot) {
     if (!bot.modes.isOn('torch_placing') || bot.interrupt_code) return false;
     const pos = getPosition(bot);

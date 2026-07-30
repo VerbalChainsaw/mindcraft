@@ -1,0 +1,114 @@
+{
+  "mode": "live",
+  "baseUrl": "http://localhost:8080",
+  "bot": "MindcraftBot",
+  "startedAt": "2026-07-29T20:24:04.129Z",
+  "selectedCases": [
+    "bot-lifecycle"
+  ],
+  "results": [
+    {
+      "id": "bot-lifecycle",
+      "passed": true,
+      "observed": {
+        "initial": {
+          "name": "MindcraftBot",
+          "in_game": false,
+          "retryable": true,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": false,
+          "connection_stage": "stopped",
+          "readiness_stage": "stopped",
+          "provider": "qwen",
+          "model": "ollama/qwen2.5:3b",
+          "state": "stopped",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "worldOccupancy": {
+          "provedEmpty": false,
+          "authorizedOverride": true,
+          "playerCount": null,
+          "players": []
+        },
+        "ready": {
+          "name": "MindcraftBot",
+          "in_game": true,
+          "retryable": false,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": true,
+          "connection_stage": "world_ready",
+          "readiness_stage": "world_ready",
+          "provider": "qwen",
+          "model": "ollama/qwen2.5:3b",
+          "state": "running",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "command": {
+          "success": true,
+          "agentName": "MindcraftBot",
+          "acceptedAt": 1785356698361
+        },
+        "actionResult": {
+          "phase": "succeeded",
+          "code": "completed",
+          "label": "action:stay",
+          "detail": "Action output: Stayed for 1 seconds.",
+          "target": null,
+          "retryable": false,
+          "finishedAt": 1785356699402
+        },
+        "sampledAt": 1785356699468,
+        "outputs": [
+          "No response data.",
+          "*ADMIN used stay*",
+          "Action output: Stayed for 1 seconds."
+        ],
+        "cleanupAttempts": [
+          {
+            "required": true,
+            "attempted": true,
+            "success": true,
+            "acknowledgement": {
+              "success": true,
+              "error": null,
+              "agents": [
+                {
+                  "name": "MindcraftBot",
+                  "stopped": true,
+                  "forced": false,
+                  "error": null
+                }
+              ]
+            },
+            "stopped": {
+              "name": "MindcraftBot",
+              "in_game": false,
+              "retryable": true,
+              "viewerEnabled": false,
+              "viewerAvailable": false,
+              "viewerPort": null,
+              "socket_connected": false,
+              "connection_stage": "stopped",
+              "readiness_stage": "stopped",
+              "provider": "qwen",
+              "model": "ollama/qwen2.5:3b",
+              "state": "stopped",
+              "lastError": null,
+              "diagnostics": []
+            },
+            "error": null
+          }
+        ],
+        "elapsedMs": 55903
+      }
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-07-29T20:25:00.034Z"
+}

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { EventEmitter, once } from 'node:events';
 import test from 'node:test';
+import { io } from 'socket.io-client';
 
 import * as Mindcraft from '../../src/mindcraft/mindcraft.js';
 import { createMindServer } from '../../src/mindcraft/mindserver.js';
 import { swarm } from '../../src/mindcraft/swarm/swarm.js';
+import { AgentProcess } from '../../src/process/agent_process.js';
 
 function settingsFor(agentName) {
   return {
@@ -32,7 +35,9 @@ function createActiveProcess() {
   return {
     state: 'running',
     running: true,
+    retryable: false,
     lastError: null,
+    connectionToken: 'active-process-capability',
     stopCalls: 0,
     forceRestartCalls: 0,
     start() {
@@ -49,6 +54,12 @@ function createActiveProcess() {
     forceRestart() {
       this.forceRestartCalls += 1;
       return Promise.resolve(this);
+    },
+    markReady() {
+      this.state = 'running';
+      this.running = true;
+      this.retryable = false;
+      return true;
     },
     waitForExit() {
       return exitWait;
@@ -135,9 +146,27 @@ async function closeMindServer(server) {
   swarm.stop();
 }
 
+function connect(url, options = {}) {
+  return io(url, {
+    transports: ['websocket'],
+    reconnection: false,
+    forceNew: true,
+    ...options,
+  });
+}
+
+function publicLifecycleFields(agent) {
+  return {
+    retryable: agent.retryable,
+    viewerEnabled: agent.viewerEnabled,
+    viewerAvailable: agent.viewerAvailable,
+    viewerPort: agent.viewerPort,
+  };
+}
+
 test('Given multiple queued replacements, when the owner exits, then only the latest replacement installs and starts remain pending until finalization', async () => {
   // Given
-  const agentName = 'latest-finalization-agent';
+  const agentName = 'LatestFinalBot';
   const activeProcess = createActiveProcess();
   await createActiveAgent(agentName, activeProcess);
   const first = Mindcraft.registerBlockedAgent(
@@ -178,7 +207,7 @@ test('Given multiple queued replacements, when the owner exits, then only the la
 
 test('Given a queued replacement, when destruction supersedes it before exit, then public ownership is removed only after the original owner exits', async () => {
   // Given
-  const agentName = 'destroy-finalization-agent';
+  const agentName = 'DestroyFinalBot';
   const activeProcess = createActiveProcess();
   const mindServer = await createMindServer(false, 0);
   await createActiveAgent(agentName, activeProcess);
@@ -214,7 +243,7 @@ test('Given a queued replacement, when destruction supersedes it before exit, th
 
 test('Given a stale startup, when a replacement is queued before it completes, then the stale completion preserves public ownership until its owner exits', async () => {
   // Given
-  const agentName = 'stale-finalization-agent';
+  const agentName = 'StaleFinalBot';
   const deferred = createDeferredStartProcess();
   const mindServer = await createMindServer(false, 0);
   Mindcraft.registerBlockedAgent(
@@ -258,6 +287,148 @@ test('Given a stale startup, when a replacement is queued before it completes, t
     await deferred.resolveExit();
     await staleStart.catch(() => {});
     Mindcraft.destroyAgent(agentName);
+    await closeMindServer(mindServer);
+  }
+});
+
+test('Given a runtime startup reaches the exact readiness deadline, when it fails, then its owner and public summary remain retryable with a disabled viewer', async () => {
+  const agentName = 'TimeoutPublicBot';
+  const child = new EventEmitter();
+  child.killed = false;
+  child.kill = (signal) => {
+    child.killed = true;
+    queueMicrotask(() => child.emit('exit', null, signal));
+    return true;
+  };
+  const owner = new AgentProcess(agentName, 8080, {
+    readyTimeoutMs: 5_000,
+    spawnChild: () => {
+      setImmediate(() => child.emit('spawn'));
+      return child;
+    },
+    terminateProcessTree: () => ({ success: true }),
+  });
+  const mindServer = await createMindServer(false, 0);
+
+  try {
+    const result = await Mindcraft.createAgent({
+      ...settingsFor(agentName),
+      render_bot_view: false,
+    }, {
+      viewerPort: 3900,
+      resolveServer: () => Promise.resolve({ host: '127.0.0.1', port: 25565, version: '1.21.8' }),
+      createAgentProcess: () => owner,
+    });
+    const [publicAgent] = await listPublicAgents(mindServer.address().port);
+
+    assert.deepEqual(result, {
+      success: false,
+      error: `Agent '${agentName}' did not become world-ready within 5 seconds.`,
+    });
+    assert.equal(owner.state, 'failed');
+    assert.equal(owner.retryable, true);
+    assert.equal(publicAgent.state, 'failed');
+    assert.equal(publicAgent.lastError, result.error);
+    assert.deepEqual(publicLifecycleFields(publicAgent), {
+      retryable: true,
+      viewerEnabled: false,
+      viewerAvailable: false,
+      viewerPort: null,
+    });
+  } finally {
+    await new Promise((resolve) => setImmediate(resolve));
+    Mindcraft.destroyAgent(agentName);
+    await closeMindServer(mindServer);
+  }
+});
+
+test('Given owner settings enable a viewer, when the agent becomes in-game, then REST and agents-status share the same available viewer projection', async () => {
+  const agentName = 'ViewerPublicBot';
+  const activeProcess = createActiveProcess();
+  const mindServer = await createMindServer(false, 0);
+  await Mindcraft.createAgent({
+    ...settingsFor(agentName),
+    render_bot_view: true,
+  }, {
+    viewerPort: 3901,
+    resolveServer: () => Promise.resolve({ host: '127.0.0.1', port: 25565, version: '1.21.8' }),
+    createAgentProcess: () => activeProcess,
+  });
+  const socket = connect(`http://localhost:${mindServer.address().port}`, {
+    auth: {
+      role: 'agent',
+      agentName,
+      token: activeProcess.connectionToken,
+    },
+  });
+
+  try {
+    await once(socket, 'connect');
+    let statusUpdate = once(socket, 'agents-status');
+    socket.emit('connect-agent-process', agentName);
+    await statusUpdate;
+    statusUpdate = once(socket, 'agents-status');
+    socket.emit('login-agent', agentName);
+    await statusUpdate;
+    statusUpdate = once(socket, 'agents-status');
+    const readyResult = new Promise((resolve) => socket.emit('ready-agent', agentName, resolve));
+    const [[statusAgents], ready] = await Promise.all([statusUpdate, readyResult]);
+    const [restAgent] = await listPublicAgents(mindServer.address().port);
+    const statusAgent = statusAgents.find(({ name }) => name === agentName);
+
+    assert.deepEqual(ready, { success: true, error: null });
+    assert.deepEqual(statusAgent, restAgent);
+    assert.deepEqual(publicLifecycleFields(restAgent), {
+      retryable: false,
+      viewerEnabled: true,
+      viewerAvailable: true,
+      viewerPort: 3901,
+    });
+  } finally {
+    socket.disconnect();
+    await activeProcess.resolveExit();
+    Mindcraft.destroyAgent(agentName);
+    await closeMindServer(mindServer);
+  }
+});
+
+test('Given blocked lifecycle owners, when retryability is refused or recomputed, then the public owner value stays authoritative', async () => {
+  const fixedName = 'FixedBlockedBot';
+  const recheckedName = 'RecheckBlockBot';
+  const mindServer = await createMindServer(false, 0);
+  Mindcraft.registerBlockedAgent(
+    settingsFor(fixedName),
+    blockedDescriptor(fixedName, 'Duplicate agent name.', false),
+  );
+  Mindcraft.registerBlockedAgent(
+    {
+      ...settingsFor(recheckedName),
+      profile: { name: recheckedName, model: 'unsupported/model' },
+    },
+    blockedDescriptor(recheckedName, 'Readiness must be rechecked.', true),
+  );
+
+  try {
+    const before = await listPublicAgents(mindServer.address().port);
+    assert.equal(before.find(({ name }) => name === fixedName).retryable, false);
+    assert.equal(before.find(({ name }) => name === recheckedName).retryable, true);
+
+    assert.deepEqual(await Mindcraft.startAgent(fixedName), {
+      success: false,
+      error: 'Duplicate agent name.',
+    });
+    const rechecked = await Mindcraft.startAgent(recheckedName);
+    const after = await listPublicAgents(mindServer.address().port);
+
+    assert.equal(rechecked.success, false);
+    assert.match(rechecked.error, /unsupported chat model provider/i);
+    assert.equal(Mindcraft.getAgentProcess(fixedName).retryable, false);
+    assert.equal(Mindcraft.getAgentProcess(recheckedName).retryable, false);
+    assert.equal(after.find(({ name }) => name === fixedName).retryable, false);
+    assert.equal(after.find(({ name }) => name === recheckedName).retryable, false);
+  } finally {
+    Mindcraft.destroyAgent(fixedName);
+    Mindcraft.destroyAgent(recheckedName);
     await closeMindServer(mindServer);
   }
 });

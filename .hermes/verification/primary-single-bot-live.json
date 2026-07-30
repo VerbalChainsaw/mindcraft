@@ -1,0 +1,67 @@
+{
+  "mode": "live",
+  "baseUrl": "http://localhost:8080",
+  "bot": "MindcraftBot",
+  "startedAt": "2026-07-29T01:57:30.319Z",
+  "selectedCases": [
+    "bot-lifecycle"
+  ],
+  "results": [
+    {
+      "id": "bot-lifecycle",
+      "passed": true,
+      "observed": {
+        "ready": {
+          "name": "MindcraftBot",
+          "in_game": true,
+          "viewerPort": 3000,
+          "socket_connected": true,
+          "connection_stage": "world_ready",
+          "readiness_stage": "world_ready",
+          "provider": "qwen",
+          "model": "ollama/qwen2.5:3b",
+          "state": "running",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "command": {
+          "success": true,
+          "agentName": "MindcraftBot",
+          "acceptedAt": 1785290272260
+        },
+        "actionResult": {
+          "phase": "succeeded",
+          "code": "completed",
+          "label": "action:stay",
+          "detail": "Action output: Stayed for 1.499 seconds.",
+          "target": null,
+          "retryable": false,
+          "finishedAt": 1785290273797
+        },
+        "sampledAt": 1785290274047,
+        "outputs": [
+          "Hello world, my name is MinerBot. How can I assist you today?",
+          "*ADMIN used stay*",
+          "Action output: Stayed for 1.499 seconds.",
+          "Fighting phantom!"
+        ],
+        "stopped": {
+          "name": "MindcraftBot",
+          "in_game": false,
+          "viewerPort": 3000,
+          "socket_connected": false,
+          "connection_stage": "stopped",
+          "readiness_stage": "stopped",
+          "provider": "qwen",
+          "model": "ollama/qwen2.5:3b",
+          "state": "stopped",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "elapsedMs": 24482
+      }
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-07-29T01:57:54.804Z"
+}

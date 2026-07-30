@@ -1,6 +1,8 @@
-import { readFileSync, mkdirSync, writeFileSync} from 'fs';
+import { readFileSync, mkdirSync } from 'fs';
 import { Examples } from '../utils/examples.js';
-import { getCommandDocs } from '../agent/commands/index.js';
+import { writeJsonAtomicSync } from '../utils/atomic-file.js';
+import { containsCommand, getCommandDocs } from '../agent/commands/index.js';
+import { identityPrompt } from '../agent/runtime/identity-config.js';
 import { SkillLibrary } from "../agent/library/skill_library.js";
 import { stringifyTurns } from '../utils/text.js';
 import { getCommand } from '../agent/commands/index.js';
@@ -8,10 +10,36 @@ import settings from '../agent/settings.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { selectAPI, createModel } from './_model_map.js';
+import { createModel, resolveConfiguredModel } from './_model_map.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const ACTION_REQUEST_PATTERN = /\b(?:attack|break|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|run|search|stay|stop|turn|use|walk|wait)\b/i;
+const GAMEPLAY_OPERATING_RULES = [
+    'GAMEPLAY OPERATING RULES:',
+    'Treat SITUATIONAL_AWARENESS, INVENTORY, command results, and the connected Minecraft registry as authoritative.',
+    'For an unfamiliar item or block, use !inspectMinecraft with its name; use !getCraftingPlan when a recipe chain is unclear.',
+    'For complex work, compose available primitives: observe, preflight tools/materials/reachability/hazards, act once, verify the result, then adapt.',
+    'Use canonical Minecraft names from inspection. Never invent an item, tool requirement, recipe, location, action result, or completed step.',
+].join('\n');
+
+function ensurePromptContext(template, placeholders) {
+    let result = String(template || '')
+        .replaceAll('__STATS__', '$STATS')
+        .replaceAll('__INVENTORY__', '$INVENTORY');
+    for (const placeholder of placeholders) {
+        if (!result.includes(placeholder)) result += `\n${placeholder}`;
+    }
+    return result;
+}
+
+function latestMessageRequestsAction(messages) {
+    const latest = messages?.slice().reverse().find(message => message.role === 'user');
+    if (!latest?.content) return false;
+    const content = latest.content.replace(/^[^:]{1,64}:\s*/, '').trim();
+    if (/^(?:how|what|where|when|why)\b/i.test(content)) return false;
+    return ACTION_REQUEST_PATTERN.test(content);
+}
 
 export class Prompter {
     constructor(agent, profile) {
@@ -56,11 +84,11 @@ export class Prompter {
         if (this.profile.max_tokens)
             max_tokens = this.profile.max_tokens;
 
-        let chat_model_profile = selectAPI(this.profile.model);
+        let chat_model_profile = resolveConfiguredModel(this.profile, 'model');
         this.chat_model = createModel(chat_model_profile);
 
         if (this.profile.code_model) {
-            let code_model_profile = selectAPI(this.profile.code_model);
+            let code_model_profile = resolveConfiguredModel(this.profile, 'code_model');
             this.code_model = createModel(code_model_profile);
         }
         else {
@@ -68,7 +96,7 @@ export class Prompter {
         }
 
         if (this.profile.vision_model) {
-            let vision_model_profile = selectAPI(this.profile.vision_model);
+            let vision_model_profile = resolveConfiguredModel(this.profile, 'vision_model');
             this.vision_model = createModel(vision_model_profile);
         }
         else {
@@ -79,7 +107,7 @@ export class Prompter {
         let embedding_model_profile = null;
         if (this.profile.embedding) {
             try {
-                embedding_model_profile = selectAPI(this.profile.embedding);
+                embedding_model_profile = resolveConfiguredModel(this.profile, 'embedding');
             } catch (e) {
                 embedding_model_profile = null;
             }
@@ -87,18 +115,24 @@ export class Prompter {
         if (embedding_model_profile) {
             this.embedding_model = createModel(embedding_model_profile);
         }
+        else if (chat_model_profile.api === 'codex') {
+            // Codex OAuth is chat-only. Keep the existing complete lexical
+            // example and skill-doc ranking rather than attempting embeddings.
+            this.embedding_model = null;
+        }
         else {
-            this.embedding_model = createModel({api: chat_model_profile.api});
+            this.embedding_model = createModel({
+                api: chat_model_profile.api,
+                model: null,
+                url: chat_model_profile.url,
+                params: chat_model_profile.params,
+            });
         }
 
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
         mkdirSync(`./bots/${name}`, { recursive: true });
-        writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
-            if (err) {
-                throw new Error('Failed to save profile:', err);
-            }
-            console.log("Copy profile saved.");
-        });
+        writeJsonAtomicSync(`./bots/${name}/last_profile.json`, this.profile, 4);
+        console.log("Copy profile saved.");
     }
 
     getName() {
@@ -111,6 +145,13 @@ export class Prompter {
 
     async initExamples() {
         try {
+            const preflightModels = [...new Set([
+                this.chat_model,
+                this.code_model,
+                this.vision_model,
+                this.embedding_model,
+            ].filter(Boolean))];
+            await Promise.all(preflightModels.map(model => model.preflight?.()));
             this.convo_examples = new Examples(this.embedding_model, settings.num_examples);
             this.coding_examples = new Examples(this.embedding_model, settings.num_examples);
             
@@ -134,13 +175,61 @@ export class Prompter {
         }
     }
 
+    cancelPendingModelGeneration() {
+        const models = new Set([
+            this.chat_model,
+            this.code_model,
+            this.vision_model,
+            this.embedding_model,
+        ].filter(Boolean));
+        let cancelled = 0;
+        for (const model of models) {
+            cancelled += Number(model.cancelPending?.() || 0);
+        }
+        return cancelled;
+    }
+
+    dispose() {
+        if (this._disposePromise) return this._disposePromise;
+        const models = [...new Set([
+            this.chat_model,
+            this.code_model,
+            this.vision_model,
+            this.embedding_model,
+        ].filter(Boolean))];
+        this._disposePromise = Promise.allSettled(models.map(model => model.dispose?.()))
+            .then(() => undefined);
+        return this._disposePromise;
+    }
+
     async replaceStrings(prompt, messages, examples=null, to_summarize=[], last_goals=null) {
-        prompt = prompt.replaceAll('$NAME', this.agent.name);
+        const characterName = this.agent.runtime?.identity?.displayName || this.agent.name;
+        prompt = prompt.replaceAll('$NAME', characterName);
+        if (prompt.includes('$PERSONA')) {
+            const persona = this.agent.getPersona?.();
+            const runtime = this.agent.runtime;
+            const characterIdentity = identityPrompt(runtime?.identity || this.profile.identity);
+            const traits = [runtime?.role, runtime?.identity?.attitude, runtime?.identity?.style, ...(runtime?.identity?.specialties || [])]
+                .filter(Boolean)
+                .join('; ');
+            const roleFocus = (runtime?.rolePreset?.focus || [])
+                .map(focus => String(focus).replace(/_/g, ' '))
+                .filter(Boolean)
+                .join(', ');
+            const characterLines = [
+                characterIdentity,
+                persona ? `Character brief: ${persona}` : '',
+                traits ? `Role configuration: ${traits}` : '',
+                roleFocus ? `Operational focus: ${roleFocus}.` : '',
+            ].filter(Boolean);
+            prompt = prompt.replaceAll(
+                '$PERSONA',
+                `CHARACTER AND ROLE:\n${characterLines.join('\n') || 'Be a concise, capable Minecraft companion.'}\nStay in character while remaining truthful about perception, capabilities, command results, and completed actions.\n${GAMEPLAY_OPERATING_RULES}`,
+            );
+        }
 
         if (prompt.includes('$STATS')) {
-            let stats = await getCommand('!stats').perform(this.agent) + '\n';
-            stats += await getCommand('!entities').perform(this.agent) + '\n';
-            stats += await getCommand('!nearbyBlocks').perform(this.agent);
+            const stats = await getCommand('!awareness').perform(this.agent);
             prompt = prompt.replaceAll('$STATS', stats);
         }
         if (prompt.includes('$INVENTORY')) {
@@ -165,23 +254,31 @@ export class Prompter {
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+            prompt = prompt.replaceAll('$MEMORY', [
+                this.agent.history.memory,
+                this.agent.memory_bank?.personal?.getPromptSummary?.() || '',
+            ].filter(Boolean).join('\n'));
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))
             prompt = prompt.replaceAll('$CONVO', 'Recent conversation:\n' + stringifyTurns(messages));
         if (prompt.includes('$SELF_PROMPT')) {
             // if active or paused, show the current goal
-            let self_prompt = !this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"\n` : '';
+            let self_prompt = !this.agent.self_prompter.isStopped()
+                ? [
+                    `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"`,
+                    this.agent.self_prompter.getProgressPrompt?.() || '',
+                ].filter(Boolean).join('\n')
+                : '';
             prompt = prompt.replaceAll('$SELF_PROMPT', self_prompt);
         }
         if (prompt.includes('$LAST_GOALS')) {
             let goal_text = '';
             for (let goal in last_goals) {
                 if (last_goals[goal])
-                    goal_text += `You recently successfully completed the goal ${goal}.\n`
+                    goal_text += `You recently successfully completed the goal ${goal}.\n`;
                 else
-                    goal_text += `You recently failed to complete the goal ${goal}.\n`
+                    goal_text += `You recently failed to complete the goal ${goal}.\n`;
             }
             prompt = prompt.replaceAll('$LAST_GOALS', goal_text.trim());
         }
@@ -214,8 +311,11 @@ export class Prompter {
     async promptConvo(messages) {
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
+        const requiresActionCommand = latestMessageRequestsAction(messages);
+        let actionCorrection = '';
 
-        for (let i = 0; i < 3; i++) { // try 3 times to avoid hallucinations
+        const maxTurns = this.agent.runtime?.limits?.maxPromptTurns ?? 3;
+        for (let i = 0; i < maxTurns; i++) { // retry only within this profile's budget
             await this.checkCooldown();
             if (current_msg_time !== this.most_recent_msg_time) {
                 return '';
@@ -223,6 +323,7 @@ export class Prompter {
 
             let prompt = this.profile.conversing;
             prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
+            prompt += actionCorrection;
             let generation;
 
             try {
@@ -251,13 +352,22 @@ export class Prompter {
             }
 
             if (generation?.includes('</think>')) {
-                const [_, afterThink] = generation.split('</think>')
-                generation = afterThink
+                const [_, afterThink] = generation.split('</think>');
+                generation = afterThink;
+            }
+
+            if (requiresActionCommand && !containsCommand(generation)) {
+                console.warn('LLM described or answered an action request without a command. Trying again...');
+                actionCorrection = '\nCRITICAL RETRY: The latest player message requests a physical gameplay action. Your previous attempt did not execute anything. Respond with a valid !command, or briefly state the exact missing capability. Do not promise, narrate, roleplay, or claim the action happened.';
+                continue;
             }
 
             return generation;
         }
 
+        if (requiresActionCommand) {
+            return 'I could not map that request to a safe gameplay command. Ask me to inspect with !awareness or use a specific available command.';
+        }
         return '';
     }
 
@@ -277,6 +387,54 @@ export class Prompter {
         return resp;
     }
 
+    async promptAutonomy(messages) {
+        // Drives continuous self-play. A profile may ship its own
+        // 'autonomy' prompt; otherwise we derive one from the standard
+        // 'conversing' prompt so behaviour stays consistent.
+        await this.checkCooldown();
+        const base = (this.profile.autonomy && this.profile.autonomy.trim())
+            ? this.profile.autonomy
+            : this.profile.conversing;
+        let template = ensurePromptContext(base, [
+            '$PERSONA',
+            '$SELF_PROMPT',
+            '$MEMORY',
+            '$STATS',
+            '$INVENTORY',
+            '$COMMAND_DOCS',
+            '$CONVO',
+        ]);
+        template = template.replaceAll('$COMMAND_DOCS', getCommandDocs(this.agent, { compact: true }));
+        let prompt = await this.replaceStrings(template, messages, this.convo_examples);
+        return await this._generateAutonomy(prompt);
+    }
+
+    async _generateAutonomy(prompt) {
+        const requiresActionCommand = true; // autonomy turns MUST act
+        let actionCorrection = '';
+        const maxTurns = this.agent.runtime?.limits?.maxPromptTurns ?? 3;
+        for (let i = 0; i < maxTurns; i++) {
+            await this.checkCooldown();
+            let generation = await this.chat_model.sendRequest([], prompt + actionCorrection);
+            if (typeof generation !== 'string') {
+                console.error('Error: Autonomy generation is not a string', generation);
+                return '';
+            }
+            console.log(`${this.agent.name} autonomy response:`, generation);
+            if (generation?.includes('</think>')) {
+                const [_, afterThink] = generation.split('</think>');
+                generation = afterThink;
+            }
+            if (!containsCommand(generation)) {
+                console.warn('Autonomy turn produced no !command. Retrying with stronger instruction...');
+                actionCorrection = '\nCRITICAL: Your previous response had no command. Respond with exactly one valid listed command that makes progress, such as !awareness, !inspectMinecraft("iron_ore"), !collectWood(8), or !goToPlayer("player", 4). Use double quotes for strings. Do not narrate.';
+                continue;
+            }
+            return generation;
+        }
+        return 'I could not decide on a safe action this turn.';
+    }
+
     async promptMemSaving(to_summarize) {
         await this.checkCooldown();
         let prompt = this.profile.saving_memory;
@@ -284,7 +442,7 @@ export class Prompter {
         let resp = await this.chat_model.sendRequest([], prompt);
         await this._saveLog(prompt, to_summarize, resp, 'memSaving');
         if (resp?.includes('</think>')) {
-            const [_, afterThink] = resp.split('</think>')
+            const [_, afterThink] = resp.split('</think>');
             resp = afterThink;
         }
         return resp;
@@ -300,6 +458,22 @@ export class Prompter {
         return res.trim().toLowerCase() === 'respond';
     }
 
+    async phraseReaction(reaction) {
+        await this.checkCooldown();
+        const facts = reaction?.event || {};
+        const prompt = [
+            'Write one natural Minecraft reaction using only the immutable facts in the JSON below.',
+            'Do not add names, entities, directions, counts, coordinates, outcomes, or commands.',
+            'Keep it under 140 characters. Return only the reaction text.',
+            `Tone hint: ${String(reaction?.tone || 'steady').slice(0, 32)}`,
+            `Facts: ${JSON.stringify(facts)}`,
+        ].join('\n');
+        let response = await this.chat_model.sendRequest([], prompt);
+        if (typeof response !== 'string') return '';
+        if (response.includes('</think>')) response = response.split('</think>').at(-1);
+        return response.replace(/[\r\n]+/g, ' ').trim().slice(0, 180);
+    }
+
     async promptVision(messages, imageBuffer) {
         await this.checkCooldown();
         let prompt = this.profile.image_analysis;
@@ -313,7 +487,7 @@ export class Prompter {
         system_message = await this.replaceStrings(system_message, messages);
 
         let user_message = 'Use the below info to determine what goal to target next\n\n';
-        user_message += '$LAST_GOALS\n$STATS\n$INVENTORY\n$CONVO'
+        user_message += '$LAST_GOALS\n$STATS\n$INVENTORY\n$CONVO';
         user_message = await this.replaceStrings(user_message, messages, null, null, last_goals);
         let user_messages = [{role: 'user', content: user_message}];
 

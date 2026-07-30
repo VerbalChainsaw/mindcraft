@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
+import {
+  executeModeAction,
+  runBoundedUnstuckRecovery,
+} from '../../src/agent/modes.js';
+import {
+  Agent,
+  configureSurvivalOwnership,
+  emitStartupMilestone,
+  shouldSeedLegacyDefaultGoal,
+} from '../../src/agent/agent.js';
 import * as Mindcraft from '../../src/mindcraft/mindcraft.js';
-import { AgentProcess } from '../../src/process/agent_process.js';
-import './profile-preflight.test.js';
-
+import { Prompter } from '../../src/models/prompter.js';
+import { AgentProcess, sanitizeAgentDiagnostic } from '../../src/process/agent_process.js';
 class FakeChildProcess extends EventEmitter {
   constructor(killResults = [true]) {
     super();
@@ -19,6 +29,11 @@ class FakeChildProcess extends EventEmitter {
     const accepted = this.killResults.shift() ?? false;
     if (accepted) this.killed = true;
     return accepted;
+  }
+
+  emit(eventName, ...args) {
+    if (eventName === 'spawn' && !this.pid) this.pid = 1000;
+    return super.emit(eventName, ...args);
   }
 }
 
@@ -50,6 +65,68 @@ class FakeRegisteredAgentProcess {
   }
 }
 
+test('Given an unstuck movement that never settles, when its deadline expires, then movement is interrupted without killing the bot process', async () => {
+  const calls = {
+    clearControlStates: 0,
+    cleanKill: 0,
+    requestInterrupt: 0,
+  };
+  const agent = {
+    bot: {
+      clearControlStates() {
+        calls.clearControlStates += 1;
+      },
+    },
+    cleanKill() {
+      calls.cleanKill += 1;
+    },
+    requestInterrupt() {
+      calls.requestInterrupt += 1;
+    },
+  };
+
+  const result = await runBoundedUnstuckRecovery(agent, {
+    moveAway: () => new Promise(() => {}),
+    timeoutMs: 5,
+  });
+
+  assert.deepEqual(result, { success: false, reason: 'timed-out' });
+  assert.equal(calls.requestInterrupt, 1);
+  assert.equal(calls.clearControlStates, 1);
+  assert.equal(calls.cleanKill, 0);
+});
+
+test('Given a fire-and-forget mode action rejects, when it settles, then the rejection is contained and active state is cleared', async () => {
+  const originalConsoleError = console.error;
+  const reportedErrors = [];
+  console.error = message => reportedErrors.push(String(message));
+  const mode = { name: 'test-mode', active: false };
+  const agent = {
+    actions: {
+      currentActionLabel: '',
+      resume_func: null,
+      runAction: () => {
+        const error = new Error('expected test rejection');
+        error.name = 'PathStopped';
+        return Promise.reject(error);
+      },
+    },
+    self_prompter: {
+      isActive: () => false,
+      stopLoop() {},
+    },
+  };
+
+  try {
+    const result = await executeModeAction(mode, agent, async () => {});
+    assert.equal(result.success, false);
+    assert.equal(mode.active, false);
+    assert.match(reportedErrors.join('\n'), /expected test rejection/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
 function createChildFactory(children) {
   const calls = [];
   return {
@@ -65,6 +142,7 @@ function createChildFactory(children) {
 async function startFakeAgent(agentProcess, child) {
   const startup = agentProcess.start();
   child.emit('spawn');
+  agentProcess.markReady();
   await startup;
 }
 
@@ -79,6 +157,153 @@ test('Given an injected child factory, when an AgentProcess is constructed, then
 
   // Then
   assert.equal(agentProcess.spawnChild, spawnChild);
+});
+
+test('Given an agent process capability, when the child is spawned, then the capability is passed privately through the child environment', async () => {
+  const child = new FakeChildProcess();
+  child.stdout = new PassThrough();
+  let spawnOptions;
+  const agentProcess = new AgentProcess('BridgeBot', 8080, {
+    connectionToken: 'test-bridge-capability',
+    spawnChild: (_executable, _args, options) => {
+      spawnOptions = options;
+      return child;
+    },
+  });
+
+  const startup = agentProcess.start();
+  child.emit('spawn');
+  agentProcess.markReady();
+  await startup;
+
+  assert.equal(agentProcess.connectionToken, 'test-bridge-capability');
+  assert.equal(spawnOptions.env.MINDCRAFT_AGENT_TOKEN, 'test-bridge-capability');
+  assert.equal(spawnOptions.windowsHide, true);
+  assert.deepEqual(spawnOptions.stdio, ['ignore', 'inherit', 'pipe']);
+  assert.equal(child.stdout.listenerCount('data'), 0);
+});
+
+test('Given parent, fixed child milestones, and ordinary stderr, when startup fails, then diagnostics retain sanitized errors and ordered stage evidence', async () => {
+  const child = new FakeChildProcess();
+  child.stderr = new PassThrough();
+  let now = 1_000;
+  const agentProcess = new AgentProcess('DiagnosticBot', 8080, {
+    maxAutoRestarts: 0,
+    now: () => now,
+    spawnChild: () => child,
+  });
+
+  const startup = agentProcess.start();
+  now = 1_004;
+  child.emit('spawn');
+  now = 1_006;
+  child.stderr.write('[mindcraft-startup] settings_profile_ready\n');
+  child.stderr.write('api_key=super-secret-value\n');
+  child.stderr.write('Error: Ollama model unavailable\n');
+  child.stderr.write('[mindcraft-startup] login_callback arbitrary-value\n');
+  now = 1_007;
+  child.stderr.write('[mindcraft-startup] mineflayer_created\n');
+  now = 1_009;
+  agentProcess.markReadinessStage('bridge_connected');
+  now = 1_012;
+  agentProcess.markReadinessStage('minecraft_login');
+  child.stderr.write('[mindcraft-startup] login_callback\n');
+  now = 1_014;
+  child.stderr.write('[mindcraft-startup] spawn_callback\n');
+  now = 1_016;
+  child.stderr.write('[mindcraft-startup] handlers_ready\n');
+  now = 1_018;
+  agentProcess.markReady();
+  await startup;
+  now = 1_025;
+  child.emit('exit', 1, null);
+
+  assert.equal(agentProcess.state, 'failed');
+  assert.equal(agentProcess.lastError, 'Error: Ollama model unavailable');
+  assert.deepEqual(agentProcess.getDiagnostics(40), [
+    'startup +0ms: process_starting',
+    'startup +4ms: process_spawned',
+    'startup +6ms: child.settings_profile_ready',
+    'api_key=[redacted]',
+    'Error: Ollama model unavailable',
+    'startup +7ms: child.mineflayer_created',
+    'startup +9ms: bridge_connected',
+    'startup +12ms: minecraft_login',
+    'startup +12ms: child.login_callback',
+    'startup +14ms: child.spawn_callback',
+    'startup +16ms: child.handlers_ready',
+    'startup +18ms: world_ready',
+    'startup +25ms: failure',
+  ]);
+  const evidence = agentProcess.getDiagnostics(40).filter((line) => line.startsWith('startup +'));
+  const elapsed = evidence.map((line) => Number(/\+(\d+)ms/.exec(line)[1]));
+  assert.deepEqual(elapsed, [...elapsed].sort((first, second) => first - second));
+  assert.doesNotMatch(agentProcess.getDiagnostics(40).join('\n'), /arbitrary-value/i);
+  assert.equal(sanitizeAgentDiagnostic('Bearer abc123'), 'Bearer [redacted]');
+});
+
+test('Given repeated fixed startup markers, when evidence exceeds its limit, then only the newest bounded fixed-vocabulary entries remain', () => {
+  const child = new FakeChildProcess();
+  child.stderr = new PassThrough();
+  let now = 2_000;
+  const agentProcess = new AgentProcess('BoundedEvidence', 8080, {
+    now: () => now,
+    spawnChild: () => child,
+  });
+  agentProcess.start().catch(() => {});
+  child.emit('spawn');
+
+  for (let index = 0; index < 55; index += 1) {
+    now += 1;
+    const marker = index % 2 === 0 ? 'spawn_callback' : 'handlers_ready';
+    child.stderr.write(`[mindcraft-startup] ${marker}\n`);
+  }
+
+  const diagnostics = agentProcess.getDiagnostics(100);
+  assert.equal(diagnostics.length, 40);
+  assert.ok(diagnostics.every((line) => /^startup \+\d+ms: child\.(?:spawn_callback|handlers_ready)$/.test(line)));
+  const elapsed = diagnostics.map((line) => Number(/\+(\d+)ms/.exec(line)[1]));
+  assert.deepEqual(elapsed, [...elapsed].sort((first, second) => first - second));
+  agentProcess.stop();
+  child.emit('exit', null, 'SIGINT');
+});
+
+test('Given the child milestone writer, when arbitrary or secret-bearing values are requested, then only exact fixed vocabulary is emitted', () => {
+  const writes = [];
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    writes.push(String(chunk));
+    return true;
+  };
+  try {
+    assert.equal(emitStartupMilestone('mineflayer_created'), true);
+    assert.equal(emitStartupMilestone('mineflayer_created token=do-not-emit'), false);
+    assert.equal(emitStartupMilestone('bot chat or model output'), false);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  assert.deepEqual(writes, ['[mindcraft-startup] mineflayer_created\n']);
+});
+
+test('Given stale stderr from a handled gameplay warning, when the child later exits, then the warning is not misreported as the crash cause', async () => {
+  const child = new FakeChildProcess();
+  child.stderr = new PassThrough();
+  let now = 1_000;
+  const agentProcess = new AgentProcess('StaleDiagnostic', 8080, {
+    maxAutoRestarts: 0,
+    now: () => now,
+    spawnChild: () => child,
+  });
+
+  const startup = agentProcess.start();
+  child.emit('spawn');
+  agentProcess.markReady();
+  await startup;
+  child.stderr.write('PathStopped: expected navigation cancellation\n');
+  now += 31_000;
+  child.emit('exit', 1, null);
+
+  assert.equal(agentProcess.lastError, 'Agent process exited with code 1 and signal none');
 });
 
 test('Given a child spawn error, when agent startup is awaited, then the agent is failed with a usable error', async () => {
@@ -110,6 +335,7 @@ test('Given an accepted stop signal without child exit, when multiple exit waite
   let settled = false;
   firstWaiter.then(() => { settled = true; });
   child.emit('spawn');
+  agentProcess.markReady();
   await startup;
 
   // When
@@ -156,9 +382,11 @@ test('Given a stop before a delayed child spawn, when startup settles, then it r
 
   // Then
   assert.equal(stopped, true);
-  await assert.rejects(startup, /stopped before becoming ready/);
+  await assert.rejects(startup, /startup stopped by operator request/);
   assert.deepEqual(child.killCalls, ['SIGINT']);
   assert.equal(agentProcess.running, false);
+  assert.equal(agentProcess.state, 'stopping');
+  child.emit('exit', null, 'SIGINT');
   assert.equal(agentProcess.state, 'stopped');
 });
 
@@ -202,6 +430,33 @@ test('Given repeated unexpected exits, when automatic restart is bounded, then n
   assert.match(agentProcess.lastError, /exited with code 1/);
 });
 
+test('Given an unexpected Windows control event after stable uptime, when no stop was requested, then bounded recovery restarts the bot', async () => {
+  // Given
+  const firstChild = new FakeChildProcess();
+  const restartedChild = new FakeChildProcess();
+  const factory = createChildFactory([firstChild, restartedChild]);
+  let now = 0;
+  const agentProcess = new AgentProcess('windows-control-recovery', 8080, {
+    ...factory,
+    now: () => now,
+    platform: 'win32',
+    minAutoRestartUptimeMs: 10000,
+    maxAutoRestarts: 1,
+  });
+  await startFakeAgent(agentProcess, firstChild);
+
+  // When
+  now = 15000;
+  firstChild.emit('exit', 0xC000013A, null);
+  restartedChild.emit('spawn');
+  agentProcess.markReady();
+
+  // Then
+  assert.equal(factory.calls.length, 2);
+  assert.equal(agentProcess.state, 'running');
+  assert.equal(agentProcess.lastError, null);
+});
+
 test('Given one explicit restart request, when the current child exits, then exactly one stop-to-start transition occurs', async () => {
   // Given
   const firstChild = new FakeChildProcess();
@@ -214,6 +469,7 @@ test('Given one explicit restart request, when the current child exits, then exa
   const restart = agentProcess.forceRestart();
   firstChild.emit('exit', null, 'SIGINT');
   restartedChild.emit('spawn');
+  agentProcess.markReady();
   await restart;
 
   // Then
@@ -257,15 +513,14 @@ test('Given a post-spawn child error during an explicit restart, when the old ch
     () => { blockedRestartSettled = true; },
   );
   await Promise.resolve();
-  assert.equal(blockedRestartSettled, true);
-  await assert.rejects(blockedRestart, /still stopping/);
+  assert.equal(blockedRestartSettled, false);
   assert.equal(factory.calls.length, 1);
 
   firstChild.emit('exit', null, 'SIGINT');
-  const recovery = agentProcess.forceRestart();
   assert.equal(factory.calls.length, 2);
   recoveredChild.emit('spawn');
-  await recovery;
+  agentProcess.markReady();
+  await blockedRestart;
   assert.equal(agentProcess.state, 'running');
 });
 
@@ -274,33 +529,26 @@ test('Given a failed restart signal delivery, when restart is retried before chi
   const firstChild = new FakeChildProcess([false, false]);
   const replacementChild = new FakeChildProcess();
   const factory = createChildFactory([firstChild, replacementChild]);
-  const agentProcess = new AgentProcess('restart-kill-failure', 8080, factory);
+  const agentProcess = new AgentProcess('restart-kill-failure', 8080, {
+    ...factory,
+    terminateProcessTree: () => Promise.resolve({
+      success: false,
+      error: 'Unable to terminate owned test process tree.',
+    }),
+  });
   await startFakeAgent(agentProcess, firstChild);
 
   // When
   const firstRestart = agentProcess.forceRestart();
-  let firstRestartSettled = false;
-  firstRestart.then(
-    () => { firstRestartSettled = true; },
-    () => { firstRestartSettled = true; },
-  );
-  await Promise.resolve();
-
+  await new Promise((resolve) => setTimeout(resolve, 10));
   // Then
-  assert.equal(firstRestartSettled, true);
-  await assert.rejects(firstRestart, /Unable to send SIGINT/);
+  await assert.rejects(firstRestart, /Unable to terminate owned test process tree/);
   assert.equal(agentProcess.process, firstChild);
   assert.equal(agentProcess.isActive(), true);
 
   const retry = agentProcess.forceRestart();
-  let retrySettled = false;
-  retry.then(
-    () => { retrySettled = true; },
-    () => { retrySettled = true; },
-  );
-  await Promise.resolve();
-  assert.equal(retrySettled, true);
-  await assert.rejects(retry, /Unable to send SIGINT/);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await assert.rejects(retry, /Unable to terminate owned test process tree/);
   assert.deepEqual(firstChild.killCalls, ['SIGINT', 'SIGINT']);
   assert.equal(factory.calls.length, 1);
   assert.equal(agentProcess.process, firstChild);
@@ -328,9 +576,10 @@ test('Given an automatic restart, when lifecycle state changes asynchronously, t
   // When
   firstChild.emit('exit', 1, null);
   restartedChild.emit('spawn');
+  agentProcess.markReady();
 
   // Then
-  assert.deepEqual(statusReports.map((report) => report.state), ['restarting', 'starting', 'running']);
+  assert.deepEqual(statusReports.map((report) => report.state), ['restarting', 'starting', 'starting', 'running']);
   assert.match(statusReports[0].lastError, /exited with code 1/);
   assert.equal(statusReports.at(-1).lastError, null);
 });
@@ -340,9 +589,122 @@ test('Given lifecycle dependencies, when creating an agent, then Mindcraft accep
   assert.equal(Mindcraft.createAgent.length, 2);
 });
 
+test('Given plugin auto-eat, when survival ownership is configured, then unsupervised eating is disabled', () => {
+  const calls = [];
+  const bot = {
+    autoEat: {
+      options: null,
+      disable() {
+        calls.push('disable');
+      },
+    },
+  };
+
+  configureSurvivalOwnership(bot);
+
+  assert.deepEqual(calls, ['disable']);
+  assert.equal(bot.autoEat.options.startAt, 14);
+  assert.equal(bot.autoEat.options.bannedFood.includes('rotten_flesh'), true);
+});
+
+test('Given an idle behavior cycle, when the agent updates, then preservation runs before autonomy and jobs', async () => {
+  const calls = [];
+  const fakeAgent = {
+    bot: { modes: { update() { calls.push('modes'); } } },
+    survival_director: {
+      update() { calls.push('survival'); },
+      blocksLowerPriority: () => false,
+    },
+    self_prompter: { update(delta) { calls.push(`prompt:${delta}`); } },
+    job_director: { update() { calls.push('job'); } },
+    reaction_director: { update() { calls.push('reaction'); } },
+    checkTaskDone() { calls.push('task'); },
+  };
+
+  await Agent.prototype.update.call(fakeAgent, 25);
+
+  assert.deepEqual(calls, ['modes', 'survival', 'prompt:25', 'job', 'reaction', 'task']);
+});
+
+test('Given survival upkeep reports a bodily blocker, the behavior cycle does not start autonomous job work', async () => {
+  const calls = [];
+  const fakeAgent = {
+    bot: { modes: { update() { calls.push('modes'); } } },
+    survival_director: {
+      update() { calls.push('survival'); },
+      blocksLowerPriority: () => true,
+    },
+    self_prompter: { update() { calls.push('prompt'); } },
+    job_director: { update() { calls.push('job'); } },
+    reaction_director: { update() { calls.push('reaction'); } },
+    checkTaskDone() { calls.push('task'); },
+  };
+
+  await Agent.prototype.update.call(fakeAgent, 25);
+
+  assert.deepEqual(calls, ['modes', 'survival', 'prompt', 'reaction', 'task']);
+});
+
+test('Given runtime-configured role bots, when legacy default-goal seeding is evaluated, then role autonomy keeps control and self-prompt bootstrap stays off', () => {
+  assert.equal(
+    shouldSeedLegacyDefaultGoal(
+      { runtime: { role: 'companion', autonomy: 'balanced' } },
+      { role: 'companion', autonomy: 'balanced' },
+      { default_goal: 'Gather and explore.' },
+    ),
+    false,
+  );
+
+  assert.equal(
+    shouldSeedLegacyDefaultGoal(
+      { runtime: { role: 'builder', autonomy: 'autonomous' } },
+      { role: 'builder', autonomy: 'autonomous' },
+      { default_goal: 'Gather and build.' },
+    ),
+    false,
+  );
+});
+
+test('Given a legacy profile without runtime behavior, when default-goal seeding is evaluated, then the old self-prompt bootstrap still works', () => {
+  assert.equal(
+    shouldSeedLegacyDefaultGoal(
+      { name: 'andy' },
+      { role: 'companion', autonomy: 'balanced' },
+      { default_goal: 'Gather and explore.' },
+    ),
+    true,
+  );
+
+  assert.equal(
+    shouldSeedLegacyDefaultGoal(
+      { name: 'andy' },
+      { role: 'companion', autonomy: 'command' },
+      { default_goal: 'Gather and explore.' },
+    ),
+    false,
+  );
+});
+
+test('Given autonomy output containing think tags, when the autonomy generator strips them, then the command survives without throwing', async () => {
+  const sentPrompts = [];
+  const response = await Prompter.prototype._generateAutonomy.call({
+    agent: { name: 'RoleBot', runtime: { limits: { maxPromptTurns: 1 } } },
+    chat_model: {
+      sendRequest(_messages, prompt) {
+        sentPrompts.push(prompt);
+        return '</think>!followPlayer("Director", 3)';
+      },
+    },
+    async checkCooldown() {},
+  }, 'Autonomy prompt');
+
+  assert.equal(sentPrompts.length, 1);
+  assert.equal(response, '!followPlayer("Director", 3)');
+});
+
 test('Given an existing live agent, when duplicate creation is requested, then Mindcraft preserves the registered process', async () => {
   // Given
-  const agentName = 'duplicate-lifecycle-agent';
+  const agentName = 'DuplicateBot';
   const createdProcesses = [];
   const runtime = {
     resolveServer: () => Promise.resolve({ host: '127.0.0.1', port: 25565, version: '1.21.8' }),
@@ -376,7 +738,7 @@ test('Given an existing live agent, when duplicate creation is requested, then M
 
 test('Given an inactive blocked placeholder, when a normal create replaces it, then an ordinary restart follows the live agent path', async () => {
   // Given
-  const agentName = 'manual-blocked-replacement-agent';
+  const agentName = 'ManualBot';
   const settings = {
     host: '127.0.0.1',
     port: 25565,
@@ -410,9 +772,43 @@ test('Given an inactive blocked placeholder, when a normal create replaces it, t
   }
 });
 
+test('Given a configured profile with auto-start disabled, when it is registered, then the dashboard can start it on demand', async () => {
+  const agentName = 'ReadyManualBot';
+  const settings = {
+    host: '127.0.0.1',
+    port: 25565,
+    minecraft_version: 'auto',
+    profile: { name: agentName, model: 'ollama/local' },
+  };
+  const liveProcess = new FakeRegisteredAgentProcess();
+  const configured = Mindcraft.registerConfiguredAgent(settings, {
+    name: agentName,
+    state: 'ready',
+    running: false,
+    retryable: false,
+    lastError: null,
+  });
+
+  try {
+    assert.equal(configured.state, 'stopped');
+
+    const startResult = await Mindcraft.startAgent(agentName, {
+      hasKey: () => true,
+      resolveServer: () => Promise.resolve({ host: '127.0.0.1', port: 25565, version: '1.21.8' }),
+      createAgentProcess: () => liveProcess,
+    });
+
+    assert.deepEqual(startResult, { success: true, error: null });
+    assert.equal(liveProcess.state, 'running');
+    assert.equal(Mindcraft.getAgentProcess(agentName), liveProcess);
+  } finally {
+    Mindcraft.destroyAgent(agentName);
+  }
+});
+
 test('Given a delayed normal create for an old blocked placeholder, when a newer blocked generation replaces it, then the stale create leaves the newer placeholder current', async () => {
   // Given
-  const agentName = 'stale-manual-blocked-replacement-agent';
+  const agentName = 'StaleManualBot';
   const settings = {
     host: '127.0.0.1',
     port: 25565,
@@ -464,7 +860,7 @@ test('Given a delayed normal create for an old blocked placeholder, when a newer
 
 test('Given an ordinary agent whose restart rejects, when it is started, then Mindcraft returns a failure without changing lifecycle state', async () => {
   // Given
-  const agentName = 'restart-failure-agent';
+  const agentName = 'RestartFailBot';
   const restartError = new Error('SIGINT delivery failed');
   const restartFailedProcess = {
     state: 'failed',
@@ -502,7 +898,7 @@ test('Given an ordinary agent whose restart rejects, when it is started, then Mi
 
 test('Given a failed child startup, when Mindcraft creates the agent, then it reports failure and retains failed lifecycle state', async () => {
   // Given
-  const agentName = 'failed-lifecycle-agent';
+  const agentName = 'FailedLifeBot';
   const failedProcess = {
     state: 'failed',
     lastError: 'ENOENT: test spawn failure',

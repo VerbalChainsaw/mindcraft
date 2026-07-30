@@ -1,4 +1,5 @@
-import { describeModelProvider } from '../models/_model_map.js';
+import { describeModelProvider, resolveConfiguredModel } from '../models/_model_map.js';
+import { prepareAgentName, validateAgentName } from '../utils/agent-name.js';
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -35,27 +36,53 @@ export function buildProfileSettings(baseSettings, profile) {
 }
 
 export function assessProfileSettings(settings, { hasKey } = {}) {
-  const name = normalizeName(settings?.profile?.name);
-  if (!name) {
-    return createDescriptor(-1, 'unnamed-profile', 'blocked', 'Profile name is required.', false);
+  const nameCheck = validateAgentName(settings?.profile?.name);
+  const name = nameCheck.name || 'unnamed-profile';
+  if (!nameCheck.success) {
+    return createDescriptor(-1, name, 'blocked', nameCheck.error, false);
   }
 
-  const chat = describeModelProvider(settings.profile.model);
+  let chatProfile;
+  try {
+    chatProfile = resolveConfiguredModel(settings.profile, 'model');
+  } catch {
+    return createDescriptor(-1, name, 'blocked', 'Unsupported chat model provider.', false);
+  }
+  const chat = describeModelProvider(chatProfile);
   let failure = evaluateCredential(chat, 'chat model', hasKey);
   if (failure) return createDescriptor(-1, name, 'blocked', failure.lastError, failure.retryable);
 
   if (settings.profile.code_model) {
-    failure = evaluateCredential(describeModelProvider(settings.profile.code_model), 'code model', hasKey);
+    let codeProfile;
+    try {
+      codeProfile = resolveConfiguredModel(settings.profile, 'code_model');
+    } catch {
+      return createDescriptor(-1, name, 'blocked', 'Unsupported code model provider.', false);
+    }
+    failure = evaluateCredential(describeModelProvider(codeProfile), 'code model', hasKey);
     if (failure) return createDescriptor(-1, name, 'blocked', failure.lastError, failure.retryable);
   }
 
   if (settings.profile.vision_model) {
-    failure = evaluateCredential(describeModelProvider(settings.profile.vision_model), 'vision model', hasKey);
+    let visionProfile;
+    try {
+      visionProfile = resolveConfiguredModel(settings.profile, 'vision_model');
+    } catch {
+      return createDescriptor(-1, name, 'blocked', 'Unsupported vision model provider.', false);
+    }
+    failure = evaluateCredential(describeModelProvider(visionProfile), 'vision model', hasKey);
     if (failure) return createDescriptor(-1, name, 'blocked', failure.lastError, failure.retryable);
   }
 
-  const embedding = settings.profile.embedding ? describeModelProvider(settings.profile.embedding) : chat;
-  failure = evaluateCredential(embedding.ok ? embedding : chat, 'embedding model', hasKey);
+  let embedding = chat;
+  if (settings.profile.embedding) {
+    try {
+      embedding = describeModelProvider(resolveConfiguredModel(settings.profile, 'embedding'));
+    } catch {
+      return createDescriptor(-1, name, 'blocked', 'Unsupported embedding model provider.', false);
+    }
+  }
+  failure = evaluateCredential(embedding, 'embedding model', hasKey);
   if (failure) return createDescriptor(-1, name, 'blocked', failure.lastError, failure.retryable);
 
   return createDescriptor(-1, name, 'ready', null, false);
@@ -69,11 +96,19 @@ export function prepareProfiles(profileEntries, baseSettings, { hasKey } = {}) {
       };
     }
     const settings = buildProfileSettings(baseSettings, entry.profile);
-    if (!settings.profile.name) {
+    const nameCheck = prepareAgentName(settings.profile.name);
+    if (!nameCheck.success) {
       return {
-        descriptor: createDescriptor(index, `profile-${index + 1}`, 'blocked', 'Profile name is required.', false),
+        descriptor: createDescriptor(
+          index,
+          nameCheck.name || `profile-${index + 1}`,
+          'blocked',
+          nameCheck.error,
+          false,
+        ),
       };
     }
+    settings.profile.name = nameCheck.name;
     return { settings, index };
   });
   const nameCounts = new Map();

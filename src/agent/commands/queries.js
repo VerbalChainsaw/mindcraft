@@ -4,6 +4,8 @@ import { getCommandDocs } from './index.js';
 import convoManager from '../conversation.js';
 import { checkLevelBlueprint, checkBlueprint } from '../tasks/construction_tasks.js';
 import { load } from 'cheerio';
+import { getFullState } from '../library/full_state.js';
+import { formatGameObjectKnowledge, inspectGameObject } from '../library/game_knowledge.js';
 
 const pad = (str) => {
     return '\n' + str + '\n';
@@ -11,6 +13,88 @@ const pad = (str) => {
 
 // queries are commands that just return strings and don't affect anything in the world
 export const queryList = [
+    {
+        name: "!status",
+        description: "Report current position, health, inventory summary, current deterministic action, and whether an operator stop is active.",
+        perform: function (agent) {
+            const bot = agent.bot;
+            const pos = bot.entity.position;
+            const inventory = world.getInventoryCounts(bot);
+            const carried = Object.entries(inventory)
+                .filter(([, count]) => count > 0)
+                .map(([name, count]) => `${name} x${count}`)
+                .slice(0, 12)
+                .join(', ') || 'empty';
+            const action = agent.isIdle() ? 'idle' : agent.actions.currentActionLabel;
+            return pad(
+                `STATUS\n- Position: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`
+                + `\n- Health/Hunger: ${Math.round(bot.health)}/20, ${Math.round(bot.food)}/20`
+                + `\n- Action: ${action || 'idle'}`
+                + `\n- Operator stop: ${agent.isOperatorHeld?.() ? 'active' : 'inactive'}`
+                + `\n- Inventory: ${carried}`,
+            );
+        }
+    },
+    {
+        name: "!awareness",
+        description: "Inspect your body, movement, current action, nearby hazards, entities, dropped items, useful blocks, tools, and reflex modes.",
+        perform: function (agent) {
+            const state = getFullState(agent, { deep: true });
+            const { gameplay, action, body, surroundings, inventory, perception, modes } = state;
+            const position = gameplay.position;
+            const describe = (entries, empty = 'none') => entries.length > 0
+                ? entries.map(entry => {
+                    const count = entry.count > 1 ? ` x${entry.count}` : '';
+                    const danger = entry.hostile ? ' HOSTILE' : '';
+                    const location = Number.isFinite(entry.distance)
+                        ? ` (${entry.distance} blocks ${entry.direction})`
+                        : '';
+                    return `${entry.name}${count}${location}${danger}`;
+                }).join(', ')
+                : empty;
+            const modeState = modes.status
+                .filter(mode => mode.on || mode.active || mode.paused)
+                .map(mode => `${mode.name}:${mode.active ? 'ACTIVE' : mode.paused ? 'PAUSED' : 'ready'}`)
+                .join(', ') || 'none';
+            const movement = action.pathfinding
+                ? `${action.current}; path goal ${JSON.stringify(action.pathfinding)}`
+                : action.current;
+
+            let res = 'SITUATIONAL_AWARENESS';
+            res += `\n- Self: ${state.name}; ${gameplay.gamemode}; health ${gameplay.health}/20; hunger ${gameplay.hunger}/20`;
+            res += `\n- Character role: ${state.persona || 'general Minecraft companion'}`;
+            res += `\n- Position: (${position.x}, ${position.y}, ${position.z}) in ${gameplay.biome}; facing ${body.facing}; on ground: ${body.onGround}`;
+            res += `\n- Motion: velocity (${body.velocity.x}, ${body.velocity.y}, ${body.velocity.z}); activity: ${movement}`;
+            res += `\n- Body space: below=${surroundings.below}, legs=${surroundings.legs}, head=${surroundings.head}`;
+            res += `\n- One block ahead: below=${surroundings.front.below}, legs=${surroundings.front.legs}, head=${surroundings.front.head}; body clear=${surroundings.front.bodyClear}; support=${surroundings.front.hasSupport}`;
+            res += `\n- Holding: ${body.mainHand || 'nothing'}`;
+            res += `\n- Tools: ${describe(inventory.tools)}`;
+            res += `\n- Weapons: ${describe(inventory.weapons)}`;
+            res += `\n- Food: ${describe(inventory.food)}`;
+            res += `\n- Dropped items recognized: ${describe(perception.droppedItems)}`;
+            res += `\n- Nearby hostiles: ${describe(perception.hostiles)}`;
+            res += `\n- Nearby entities: ${describe(perception.entities.filter(entity => entity.kind !== 'dropped_item'))}`;
+            res += `\n- Hazards: ${describe(perception.hazards)}`;
+            res += `\n- Useful blocks/resources: ${describe(perception.usefulBlocks)}`;
+            res += `\n- Reflex modes: ${modeState}`;
+            if (action.goalDirector?.goal) {
+                const goal = action.goalDirector.goal;
+                const target = goal.target?.family || goal.target?.canonicalName || 'item';
+                const progress = goal.kind === 'deliver'
+                    ? `${goal.checkpoint?.delivered || 0}/${goal.quantity} delivered`
+                    : `${Math.max(0, (goal.checkpoint?.targetInventory || 0) - (goal.checkpoint?.baselineInventory || 0))} requested`;
+                res += `\n- Typed goal: ${goal.phase}; ${goal.kind} ${goal.quantity} ${target}; ${progress}; attempts ${goal.attempts}/${goal.maxAttempts}`;
+            }
+            return pad(res);
+        }
+    },
+    {
+        name: "!persona",
+        description: "Report your current character and roleplay identity.",
+        perform: function (agent) {
+            return pad(`CHARACTER_ROLE\n- ${agent.getPersona?.() || 'General Minecraft companion'}`);
+        }
+    },
     {
         name: "!stats",
         description: "Get your bot's location, health, hunger, and time of day.", 
@@ -143,6 +227,19 @@ export const queryList = [
             }
             return pad(res);
         }
+    },
+    {
+        name: '!inspectMinecraft',
+        description: 'Inspect any item or block using the connected server registry: canonical identity, inventory, durability, food, placement, mining tools, drops, and crafting recipes.',
+        params: {
+            name: {
+                type: 'string',
+                description: 'Canonical or human-readable Minecraft item/block name, such as iron ore, shield, or diamond_pickaxe.',
+            },
+        },
+        perform: function (agent, name) {
+            return pad(formatGameObjectKnowledge(inspectGameObject(agent.bot, name)));
+        },
     },
     {
         name: "!entities",

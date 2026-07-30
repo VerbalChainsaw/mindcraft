@@ -22,12 +22,22 @@ export function blacklistCommands(commands) {
             continue;
         }
         delete commandMap[command_name];
-        delete commandList.find(command => command.name === command_name);
     }
 }
 
-const commandRegex = /!(\w+)(?:\(((?:-?\d+(?:\.\d+)?|true|false|"[^"]*")(?:\s*,\s*(?:-?\d+(?:\.\d+)?|true|false|"[^"]*"))*)\))?/
-const argRegex = /-?\d+(?:\.\d+)?|true|false|"[^"]*"/g;
+const commandRegex = /!(\w+)(?:\(((?:-?\d+(?:\.\d+)?|true|false|"[^"]*"|'[^']*')(?:\s*,\s*(?:-?\d+(?:\.\d+)?|true|false|"[^"]*"|'[^']*'))*)\))?/
+const argRegex = /-?\d+(?:\.\d+)?|true|false|"[^"]*"|'[^']*'/g;
+const bareArgRegex = /"[^"]*"|'[^']*'|\S+/g;
+
+function parseBareCommand(message) {
+    const trimmed = String(message || '').trim();
+    const match = /^!(\w+)(?:\s+(.+))?$/.exec(trimmed);
+    if (!match || trimmed.includes('(')) return null;
+    return {
+        commandName: `!${match[1]}`,
+        args: match[2]?.match(bareArgRegex) || [],
+    };
+}
 
 export function containsCommand(message) {
     const commandMatch = message.match(commandRegex);
@@ -95,6 +105,12 @@ function checkInInterval(number, lowerBound, upperBound, endpointType) {
  * @returns {string | Object}
  */
 export function parseCommandMessage(message) {
+    const bare = parseBareCommand(message);
+    if (bare) {
+        const command = getCommand(bare.commandName);
+        if (!command) return `${bare.commandName} is not a command.`;
+        return parseCommandArguments(command, bare.commandName, bare.args);
+    }
     const commandMatch = message.match(commandRegex);
     if (!commandMatch) return `Command is incorrectly formatted`;
 
@@ -107,13 +123,15 @@ export function parseCommandMessage(message) {
     const command = getCommand(commandName);
     if(!command) return `${commandName} is not a command.`
 
+    return parseCommandArguments(command, commandName, args);
+}
+
+function parseCommandArguments(command, commandName, args) {
     const params = commandParams(command);
     const paramNames = commandParamNames(command);
-    
     if (args.length !== params.length)
         return `Command ${command.name} was given ${args.length} args, but requires ${params.length} args.`;
 
-    
     for (let i = 0; i < args.length; i++) {
         const param = params[i];
         //Remove any extra characters
@@ -174,6 +192,8 @@ export function parseCommandMessage(message) {
 }
 
 export function truncCommandMessage(message) {
+    const bare = parseBareCommand(message);
+    if (bare && getCommand(bare.commandName)) return String(message).trim();
     const commandMatch = message.match(commandRegex);
     if (commandMatch) {
         return message.substring(0, commandMatch.index + commandMatch[0].length);
@@ -183,6 +203,21 @@ export function truncCommandMessage(message) {
 
 export function isAction(name) {
     return actionsList.find(action => action.name === name) !== undefined;
+}
+
+export function commandTakesManualAutonomy(name) {
+    const commandName = String(name || '');
+    return commandMap[commandName]?.perform?.manualAutonomyTakeover === true;
+}
+
+export function commandAssignsPersistentJob(name) {
+    const commandName = String(name || '');
+    return commandMap[commandName]?.perform?.persistentJobAssignment === true;
+}
+
+export function commandAssignsPersistentGoal(name) {
+    const commandName = String(name || '');
+    return commandMap[commandName]?.perform?.persistentGoalAssignment === true;
 }
 
 /**
@@ -209,7 +244,7 @@ function numParams(command) {
     return commandParams(command).length;
 }
 
-export async function executeCommand(agent, message) {
+export async function executeCommand(agent, message, { owner = 'player' } = {}) {
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
         return parsed; //The command was incorrectly formatted or an invalid input was given.
@@ -223,13 +258,16 @@ export async function executeCommand(agent, message) {
         if (numArgs !== numParams(command))
             return `Command ${command.name} was given ${numArgs} args, but requires ${numParams(command)} args.`;
         else {
-            const result = await command.perform(agent, ...parsed.args);
+            const perform = () => command.perform(agent, ...parsed.args);
+            const result = typeof agent.actions?.runWithOwner === 'function'
+                ? await agent.actions.runWithOwner(owner, perform)
+                : await perform();
             return result;
         }
     }
 }
 
-export function getCommandDocs(agent) {
+export function getCommandDocs(agent, { compact = false } = {}) {
     const typeTranslations = {
         //This was added to keep the prompt the same as before type checks were implemented.
         //If the language model is giving invalid inputs changing this might help.
@@ -240,6 +278,24 @@ export function getCommandDocs(agent) {
         'BlockOrItemName':   'string',
         'boolean':           'bool'
     }
+    if (compact) {
+        let docs = '\n*COMPACT COMMANDS\nUse exactly one command. Strings require double quotes.\n';
+        for (const command of commandList) {
+            if (agent.blocked_actions.includes(command.name)) continue;
+            const params = command.params
+                ? Object.entries(command.params)
+                    .map(([name, param]) => `${name}:${typeTranslations[param.type] ?? param.type}`)
+                    .join(', ')
+                : '';
+            const description = String(command.description || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 140);
+            docs += `${command.name}${params ? `(${params})` : ''} - ${description}\n`;
+        }
+        return docs + '*\n';
+    }
+
     let docs = `\n*COMMAND DOCS\n You can use the following commands to perform actions and get information about the world. 
     Use the commands with the syntax: !commandName or !commandName("arg1", 1.2, ...) if the command takes arguments.\n
     Do not use codeblocks. Use double quotes for strings. Only use one command in each response, trailing commands and comments will be ignored.\n`;

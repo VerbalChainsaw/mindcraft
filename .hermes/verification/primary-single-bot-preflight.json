@@ -1,0 +1,39 @@
+{
+  "mode": "live",
+  "baseUrl": "http://localhost:8080",
+  "bot": "MindcraftBot",
+  "startedAt": "2026-07-29T01:56:38.057Z",
+  "selectedCases": [
+    "preflight"
+  ],
+  "results": [
+    {
+      "id": "preflight",
+      "passed": true,
+      "observed": {
+        "healthSuccess": true,
+        "healthProblems": [
+          "Agent(s) registered but none are in-game yet."
+        ],
+        "registeredAgents": [
+          "MindcraftBot"
+        ],
+        "selectedAgent": {
+          "name": "MindcraftBot",
+          "in_game": false,
+          "viewerPort": 3000,
+          "socket_connected": false,
+          "connection_stage": "registered",
+          "readiness_stage": null,
+          "provider": null,
+          "model": null,
+          "state": "stopped",
+          "lastError": null,
+          "diagnostics": []
+        }
+      }
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-07-29T01:56:38.093Z"
+}

@@ -9,7 +9,7 @@ import mc from 'minecraft-protocol';
  * @param {boolean} verbose - Whether to print output on connection errors.
  * @returns {Promise<Array>} - A Promise that resolves to an array of server info objects.
  */
-export async function serverInfo(ip, port, timeout = 1000, verbose = false) {
+export function serverInfo(ip, port, timeout = 1000, verbose = false) {
     return new Promise((resolve) => {
 
         let timeoutId = setTimeout(() => {
@@ -34,7 +34,7 @@ export async function serverInfo(ip, port, timeout = 1000, verbose = false) {
             const version = response?.version?.name || '';
             const match = String(version).match(/\d+\.\d+(?:\.\d+)?/);
             const numericVersion = match ? match[0] : null;
-            if (numericVersion !== version) {
+            if (verbose && numericVersion !== version) {
                 console.log(`Modded server found (${version}), attempting to use ${numericVersion}...`);
             }
 
@@ -58,46 +58,67 @@ export async function serverInfo(ip, port, timeout = 1000, verbose = false) {
  * @param {number} timeout - The connection timeout in ms.
  * @returns {Promise<Array>} - A Promise that resolves to an array of server info objects.
  */
-export async function findServers(ip, earlyExit = false, timeout = 100) {
-    const servers = [];
-    const startPort = 49000;
-    const endPort = 65000;
+export function findServers(ip, earlyExit = false, timeout = 100) {
+    return scanMinecraftPorts({
+        startPort: 49000,
+        endPort: 65000,
+        concurrency: 128,
+        earlyExit,
+        checkPort: (port) => checkTcpPort(ip, port, timeout),
+        inspectPort: (port) => serverInfo(ip, port, 200, false),
+    });
+}
 
-    const checkPort = (port) => {
-        return new Promise((resolve) => {
-            const socket = net.createConnection({ host: ip, port, timeout }, () => {
-                socket.end();
-                resolve(port); // Port is open
-            });
-
-            socket.on('error', () => resolve(null)); // Port is closed
-            socket.on('timeout', () => {
-                socket.destroy();
-                resolve(null);
-            });
+function checkTcpPort(ip, port, timeout) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+        };
+        const socket = net.createConnection({ host: ip, port, timeout }, () => {
+            socket.end();
+            finish(port);
         });
-    };
+        socket.on('error', () => finish(null));
+        socket.on('timeout', () => {
+            socket.destroy();
+            finish(null);
+        });
+    });
+}
 
-    // This supresses a lot of annoying console output from the mc library
-    // TODO: find a better way to do this, it supresses other useful output
-    const originalConsoleLog = console.log;
-    console.log = () => { };
-    
-    for (let port = startPort; port <= endPort; port++) {
-        const openPort = await checkPort(port);
-        if (openPort) {
-            const server = await serverInfo(ip, port, 200, false);
-            if (server) {
-                servers.push(server);
-
-                if (earlyExit) break;
-            }
-        }
+export async function scanMinecraftPorts({
+    startPort,
+    endPort,
+    concurrency = 128,
+    earlyExit = false,
+    checkPort,
+    inspectPort,
+}) {
+    if (!Number.isInteger(startPort) || !Number.isInteger(endPort) || startPort < 1 || endPort > 65535 || endPort < startPort) {
+        throw new TypeError('Minecraft discovery port range is invalid.');
+    }
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 512) {
+        throw new TypeError('Minecraft discovery concurrency must be between 1 and 512.');
+    }
+    if (typeof checkPort !== 'function' || typeof inspectPort !== 'function') {
+        throw new TypeError('Minecraft discovery requires port check and inspection functions.');
     }
 
-    // Restore console output
-    console.log = originalConsoleLog;
-
+    const servers = [];
+    for (let batchStart = startPort; batchStart <= endPort; batchStart += concurrency) {
+        const batchEnd = Math.min(endPort, batchStart + concurrency - 1);
+        const ports = Array.from({ length: batchEnd - batchStart + 1 }, (_, index) => batchStart + index);
+        const results = await Promise.all(ports.map(async (port) => {
+            const openPort = await checkPort(port);
+            return openPort ? inspectPort(openPort) : null;
+        }));
+        const discovered = results.filter(Boolean);
+        servers.push(...discovered);
+        if (earlyExit && discovered.length > 0) return [discovered[0]];
+    }
     return servers;
 }
 

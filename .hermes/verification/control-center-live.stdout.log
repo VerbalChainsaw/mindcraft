@@ -1,0 +1,91 @@
+MindServer running on port 8080 on host localhost
+[launcher] Configured bot profiles are ready to start from the web UI.
+Client connected
+Client connected
+Client connected
+Client connected
+Connecting to MindServer
+Client connected
+Audit_1 connected to MindServer
+Starting agent
+Copy profile saved.
+Initializing agent Audit_1...
+Examples initialized.
+No task.
+Audit_1 logging into minecraft...
+Error: connect ECONNREFUSED 127.0.0.1:25579
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25579
+}
+Saved memory to: ./bots/Audit_1/memory.json
+Agent Audit_1 disconnected
+Agent process exited with code 1 and signal null
+Client connected
+Connecting to MindServer
+Client connected
+Audit_1 connected to MindServer
+Starting agent
+Copy profile saved.
+Initializing agent Audit_1...
+Examples initialized.
+Loaded memory: 
+No task.
+Audit_1 logging into minecraft...
+Audit_1 logged in!
+Audit_1 updating available agents
+Audit_1 updating available agents
+Initializing vision intepreter...
+Using version: 1.21.4
+Audit_1 spawned.
+received message from system : Agent process restarted.
+Saved memory to: ./bots/Audit_1/memory.json
+selected examples:
+Example: miner_32: Hey! What are you up to?
+Example: say hi to john_goodman
+Awaiting local response... (model: qwen2.5:3b, attempt: 1)
+Generated response: I'm sorry for the inconvenience, it seems like there might be a network issue preventing me from functioning properly. Could you please check your internet connection and try restarting this session? If the problem persists, I'll need to restart my service temporarily.
+Audit_1 full response to system: ""I'm sorry for the inconvenience, it seems like there might be a network issue preventing me from functioning properly. Could you please check your internet connection and try restarting this session? If the problem persists, I'll need to restart my service temporarily.""
+Audit_1 updating available agents
+Audit_1 updating available agents
+Audit_1 updating available agents
+Audit_1 updating available agents
+Client connected
+Agent Audit_1 disconnected
+Agent process exited with code null and signal SIGINT
+Connecting to MindServer
+Client connected
+Audit_1 connected to MindServer
+Starting agent
+Copy profile saved.
+Initializing agent Audit_1...
+Examples initialized.
+Loaded memory: 
+No task.
+Audit_1 logging into minecraft...
+Audit_1 logged in!
+Initializing vision intepreter...
+Using version: 1.21.4
+Audit_1 spawned.
+received message from system : Agent process restarted.
+Saved memory to: ./bots/Audit_1/memory.json
+Audit_1 updating available agents
+Audit_1 updating available agents
+selected examples:
+Example: miner_32: Hey! What are you up to?
+Example: say hi to john_goodman
+Awaiting local response... (model: qwen2.5:3b, attempt: 1)
+Generated response: I seem to have encountered an issue with the network, but I've been reconnected now. How can I assist you today?
+Audit_1 full response to system: ""I seem to have encountered an issue with the network, but I've been reconnected now. How can I assist you today?""
+Audit_1 updating available agents
+Audit_1 updating available agents
+Audit_1 updating available agents
+Audit_1 updating available agents
+Agent Audit_1 disconnected
+Agent process exited with code null and signal SIGINT
+Client connected
+Shutting down
+Exiting MindServer

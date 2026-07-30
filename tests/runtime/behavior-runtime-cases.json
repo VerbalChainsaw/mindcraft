@@ -1,0 +1,21 @@
+[
+  {
+    "id": "preflight",
+    "description": "Read MindServer health and registered agent state without mutation.",
+    "mutates": false,
+    "requires": ["mindserver"]
+  },
+  {
+    "id": "bot-lifecycle",
+    "description": "Prove the managed world is empty, start one selected stopped bot, reach world-ready state, require the expected structured action result, then reconcile that bot to stopped.",
+    "mutates": true,
+    "requires": ["mindserver", "minecraft", "provider"],
+    "command": "!stay(1)",
+    "expectedActionResult": {
+      "phase": "succeeded",
+      "code": "completed",
+      "label": "action:stay"
+    },
+    "mutations": ["query managed server player list", "start selected bot", "send !stay(1) to selected bot", "stop selected bot"]
+  }
+]

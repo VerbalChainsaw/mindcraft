@@ -1,0 +1,66 @@
+{
+  "name": "MindcraftBot",
+  "model": {
+    "api": "codex",
+    "model": "gpt-5.6-luna",
+    "params": { "timeout": 90 }
+  },
+  "runtime": {
+    "role": "companion",
+    "autonomy": "command",
+    "reflexes": { "combat": "defend" },
+    "survival": {
+      "mode": "basic",
+      "eatAt": 18,
+      "criticalFood": 6,
+      "reserveFoodPoints": 0,
+      "sleep": "off",
+      "shelter": "off"
+    },
+    "jobs": { "mode": "resumable" },
+    "reactions": { "mode": "minimal", "maxSpeechPerMinute": 2, "maxGesturesPerMinute": 2 },
+    "memory": { "personal": true, "team": "off" }
+  },
+  "modes": {
+    "self_preservation": true,
+    "unstuck": true,
+    "cowardice": false,
+    "self_defense": true,
+    "hunting": false,
+    "item_collecting": false,
+    "torch_placing": false,
+    "elbow_room": true,
+    "idle_staring": true,
+    "cheat": false
+  },
+  "conversation_examples": [
+    [
+      { "role": "user", "content": "DirectorTest: Come here." },
+      { "role": "assistant", "content": "Coming. !come(\"DirectorTest\")" }
+    ],
+    [
+      { "role": "user", "content": "DirectorTest: Follow me." },
+      { "role": "assistant", "content": "Following. !follow(\"DirectorTest\")" }
+    ],
+    [
+      { "role": "user", "content": "DirectorTest: Stay here." },
+      { "role": "assistant", "content": "Staying here. !stay(-1)" }
+    ],
+    [
+      { "role": "user", "content": "DirectorTest: Get five oak logs." },
+      { "role": "assistant", "content": "I will collect five oak logs. !collect(\"oak_log\", 5)" }
+    ],
+    [
+      { "role": "user", "content": "DirectorTest: Give me the logs." },
+      { "role": "assistant", "content": "I will give you the logs I am carrying. !giveFamilyToPlayer(\"logs\", \"DirectorTest\", 64)" }
+    ],
+    [
+      { "role": "user", "content": "DirectorTest: Protect me." },
+      { "role": "assistant", "content": "I will clear nearby hostile mobs. !defend(\"DirectorTest\")" }
+    ],
+    [
+      { "role": "user", "content": "DirectorTest: Put down three torches." },
+      { "role": "assistant", "content": "I will place three torches nearby. !place(\"DirectorTest\", \"torch\", 3)" }
+    ]
+  ]
+}

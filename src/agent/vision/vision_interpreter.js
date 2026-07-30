@@ -1,81 +1,194 @@
 import { Vec3 } from 'vec3';
 import { Camera } from "./camera.js";
-import fs from 'fs';
+import fs from 'node:fs/promises';
+import { resolvePlayerTarget } from '../player-target.js';
+
+const CAMERA_READY_TIMEOUT_MS = 8_000;
+const MINUTE_MS = 60_000;
 
 export class VisionInterpreter {
     constructor(agent, allow_vision) {
         this.agent = agent;
-        this.allow_vision = allow_vision;
+        this.allow_vision = allow_vision === true;
         this.fp = './bots/'+agent.name+'/screenshots/';
-        if (allow_vision) {
-            this.camera = new Camera(agent.bot, this.fp);
+        this.lastOutcome = null;
+        this.inFlight = null;
+        this.lastRequestAt = 0;
+        const vision = agent.runtime?.vision || {};
+        this.visionMode = vision.mode || (this.allow_vision ? 'hybrid' : 'off');
+        this.maxRequestsPerMinute = Number.isInteger(vision.maxRequestsPerMinute)
+            ? Math.max(0, vision.maxRequestsPerMinute)
+            : 2;
+        this.retainScreenshots = Number.isInteger(vision.retainScreenshots)
+            ? Math.max(0, vision.retainScreenshots)
+            : 12;
+        if (this.allow_vision && this.visionMode !== 'off') {
+            this.camera = new Camera(agent.bot, this.fp, {
+                retainScreenshots: this.retainScreenshots,
+            });
+        }
+    }
+
+    _fallback() {
+        return `Structured sensing remains available. ${this.getCenterBlockInfo()}`;
+    }
+
+    _record({ success, code, message, target = null, retryable = false }) {
+        const recordedAt = Date.now();
+        this.lastOutcome = { success, code, message, target, retryable, recordedAt };
+        if (this.agent.bot) {
+            this.agent.bot.lastActionEvidence = {
+                kind: 'vision',
+                outcome: code,
+                target,
+                retryable,
+                recordedAt,
+            };
+        }
+        return message;
+    }
+
+    _unavailable(code, message, target = null, retryable = false) {
+        return this._record({
+            success: false,
+            code,
+            message: `${message} ${this._fallback()}`,
+            target,
+            retryable,
+        });
+    }
+
+    _requestDelayMs(now = Date.now()) {
+        if (this.maxRequestsPerMinute <= 0) return Infinity;
+        const minimumInterval = Math.ceil(MINUTE_MS / this.maxRequestsPerMinute);
+        return Math.max(0, this.lastRequestAt + minimumInterval - now);
+    }
+
+    _validateRequest(target) {
+        if (!this.allow_vision || this.visionMode === 'off') {
+            return this._unavailable('vision_disabled', 'Vision is disabled for this bot profile.', target, false);
+        }
+        if (!this.agent.prompter?.vision_model?.sendVisionRequest) {
+            return this._unavailable('vision_model_unavailable', 'No vision-capable model is connected.', target, false);
+        }
+        if (!this.camera) {
+            return this._unavailable('camera_unavailable', 'The camera is not available.', target, true);
+        }
+        if (this.inFlight) {
+            return this._unavailable('vision_busy', 'Another vision request is still running.', target, true);
+        }
+        const delay = this._requestDelayMs();
+        if (delay === Infinity) {
+            return this._unavailable('vision_rate_disabled', 'This profile disables model-vision requests.', target, false);
+        }
+        if (delay > 0) {
+            const seconds = Math.ceil(delay / 1000);
+            return this._unavailable('vision_rate_limited', `Vision is cooling down; try again in about ${seconds} second${seconds === 1 ? '' : 's'}.`, target, true);
+        }
+        return null;
+    }
+
+    async _runVision({ target, lookingMessage, aim }) {
+        const unavailable = this._validateRequest(target);
+        if (unavailable) return unavailable;
+
+        this.lastRequestAt = Date.now();
+        const request = (async () => {
+            try {
+                await this.camera.waitUntilReady(CAMERA_READY_TIMEOUT_MS);
+                await aim();
+                const filename = await this.camera.capture();
+                const analysis = await this.analyzeImage(filename);
+                return this._record({
+                    success: true,
+                    code: 'analyzed',
+                    target,
+                    retryable: false,
+                    message: `${lookingMessage}\nImage analysis (non-authoritative): "${analysis}"\n${this.getCenterBlockInfo()}`,
+                });
+            } catch (error) {
+                const code = this.camera?.initError ? 'camera_unavailable' : 'vision_failed';
+                console.warn(`[vision] ${code}: ${String(error?.message || error).slice(0, 512)}`);
+                return this._unavailable(code, 'Vision could not complete; use structured sensing or retry.', target, true);
+            }
+        })();
+        this.inFlight = request;
+        try {
+            return await request;
+        } finally {
+            if (this.inFlight === request) this.inFlight = null;
         }
     }
 
     async lookAtPlayer(player_name, direction) {
-        if (!this.allow_vision || !this.agent.prompter.vision_model.sendVisionRequest) {
-            return "Vision is disabled. Use other methods to describe the environment.";
-        }
-        let result = "";
         const bot = this.agent.bot;
-        const player = bot.players[player_name]?.entity;
+        const resolution = resolvePlayerTarget(bot, player_name, {
+            knownBotNames: this.agent.task?.agent_names || [],
+        });
+        const player = resolution.entity;
         if (!player) {
-            return `Could not find player ${player_name}`;
+            return this._unavailable('lost_target', `Could not find player ${player_name}.`, {
+                name: player_name,
+                requestedName: resolution.requested,
+                canonicalName: null,
+                aliasesTried: resolution.aliasesTried,
+            }, false);
         }
-
-        let filename;
-        if (direction === 'with') {
-            await bot.look(player.yaw, player.pitch);
-            result = `Looking in the same direction as ${player_name}\n`;
-            filename = await this.camera.capture();
-        } else {
-            await bot.lookAt(new Vec3(player.position.x, player.position.y + player.height, player.position.z));
-            result = `Looking at player ${player_name}\n`;
-            filename = await this.camera.capture();
-
-        }
-
-        return result + `Image analysis: "${await this.analyzeImage(filename)}"`;
+        const target = {
+            name: player_name,
+            requestedName: resolution.requested,
+            canonicalName: resolution.canonical,
+            id: player.id,
+        };
+        return this._runVision({
+            target,
+            lookingMessage: direction === 'with'
+                ? `Looking in the same direction as ${player_name}.`
+                : `Looking at ${player_name}.`,
+            aim: async () => {
+                if (direction === 'with') {
+                    await bot.look(player.yaw, player.pitch);
+                } else {
+                    await bot.lookAt(new Vec3(player.position.x, player.position.y + player.height, player.position.z));
+                }
+            },
+        });
     }
 
     async lookAtPosition(x, y, z) {
-        if (!this.allow_vision || !this.agent.prompter.vision_model.sendVisionRequest) {
-            return "Vision is disabled. Use other methods to describe the environment.";
+        if (![x, y, z].every(Number.isFinite)) {
+            return this._unavailable('invalid_target', 'Vision needs valid coordinates.', null, false);
         }
-        let result = "";
         const bot = this.agent.bot;
-        await bot.lookAt(new Vec3(x, y + 2, z));
-        result = `Looking at coordinate ${x}, ${y}, ${z}\n`;
-
-        let filename = await this.camera.capture();
-
-        return result + `Image analysis: "${await this.analyzeImage(filename)}"`;
+        const target = { x, y, z };
+        return this._runVision({
+            target,
+            lookingMessage: `Looking at coordinate ${x}, ${y}, ${z}.`,
+            aim: () => bot.lookAt(new Vec3(x, y + 2, z)),
+        });
     }
 
     getCenterBlockInfo() {
         const bot = this.agent.bot;
         const maxDistance = 128; // Maximum distance to check for blocks
-        const targetBlock = bot.blockAtCursor(maxDistance);
-        
-        if (targetBlock) {
-            return `Block at center view: ${targetBlock.name} at (${targetBlock.position.x}, ${targetBlock.position.y}, ${targetBlock.position.z})`;
-        } else {
-            return "No block in center view";
+        try {
+            const targetBlock = bot.blockAtCursor(maxDistance);
+            if (targetBlock) {
+                return `Center block: ${targetBlock.name} at (${targetBlock.position.x}, ${targetBlock.position.y}, ${targetBlock.position.z}).`;
+            }
+        } catch (error) {
+            return `Center block unavailable: ${String(error?.message || error).slice(0, 160)}.`;
         }
+        return 'No block is currently resolved at the center view.';
     }
 
     async analyzeImage(filename) {
-        try {
-            const imageBuffer = fs.readFileSync(`${this.fp}/${filename}.jpg`);
-            const messages = this.agent.history.getHistory();
-
-            const blockInfo = this.getCenterBlockInfo();
-            const result = await this.agent.prompter.promptVision(messages, imageBuffer);
-            return result + `\n${blockInfo}`;
-
-        } catch (error) {
-            console.warn('Error reading image:', error);
-            return `Error reading image: ${error.message}`;
+        const imageBuffer = await fs.readFile(`${this.fp}/${filename}.jpg`);
+        const messages = this.agent.history.getHistory();
+        const result = await this.agent.prompter.promptVision(messages, imageBuffer);
+        if (!String(result || '').trim()) {
+            throw new Error('Vision model returned no analysis.');
         }
+        return String(result).slice(0, 4_000);
     }
-} 
+}

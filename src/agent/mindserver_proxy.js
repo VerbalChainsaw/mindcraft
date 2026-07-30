@@ -14,91 +14,207 @@ class MindServerProxy {
         
         this.socket = null;
         this.connected = false;
+        this.connectPromise = null;
+        this.settingsLoaded = false;
         this.agents = [];
         MindServerProxy.instance = this;
     }
 
-    async connect(name, port) {
-        if (this.connected) return;
-        
+    async connect(name, port, connectionToken) {
+        if (typeof connectionToken !== 'string' || connectionToken.length < 16) {
+            throw new Error('MindServer agent capability is missing or invalid.');
+        }
+        if (this.connected && this.socket?.connected) return;
+        if (this.connectPromise) return this.connectPromise;
+
+        const operation = this._connect(name, port, connectionToken);
+        this.connectPromise = operation;
+        try {
+            await operation;
+        } finally {
+            if (this.connectPromise === operation) this.connectPromise = null;
+        }
+    }
+
+    async _connect(name, port, connectionToken) {
+        if (this.socket) this._disposeSocket(this.socket);
         this.name = name;
-        this.socket = io(`http://localhost:${port}`);
-
-        await new Promise((resolve, reject) => {
-            this.socket.on('connect', resolve);
-            this.socket.on('connect_error', (err) => {
-                console.error('Connection failed:', err);
-                reject(err);
-            });
+        const socket = io(`http://localhost:${port}`, {
+            auth: {
+                role: 'agent',
+                agentName: name,
+                token: connectionToken,
+            },
+            reconnection: false,
+            timeout: 5000,
         });
+        this.socket = socket;
+        this.settingsLoaded = false;
 
-        this.connected = true;
-        console.log(name, 'connected to MindServer');
-
-        this.socket.on('disconnect', () => {
+        socket.on('disconnect', () => {
+            if (this.socket !== socket) return;
             console.log('Disconnected from MindServer');
             this.connected = false;
+            this.settingsLoaded = false;
+            this.socket = null;
             if (this.agent) {
                 this.agent.cleanKill('Disconnected from MindServer. Killing agent process.');
             }
         });
 
-        this.socket.on('chat-message', (agentName, json) => {
+        socket.on('chat-message', (agentName, json) => {
             convoManager.receiveFromBot(agentName, json);
         });
 
-        this.socket.on('agents-status', (agents) => {
-            this.agents = agents;
-            convoManager.updateAgents(agents);
+        socket.on('agents-status', (agents) => {
+            const nextAgents = Array.isArray(agents) ? agents : [];
+            this.agents = nextAgents;
+            convoManager.updateAgents(nextAgents);
             if (this.agent?.task) {
                 console.log(this.agent.name, 'updating available agents');
-                this.agent.task.updateAvailableAgents(agents);
+                this.agent.task.updateAvailableAgents(nextAgents);
             }
         });
 
-        this.socket.on('restart-agent', (agentName) => {
-            console.log(`Restarting agent: ${agentName}`);
-            this.agent.cleanKill();
-        });
-		
-        this.socket.on('send-message', (data) => {
+        socket.on('send-message', (data) => {
             try {
-                this.agent.respondFunc(data.from, data.message);
+                if (!this.agent?.respondFunc) throw new Error('Agent runtime is not ready for messages.');
+                this.agent.respondFunc(data?.from, data?.message);
             } catch (error) {
                 console.error('Error: ', JSON.stringify(error, Object.getOwnPropertyNames(error)));
             }
         });
 
-        this.socket.on('get-full-state', (callback) => {
+        socket.on('squad-radio', (data) => {
             try {
-                const state = getFullState(this.agent);
-                callback(state);
+                const sender = typeof data?.from === 'string' ? data.from : '';
+                const message = typeof data?.message === 'string' ? data.message : '';
+                if (sender && message) {
+                    if (!this.agent) throw new Error('Agent runtime is not ready for squad radio.');
+                    const normalizedKind = String(data?.kind || 'order').toLowerCase();
+                    const eventType = {
+                        order: 'squad.order',
+                        warning: 'squad.warning',
+                        request: 'squad.request',
+                        completion: 'squad.completion',
+                        complete: 'squad.completion',
+                    }[normalizedKind];
+                    if (eventType) {
+                        this.agent.publishBehaviorEvent?.({
+                            id: typeof data?.eventId === 'string' ? data.eventId : undefined,
+                            type: eventType,
+                            target: { name: sender },
+                            evidence: { code: normalizedKind },
+                            salience: normalizedKind === 'warning' ? 5 : normalizedKind === 'completion' || normalizedKind === 'complete' ? 4 : 3,
+                            witnesses: [this.agent.name, ...convoManager.getInGameAgents()],
+                        });
+                    }
+                    if (sender === 'Director') this.agent.handleMessage(sender, `[SQUAD RADIO · ${String(data?.kind || 'order').toUpperCase()}] ${message}`);
+                    else convoManager.receiveSquadRadio(sender, message, data?.kind);
+                }
             } catch (error) {
-                console.error('Error getting full state:', error);
-                callback(null);
+                console.error('Error handling squad radio:', error);
             }
         });
 
-        // Request settings and wait for response
-        await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Settings request timed out after 5 seconds'));
-            }, 5000);
-
-            this.socket.emit('get-settings', name, (response) => {
-                clearTimeout(timeout);
-                if (response.error) {
-                    return reject(new Error(response.error));
+        socket.on('get-full-state', (callback) => {
+            if (typeof callback !== 'function') return;
+            try {
+                if (!this.agent) {
+                    callback({ error: 'agent runtime not ready' });
+                    return;
                 }
-                setSettings(response.settings);
-                this.socket.emit('connect-agent-process', name);
-                resolve();
-            });
+                callback(getFullState(this.agent));
+            } catch (error) {
+                console.error('Error getting full state:', error);
+                callback({ error: String(error?.message || error || 'state collection failed').slice(0, 240) });
+            }
         });
+
+        try {
+            await new Promise((resolve, reject) => {
+                let settled = false;
+                const finish = (error = null) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+                    socket.off('connect', onConnect);
+                    socket.off('connect_error', onError);
+                    if (error) reject(error);
+                    else resolve();
+                };
+                const onConnect = () => finish();
+                const onError = (error) => finish(error || new Error('MindServer connection failed.'));
+                const timeout = setTimeout(
+                    () => finish(new Error('MindServer connection timed out after 5 seconds.')),
+                    5000,
+                );
+                socket.once('connect', onConnect);
+                socket.once('connect_error', onError);
+                if (socket.connected) finish();
+            });
+
+            await new Promise((resolve, reject) => {
+                let settled = false;
+                const finish = (error = null) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+                    if (error) reject(error);
+                    else resolve();
+                };
+                const timeout = setTimeout(
+                    () => finish(new Error('Settings request timed out after 5 seconds.')),
+                    5000,
+                );
+                try {
+                    socket.emit('get-settings', name, (response) => {
+                        try {
+                            if (response?.error) {
+                                finish(new Error(response.error));
+                                return;
+                            }
+                            if (!response?.settings) {
+                                finish(new Error('MindServer returned no agent settings.'));
+                                return;
+                            }
+                            setSettings(response.settings);
+                            this.settingsLoaded = true;
+                            finish();
+                        } catch (error) {
+                            finish(error);
+                        }
+                    });
+                } catch (error) {
+                    finish(error);
+                }
+            });
+
+            if (!socket.connected || this.socket !== socket) {
+                throw new Error('MindServer disconnected during agent setup.');
+            }
+            this.connected = true;
+            console.log(name, 'connected to MindServer');
+        } catch (error) {
+            if (this.socket === socket) this.socket = null;
+            this.connected = false;
+            this.settingsLoaded = false;
+            this._disposeSocket(socket);
+            throw error;
+        }
+    }
+
+    _disposeSocket(socket) {
+        if (!socket) return;
+        try { socket.removeAllListeners(); } catch { /* best effort */ }
+        try { socket.disconnect(); } catch { /* best effort */ }
     }
 
     setAgent(agent) {
         this.agent = agent;
+        if (this.settingsLoaded && this.socket?.connected && this.name) {
+            this.socket.emit('connect-agent-process', this.name);
+        }
     }
 
     getAgents() {
@@ -110,11 +226,49 @@ class MindServerProxy {
     }
 
     login() {
+        if (!this.socket?.connected || !this.agent?.name) return false;
         this.socket.emit('login-agent', this.agent.name);
+        return true;
+    }
+
+    async ready() {
+        const socket = this.socket;
+        const agentName = this.agent?.name;
+        if (!socket?.connected || !agentName) {
+            throw new Error('MindServer bridge is unavailable during world-ready acknowledgement.');
+        }
+        await new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = (error = null) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                if (error) reject(error);
+                else resolve();
+            };
+            const timeout = setTimeout(
+                () => finish(new Error('MindServer world-ready acknowledgement timed out after 5 seconds.')),
+                5000,
+            );
+            try {
+                socket.emit('ready-agent', agentName, (response) => {
+                    if (!response?.success) {
+                        finish(new Error(response?.error || 'MindServer rejected world-ready acknowledgement.'));
+                        return;
+                    }
+                    finish();
+                });
+            } catch (error) {
+                finish(error);
+            }
+        });
+        return true;
     }
 
     shutdown() {
+        if (!this.socket?.connected) return false;
         this.socket.emit('shutdown');
+        return true;
     }
 
     getSocket() {
@@ -127,10 +281,50 @@ export const serverProxy = new MindServerProxy();
 
 // for chatting with other bots
 export function sendBotChatToServer(agentName, json) {
-    serverProxy.getSocket().emit('chat-message', agentName, json);
+    const socket = serverProxy.getSocket();
+    if (!socket?.connected) return false;
+    const message = String(json?.message || '').slice(0, 4096);
+    if (!message) return false;
+    socket.emit('chat-message', agentName, {
+        message,
+        start: json?.start === true,
+        end: json?.end === true,
+    });
+    return true;
+}
+
+export function sendSquadRadio(message, kind = 'status') {
+    return new Promise((resolve) => {
+        const socket = serverProxy.getSocket();
+        if (!socket?.connected) return resolve({ success: false, error: 'MindServer is not connected.' });
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(result || { success: false, error: 'Squad radio returned no response.' });
+        };
+        const timeout = setTimeout(
+            () => finish({ success: false, error: 'Squad radio acknowledgement timed out after 5 seconds.' }),
+            5000,
+        );
+        try {
+            socket.emit('squad-radio', {
+                message: String(message || '').slice(0, 1200),
+                kind: String(kind || 'status').slice(0, 24),
+            }, finish);
+        } catch (error) {
+            finish({ success: false, error: String(error?.message || error || 'Squad radio failed.').slice(0, 240) });
+        }
+    });
 }
 
 // for sending general output to server for display
 export function sendOutputToServer(agentName, message) {
-    serverProxy.getSocket().emit('bot-output', agentName, message);
+    const socket = serverProxy.getSocket();
+    if (!socket?.connected) return false;
+    const output = String(message || '').slice(0, 16384);
+    if (!output) return false;
+    socket.emit('bot-output', agentName, output);
+    return true;
 }

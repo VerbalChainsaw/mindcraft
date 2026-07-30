@@ -1,0 +1,56 @@
+{
+  "date": "2026-07-29",
+  "workspace": "C:\\Users\\zerop\\Development\\minecraft-companion",
+  "focusedContracts": {
+    "agentSquadDashboard": { "passed": 31, "failed": 0 },
+    "startupEvidence": { "passed": 4, "failed": 0 },
+    "criticalGate": { "command": "npm run check:critical", "passed": 9, "failed": 0, "lint": "passed", "format": "passed", "syntax": "passed" }
+  },
+  "liveRecovery": {
+    "squadId": "04da3d15-ef40-401b-89e1-61097baa17de",
+    "member": "Audit_1",
+    "forcedFailure": {
+      "precondition": "Managed Paper stopped; Ollama remained available",
+      "squadState": "failed",
+      "agentState": "failed",
+      "retryable": true,
+      "viewerEnabled": false,
+      "viewerAvailable": false,
+      "viewerPort": null,
+      "lastError": "[LoginGuard] Network Error: Connection timed out or was lost.",
+      "decisiveDiagnostics": [
+        "startup +0ms: process_starting",
+        "startup +13ms: process_spawned",
+        "startup +2741ms: bridge_connected",
+        "startup +4667ms: child.settings_profile_ready",
+        "startup +4863ms: child.mineflayer_created",
+        "Disconnected: econnrefused 127.0.0.1:25579",
+        "startup +4905ms: failure"
+      ]
+    },
+    "retry": {
+      "paperPid": 35632,
+      "squadState": "running",
+      "startedCount": 1,
+      "failedCount": 0,
+      "agentState": "running",
+      "inGame": true,
+      "connectionStage": "world_ready",
+      "readinessStage": "world_ready"
+    },
+    "lifecycle": ["stop:passed", "start:passed", "stop-before-remove:passed", "remove:passed"]
+  },
+  "shutdownOwnership": {
+    "shutdownResult": "success",
+    "removedOwnedPids": [27112, 35632, 3268],
+    "listenersAfterShutdown": [],
+    "sourceConsoleRestart": { "pid": 32324, "port": 8080, "apiReady": true },
+    "listenersAfterRestart": [{ "port": 8080, "pid": 32324 }],
+    "paperAndOllamaAfterRestart": "stopped"
+  },
+  "knownLimitation": {
+    "route": "POST /api/restart",
+    "result": "The replacement handoff did not become ready within the observed window; the original PID retained the listener and stopped serving HTTP. The verified owned PID was then terminated and a clean hidden source console was launched successfully.",
+    "status": "Open; do not claim the in-process self-handoff is reliable on Windows. Coordinated shutdown plus explicit source-console launch is verified."
+  }
+}

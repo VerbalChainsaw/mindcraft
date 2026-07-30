@@ -3,6 +3,11 @@ import * as skills from '../library/skills.js';
 import * as world from '../library/world.js';
 import * as mc from '../../utils/mcdata.js';
 import { blockSatisfied, getTypeOfGeneric, rotateXZ } from './utils.js';
+import {
+    isLiquidGameplayBlock,
+    isProtectedGameplayBlock,
+    isReplaceableGameplayBlock,
+} from '../runtime/gameplay-safety.js';
 
 
 export class BuildGoal {
@@ -13,8 +18,8 @@ export class BuildGoal {
     async wrapSkill(func) {
         if (!this.agent.isIdle())
             return false;
-        let res = await this.agent.actions.runAction('BuildGoal', func);
-        return !res.interrupted;
+        let res = await this.agent.actions.runAction('BuildGoal', func, { owner: 'job' });
+        return res.success === true;
     }
 
     async executeNext(goal, position=null, orientation=null) {
@@ -22,10 +27,17 @@ export class BuildGoal {
         let sizez = goal.blocks[0].length;
         let sizey = goal.blocks.length;
         if (!position) {
-            for (let x = 0; x < sizex - 1; x++) {
-                position = world.getNearestFreeSpace(this.agent.bot, sizex - x, 16);
-                if (position) break;
-            }
+            position = world.getNearestFreeSpace(this.agent.bot, Math.max(sizex, sizez), 16);
+        }
+        if (!position) {
+            return {
+                missing: {},
+                blocked: [{ outcome: 'no_safe_build_site' }],
+                acted: false,
+                complete: false,
+                position: null,
+                orientation,
+            };
         }
         if (orientation === null) {
             orientation = Math.floor(Math.random() * 4);
@@ -33,6 +45,7 @@ export class BuildGoal {
 
         let inventory = world.getInventoryCounts(this.agent.bot);
         let missing = {};
+        let blocked = [];
         let acted = false;
         for (let y = goal.offset; y < sizey+goal.offset; y++) {
             for (let z = 0; z < sizez; z++) {
@@ -47,23 +60,60 @@ export class BuildGoal {
                     let current_block = this.agent.bot.blockAt(world_pos);
 
                     let res = null;
-                    if (current_block !== null && !blockSatisfied(block_name, current_block)) {
+                    if (current_block === null) {
+                        blocked.push({ position: world_pos, outcome: 'target_unloaded' });
+                        acted = true;
+                        continue;
+                    }
+                    if (!blockSatisfied(block_name, current_block)) {
                         acted = true;
 
                         if (current_block.name !== 'air') {
+                            if (
+                                isProtectedGameplayBlock(current_block)
+                                || isLiquidGameplayBlock(current_block)
+                                || !isReplaceableGameplayBlock(current_block)
+                            ) {
+                                blocked.push({
+                                    position: world_pos,
+                                    outcome: isProtectedGameplayBlock(current_block)
+                                        ? 'protected_block'
+                                        : isLiquidGameplayBlock(current_block)
+                                            ? 'liquid'
+                                            : 'occupied',
+                                    observed: current_block.name,
+                                    expected: block_name,
+                                });
+                                continue;
+                            }
                             res = await this.wrapSkill(async () => {
-                                await skills.breakBlockAt(this.agent.bot, world_pos.x, world_pos.y, world_pos.z);
+                                return await skills.breakBlockAt(this.agent.bot, world_pos.x, world_pos.y, world_pos.z);
                             });
-                            if (!res) return {missing: missing, acted: acted, position: position, orientation: orientation};
+                            if (!res) {
+                                blocked.push({ position: world_pos, outcome: 'clear_failed', observed: current_block.name });
+                                continue;
+                            }
                         }
 
                         if (block_name !== 'air') {
                             let block_typed = getTypeOfGeneric(this.agent.bot, block_name);
                             if (inventory[block_typed] > 0) {
                                 res = await this.wrapSkill(async () => {
-                                    await skills.placeBlock(this.agent.bot, block_typed, world_pos.x, world_pos.y, world_pos.z);
+                                    return await skills.placeBlock(
+                                        this.agent.bot,
+                                        block_typed,
+                                        world_pos.x,
+                                        world_pos.y,
+                                        world_pos.z,
+                                        'bottom',
+                                        false,
+                                        false,
+                                    );
                                 });
-                                if (!res) return {missing: missing, acted: acted, position: position, orientation: orientation};
+                                if (!res) {
+                                    blocked.push({ position: world_pos, outcome: 'place_failed', expected: block_typed });
+                                    continue;
+                                }
                             } else {
                                 if (missing[block_typed] === undefined)
                                     missing[block_typed] = 0;
@@ -74,7 +124,14 @@ export class BuildGoal {
                 }
             }
         }
-        return {missing: missing, acted: acted, position: position, orientation: orientation};
+        return {
+            missing,
+            blocked,
+            acted,
+            complete: Object.keys(missing).length === 0 && blocked.length === 0,
+            position,
+            orientation,
+        };
     }
 
 }

@@ -56,3 +56,10 @@ export function hasKey(name) {
     refresh();
     return Boolean(keys[name] || process.env[name]);
 }
+
+export function getKeySource(name) {
+    refresh();
+    if (keys[name]) return 'keys.json';
+    if (process.env[name]) return 'environment';
+    return null;
+}

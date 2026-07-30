@@ -14,7 +14,9 @@
 
 import { EventEmitter } from 'events';
 import path from 'path';
+import process from 'node:process';
 import { hasKey } from '../../utils/keys.js';
+import { terminateOwnedProcessTree } from '../process-tree.js';
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -26,6 +28,33 @@ const DEFAULTS = {
   maxStaleCycles: 3, // this many stale ticks => auto-recall
   defaultCwd: process.cwd(),
 };
+const LOCAL_LOCATIONS = new Set(['in-process', 'child']);
+const MAX_PUBLIC_RESULT_TEXT = 240;
+
+function localLocation(value) {
+  const location = String(value || 'in-process');
+  if (!LOCAL_LOCATIONS.has(location)) {
+    throw new Error('Remote task-runner execution is not implemented. Choose a local execution mode.');
+  }
+  return location;
+}
+
+function boundedText(value, fallback = '') {
+  // eslint-disable-next-line no-control-regex -- remove terminal control characters from public task output
+  return String(value || fallback).replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, MAX_PUBLIC_RESULT_TEXT);
+}
+
+function publicResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const code = Number.isInteger(result.code) ? result.code : null;
+  return {
+    ok: result.ok === true,
+    code,
+    timedOut: result.timedOut === true,
+    skipped: result.skipped === true,
+    error: boundedText(result.error),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helper: one member of the angry swarm
@@ -36,8 +65,8 @@ export class Helper {
     this.name = spec.name || this.id;
     this.command = spec.command || 'echo "[swarm] ' + this.name + ' alive"';
     this.cwd = spec.cwd || DEFAULTS.defaultCwd;
-    this.location = spec.location || 'in-process'; // 'in-process' | 'child' | 'remote'
-    this.host = spec.host || 'localhost'; // for 'remote' / 'child' reporting
+    this.location = localLocation(spec.location); // Local execution modes only.
+    this.host = 'localhost';
     // Mobility: where it should run. relocate() updates cwd + location.
     this.status = 'idle'; // 'idle' | 'active' | 'stale' | 'stopped' | 'error'
     this.cycleIntervalMs = spec.cycleIntervalMs || DEFAULTS.cycleIntervalMs;
@@ -52,16 +81,21 @@ export class Helper {
     this.cycleCount = 0;
     this.staleCycles = 0;
     this.lastBeat = Date.now();
+    this.lastBeatSource = 'started';
     this.lastResult = null;
+    this.lastResultAt = null;
     this.lastError = null;
     this._heartbeatTimer = null;
     this._cycleTimer = null;
     this._proc = null; // for 'child' location
     this._onAction = null; // injected executor
+    this._tickInFlight = false;
+    this._executionGeneration = 0;
   }
 
-  markAlive() {
+  markAlive(source = 'successful-cycle') {
     this.lastBeat = Date.now();
+    this.lastBeatSource = source;
     if (this.status === 'stale') this.status = 'active';
     this.staleCycles = 0;
   }
@@ -76,6 +110,11 @@ export class Helper {
   }
 
   async tick() {
+    if (this._tickInFlight) {
+      return { ok: false, skipped: true, reason: 'cycle already running' };
+    }
+    this._tickInFlight = true;
+    const generation = this._executionGeneration;
     this.cycleCount += 1;
     try {
       // Optional brain: consult LLM (guarded). Brain may return an override
@@ -97,21 +136,39 @@ export class Helper {
             brain: brainOutput,
           })
         : { skipped: true, reason: 'no executor attached' };
+      if (generation !== this._executionGeneration) {
+        return { ok: false, skipped: true, reason: 'cycle interrupted' };
+      }
       this.lastResult = result;
+      this.lastResultAt = Date.now();
+      if (result?.ok !== true) {
+        this.lastError = result?.timedOut
+          ? 'Cycle timed out before completion.'
+          : boundedText(result?.error, result?.skipped ? 'Cycle did not execute.' : 'Cycle failed.');
+        this.status = 'error';
+        return { ok: false, error: this.lastError, result: publicResult(result) };
+      }
       this.lastError = null;
-      this.markAlive();
-      return { ok: true, result };
+      this.markAlive('successful-cycle');
+      return { ok: true, result: publicResult(result) };
     } catch (err) {
+      if (generation !== this._executionGeneration) {
+        return { ok: false, skipped: true, reason: 'cycle interrupted' };
+      }
       this.lastError = String(err && err.message ? err.message : err);
+      this.lastResult = { ok: false, error: this.lastError };
+      this.lastResultAt = Date.now();
       this.status = 'error';
       return { ok: false, error: this.lastError };
+    } finally {
+      this._tickInFlight = false;
     }
   }
 
   start() {
     if (this._cycleTimer) return;
     this.status = 'active';
-    this.markAlive();
+    this.markAlive('started');
     // NOTE: no self-ping heartbeat — lastBeat is refreshed ONLY by real
     // liveness proof (a successful tick, or an external pulse via the API).
     // A self-ping timer would defeat the watchdog entirely.
@@ -123,15 +180,16 @@ export class Helper {
   stop() {
     if (this._cycleTimer) clearInterval(this._cycleTimer);
     this._cycleTimer = null;
+    this._executionGeneration += 1;
     this.status = 'stopped';
-    this._killProc();
+    return this._killProc();
   }
 
   _killProc() {
-    if (this._proc) {
-      try { this._proc.kill(); } catch { /* ignore */ }
-      this._proc = null;
-    }
+    const proc = this._proc;
+    this._proc = null;
+    if (!proc) return { success: true, alreadyExited: true };
+    return terminateOwnedProcessTree(proc);
   }
 
   // Mobility: change where this helper runs. For 'in-process' helpers this
@@ -139,8 +197,9 @@ export class Helper {
   relocate({ cwd, location, host } = {}) {
     const prevCwd = this.cwd;
     if (cwd) this.cwd = path.resolve(cwd);
-    if (location) this.location = location;
-    if (host) this.host = host;
+    if (location) this.location = localLocation(location);
+    this.host = 'localhost';
+    this._executionGeneration += 1;
     this._killProc();
     if (this.location === 'child') {
       // executor re-spawns worker on next tick via the swarm's child runner
@@ -161,11 +220,15 @@ export class Helper {
       cycleCount: this.cycleCount,
       staleCycles: this.staleCycles,
       lastBeat: this.lastBeat,
+      lastBeatSource: this.lastBeatSource,
       ageMs: Date.now() - this.lastBeat,
+      execution: { scope: 'local', transport: 'local-shell' },
+      cycleInFlight: this._tickInFlight,
       hasBrain: Boolean(this.brain && this.brain.enabled),
       brain: this.brain ? { provider: this.brain.provider, model: this.brain.model, enabled: this.brain.enabled } : null,
-      lastResult: this.lastResult,
-      lastError: this.lastError,
+      lastResult: publicResult(this.lastResult),
+      lastResultAt: this.lastResultAt,
+      lastError: boundedText(this.lastError),
     };
   }
 }
@@ -208,7 +271,7 @@ export class Swarm extends EventEmitter {
   recall(id) {
     const h = this.helpers.get(id);
     if (!h) return { ok: false, error: 'not found' };
-    h.stop();
+    void h.stop();
     this.helpers.delete(id);
     this.emit('recall', { id });
     this.emit('change');
@@ -218,7 +281,12 @@ export class Swarm extends EventEmitter {
   relocate(id, opts = {}) {
     const h = this.helpers.get(id);
     if (!h) return { ok: false, error: 'not found' };
-    const r = h.relocate(opts);
+    let r;
+    try {
+      r = h.relocate(opts);
+    } catch (error) {
+      return { ok: false, error: String(error && error.message ? error.message : error) };
+    }
     this.emit('relocate', { id, ...r });
     this.emit('change');
     return r;
@@ -231,7 +299,7 @@ export class Swarm extends EventEmitter {
   pulse(id) {
     const h = this.helpers.get(id);
     if (!h) return { ok: false, error: 'not found' };
-    h.markAlive();
+    h.markAlive('manual-pulse');
     this.emit('change');
     return { ok: true, id, ageMs: Date.now() - h.lastBeat };
   }
@@ -265,13 +333,19 @@ export class Swarm extends EventEmitter {
     this.emit('start');
   }
 
-  stop() {
+  async stop() {
     if (this._watchdogTimer) clearInterval(this._watchdogTimer);
     this._watchdogTimer = null;
-    for (const h of this.helpers.values()) h.stop();
+    const results = await Promise.all([...this.helpers.values()].map((helper) => helper.stop()));
     this.helpers.clear();
     this._running = false;
     this.emit('stop');
+    const failed = results.filter((result) => result?.success === false);
+    return {
+      success: failed.length === 0,
+      error: failed.length ? 'One or more task-runner process trees did not exit.' : null,
+      helpers: results,
+    };
   }
 }
 
@@ -306,7 +380,7 @@ async function defaultExecutor({ helper, brain } = {}) {
       });
       helper._proc = proc;
       const to = setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch { /* ignore */ }
+        void terminateOwnedProcessTree(proc);
         close({ ok: false, timedOut: true, stdout, stderr: stderr + '\n[swarm] cycle timed out' });
       }, Math.max(2000, Math.floor(helper.cycleIntervalMs * 0.8)));
       proc.stdout.on('data', (d) => { stdout += String(d); });
@@ -330,7 +404,7 @@ async function defaultExecutor({ helper, brain } = {}) {
 //   null             -> no change (run the static command)
 // This is a safe, dependency-light default; swap in a real LLM client later.
 // ---------------------------------------------------------------------------
-export async function defaultBrainHook(helper, ctx) {
+export function defaultBrainHook(helper, ctx) {
   const brain = helper.brain;
   if (!brain || !brain.enabled) return null;
   const keyName = providerKeyName(brain.provider);

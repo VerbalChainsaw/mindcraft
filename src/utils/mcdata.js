@@ -7,6 +7,7 @@ import { plugin as pvp } from 'mineflayer-pvp';
 import { plugin as collectblock } from 'mineflayer-collectblock';
 import { plugin as autoEat } from 'mineflayer-auto-eat';
 import plugin from 'mineflayer-armor-manager';
+import { plugin as toolPlugin } from 'mineflayer-tool';
 const armorManager = plugin;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
@@ -50,6 +51,28 @@ export const WOOL_COLORS = [
     'red',
     'black'
 ]
+
+// Mineflayer reports both passive and hostile living entities as `type: mob`.
+// Keep reflex targeting conservative: a bot should never attack livestock just
+// because it is a living entity. Names are stable Minecraft protocol IDs.
+const HOSTILE_MOB_NAMES = new Set([
+    'blaze', 'bogged', 'breeze', 'cave_spider', 'creaking', 'creeper',
+    'drowned', 'elder_guardian', 'endermite', 'evoker', 'ghast', 'giant',
+    'guardian', 'hoglin', 'husk', 'illusioner', 'magma_cube', 'phantom',
+    'pillager', 'ravager', 'shulker', 'silverfish', 'skeleton', 'slime',
+    'stray', 'vex', 'vindicator', 'warden', 'witch', 'wither',
+    'wither_skeleton', 'zoglin', 'zombie', 'zombie_villager',
+]);
+
+// These are real threats but a companion should not autonomously enter melee
+// with them. Cowardice can still react; explicit player combat commands retain
+// their existing authority.
+const AVOID_ONLY_HOSTILES = new Set(['enderman', 'warden', 'wither', 'ender_dragon']);
+const NEVER_AUTO_TARGET = new Set(['iron_golem', 'snow_golem']);
+
+function normalizedEntityName(mob) {
+    return typeof mob?.name === 'string' ? mob.name.toLowerCase() : '';
+}
 
 
 export function initBot(username) {
@@ -119,6 +142,7 @@ export function initBot(username) {
     bot.loadPlugin(collectblock);
     bot.loadPlugin(autoEat);
     bot.loadPlugin(armorManager); // auto equip armor
+    bot.loadPlugin(toolPlugin);
     bot.once('resourcePack', () => {
         bot.acceptResourcePack();
     });
@@ -135,12 +159,24 @@ export function initBot(username) {
 export function isHuntable(mob) {
     if (!mob || !mob.name) return false;
     const animals = ['chicken', 'cow', 'llama', 'mooshroom', 'pig', 'rabbit', 'sheep'];
-    return animals.includes(mob.name.toLowerCase()) && !mob.metadata[16]; // metadata 16 is not baby
+    return animals.includes(normalizedEntityName(mob)) && !mob.metadata?.[16]; // metadata 16 is not baby
 }
 
 export function isHostile(mob) {
-    if (!mob || !mob.name) return false;
-    return  (mob.type === 'mob' || mob.type === 'hostile') && mob.name !== 'iron_golem' && mob.name !== 'snow_golem';
+    const name = normalizedEntityName(mob);
+    if (!name) return false;
+    if (NEVER_AUTO_TARGET.has(name)) return false;
+    return mob.type === 'hostile' || HOSTILE_MOB_NAMES.has(name) || AVOID_ONLY_HOSTILES.has(name);
+}
+
+export function isCombatSafeHostile(mob) {
+    const name = normalizedEntityName(mob);
+    return isHostile(mob) && !AVOID_ONLY_HOSTILES.has(name);
+}
+
+export function getThreatDisposition(mob) {
+    if (!isHostile(mob)) return isHuntable(mob) ? 'huntable' : 'neutral';
+    return isCombatSafeHostile(mob) ? 'combat_safe' : 'avoid_only';
 }
 
 // blocks that don't work with collectBlock, need to be manually collected

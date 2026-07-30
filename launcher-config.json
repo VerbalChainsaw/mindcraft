@@ -1,23 +1,33 @@
 {
   "mindserver_port": 8080,
   "mindserver_host_public": false,
-  "auto_open_ui": true,
+  "auto_open_ui": false,
   "auto_start": true,
   "port_scan_start": 8080,
   "port_scan_max": 20,
   "profiles": [
-    "./profiles/deepseek.json"
+    "./profiles/local-quickstart.json"
   ],
   "agent_defaults": {
     "host": "127.0.0.1",
-    "port": 55916,
+    "port": 25579,
     "auth": "offline",
     "minecraft_version": "auto",
     "base_profile": "assistant",
     "model": "",
     "init_message": "Respond with hello world and your name",
-    "load_memory": false,
+    "load_memory": true,
     "speak": false,
-    "chat_ingame": true
+    "chat_ingame": true,
+    "allow_vision": false,
+    "render_bot_view": false
+  },
+  "telemetry": {
+    "intervalMs": 1000,
+    "requestTimeoutMs": 1200,
+    "maxConcurrent": 6,
+    "heartbeatMs": 3000,
+    "failureBackoffMs": 1500,
+    "maxFailureBackoffMs": 15000
   }
 }

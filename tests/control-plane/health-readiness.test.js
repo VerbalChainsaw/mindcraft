@@ -36,9 +36,9 @@ function cleanup(...names) {
 
 test('Given selected local profiles and no API keys, when health is assembled, then selected readiness is true while legacy anyApiKey remains false', () => {
   // Given
-  selectProfile('local-ollama', 'ollama/llama3');
-  selectProfile('local-lmstudio', 'lmstudio/local-model');
-  selectProfile('local-vllm', 'vllm/local-model');
+  selectProfile('LocalOllama', 'ollama/llama3');
+  selectProfile('LocalLMStudio', 'lmstudio/local-model');
+  selectProfile('LocalVLLM', 'vllm/local-model');
 
   try {
     // When
@@ -51,18 +51,18 @@ test('Given selected local profiles and no API keys, when health is assembled, t
     assert.equal(health.ok, true);
     assert.equal(health.problems.includes('No API key configured — add one in the Setup Wizard (API Keys card).'), false);
     assert.deepEqual(selectedProfiles.map(({ name, state }) => ({ name, state })), [
-      { name: 'local-lmstudio', state: 'ready' },
-      { name: 'local-ollama', state: 'ready' },
-      { name: 'local-vllm', state: 'ready' },
+      { name: 'LocalLMStudio', state: 'ready' },
+      { name: 'LocalOllama', state: 'ready' },
+      { name: 'LocalVLLM', state: 'ready' },
     ]);
   } finally {
-    cleanup('local-ollama', 'local-lmstudio', 'local-vllm');
+    cleanup('LocalOllama', 'LocalLMStudio', 'LocalVLLM');
   }
 });
 
 test('Given duplicate local selected profiles, when health readiness is requested, then each selected descriptor remains blocked without exposing settings', () => {
   // Given
-  const agentName = 'duplicate-local-health-agent';
+  const agentName = 'HealthDupBot';
   const firstSettings = {
     profile: {
       name: agentName,
@@ -140,13 +140,13 @@ test('Given a selected credentialed provider without any API key, when health is
 
 test('Given credentialed profiles and only unrelated keys, when readiness is recomputed, then those profiles remain blocked', () => {
   // Given
-  selectProfile('openai-unrelated-key', 'openai/gpt-4o');
-  selectProfile('compatible-unrelated-key', {
+  selectProfile('OpenAIUnrelated', 'openai/gpt-4o');
+  selectProfile('CompatUnrelated', {
     api: 'openai_compatible',
     model: 'custom/model',
     url: 'https://custom-provider.example/v1',
   });
-  selectProfile('compatible-advertised-key', {
+  selectProfile('CompatKeyBot', {
     api: 'openai_compatible',
     model: 'together/model',
     url: 'https://api.together.xyz/v1',
@@ -161,19 +161,19 @@ test('Given credentialed profiles and only unrelated keys, when readiness is rec
 
     // Then
     assert.deepEqual(profiles.map(({ name, state }) => ({ name, state })), [
-      { name: 'compatible-advertised-key', state: 'ready' },
-      { name: 'compatible-unrelated-key', state: 'blocked' },
-      { name: 'openai-unrelated-key', state: 'blocked' },
+      { name: 'CompatKeyBot', state: 'ready' },
+      { name: 'CompatUnrelated', state: 'blocked' },
+      { name: 'OpenAIUnrelated', state: 'blocked' },
     ]);
     assert.equal(profiles[2].reason, 'Missing credential for chat model provider "openai".');
   } finally {
-    cleanup('openai-unrelated-key', 'compatible-unrelated-key', 'compatible-advertised-key');
+    cleanup('OpenAIUnrelated', 'CompatUnrelated', 'CompatKeyBot');
   }
 });
 
 test('Given a DeepSeek profile without its required key, when health is assembled, then only that selected profile has a specific blocked problem', () => {
   // Given
-  selectProfile('deepseek-missing-key', 'deepseek/deepseek-chat');
+  selectProfile('DeepseekBot', 'deepseek/deepseek-chat');
 
   try {
     // When
@@ -184,16 +184,16 @@ test('Given a DeepSeek profile without its required key, when health is assemble
     assert.equal(health.checks.selectedProfilesReady, false);
     assert.equal(selectedProfiles[0].state, 'blocked');
     assert.deepEqual(health.problems, [
-      'Selected profile "deepseek-missing-key" is blocked: Missing credential for chat model provider "deepseek".',
+      'Selected profile "DeepseekBot" is blocked: Missing credential for chat model provider "deepseek".',
     ]);
   } finally {
-    cleanup('deepseek-missing-key');
+    cleanup('DeepseekBot');
   }
 });
 
 test('Given a selected profile and a hot-added required key, when readiness is requested again, then it changes without re-registering the profile', () => {
   // Given
-  selectProfile('hot-key-profile', 'openai/gpt-4o');
+  selectProfile('HotKeyBot', 'openai/gpt-4o');
   let keyAvailable = false;
   const keyLookup = (key) => keyAvailable && key === 'OPENAI_API_KEY';
 
@@ -208,14 +208,14 @@ test('Given a selected profile and a hot-added required key, when readiness is r
     assert.equal(after[0].state, 'ready');
     assert.equal(after[0].reason, null);
   } finally {
-    cleanup('hot-key-profile');
+    cleanup('HotKeyBot');
   }
 });
 
 test('Given mixed local and credentialed profiles, when readiness is recomputed, then profile states remain independent', () => {
   // Given
-  selectProfile('mixed-local', 'ollama/llama3');
-  selectProfile('mixed-openai', 'openai/gpt-4o');
+  selectProfile('MixedLocal', 'ollama/llama3');
+  selectProfile('MixedOpenAI', 'openai/gpt-4o');
 
   try {
     // When
@@ -223,17 +223,17 @@ test('Given mixed local and credentialed profiles, when readiness is recomputed,
 
     // Then
     assert.deepEqual(profiles.map(({ name, state }) => ({ name, state })), [
-      { name: 'mixed-local', state: 'ready' },
-      { name: 'mixed-openai', state: 'blocked' },
+      { name: 'MixedLocal', state: 'ready' },
+      { name: 'MixedOpenAI', state: 'blocked' },
     ]);
   } finally {
-    cleanup('mixed-local', 'mixed-openai');
+    cleanup('MixedLocal', 'MixedOpenAI');
   }
 });
 
 test('Given private profile settings, when selected readiness is returned, then it exposes only sanitized readiness fields', () => {
   // Given
-  selectProfile('sanitized-profile', {
+  selectProfile('SanitizeBot', {
     api: 'openai',
     model: 'gpt-4o',
     url: 'https://private-provider.example/v1',
@@ -258,7 +258,7 @@ test('Given private profile settings, when selected readiness is returned, then 
     ]);
     assert.doesNotMatch(JSON.stringify(profile), /private-provider|must-not-leak|url|apiKey/i);
   } finally {
-    cleanup('sanitized-profile');
+    cleanup('SanitizeBot');
   }
 });
 

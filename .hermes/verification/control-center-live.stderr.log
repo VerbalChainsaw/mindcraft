@@ -1,0 +1,37 @@
+Error pinging server 127.0.0.1:25579 Error: connect ECONNREFUSED 127.0.0.1:25579
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 25579
+}
+Error getting server: Error: MC server not found. (Host: 127.0.0.1, Port: 25579) Check the host and port in settings.js, and ensure the server is running and open to public or LAN.
+    at getServer (file:///C:/Users/zerop/Development/minecraft-companion/src/mindcraft/mcserver.js:155:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Module.createAgent (file:///C:/Users/zerop/Development/minecraft-companion/src/mindcraft/mindcraft.js:310:28)
+    at async BotSquadManager.runStart (file:///C:/Users/zerop/Development/minecraft-companion/src/mindcraft/bot-squad-manager.js:661:13)
+Attempting to connect anyway...
+Gameplay skill embeddings are unavailable; using complete lexical skill-doc ranking.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+Disconnected: {"errno":-4078,"code":"econnrefused","syscall":"connect","address":"127.0.0.1","port":25579}
+[LoginGuard] Network Error: Connection timed out or was lost.
+Error creating agent Audit_1: Error: [LoginGuard] Network Error: Connection timed out or was lost.
+    at AgentProcess._handleExit (file:///C:/Users/zerop/Development/minecraft-companion/src/process/agent_process.js:351:70)
+    at ChildProcess.<anonymous> (file:///C:/Users/zerop/Development/minecraft-companion/src/process/agent_process.js:165:18)
+    at Object.onceWrapper (node:events:634:26)
+    at ChildProcess.emit (node:events:519:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+Gameplay skill embeddings are unavailable; using complete lexical skill-doc ranking.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Gameplay skill embeddings are unavailable; using complete lexical skill-doc ranking.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready

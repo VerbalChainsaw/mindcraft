@@ -12,14 +12,6 @@ import {
   loadLauncherConfig,
   writeLauncherConfig,
 } from '../../src/mindcraft/launcher-config.js';
-import './agent-finalization.test.js';
-import './dashboard-lifecycle.test.js';
-import './health-readiness.test.js';
-import './mindserver-readiness.test.js';
-import './openai-compatible.test.js';
-import './agent-lifecycle.test.js';
-import './runtime-config.test.js';
-
 test('Given no public-bind setting, when launcher configuration is loaded, then MindServer remains loopback-only', async () => {
   // Given
   const configDirectory = await mkdtemp(path.join(tmpdir(), 'mindcraft-control-plane-'));

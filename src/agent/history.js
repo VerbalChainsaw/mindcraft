@@ -1,6 +1,64 @@
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import {
+    appendFileSync,
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    renameSync,
+    statSync,
+} from 'fs';
 import { NPCData } from './npc/data.js';
 import settings from './settings.js';
+import { writeJsonAtomicSync } from '../utils/atomic-file.js';
+
+const MAX_MEMORY_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_STORED_TURNS = 100;
+const MAX_STORED_TURN_CHARS = 32_000;
+const MAX_STORED_MEMORY_CHARS = 4_000;
+const MAX_STORED_PROMPT_CHARS = 4_000;
+
+function validateStoredHistory(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new TypeError('Bot memory must contain a JSON object.');
+    }
+    if (!Array.isArray(value.turns) || value.turns.length > MAX_STORED_TURNS) {
+        throw new TypeError('Bot memory contains an invalid turn list.');
+    }
+    const turns = value.turns.map((turn) => {
+        if (
+            !turn
+            || typeof turn !== 'object'
+            || !['assistant', 'system', 'user'].includes(turn.role)
+            || typeof turn.content !== 'string'
+            || turn.content.length > MAX_STORED_TURN_CHARS
+        ) {
+            throw new TypeError('Bot memory contains an invalid conversation turn.');
+        }
+        return { role: turn.role, content: turn.content };
+    });
+    if (value.memory !== undefined && typeof value.memory !== 'string') {
+        throw new TypeError('Bot memory summary must be text.');
+    }
+    if (value.self_prompt !== undefined && value.self_prompt !== null && typeof value.self_prompt !== 'string') {
+        throw new TypeError('Bot self-prompt memory must be text or null.');
+    }
+    if (
+        value.self_prompting_state !== undefined
+        && ![0, 1, 2].includes(value.self_prompting_state)
+    ) {
+        throw new TypeError('Bot self-prompt state is invalid.');
+    }
+    return {
+        ...value,
+        memory: String(value.memory || '').slice(0, MAX_STORED_MEMORY_CHARS),
+        turns,
+        self_prompt: typeof value.self_prompt === 'string'
+            ? value.self_prompt.slice(0, MAX_STORED_PROMPT_CHARS)
+            : null,
+        self_prompting_state: value.self_prompting_state ?? 0,
+        last_sender: typeof value.last_sender === 'string' ? value.last_sender.slice(0, 64) : null,
+        taskStart: Number.isFinite(value.taskStart) ? value.taskStart : null,
+    };
+}
 
 
 export class History {
@@ -42,19 +100,16 @@ export class History {
         console.log("Memory updated to: ", this.memory);
     }
 
-    async appendFullHistory(to_store) {
+    appendFullHistory(to_store) {
         if (this.full_history_fp === undefined) {
             const string_timestamp = new Date().toLocaleString().replace(/[/:]/g, '-').replace(/ /g, '').replace(/,/g, '_');
-            this.full_history_fp = `./bots/${this.name}/histories/${string_timestamp}.json`;
-            writeFileSync(this.full_history_fp, '[]', 'utf8');
+            this.full_history_fp = `./bots/${this.name}/histories/${string_timestamp}.jsonl`;
         }
         try {
-            const data = readFileSync(this.full_history_fp, 'utf8');
-            let full_history = JSON.parse(data);
-            full_history.push(...to_store);
-            writeFileSync(this.full_history_fp, JSON.stringify(full_history, null, 4), 'utf8');
+            const records = to_store.map((entry) => JSON.stringify(entry)).join('\n');
+            if (records) appendFileSync(this.full_history_fp, `${records}\n`, 'utf8');
         } catch (err) {
-            console.error(`Error reading ${this.name}'s full history file: ${err.message}`);
+            console.error(`Error appending ${this.name}'s full history file: ${err.message}`);
         }
     }
 
@@ -79,7 +134,7 @@ export class History {
         }
     }
 
-    async save() {
+    save() {
         try {
             const data = {
                 memory: this.memory,
@@ -89,7 +144,7 @@ export class History {
                 taskStart: this.agent.task.taskStartTime,
                 last_sender: this.agent.last_sender
             };
-            writeFileSync(this.memory_fp, JSON.stringify(data, null, 2));
+            writeJsonAtomicSync(this.memory_fp, data);
             console.log('Saved memory to:', this.memory_fp);
         } catch (error) {
             console.error('Failed to save history:', error);
@@ -103,14 +158,37 @@ export class History {
                 console.log('No memory file found.');
                 return null;
             }
-            const data = JSON.parse(readFileSync(this.memory_fp, 'utf8'));
-            this.memory = data.memory || '';
-            this.turns = data.turns || [];
+            if (statSync(this.memory_fp).size > MAX_MEMORY_FILE_BYTES) {
+                throw new TypeError('Bot memory file exceeds the 2 MB safety limit.');
+            }
+            const data = validateStoredHistory(JSON.parse(readFileSync(this.memory_fp, 'utf8')));
+            this.memory = data.memory;
+            this.turns = data.turns;
             console.log('Loaded memory:', this.memory);
             return data;
         } catch (error) {
-            console.error('Failed to load history:', error);
-            throw error;
+            const recoverable = error instanceof SyntaxError || error instanceof TypeError;
+            if (!recoverable) {
+                console.error('Failed to load history:', error);
+                throw error;
+            }
+            const quarantinePath = this.memory_fp.replace(
+                /\.json$/i,
+                `.corrupt-${Date.now()}.json`,
+            );
+            try {
+                renameSync(this.memory_fp, quarantinePath);
+                console.error(
+                    `Ignored invalid bot memory for ${this.name}; preserved it at ${quarantinePath}: ${error.message}`,
+                );
+            } catch (quarantineError) {
+                console.error(
+                    `Ignored invalid bot memory for ${this.name}, but could not quarantine it: ${quarantineError.message}`,
+                );
+            }
+            this.memory = '';
+            this.turns = [];
+            return null;
         }
     }
 

@@ -28,6 +28,38 @@ function descriptor(result) {
   return [...result.ready, ...result.blocked][0];
 }
 
+test('Given an agent name that can escape the bot data directory, when profile preflight runs, then it is rejected before launch', () => {
+  const result = preflight({
+    name: '../outside-bots',
+    model: 'ollama/qwen2.5:3b',
+  });
+
+  assert.equal(result.ready.length, 0);
+  assert.equal(result.blocked.length, 1);
+  assert.match(result.blocked[0].lastError, /3-16 alphanumeric/i);
+});
+
+test('Given an invalid agent name reaches the direct creation boundary, when creation is attempted, then no child process is constructed', async () => {
+  let processConstructed = false;
+  const response = await Mindcraft.createAgent({
+    ...DEFAULTS,
+    profile: {
+      name: '../../outside-bots',
+      model: 'ollama/qwen2.5:3b',
+    },
+  }, {
+    resolveServer: () => ({ host: '127.0.0.1', port: 25565, version: '1.21.11' }),
+    createAgentProcess: () => {
+      processConstructed = true;
+      throw new Error('invalid names must not reach process construction');
+    },
+  });
+
+  assert.equal(response.success, false);
+  assert.match(response.error, /3-16 alphanumeric/i);
+  assert.equal(processConstructed, false);
+});
+
 class FakeRetryProcess {
   constructor() {
     this.state = 'idle';
@@ -184,6 +216,14 @@ test('Given duplicate trimmed names, when profiles are prepared, then all duplic
   assert.ok(result.blocked.every((entry) => /Duplicate agent name/.test(entry.lastError)));
 });
 
+test('Given a safe catalog-style profile name, when profiles are prepared, then it becomes a valid Minecraft username', () => {
+  const result = prepareProfiles([
+    { profile: { name: 'nvidia-nim-provider', model: 'ollama/local' } },
+  ], DEFAULTS, { hasKey: () => false });
+
+  assert.equal(result.ready[0].name, 'nvidia_nim_provi');
+});
+
 test('Given a malformed selected profile, when profiles are prepared, then it has a sanitized blocked descriptor', () => {
   // Given / When
   const result = prepareProfiles([{ loadError: 'profile JSON failed to parse' }], DEFAULTS, { hasKey: () => false });
@@ -202,7 +242,7 @@ test('Given a malformed selected profile, when profiles are prepared, then it ha
 
 test('Given an OpenAI profile without its credential, when profiles are prepared, then it is blocked without exposing profile settings', () => {
   // Given / When
-  const result = preflight({ name: 'openai-agent', model: 'gpt-4o' });
+  const result = preflight({ name: 'OpenAIBot', model: 'gpt-4o' });
   const blocked = descriptor(result);
 
   // Then
@@ -223,7 +263,7 @@ test('Given local model providers, when profiles are prepared without keys, then
 test('Given an Azure profile with only an OpenAI key, when profiles are prepared, then the Azure credential fallback is ready', () => {
   // Given / When
   const result = preflight(
-    { name: 'azure-agent', model: { api: 'azure', model: 'deployment' } },
+    { name: 'AzureBot', model: { api: 'azure', model: 'deployment' } },
     ['OPENAI_API_KEY'],
   );
 
@@ -327,23 +367,24 @@ test('Given explicit code, vision, or embedding models without their credentials
   ];
 
   // When / Then
-  for (const [field, model, label] of cases) {
-    const result = preflight({ name: `${field}-agent`, model: 'ollama/local', [field]: model });
+  for (const [index, [field, model, label]] of cases.entries()) {
+    const result = preflight({ name: `ModelBot${index}`, model: 'ollama/local', [field]: model });
     assert.match(descriptor(result).lastError, new RegExp(`Missing credential for ${label} provider`));
   }
 });
 
-test('Given a malformed explicit embedding model, when profiles are prepared, then it falls back to the chat provider as Prompter does', () => {
+test('Given a malformed explicit embedding model, when profiles are prepared, then startup is blocked before provider construction', () => {
   // Given / When
-  const result = preflight({ name: 'embedding-fallback', model: 'ollama/local', embedding: 'unsupported-model' });
+  const result = preflight({ name: 'EmbedBot', model: 'ollama/local', embedding: 'unsupported-model' });
 
   // Then
-  assert.equal(descriptor(result).state, 'ready');
+  assert.equal(descriptor(result).state, 'blocked');
+  assert.equal(descriptor(result).lastError, 'Unsupported embedding model provider.');
 });
 
 test('Given a blocked profile, when start is requested before a key is available, then no Minecraft lookup or child spawn occurs', async () => {
   // Given
-  const settings = { ...DEFAULTS, profile: { name: 'blocked-agent', model: 'openai/gpt-4o' } };
+  const settings = { ...DEFAULTS, profile: { name: 'BlockedBot', model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   let minecraftLookups = 0;
   let childStarts = 0;
@@ -361,22 +402,22 @@ test('Given a blocked profile, when start is requested before a key is available
 
   try {
     // When
-    const result = await Mindcraft.startAgent('blocked-agent');
+    const result = await Mindcraft.startAgent('BlockedBot');
 
     // Then
     assert.equal(result.success, false);
     assert.equal(minecraftLookups, 0);
     assert.equal(childStarts, 0);
-    assert.equal(Mindcraft.getAgentProcess('blocked-agent').state, 'blocked');
-    assert.equal(Mindcraft.getAgentProcess('blocked-agent').running, false);
+    assert.equal(Mindcraft.getAgentProcess('BlockedBot').state, 'blocked');
+    assert.equal(Mindcraft.getAgentProcess('BlockedBot').running, false);
   } finally {
-    Mindcraft.destroyAgent('blocked-agent');
+    Mindcraft.destroyAgent('BlockedBot');
   }
 });
 
 test('Given a blocked profile and a hot-added key, when start is retried, then readiness is reevaluated before normal startup', async () => {
   // Given
-  const settings = { ...DEFAULTS, profile: { name: 'retry-agent', model: 'openai/gpt-4o' } };
+  const settings = { ...DEFAULTS, profile: { name: 'RetryBot', model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   let keyAvailable = false;
   let minecraftLookups = 0;
@@ -394,21 +435,21 @@ test('Given a blocked profile and a hot-added key, when start is retried, then r
   try {
     // When
     keyAvailable = true;
-    const result = await Mindcraft.startAgent('retry-agent');
+    const result = await Mindcraft.startAgent('RetryBot');
 
     // Then
     assert.equal(result.success, true);
     assert.equal(minecraftLookups, 1);
     assert.equal(retryProcess.startCalls, 1);
-    assert.equal(Mindcraft.getAgentProcess('retry-agent').state, 'running');
+    assert.equal(Mindcraft.getAgentProcess('RetryBot').state, 'running');
   } finally {
-    Mindcraft.destroyAgent('retry-agent');
+    Mindcraft.destroyAgent('RetryBot');
   }
 });
 
 test('Given a blocked profile with private settings, when public settings are requested, then only its name is exposed while retry retains the private settings', async () => {
   // Given
-  const agentName = 'private-blocked-agent';
+  const agentName = 'PrivateBot';
   const settings = {
     ...DEFAULTS,
     profile: {
@@ -446,7 +487,12 @@ test('Given a blocked profile with private settings, when public settings are re
     });
 
     // Then
-    assert.deepEqual(publicSettings, { settings: { profile: { name: agentName } } });
+    assert.deepEqual(publicSettings, {
+      settings: {
+        profile: { name: agentName },
+        render_bot_view: false,
+      },
+    });
 
     const blockedAttempt = await Mindcraft.startAgent(agentName);
     assert.equal(blockedAttempt.success, false);
@@ -470,7 +516,7 @@ test('Given a blocked profile with private settings, when public settings are re
 
 test('Given a queued stale blocked retry, when a newer generation is registered, then stale completion preserves the new record for a later start', async () => {
   // Given
-  const agentName = 'cancelled-retry-agent';
+  const agentName = 'CancelBot';
   const settings = { ...DEFAULTS, profile: { name: agentName, model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   let staleChildStarts = 0;
@@ -522,7 +568,7 @@ test('Given a queued stale blocked retry, when a newer generation is registered,
 
 test('Given a stale blocked child startup, when a newer generation replaces it, then stale completion stops only the old process without altering the replacement', async () => {
   // Given
-  const agentName = 'stale-start-owner-agent';
+  const agentName = 'StaleBot';
   const settings = { ...DEFAULTS, profile: { name: agentName, model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   const oldStart = createDeferredStartProcess();
@@ -572,7 +618,7 @@ test('Given a stale blocked child startup, when a newer generation replaces it, 
 
 test('Given a current blocked generation, when its child startup completes, then it remains the active process', async () => {
   // Given
-  const agentName = 'current-start-owner-agent';
+  const agentName = 'CurrentBot';
   const settings = { ...DEFAULTS, profile: { name: agentName, model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   const currentProcess = new FakeRetryProcess();
@@ -597,7 +643,7 @@ test('Given a current blocked generation, when its child startup completes, then
 
 test('Given an active agent whose stop is unconfirmed, when blocked replacement is requested, then existing ownership is retained and start reports the replacement failure', async () => {
   // Given
-  const agentName = 'failed-stop-replacement-agent';
+  const agentName = 'FailedStopBot';
   const settings = { ...DEFAULTS, profile: { name: agentName, model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   const activeProcess = createActiveProcess(false);
@@ -644,7 +690,7 @@ test('Given an active agent whose stop is unconfirmed, when blocked replacement 
 
 test('Given an active agent whose stop is confirmed, when blocked replacement is requested, then the replacement installs and starts normally', async () => {
   // Given
-  const agentName = 'confirmed-stop-replacement-agent';
+  const agentName = 'ReplaceBot';
   const settings = { ...DEFAULTS, profile: { name: agentName, model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   const activeProcess = createActiveProcess(true);
@@ -681,7 +727,7 @@ test('Given an active agent whose stop is confirmed, when blocked replacement is
 
 test('Given concurrent retries for a newly-ready blocked profile, when startup is pending, then both callers share one normal startup', async () => {
   // Given
-  const settings = { ...DEFAULTS, profile: { name: 'concurrent-retry-agent', model: 'openai/gpt-4o' } };
+  const settings = { ...DEFAULTS, profile: { name: 'ConcurrentBot', model: 'openai/gpt-4o' } };
   const blocked = descriptor(preflight(settings.profile));
   const retryProcess = new FakeRetryProcess();
   let releaseServer;
@@ -700,8 +746,8 @@ test('Given concurrent retries for a newly-ready blocked profile, when startup i
 
   try {
     // When
-    const firstStart = Mindcraft.startAgent('concurrent-retry-agent');
-    const secondStart = Mindcraft.startAgent('concurrent-retry-agent');
+    const firstStart = Mindcraft.startAgent('ConcurrentBot');
+    const secondStart = Mindcraft.startAgent('ConcurrentBot');
 
     // Then
     assert.equal(
@@ -717,6 +763,6 @@ test('Given concurrent retries for a newly-ready blocked profile, when startup i
     assert.equal(secondResult.success, true);
     assert.equal(retryProcess.startCalls, 1);
   } finally {
-    Mindcraft.destroyAgent('concurrent-retry-agent');
+    Mindcraft.destroyAgent('ConcurrentBot');
   }
 });

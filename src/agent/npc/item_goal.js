@@ -148,29 +148,35 @@ export class ItemNode {
     async execute(quantity=1) {
         if (!this.isReady()) {
             this.fails += 1;
-            return;
+            return false;
         }
         let inventory = world.getInventoryCounts(this.manager.agent.bot);
         let init_quantity = inventory[this.name] || 0;
+        let operationSucceeded = false;
         if (this.type === 'block') {
-            await skills.collectBlock(this.manager.agent.bot, this.source, quantity, this.manager.agent.npc.getBuiltPositions());
+            operationSucceeded = await skills.collectBlock(this.manager.agent.bot, this.source, quantity, this.manager.agent.npc.getBuiltPositions());
         } else if (this.type === 'smelt') {
             let to_smelt_name = this.recipe[0].node.name;
             let to_smelt_quantity = Math.min(quantity, inventory[to_smelt_name] || 1);
-            await skills.smeltItem(this.manager.agent.bot, to_smelt_name, to_smelt_quantity);
+            operationSucceeded = await skills.smeltItem(this.manager.agent.bot, to_smelt_name, to_smelt_quantity);
         } else if (this.type === 'hunt') {
+            operationSucceeded = true;
             for (let i=0; i<quantity; i++) {
                 let res = await skills.attackNearest(this.manager.agent.bot, this.source);
-                if (!res || this.manager.agent.bot.interrupt_code)
+                if (!res || this.manager.agent.bot.interrupt_code) {
+                    operationSucceeded = false;
                     break;
+                }
             }
         } else if (this.type === 'craft') {
-            await skills.craftRecipe(this.manager.agent.bot, this.name, quantity);
+            operationSucceeded = await skills.craftRecipe(this.manager.agent.bot, this.name, quantity);
         }
         let final_quantity = world.getInventoryCounts(this.manager.agent.bot)[this.name] || 0;
-        if (final_quantity <= init_quantity) {
+        const verified = operationSucceeded && final_quantity > init_quantity;
+        if (!verified) {
             this.fails += 1;
         }
+        return verified;
     }
 }
 
@@ -204,7 +210,7 @@ class ItemWrapper {
     }
 
     createChildren() {
-        let recipes = mc.getItemCraftingRecipes(this.name).map(([recipe, craftedCount]) => recipe);
+        const recipes = mc.getItemCraftingRecipes(this.name);
         if (recipes) {
             for (let recipe of recipes) {
                 let includes_blacklisted = false;
@@ -323,8 +329,8 @@ export class ItemGoal {
             if (this.failed.includes(next.name)) {
                 this.failed = this.failed.filter((item) => item !== next.name);
                 await this.agent.actions.runAction('itemGoal:explore', async () => {
-                    await skills.moveAway(this.agent.bot, 8);
-                });
+                    return await skills.moveAway(this.agent.bot, 8);
+                }, { owner: 'job' });
             } else {
                 this.failed.push(next.name);
                 await new Promise((resolve) => setTimeout(resolve, 500));
@@ -339,9 +345,9 @@ export class ItemGoal {
 
         // Execute the next goal
         let init_quantity = world.getInventoryCounts(this.agent.bot)[next.name] || 0;
-        await this.agent.actions.runAction('itemGoal:next', async () => {
-            await next.execute(quantity);
-        });
+        const action = await this.agent.actions.runAction('itemGoal:next', async () => {
+            return await next.execute(quantity);
+        }, { owner: 'job' });
         let final_quantity = world.getInventoryCounts(this.agent.bot)[next.name] || 0;
 
         // Log the result of the goal attempt
@@ -350,6 +356,6 @@ export class ItemGoal {
         } else {
             console.log(`Failed to obtain ${next.name} for goal ${this.goal.name}`);
         }
-        return final_quantity > init_quantity;
+        return action.success === true && final_quantity > init_quantity;
     }
 }

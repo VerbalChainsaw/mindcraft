@@ -7,23 +7,41 @@ import { TTSConfig as geminiTTSConfig } from '../models/gemini.js';
 
 let speakingQueue = []; // each item: {text, model, audioData, ready}
 let isSpeaking = false;
+const MAX_SPEAKING_QUEUE = 24;
+const SPEECH_PRIORITY = Object.freeze({ ambient: 0, high: 1, urgent: 2, direct: 3 });
 
-export function speak(text, speak_model) {
+export function speak(text, speak_model, { priority = 'direct' } = {}) {
     const model = speak_model || 'system';
 
-    const item = { text, model, audioData: null, ready: null };
+    const item = {
+        text,
+        model,
+        priority: SPEECH_PRIORITY[priority] ?? SPEECH_PRIORITY.direct,
+        audioData: null,
+        ready: null,
+    };
 
-    if (model === 'system') {
-        // no preprocessing needed
-        item.ready = Promise.resolve();
-    } else {
-    item.ready = fetchRemoteAudio(text, model)
-        .then(data => { item.audioData = data; })
-        .catch(err => { item.error = err; });
+    item.prepare = model === 'system'
+        ? () => Promise.resolve()
+        : () => fetchRemoteAudio(text, model)
+            .then(data => { item.audioData = data; })
+            .catch(err => { item.error = err; });
+
+    if (speakingQueue.length >= MAX_SPEAKING_QUEUE) {
+        const lowest = speakingQueue.reduce(
+            (selected, candidate, index) => (
+                candidate.priority < speakingQueue[selected].priority ? index : selected
+            ),
+            0,
+        );
+        if (speakingQueue[lowest].priority > item.priority) return false;
+        speakingQueue.splice(lowest, 1);
     }
-
-    speakingQueue.push(item);
+    const insertAt = speakingQueue.findIndex(candidate => candidate.priority < item.priority);
+    if (insertAt === -1) speakingQueue.push(item);
+    else speakingQueue.splice(insertAt, 0, item);
     if (!isSpeaking) processQueue();
+    return true;
 }
 
 async function fetchRemoteAudio(txt, model) {
@@ -73,6 +91,7 @@ async function processQueue() {
 
     // wait for preprocessing if needed
     try {
+        item.ready ||= item.prepare();
         await item.ready;
         if (item.error) throw item.error;
     } catch (err) {
@@ -92,7 +111,7 @@ async function processQueue() {
             ? `say "${txt.replace(/"/g,'\\"')}"`
             : `espeak "${txt.replace(/"/g,'\\"')}"`;
 
-        exec(cmd, err => {
+        exec(cmd, { windowsHide: true }, err => {
             if (err) console.error('TTS error', err);
             isSpeaking = false;
             processQueue();

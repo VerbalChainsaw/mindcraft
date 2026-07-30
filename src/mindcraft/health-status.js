@@ -16,7 +16,7 @@ function sanitizeSelectedProfiles(selectedProfiles) {
   }));
 }
 
-const credentialFreeProviders = new Set(['lmstudio', 'ollama', 'vllm']);
+const credentialFreeProviders = new Set(['codex', 'lmstudio', 'ollama', 'vllm']);
 
 function selectedProfilesNeedCredentials(selectedProfiles) {
   return selectedProfiles.some(({ providerRoles }) => providerRoles.some(
