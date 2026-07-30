@@ -176,6 +176,28 @@ function overworldBuildCommands() {
     setblock(commands, 1125, 100, 1003, 'iron_ore');
     setblock(commands, 1125, 99, 1006, 'deepslate');
 
+    // Mounted transport: current-protocol boat control and a genuinely saddled animal.
+    fill(commands, 1074, 99, 1022, 1139, 99, 1039, 'smooth_stone');
+    fill(commands, 1074, 100, 1022, 1139, 103, 1039, 'air');
+    fill(commands, 1075, 100, 1023, 1138, 100, 1029, 'water');
+    fill(commands, 1074, 100, 1022, 1139, 101, 1022, 'stone_bricks');
+    fill(commands, 1074, 100, 1030, 1139, 101, 1030, 'stone_bricks');
+    fill(commands, 1074, 100, 1022, 1074, 101, 1030, 'stone_bricks');
+    fill(commands, 1139, 100, 1022, 1139, 101, 1030, 'stone_bricks');
+    fill(commands, 1074, 100, 1032, 1139, 101, 1032, 'oak_fence');
+    fill(commands, 1074, 100, 1038, 1139, 101, 1038, 'oak_fence');
+    fill(commands, 1074, 100, 1032, 1074, 101, 1038, 'oak_fence');
+    fill(commands, 1139, 100, 1032, 1139, 101, 1038, 'oak_fence');
+    commands.push(`summon minecraft:oak_boat 1080.5 100.5 1026.5 {Tags:["${MAP_TAG}"]}`);
+    commands.push(`summon minecraft:horse 1080.5 100 1035.5 {Tame:1b,Tags:["${MAP_TAG}"],PersistenceRequired:1b}`);
+    commands.push(`item replace entity @e[type=minecraft:horse,tag=${MAP_TAG},x=1074,y=99,z=1031,dx=65,dy=10,dz=8,limit=1] saddle with minecraft:saddle`);
+    chestItems(commands, 1071, 100, 1035, [
+        [0, 'saddle', 3],
+        [1, 'carrot_on_a_stick', 1],
+        [2, 'warped_fungus_on_a_stick', 1],
+        [3, 'lead', 4],
+    ]);
+
     // Farming: mature crops, empty hydrated plot, and breedable animal pens.
     borderedFloor(commands, 1025, 1040, 1065, 1075, 'grass_block');
     fill(commands, 1028, 100, 1043, 1040, 100, 1055, 'farmland[moisture=7]');

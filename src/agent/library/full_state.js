@@ -10,6 +10,7 @@ import * as mc from '../../utils/mcdata.js';
 import { actionResultToTelemetry } from '../runtime/action-result.js';
 import { identityToTelemetry } from '../runtime/identity-config.js';
 import { evaluateGameplayProgression } from '../runtime/gameplay-progression.js';
+import { rideableEntityKnowledge } from './game_knowledge.js';
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 const HAZARD_BLOCKS = new Set([
@@ -152,14 +153,21 @@ function buildPerception(bot, nearbyEntities) {
                     direction: relativeDirection(bot, entity.position),
                 };
             }
+            const rideable = rideableEntityKnowledge(entity.name);
             return {
                 kind: entity.type === 'player' ? 'player' : 'entity',
                 name: entity.username || entity.name || 'unknown',
                 distance: roundedDistance,
                 direction: relativeDirection(bot, entity.position),
+                position: {
+                    x: round(entity.position.x),
+                    y: round(entity.position.y),
+                    z: round(entity.position.z),
+                },
                 hostile: mc.isHostile(entity),
                 threatDisposition: mc.getThreatDisposition(entity),
                 huntable: mc.isHuntable(entity),
+                rideable,
             };
         });
 
@@ -558,6 +566,20 @@ export function getFullState(agent, { deep = false } = {}) {
     const jobDirector = getJobDirectorState(agent);
     const goalDirector = getGoalDirectorState(agent);
     const reactionDirector = getReactionDirectorState(agent);
+    const observedVehicle = bot.vehicle && bot.entities?.[bot.vehicle.id]?.isValid !== false
+        ? bot.entities?.[bot.vehicle.id] || null
+        : null;
+    const mountedVehicle = observedVehicle && rideableEntityKnowledge(observedVehicle.name)
+        ? {
+            ...rideableEntityKnowledge(observedVehicle.name),
+            entityId: Number.isFinite(observedVehicle.id) ? observedVehicle.id : null,
+            position: observedVehicle.position ? {
+                x: round(observedVehicle.position.x, 2),
+                y: round(observedVehicle.position.y, 2),
+                z: round(observedVehicle.position.z, 2),
+            } : null,
+        }
+        : null;
 
     // Richer activity than a bare "Idle": a bot counts as idle (no action executing) even while
     // chatting, deciding its next move, or stopped. Surface those so the dashboard is meaningful.
@@ -690,6 +712,8 @@ export function getFullState(agent, { deep = false } = {}) {
             yaw: round(bot.entity.yaw, 2),
             pitch: round(bot.entity.pitch, 2),
             onGround: bot.entity.onGround === true,
+            mounted: Boolean(mountedVehicle),
+            vehicle: mountedVehicle,
             velocity: {
                 x: round(bot.entity.velocity?.x || 0, 2),
                 y: round(bot.entity.velocity?.y || 0, 2),

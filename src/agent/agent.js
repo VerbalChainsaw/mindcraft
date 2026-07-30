@@ -267,6 +267,19 @@ export class Agent {
         });
 
         initModes(this);
+        this.bot._client.on('set_passengers', ({ entityId, passengers }) => {
+            const vehicle = this.bot.vehicle;
+            if (
+                !vehicle
+                || vehicle.id !== entityId
+                || passengers.includes(this.bot.entity.id)
+            ) return;
+            const passengerIndex = vehicle.passengers?.indexOf?.(this.bot.entity) ?? -1;
+            if (passengerIndex >= 0) vehicle.passengers.splice(passengerIndex, 1);
+            if (this.bot.entity.vehicle === vehicle) delete this.bot.entity.vehicle;
+            this.bot.vehicle = null;
+            this.bot.emit('dismount', vehicle);
+        });
 
         this.bot.on('login', () => {
             emitStartupMilestone('login_callback');
@@ -444,6 +457,7 @@ export class Agent {
         try { this.bot.pathfinder.setGoal(null); } catch { /* no pathfinder goal */ }
         try { this.bot.pvp.stop(); } catch { /* no combat target */ }
         try { this.bot.deactivateItem(); } catch { /* no active item */ }
+        try { this.bot.moveVehicle?.(0, 0); } catch { /* no mounted vehicle */ }
         try { this.bot.clearControlStates(); } catch { /* disconnected body */ }
     }
 
@@ -1065,6 +1079,7 @@ export class Agent {
             }
         });
         this.bot.on('idle', () => {
+            try { this.bot.moveVehicle?.(0, 0); } catch { /* no mounted vehicle */ }
             this.bot.clearControlStates();
             this.bot.pathfinder.stop(); // clear any lingering pathfinder
             clearTimeout(this._idleResumeTimer);

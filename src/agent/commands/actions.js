@@ -222,6 +222,37 @@ export const actionsList = [
         })
     },
     {
+        name: '!mountEntity',
+        description: 'Approach and mount the nearest observed rideable entity. Use an exact entity type such as oak_boat, horse, camel, pig, or strider, or a family: boat, minecart, or mount.',
+        params: {
+            'entity_type': { type: 'string', description: 'Exact rideable entity type or the boat, minecart, or mount family.' },
+            'search_range': { type: 'float', description: 'Maximum loaded-world search range.', domain: [4, 128] },
+        },
+        perform: runAsAction(async (agent, entity_type, search_range) => {
+            return await skills.mountEntity(agent.bot, entity_type, search_range);
+        }),
+    },
+    {
+        name: '!rideToCoordinates',
+        description: 'Steer the currently mounted boat, minecart, or rideable animal toward coordinates, stop vehicle input on arrival or interruption, and report missing steering prerequisites truthfully.',
+        params: {
+            'x': { type: 'float', description: 'Destination x coordinate.', domain: [-Infinity, Infinity] },
+            'y': { type: 'float', description: 'Destination y coordinate.', domain: [-64, 320] },
+            'z': { type: 'float', description: 'Destination z coordinate.', domain: [-Infinity, Infinity] },
+            'closeness': { type: 'float', description: 'How close the mounted vehicle should get.', domain: [0, 32] },
+        },
+        perform: runAsAction(async (agent, x, y, z, closeness) => {
+            return await skills.rideToPosition(agent.bot, x, y, z, closeness);
+        }),
+    },
+    {
+        name: '!dismount',
+        description: 'Stop mounted vehicle input and dismount the current boat, minecart, or animal.',
+        perform: runAsAction(async (agent) => {
+            return await skills.dismountVehicle(agent.bot);
+        }),
+    },
+    {
         name: '!searchForBlock',
         description: 'Find and go to the nearest block of a given type in a given range.',
         params: {

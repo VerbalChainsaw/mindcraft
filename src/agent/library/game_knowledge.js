@@ -2,6 +2,17 @@ import * as mc from '../../utils/mcdata.js';
 
 const MAX_RECIPES = 4;
 const MAX_SUGGESTIONS = 8;
+const RIDEABLE_ANIMALS = new Set([
+  'camel',
+  'camel_husk',
+  'donkey',
+  'horse',
+  'mule',
+  'pig',
+  'skeleton_horse',
+  'strider',
+  'zombie_horse',
+]);
 
 function canonicalName(value) {
   return String(value || '')
@@ -36,11 +47,75 @@ function capabilityTags(name, item, block, food) {
   if (/(?:_helmet|_chestplate|_leggings|_boots)$/.test(name)) tags.add('armor');
   if (name === 'shield') tags.add('defense');
   if (name.endsWith('_bucket') || name === 'bucket') tags.add('container_tool');
-  if (name.endsWith('_boat') || name.endsWith('_minecart')) tags.add('vehicle');
+  if (name.endsWith('_boat') || name.endsWith('_raft') || name.endsWith('_minecart')) tags.add('vehicle');
   if (name.includes('spawn_egg')) tags.add('spawn_item');
   if (name.endsWith('_seeds') || ['carrot', 'potato', 'beetroot', 'nether_wart'].includes(name)) tags.add('plantable');
   if (name.includes('potion')) tags.add('potion');
   return [...tags];
+}
+
+export function isBoatEntityName(value) {
+  const name = canonicalName(value);
+  return /_(?:chest_)?boat$/.test(name)
+    || /^bamboo_(?:chest_)?raft$/.test(name);
+}
+
+export function isMinecartEntityName(value) {
+  const name = canonicalName(value);
+  return name === 'minecart' || name.endsWith('_minecart');
+}
+
+export function isRideableAnimalName(value) {
+  return RIDEABLE_ANIMALS.has(canonicalName(value));
+}
+
+export function isRideableEntityName(value) {
+  return isBoatEntityName(value)
+    || isMinecartEntityName(value)
+    || isRideableAnimalName(value);
+}
+
+export function steeringItemForEntity(value) {
+  const name = canonicalName(value);
+  if (name === 'pig') return 'carrot_on_a_stick';
+  if (name === 'strider') return 'warped_fungus_on_a_stick';
+  return null;
+}
+
+export function entityRequiresSaddle(value) {
+  return RIDEABLE_ANIMALS.has(canonicalName(value));
+}
+
+export function matchesRideableEntity(entityName, requestedType) {
+  const name = canonicalName(entityName);
+  const requested = canonicalName(requestedType);
+  if (!isRideableEntityName(name)) return false;
+  if (requested === 'boat' || requested === 'boats' || requested === 'raft') {
+    return isBoatEntityName(name);
+  }
+  if (requested === 'minecart' || requested === 'minecarts') {
+    return isMinecartEntityName(name);
+  }
+  if (['animal', 'animals', 'mount', 'rideable', 'rideable_animal'].includes(requested)) {
+    return isRideableAnimalName(name);
+  }
+  return name === requested;
+}
+
+export function rideableEntityKnowledge(value) {
+  const name = canonicalName(value);
+  if (!isRideableEntityName(name)) return null;
+  const kind = isBoatEntityName(name)
+    ? 'boat'
+    : isMinecartEntityName(name)
+      ? 'minecart'
+      : 'animal';
+  return {
+    name,
+    kind,
+    requiresSaddle: entityRequiresSaddle(name),
+    steeringItem: steeringItemForEntity(name),
+  };
 }
 
 function recipeSummaries(name) {

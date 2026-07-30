@@ -12,6 +12,13 @@ import {
 } from '../runtime/gameplay-safety.js';
 import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-target.js';
 import { companionContextFor, normalizePlayerDistance } from '../runtime/companion-context.js';
+import {
+    entityRequiresSaddle,
+    isRideableEntityName,
+    matchesRideableEntity,
+    rideableEntityKnowledge,
+    steeringItemForEntity,
+} from './game_knowledge.js';
 
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
@@ -44,6 +51,16 @@ const INTERACTION_CONFIRM_POLL_MS = 50;
 const NAVIGATION_PROGRESS_POLL_MS = 500;
 const NAVIGATION_STALL_TIMEOUT_MS = 20_000;
 const NAVIGATION_PROGRESS_DISTANCE = 0.75;
+const MOUNT_INTERACTION_RANGE = 4.5;
+const MOUNT_CONFIRM_TIMEOUT_MS = 2_500;
+const MOUNT_STABILITY_MS = 400;
+const RIDE_CONTROL_POLL_MS = 150;
+const BOAT_CONTROL_POLL_MS = 50;
+const BOAT_TRAVEL_PER_TICK = 0.2;
+const ANIMAL_TRAVEL_PER_TICK = 0.14;
+const RIDE_STALL_TIMEOUT_MS = 8_000;
+const RIDE_MAX_DURATION_MS = 120_000;
+const RIDE_PROGRESS_DISTANCE = 0.35;
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -4464,6 +4481,450 @@ export async function goToNearestEntity(bot, entityType, min_distance=2, range=6
     }
     setActionEvidence(bot, { kind: 'movement', outcome: 'arrived', target, distance, retryable: false });
     return true;
+}
+
+function nearestRideableEntity(bot, requestedType, range) {
+    return world.getNearestEntityWhere(
+        bot,
+        entity => matchesRideableEntity(entity?.name, requestedType),
+        range,
+    );
+}
+
+function currentMountedVehicle(bot) {
+    const vehicle = bot.vehicle;
+    if (!vehicle) return null;
+    const observed = bot.entities?.[vehicle.id];
+    if (!observed || observed.isValid === false) {
+        bot.vehicle = null;
+        return null;
+    }
+    return observed;
+}
+
+function mountedVehicleTarget(vehicle) {
+    return vehicle ? {
+        name: vehicle.name || 'vehicle',
+        entityId: Number.isFinite(vehicle.id) ? vehicle.id : null,
+        x: Number.isFinite(vehicle.position?.x) ? vehicle.position.x : null,
+        y: Number.isFinite(vehicle.position?.y) ? vehicle.position.y : null,
+        z: Number.isFinite(vehicle.position?.z) ? vehicle.position.z : null,
+    } : null;
+}
+
+function notchianYaw(yaw) {
+    return (Math.PI - yaw) * (180 / Math.PI);
+}
+
+function vehicleStepIsClear(bot, position, vehicleKnowledge) {
+    const feet = bot.blockAt(new Vec3(
+        Math.floor(position.x),
+        Math.floor(position.y),
+        Math.floor(position.z),
+    ));
+    if (feet && feet.boundingBox !== 'empty') return false;
+    if (vehicleKnowledge?.kind === 'boat') return true;
+    const head = bot.blockAt(new Vec3(
+        Math.floor(position.x),
+        Math.floor(position.y) + 1,
+        Math.floor(position.z),
+    ));
+    if (head && head.boundingBox !== 'empty') return false;
+    const support = bot.blockAt(new Vec3(
+        Math.floor(position.x),
+        Math.floor(position.y) - 1,
+        Math.floor(position.z),
+    ));
+    if (vehicleKnowledge?.name === 'strider') {
+        return isLiquidGameplayBlock(support) || isSafeGameplaySupport(support);
+    }
+    return isSafeGameplaySupport(support);
+}
+
+function driveVehicleStep(bot, vehicle, destination, vehicleKnowledge) {
+    const deltaX = destination.x - vehicle.position.x;
+    const deltaZ = destination.z - vehicle.position.z;
+    const horizontalDistance = Math.hypot(deltaX, deltaZ);
+    if (horizontalDistance <= 0.001) return { moved: false, blocked: false };
+    const stepSize = vehicleKnowledge?.kind === 'boat'
+        ? BOAT_TRAVEL_PER_TICK
+        : ANIMAL_TRAVEL_PER_TICK;
+    const step = Math.min(stepSize, horizontalDistance);
+    const next = new Vec3(
+        vehicle.position.x + ((deltaX / horizontalDistance) * step),
+        vehicle.position.y,
+        vehicle.position.z + ((deltaZ / horizontalDistance) * step),
+    );
+    if (!vehicleStepIsClear(bot, next, vehicleKnowledge)) return { moved: false, blocked: true };
+    const yaw = Math.atan2(-deltaX, -deltaZ);
+    if (vehicleKnowledge?.kind === 'boat') {
+        bot._client.write('steer_boat', {
+            leftPaddle: true,
+            rightPaddle: true,
+        });
+    }
+    bot._client.write('vehicle_move', {
+        x: next.x,
+        y: next.y,
+        z: next.z,
+        yaw: notchianYaw(yaw),
+        pitch: 0,
+        onGround: false,
+    });
+    return { moved: true, blocked: false };
+}
+
+async function mountObservedEntity(bot, entity) {
+    try {
+        bot.pathfinder?.setGoal?.(null);
+        await bot.mount(entity);
+    } catch (error) {
+        return { mounted: false, error };
+    }
+    const mounted = await waitForWorldCondition(
+        bot,
+        () => currentMountedVehicle(bot)?.id === entity.id,
+        MOUNT_CONFIRM_TIMEOUT_MS,
+    );
+    if (!mounted) return { mounted: false, error: null };
+    await new Promise(resolve => setTimeout(resolve, MOUNT_STABILITY_MS));
+    return { mounted: currentMountedVehicle(bot)?.id === entity.id, error: null };
+}
+
+export async function mountEntity(bot, requestedType='mount', range=32) {
+    const request = String(requestedType || 'mount')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_');
+    const searchRange = Math.max(4, Math.min(128, Number(range) || 32));
+    const existingVehicle = currentMountedVehicle(bot);
+    if (existingVehicle) {
+        const matching = matchesRideableEntity(existingVehicle.name, request);
+        setActionEvidence(bot, {
+            kind: 'mount',
+            outcome: matching ? 'already_mounted' : 'already_mounted_other',
+            target: mountedVehicleTarget(existingVehicle),
+            requestedType: request,
+            retryable: !matching,
+        });
+        log(bot, matching
+            ? `You are already mounted on ${existingVehicle.name}.`
+            : `You are already mounted on ${existingVehicle.name}; dismount before choosing another ride.`);
+        return matching;
+    }
+
+    let target = nearestRideableEntity(bot, request, searchRange);
+    if (!target?.position) {
+        setActionEvidence(bot, {
+            kind: 'mount',
+            outcome: 'rideable_not_found',
+            target: { name: request },
+            range: searchRange,
+            retryable: true,
+        });
+        log(bot, `Could not find a rideable ${request} within ${searchRange} blocks.`);
+        return false;
+    }
+
+    let distance = bot.entity.position.distanceTo(target.position);
+    if (distance > MOUNT_INTERACTION_RANGE) {
+        const approached = await goToGoal(bot, new pf.goals.GoalFollow(target, 2.5));
+        target = bot.entities?.[target.id];
+        if (!approached || !target?.position) {
+            setActionEvidence(bot, {
+                kind: 'mount',
+                outcome: target?.position ? 'unreachable' : 'target_lost',
+                target: { name: request, entityId: target?.id || null },
+                retryable: true,
+            });
+            log(bot, target?.position
+                ? `Could not reach the ${request} to mount it.`
+                : `The ${request} left observed world state before it could be mounted.`);
+            return false;
+        }
+        distance = bot.entity.position.distanceTo(target.position);
+    }
+    if (distance > MOUNT_INTERACTION_RANGE) {
+        setActionEvidence(bot, {
+            kind: 'mount',
+            outcome: 'out_of_reach',
+            target: mountedVehicleTarget(target),
+            distance,
+            retryable: true,
+        });
+        log(bot, `${target.name} is still ${distance.toFixed(1)} blocks away, outside mounting reach.`);
+        return false;
+    }
+
+    const hasSaddle = inventoryCount(bot, 'saddle') > 0;
+    const appearsSaddled = (target.equipment || []).some(item => item?.name === 'saddle');
+    let saddleRequested = false;
+    let saddleError = null;
+    if (
+        entityRequiresSaddle(target.name)
+        && hasSaddle
+        && !appearsSaddled
+        && !bot.interrupt_code
+    ) {
+        const saddle = bot.inventory.items().find(item => item.name === 'saddle');
+        try {
+            await bot.equip(saddle, 'hand');
+            await bot.useOn(target);
+            saddleRequested = true;
+            await new Promise(resolve => setTimeout(resolve, MOUNT_STABILITY_MS));
+            target = bot.entities?.[target.id] || target;
+        } catch (error) {
+            saddleError = error;
+        }
+    }
+    const result = await mountObservedEntity(bot, target);
+
+    if (!result.mounted) {
+        const interrupted = Boolean(bot.interrupt_code);
+        setActionEvidence(bot, {
+            kind: 'mount',
+            outcome: interrupted ? 'interrupted' : 'mount_rejected',
+            target: mountedVehicleTarget(target),
+            requiresSaddle: entityRequiresSaddle(target.name),
+            saddleCarried: hasSaddle,
+            saddleRequested,
+            error: result.error || saddleError
+                ? String((result.error || saddleError).message || result.error || saddleError).slice(0, 240)
+                : null,
+            retryable: !interrupted,
+        });
+        log(bot, interrupted
+            ? `Stopped while mounting ${target.name}.`
+            : `Minecraft did not confirm mounting ${target.name}${entityRequiresSaddle(target.name) && !hasSaddle ? '; it may need a saddle or taming first' : ''}.`);
+        return false;
+    }
+
+    const vehicle = currentMountedVehicle(bot);
+    const knowledge = rideableEntityKnowledge(vehicle?.name || target.name);
+    setActionEvidence(bot, {
+        kind: 'mount',
+        outcome: 'mounted',
+        target: mountedVehicleTarget(vehicle || target),
+        vehicle: knowledge,
+        saddleRequested,
+        retryable: false,
+    });
+    log(bot, `Mounted ${vehicle?.name || target.name}.`);
+    return true;
+}
+
+export async function dismountVehicle(bot) {
+    const vehicle = currentMountedVehicle(bot);
+    if (!vehicle) {
+        setActionEvidence(bot, {
+            kind: 'mount',
+            outcome: 'already_dismounted',
+            retryable: false,
+        });
+        log(bot, 'You are already dismounted.');
+        return true;
+    }
+    const target = mountedVehicleTarget(vehicle);
+    try {
+        bot.moveVehicle?.(0, 0);
+        await bot.dismount();
+        if (bot.supportFeature?.('newPlayerInputPacket')) {
+            bot._client.write('player_input', { inputs: { shift: true } });
+            await new Promise(resolve => setTimeout(resolve, 100));
+            bot._client.write('player_input', { inputs: { shift: false } });
+        }
+    } catch (error) {
+        setActionEvidence(bot, {
+            kind: 'mount',
+            outcome: 'dismount_rejected',
+            target,
+            error: String(error?.message || error).slice(0, 240),
+            retryable: true,
+        });
+        log(bot, `Could not dismount ${target.name}: ${error.message}.`);
+        return false;
+    }
+    const dismounted = await waitForWorldCondition(
+        bot,
+        () => !currentMountedVehicle(bot),
+        MOUNT_CONFIRM_TIMEOUT_MS,
+    );
+    setActionEvidence(bot, {
+        kind: 'mount',
+        outcome: dismounted ? 'dismounted' : bot.interrupt_code ? 'interrupted' : 'dismount_unconfirmed',
+        target,
+        retryable: !dismounted && !bot.interrupt_code,
+    });
+    log(bot, dismounted
+        ? `Dismounted ${target.name}.`
+        : `Minecraft did not confirm dismounting ${target.name}.`);
+    return dismounted;
+}
+
+export async function rideToPosition(bot, x, y, z, minDistance=2) {
+    if (![x, y, z].every(Number.isFinite)) {
+        setActionEvidence(bot, {
+            kind: 'ride',
+            outcome: 'invalid_target',
+            target: { x, y, z },
+            retryable: false,
+        });
+        log(bot, `Invalid riding coordinates x:${x} y:${y} z:${z}.`);
+        return false;
+    }
+    const mountedVehicle = currentMountedVehicle(bot);
+    if (!mountedVehicle || !isRideableEntityName(mountedVehicle.name)) {
+        setActionEvidence(bot, {
+            kind: 'ride',
+            outcome: 'not_mounted',
+            target: { x, y, z },
+            retryable: true,
+        });
+        log(bot, 'You must mount a boat, minecart, or rideable animal before riding to coordinates.');
+        return false;
+    }
+    if (typeof bot.moveVehicle !== 'function') {
+        setActionEvidence(bot, {
+            kind: 'ride',
+            outcome: 'vehicle_controls_unavailable',
+            target: { x, y, z },
+            vehicle: mountedVehicleTarget(mountedVehicle),
+            retryable: false,
+        });
+        log(bot, 'This connected Mineflayer version does not expose vehicle controls.');
+        return false;
+    }
+
+    const vehicleId = mountedVehicle.id;
+    const vehicleName = mountedVehicle.name;
+    const vehicleKnowledge = rideableEntityKnowledge(vehicleName);
+    const steeringItem = steeringItemForEntity(vehicleName);
+    if (steeringItem) {
+        const carried = bot.inventory.items().find(item => item.name === steeringItem);
+        if (!carried) {
+            setActionEvidence(bot, {
+                kind: 'ride',
+                outcome: 'missing_steering_item',
+                target: { x, y, z },
+                vehicle: mountedVehicleTarget(mountedVehicle),
+                requiredItem: steeringItem,
+                retryable: true,
+            });
+            log(bot, `${vehicleName} requires ${steeringItem} to steer, but none is carried.`);
+            return false;
+        }
+        try {
+            await bot.equip(carried, 'hand');
+        } catch (error) {
+            setActionEvidence(bot, {
+                kind: 'ride',
+                outcome: 'steering_item_not_equipped',
+                target: { x, y, z },
+                vehicle: mountedVehicleTarget(mountedVehicle),
+                requiredItem: steeringItem,
+                error: String(error?.message || error).slice(0, 240),
+                retryable: true,
+            });
+            log(bot, `Could not equip ${steeringItem} to steer ${vehicleName}.`);
+            return false;
+        }
+    }
+
+    const requestedDistance = Math.max(0, Math.min(32, Number(minDistance) || 0));
+    const destination = new Vec3(x, y, z);
+    const startedAt = Date.now();
+    let currentPosition = (mountedVehicle.position || bot.entity.position).clone();
+    let bestDistance = currentPosition.distanceTo(destination);
+    let lastProgressAt = startedAt;
+    let finalDistance = bestDistance;
+    let outcome = 'ride_timeout';
+
+    try {
+        while (Date.now() - startedAt < RIDE_MAX_DURATION_MS) {
+            if (bot.interrupt_code) {
+                outcome = 'interrupted';
+                break;
+            }
+            const vehicle = currentMountedVehicle(bot);
+            if (!vehicle || vehicle.id !== vehicleId || !vehicle.position) {
+                outcome = 'unexpected_dismount';
+                break;
+            }
+            currentPosition = vehicle.position.clone();
+            finalDistance = currentPosition.distanceTo(destination);
+            const horizontalDistance = Math.hypot(currentPosition.x - x, currentPosition.z - z);
+            if (horizontalDistance <= requestedDistance + 0.5 && Math.abs(currentPosition.y - y) <= 4) {
+                outcome = 'arrived';
+                break;
+            }
+            if (bestDistance - finalDistance >= RIDE_PROGRESS_DISTANCE) {
+                bestDistance = finalDistance;
+                lastProgressAt = Date.now();
+            }
+            if (Date.now() - lastProgressAt >= RIDE_STALL_TIMEOUT_MS) {
+                outcome = 'no_progress';
+                break;
+            }
+            try {
+                await bot.lookAt(new Vec3(x, currentPosition.y, z), true);
+                bot.moveVehicle(0, 1);
+                if (['boat', 'animal'].includes(vehicleKnowledge?.kind)) {
+                    const step = driveVehicleStep(bot, vehicle, destination, vehicleKnowledge);
+                    if (step.blocked) {
+                        outcome = 'route_blocked';
+                        break;
+                    }
+                }
+            } catch (error) {
+                outcome = 'control_rejected';
+                setActionEvidence(bot, {
+                    kind: 'ride',
+                    outcome,
+                    target: { x, y, z },
+                    vehicle: mountedVehicleTarget(vehicle),
+                    error: String(error?.message || error).slice(0, 240),
+                    retryable: true,
+                });
+                log(bot, `Minecraft rejected ${vehicleName} controls: ${error.message}.`);
+                return false;
+            }
+            await new Promise(resolve => setTimeout(
+                resolve,
+                ['boat', 'animal'].includes(vehicleKnowledge?.kind)
+                    ? BOAT_CONTROL_POLL_MS
+                    : RIDE_CONTROL_POLL_MS,
+            ));
+        }
+    } finally {
+        try { bot.moveVehicle(0, 0); } catch { /* disconnected or dismounted */ }
+    }
+
+    const arrived = outcome === 'arrived';
+    setActionEvidence(bot, {
+        kind: 'ride',
+        outcome,
+        target: { x, y, z },
+        vehicle: {
+            name: vehicleName,
+            entityId: vehicleId,
+            steeringItem,
+        },
+        distance: finalDistance,
+        elapsedMs: Date.now() - startedAt,
+        retryable: !arrived && outcome !== 'interrupted',
+    });
+    if (arrived) {
+        log(bot, `Rode ${vehicleName} to within ${finalDistance.toFixed(1)} blocks of ${x}, ${y}, ${z}.`);
+    } else if (outcome === 'no_progress') {
+        log(bot, `${vehicleName} made no useful progress for ${Math.round(RIDE_STALL_TIMEOUT_MS / 1000)} seconds; it may need a saddle, taming, rails, a steering item, or a clearer route.`);
+    } else if (outcome === 'unexpected_dismount') {
+        log(bot, `You dismounted ${vehicleName} before reaching ${x}, ${y}, ${z}.`);
+    } else if (outcome === 'interrupted') {
+        log(bot, `Stopped riding ${vehicleName}.`);
+    } else {
+        log(bot, `Could not ride ${vehicleName} to ${x}, ${y}, ${z} before the bounded travel window ended.`);
+    }
+    return arrived;
 }
 
 export async function goToPlayer(bot, username, distance=3) {

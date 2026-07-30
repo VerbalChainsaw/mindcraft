@@ -268,22 +268,44 @@ const modes_list = [
         last_time: Date.now(),
         max_stuck_time: 20,
         prev_dig_block: null,
+        prev_action_label: null,
+        prev_action_started_at: null,
         update: function (agent) {
             if (agent.isIdle()) { 
                 this.prev_location = null;
                 this.stuck_time = 0;
+                this.prev_action_label = null;
+                this.prev_action_started_at = null;
                 return; // don't get stuck when idle
             }
             const bot = agent.bot;
+            const actionLabel = agent.actions?.currentActionLabel || '';
+            const actionStartedAt = agent.actions?.last_action_time || null;
+            if (
+                this.prev_action_label !== actionLabel
+                || this.prev_action_started_at !== actionStartedAt
+            ) {
+                this.prev_location = null;
+                this.stuck_time = 0;
+                this.prev_dig_block = null;
+                this.last_time = Date.now();
+                this.prev_action_label = actionLabel;
+                this.prev_action_started_at = actionStartedAt;
+            }
+            const motionPosition = (
+                bot.vehicle
+                && bot.entities?.[bot.vehicle.id]?.isValid !== false
+                && bot.entities?.[bot.vehicle.id]?.position
+            ) || bot.entity.position;
             const cur_dig_block = bot.targetDigBlock;
             if (cur_dig_block && !this.prev_dig_block) {
                 this.prev_dig_block = cur_dig_block;
             }
-            if (this.prev_location && this.prev_location.distanceTo(bot.entity.position) < this.distance && cur_dig_block == this.prev_dig_block) {
+            if (this.prev_location && this.prev_location.distanceTo(motionPosition) < this.distance && cur_dig_block == this.prev_dig_block) {
                 this.stuck_time += (Date.now() - this.last_time) / 1000;
             }
             else {
-                this.prev_location = bot.entity.position.clone();
+                this.prev_location = motionPosition.clone();
                 this.stuck_time = 0;
                 this.prev_dig_block = null;
             }
@@ -307,6 +329,8 @@ const modes_list = [
             this.prev_location = null;
             this.stuck_time = 0;
             this.prev_dig_block = null;
+            this.prev_action_label = null;
+            this.prev_action_started_at = null;
         }
     },
     {
