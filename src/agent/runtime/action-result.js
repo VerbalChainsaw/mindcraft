@@ -102,6 +102,9 @@ export function actionResultToTelemetry(result) {
     detail: text(result.detail).slice(0, 280),
     target: safeTarget(result.target),
     retryable: result.retryable === true,
+    durationMs: Number.isFinite(result.startedAt) && Number.isFinite(result.finishedAt)
+      ? Math.max(0, result.finishedAt - result.startedAt)
+      : null,
     finishedAt: Number.isFinite(result.finishedAt) ? result.finishedAt : null,
   };
 }

@@ -28,6 +28,7 @@ import { ReactionDirector } from './runtime/reaction-director.js';
 import { EnvironmentObserver } from './runtime/environment-observer.js';
 import * as mc from '../utils/mcdata.js';
 import { CompanionContext } from './runtime/companion-context.js';
+import { HomeStateStore } from './runtime/home-state-store.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
@@ -211,6 +212,10 @@ export class Agent {
         this.npc = new NPCContoller(this);
         this.memory_bank = new MemoryBank(this.name);
         this.memory_bank.load();
+        this.home_state = new HomeStateStore(this.name);
+        if (this.home_state.lastError) {
+            console.warn(`[home-state] Could not restore ${this.name}: ${this.home_state.lastError}`);
+        }
         this.behavior_events = new BehaviorEventBus(this.name);
         this.self_prompter = new SelfPrompter(this);
         convoManager.initAgent(this);
@@ -328,6 +333,7 @@ export class Agent {
                 this.startEvents();
                 emitStartupMilestone('handlers_ready');
                 await serverProxy.ready();
+                serverProxy.startStateStream();
 
                 // A startup prompt can legitimately choose an endless action
                 // such as follow or guard. Start it only after the bridge has
@@ -531,6 +537,7 @@ export class Agent {
 
     recordActionResult(result) {
         this.last_action_result = result || null;
+        serverProxy.requestStatePush?.({ force: true });
         if (!result) return;
         this.publishBehaviorEvent({
             id: result.actionId,
@@ -548,7 +555,9 @@ export class Agent {
 
     publishBehaviorEvent(event) {
         try {
-            return this.behavior_events?.publish?.(event) === true;
+            const published = this.behavior_events?.publish?.(event) === true;
+            serverProxy.requestStatePush?.();
+            return published;
         } catch (error) {
             console.warn(`[behavior-event] Rejected event: ${String(error?.message || error).slice(0, 240)}`);
             return false;

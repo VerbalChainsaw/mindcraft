@@ -5,6 +5,7 @@ import { sendSquadRadio } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
 import { createWorkOrder } from '../runtime/work-order.js';
 import {
+    createBuilderConstructionOrder,
     createBuilderFunctionalShelterOrder,
     createBuilderShelterOrder,
     createBuilderStockpileOrder,
@@ -67,6 +68,35 @@ function submitRoleOrder(agent, expectedRole, order) {
         ? ''
         : ` while keeping ${defaultRole} as the default role`;
     return `Accepted resumable ${expectedRole} work order ${result.id}${roleContext}.`;
+}
+
+function submitRememberedStructure(agent, order) {
+    const response = submitRoleOrder(agent, 'builder', order);
+    if (response.startsWith('Accepted resumable')) {
+        try {
+            agent.home_state?.rememberStructure?.(order);
+        } catch (error) {
+            return `${response} Warning: durable home tracking failed: ${String(error?.message || error).slice(0, 160)}.`;
+        }
+    }
+    return response;
+}
+
+function persistFarmState(agent, farm, physicalOutcome) {
+    try {
+        if (!agent.home_state?.rememberFarm) throw new Error('home-state storage is unavailable');
+        agent.home_state.rememberFarm(farm);
+        return true;
+    } catch (error) {
+        agent.bot.lastActionEvidence = {
+            ...(agent.bot.lastActionEvidence || {}),
+            outcome: `${physicalOutcome}_unremembered`,
+            persistenceError: String(error?.message || error).slice(0, 180),
+            retryable: true,
+        };
+        skills.log(agent.bot, `The farm changed in Minecraft, but durable farm tracking failed: ${String(error?.message || error).slice(0, 160)}.`);
+        return false;
+    }
 }
 
 function persistentJobCommand(commandFn) {
@@ -792,11 +822,132 @@ export const actionsList = [
                     material,
                     requester: 'player',
                 });
-                return submitRoleOrder(agent, 'builder', order);
+                return submitRememberedStructure(agent, order);
             } catch (error) {
                 return `Functional shelter work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
             }
         }),
+    },
+    {
+        name: '!assignConstructionJob',
+        description: 'Build or repair one operator-approved bounded platform, bridge, wall, column, or room through the persistent verified Builder work-order path.',
+        params: {
+            'shape': { type: 'string', description: 'Construction shape: platform, bridge, wall, column, or room.' },
+            'width': { type: 'int', description: 'Width in blocks, 1-16.', domain: [1, 16, '[]'] },
+            'depth': { type: 'int', description: 'Depth in blocks, 1-16. Walls, bridges, and columns use a safe fixed depth.', domain: [1, 16, '[]'] },
+            'height': { type: 'int', description: 'Verified reachable height, 1-4. Platforms and bridges use one layer.', domain: [1, 4, '[]'] },
+            'material': { type: 'BlockName', description: 'Canonical full support block for the structure.' },
+        },
+        perform: persistentJobCommand(async function (agent, shape, width, depth, height, material) {
+            try {
+                const canonicalMaterial = String(material || '').trim().toLowerCase();
+                const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
+                const item = agent.bot?.registry?.itemsByName?.[canonicalMaterial];
+                if (!block || !item || block.boundingBox !== 'block') {
+                    return `Construction work order was not accepted: ${canonicalMaterial || 'the requested material'} is not a placeable full support block in the connected registry.`;
+                }
+                const position = agent.bot?.entity?.position;
+                if (!position) return 'Construction work order was not accepted: Minecraft spawn state is unavailable.';
+                const order = createBuilderConstructionOrder({
+                    x: Math.floor(position.x) + 2,
+                    y: Math.floor(position.y),
+                    z: Math.floor(position.z) + 2,
+                    shape,
+                    width,
+                    depth,
+                    height,
+                    material: canonicalMaterial,
+                    requester: 'player',
+                });
+                return submitRememberedStructure(agent, order);
+            } catch (error) {
+                return `Construction work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!rememberHome',
+        description: 'Remember the bot’s current verified position and dimension as its durable home across restarts.',
+        params: {},
+        perform: async function (agent) {
+            const position = agent.bot?.entity?.position;
+            if (!position || !agent.home_state) return 'Home was not remembered: live position or home-state storage is unavailable.';
+            try {
+                const state = agent.home_state.rememberHome(position, agent.bot?.game?.dimension);
+                return `Remembered home at ${state.home.x}, ${state.home.y}, ${state.home.z} in ${state.home.dimension}.`;
+            } catch (error) {
+                return `Home was not remembered: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        },
+    },
+    {
+        name: '!repairHome',
+        description: 'Re-run verification and repair every missing cell in the most recently remembered player-built structure.',
+        params: {},
+        perform: persistentJobCommand(async function (agent) {
+            const remembered = agent.home_state?.snapshot?.().structureOrder;
+            if (!remembered) return 'Home repair was not accepted: no player-built structure is remembered.';
+            try {
+                const now = Date.now();
+                const order = {
+                    ...remembered,
+                    id: `${remembered.id.slice(0, 68)}.repair.${now}`,
+                    source: 'player',
+                    requester: 'player',
+                    phase: 'assess',
+                    resumePhase: null,
+                    attempts: 0,
+                    checkpoint: {},
+                    evidence: null,
+                    createdAt: now,
+                    updatedAt: now,
+                };
+                return submitRememberedStructure(agent, createWorkOrder(order));
+            } catch (error) {
+                return `Home repair work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!establishFarm',
+        description: 'Till, plant, verify, and durably remember a hydrated 1-16 plot food farm beside loaded water.',
+        params: {
+            'crop': { type: 'string', description: 'Crop: wheat, carrots, potatoes, or beetroots.' },
+            'width': { type: 'int', description: 'Farm width, 1-4.', domain: [1, 4, '[]'] },
+            'depth': { type: 'int', description: 'Farm depth, 1-4.', domain: [1, 4, '[]'] },
+        },
+        perform: runAsAction(async function (agent, crop, width, depth) {
+            const established = await skills.establishFarm(agent.bot, crop, width, depth);
+            const farm = agent.bot?.lastActionEvidence?.farm;
+            if (!established || !farm) return false;
+            return persistFarmState(agent, farm, 'established');
+        }),
+    },
+    {
+        name: '!maintainFarm',
+        description: 'Harvest mature crops, collect drops, replant missing plots, and verify the remembered farm.',
+        params: {},
+        perform: runAsAction(async function (agent) {
+            const farm = agent.home_state?.snapshot?.().farm;
+            if (!farm) {
+                skills.log(agent.bot, 'No durable farm is remembered. Establish one first.');
+                return false;
+            }
+            const maintained = await skills.maintainFarm(agent.bot, farm);
+            if (!maintained) return false;
+            return persistFarmState(agent, agent.bot?.lastActionEvidence?.farm, 'maintained');
+        }),
+    },
+    {
+        name: '!breedAnimals',
+        description: 'Feed verified nearby adult animal pairs and confirm new offspring while preserving the breeding stock.',
+        params: {
+            'animal': { type: 'string', description: 'Animal: cow, sheep, pig, chicken, or rabbit.' },
+            'pairs': { type: 'int', description: 'Number of pairs, 1-4.', domain: [1, 4, '[]'] },
+        },
+        perform: runAsAction(async function (agent, animal, pairs) {
+            return await skills.breedAnimals(agent.bot, animal, pairs);
+        }, false, 1),
     },
     {
         name: '!cancelJob',

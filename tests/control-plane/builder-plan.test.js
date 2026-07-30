@@ -2,10 +2,82 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createBuilderConstructionOrder,
   createBuilderStockpileOrder,
+  createConstructionBlueprint,
   nextBuilderStep,
 } from '../../src/agent/runtime/jobs/builder-plan.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
+
+test('general construction compiler creates bounded supported shapes with a safe room doorway', () => {
+  const platform = createConstructionBlueprint({
+    shape: 'platform',
+    width: 4,
+    depth: 3,
+    height: 1,
+    material: 'cobblestone',
+  });
+  assert.equal(platform.cells.length, 12);
+  assert.ok(platform.cells.every(cell => cell.y === 0 && cell.function === 'supported_surface'));
+
+  const room = createConstructionBlueprint({
+    shape: 'room',
+    width: 5,
+    depth: 5,
+    height: 4,
+    material: 'stone',
+  });
+  assert.equal(room.cells.some(cell => cell.x === 0 && cell.y === 1 && cell.z === 2), false);
+  assert.equal(room.cells.some(cell => cell.x === 0 && cell.y === 2 && cell.z === 2), false);
+  assert.equal(room.cells.filter(cell => cell.function === 'foundation').length, 25);
+  assert.equal(room.cells.filter(cell => cell.function === 'weather_cover').length, 25);
+
+  const order = createBuilderConstructionOrder({
+    x: 10,
+    y: 64,
+    z: -4,
+    shape: 'wall',
+    width: 6,
+    depth: 1,
+    height: 3,
+    material: 'stone_bricks',
+  });
+  assert.equal(order.source, 'player');
+  assert.equal(order.kind, 'build');
+  assert.equal(order.blueprint.cells.length, 18);
+  assert.deepEqual(order.target, { name: 'construction_site', x: 10, y: 64, z: -4 });
+});
+
+test('general construction compiler rejects unknown, excessive, and unsafe room geometry', () => {
+  assert.throws(() => createConstructionBlueprint({
+    shape: 'castle',
+    width: 4,
+    depth: 4,
+    height: 4,
+    material: 'stone',
+  }), /shape/i);
+  assert.throws(() => createConstructionBlueprint({
+    shape: 'platform',
+    width: 17,
+    depth: 2,
+    height: 1,
+    material: 'stone',
+  }), /width/i);
+  assert.throws(() => createConstructionBlueprint({
+    shape: 'wall',
+    width: 4,
+    depth: 1,
+    height: 5,
+    material: 'stone',
+  }), /height must be an integer from 1 to 4/i);
+  assert.throws(() => createConstructionBlueprint({
+    shape: 'room',
+    width: 2,
+    depth: 3,
+    height: 3,
+    material: 'stone',
+  }), /3x3x3/i);
+});
 
 test('Given an autonomous idle Builder, the default order stockpiles and never grants construction authority', () => {
   const order = createBuilderStockpileOrder({ quota: 64 });
@@ -109,4 +181,5 @@ test('Given verified cells and inventory, Builder places only the next missing c
   });
   assert.equal(complete.complete, true);
   assert.equal(complete.code, 'blueprint_complete');
+  assert.deepEqual(complete.checkpoint, { verifiedCount: 2, nextCell: 2 });
 });

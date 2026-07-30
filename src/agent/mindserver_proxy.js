@@ -3,6 +3,15 @@ import convoManager from './conversation.js';
 import { setSettings } from './settings.js';
 import { getFullState } from './library/full_state.js';
 
+const STATE_PUSH_DEBOUNCE_MS = 80;
+const STATE_PUSH_HEARTBEAT_MS = 1_000;
+
+function stateFingerprint(state) {
+    return JSON.stringify(state, (key, value) => (
+        ['timeOfDay', 'sampledAt'].includes(key) ? undefined : value
+    ));
+}
+
 // agent's individual connection to the mindserver
 // always connect to localhost
 
@@ -17,6 +26,14 @@ class MindServerProxy {
         this.connectPromise = null;
         this.settingsLoaded = false;
         this.agents = [];
+        this.stateStreamDemanded = false;
+        this.statePushTimer = null;
+        this.stateHeartbeatTimer = null;
+        this.stateListeners = [];
+        this.stateSequence = 0;
+        this.lastStateFingerprint = '';
+        this.lastCheapState = '';
+        this.forceNextStatePush = false;
         MindServerProxy.instance = this;
     }
 
@@ -131,6 +148,16 @@ class MindServerProxy {
             }
         });
 
+        socket.on('state-stream-demand', (enabled) => {
+            if (this.socket !== socket) return;
+            this.stateStreamDemanded = enabled === true;
+            if (this.stateStreamDemanded) this.requestStatePush({ force: true, immediate: true });
+            else if (this.statePushTimer) {
+                clearTimeout(this.statePushTimer);
+                this.statePushTimer = null;
+            }
+        });
+
         try {
             await new Promise((resolve, reject) => {
                 let settled = false;
@@ -206,6 +233,7 @@ class MindServerProxy {
 
     _disposeSocket(socket) {
         if (!socket) return;
+        if (socket === this.socket) this.stopStateStream();
         try { socket.removeAllListeners(); } catch { /* best effort */ }
         try { socket.disconnect(); } catch { /* best effort */ }
     }
@@ -265,7 +293,93 @@ class MindServerProxy {
         return true;
     }
 
+    startStateStream() {
+        this.stopStateStream();
+        const bot = this.agent?.bot;
+        if (!bot?.on) return false;
+        const markFromPhysics = () => {
+            const position = bot.entity?.position;
+            const cheap = [
+                position ? Number(position.x).toFixed(1) : '',
+                position ? Number(position.y).toFixed(1) : '',
+                position ? Number(position.z).toFixed(1) : '',
+                Number(bot.entity?.yaw || 0).toFixed(1),
+                Number(bot.health || 0).toFixed(1),
+                Number(bot.food || 0).toFixed(1),
+                bot.heldItem?.name || '',
+                this.agent?.actions?.currentActionLabel || '',
+                this.agent?.isOperatorHeld?.() === true ? 'held' : '',
+            ].join('|');
+            if (cheap === this.lastCheapState) return;
+            this.lastCheapState = cheap;
+            this.requestStatePush();
+        };
+        const markChanged = () => this.requestStatePush();
+        const bind = (event, handler) => {
+            bot.on(event, handler);
+            this.stateListeners.push({ event, handler });
+        };
+        bind('physicsTick', markFromPhysics);
+        for (const event of [
+            'health',
+            'heldItemChanged',
+            'playerCollect',
+            'entitySpawn',
+            'entityGone',
+            'death',
+            'respawn',
+        ]) bind(event, markChanged);
+        this.stateHeartbeatTimer = setInterval(() => {
+            this.requestStatePush({ force: true });
+        }, STATE_PUSH_HEARTBEAT_MS);
+        if (typeof this.stateHeartbeatTimer.unref === 'function') this.stateHeartbeatTimer.unref();
+        if (this.stateStreamDemanded) this.requestStatePush({ force: true, immediate: true });
+        return true;
+    }
+
+    stopStateStream() {
+        if (this.statePushTimer) clearTimeout(this.statePushTimer);
+        if (this.stateHeartbeatTimer) clearInterval(this.stateHeartbeatTimer);
+        this.statePushTimer = null;
+        this.stateHeartbeatTimer = null;
+        const bot = this.agent?.bot;
+        for (const { event, handler } of this.stateListeners) {
+            try { bot?.off?.(event, handler); } catch { /* best effort */ }
+        }
+        this.stateListeners = [];
+        this.lastCheapState = '';
+    }
+
+    requestStatePush({ force = false, immediate = false } = {}) {
+        if (!this.stateStreamDemanded || !this.agent || !this.socket?.connected) return false;
+        this.forceNextStatePush ||= force;
+        if (this.statePushTimer) return true;
+        this.statePushTimer = setTimeout(() => {
+            this.statePushTimer = null;
+            if (!this.stateStreamDemanded || !this.agent || !this.socket?.connected) return;
+            try {
+                const state = getFullState(this.agent);
+                const fingerprint = stateFingerprint(state);
+                const mustSend = this.forceNextStatePush || fingerprint !== this.lastStateFingerprint;
+                this.forceNextStatePush = false;
+                if (!mustSend) return;
+                this.lastStateFingerprint = fingerprint;
+                this.stateSequence += 1;
+                this.socket.volatile.emit('agent-state', {
+                    sequence: this.stateSequence,
+                    sentAt: Date.now(),
+                    state,
+                });
+            } catch (error) {
+                console.warn('[agent-state] Push failed:', error?.message || error);
+            }
+        }, immediate ? 0 : STATE_PUSH_DEBOUNCE_MS);
+        if (typeof this.statePushTimer.unref === 'function') this.statePushTimer.unref();
+        return true;
+    }
+
     shutdown() {
+        this.stopStateStream();
         if (!this.socket?.connected) return false;
         this.socket.emit('shutdown');
         return true;

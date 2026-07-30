@@ -231,6 +231,76 @@ test('Given persisted in-flight state, JobDirector reconciles it to assessment b
   assert.equal(director.activeOrder.evidence.code, 'restart_revalidation');
 });
 
+test('Given command autonomy and a persisted player order, JobDirector restores it for restart revalidation', () => {
+  const agent = createAgent('builder');
+  agent.runtime.autonomy = 'command';
+  const persisted = {
+    ...createWorkOrder({
+      id: 'player-restart',
+      role: 'builder',
+      kind: 'build',
+      source: 'player',
+      requester: 'player',
+      target: { name: 'worksite', x: 1, y: 64, z: 1 },
+      blueprint: {
+        id: 'restart_block',
+        width: 1,
+        depth: 1,
+        height: 1,
+        cells: [{ x: 0, y: 0, z: 0, material: 'stone' }],
+      },
+    }),
+    phase: 'execute',
+  };
+  const store = memoryStore(persisted);
+
+  const director = new JobDirector(agent, {
+    store,
+    getSnapshot: () => ({ inventory: {}, position: { x: 1, y: 64, z: 1 } }),
+    now: () => 10_000,
+  });
+
+  assert.equal(director.activeOrder.id, 'player-restart');
+  assert.equal(director.activeOrder.phase, 'assess');
+  assert.equal(store.saved.at(-1).evidence.code, 'restart_revalidation');
+});
+
+test('Given command autonomy and a persisted automatic role order, JobDirector clears only that suppressed order', () => {
+  const agent = createAgent('builder');
+  agent.runtime.autonomy = 'command';
+  const persisted = createWorkOrder({
+    id: 'automatic-restart',
+    role: 'builder',
+    kind: 'stockpile',
+    source: 'role',
+    target: { name: 'planks' },
+    quota: 16,
+  });
+  const store = memoryStore(persisted);
+
+  const director = new JobDirector(agent, { store });
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(store.saved.at(-1), null);
+});
+
+test('Given corrupt persisted job state, JobDirector surfaces the load error without overwriting evidence', () => {
+  const store = {
+    lastError: 'invalid persisted JSON',
+    saved: [],
+    load: () => null,
+    save(order) {
+      this.saved.push(order);
+      return order;
+    },
+  };
+
+  const director = new JobDirector(createAgent(), { store });
+
+  assert.equal(director.snapshot().code, 'job_state_load_failed');
+  assert.deepEqual(store.saved, []);
+});
+
 test('Given manual command grace, JobDirector suppresses job scheduling', () => {
   const agent = createAgent();
   const commands = [];

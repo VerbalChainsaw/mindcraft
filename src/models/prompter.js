@@ -93,6 +93,7 @@ export class Prompter {
         this.last_prompt_time = 0;
         this.awaiting_coding = false;
         this.command_docs_cache = { key: null, compact: '' };
+        this.performance = { conversation: null };
 
         // for backwards compatibility, move max_tokens to params
         let max_tokens = null;
@@ -334,6 +335,7 @@ export class Prompter {
     async promptConvo(messages) {
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
+        const turnStartedAt = current_msg_time;
         const requiresActionCommand = latestMessageRequestsAction(messages);
         let actionCorrection = '';
 
@@ -344,13 +346,27 @@ export class Prompter {
                 return '';
             }
 
+            const promptBuildStartedAt = Date.now();
             let prompt = this.profile.conversing;
             prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
             prompt += actionCorrection;
+            const promptBuiltAt = Date.now();
             let generation;
+            let providerStartedAt = null;
+            let providerFinishedAt = null;
 
             try {
+                providerStartedAt = Date.now();
                 generation = await this.chat_model.sendRequest(messages, prompt);
+                providerFinishedAt = Date.now();
+                this.performance.conversation = {
+                    sampledAt: providerFinishedAt,
+                    attempt: i + 1,
+                    promptBuildMs: Math.max(0, promptBuiltAt - promptBuildStartedAt),
+                    providerMs: Math.max(0, providerFinishedAt - providerStartedAt),
+                    totalMs: Math.max(0, providerFinishedAt - turnStartedAt),
+                    outcome: 'generated',
+                };
                 if (typeof generation !== 'string') {
                     console.error('Error: Generated response is not a string', generation);
                     throw new Error('Generated response is not a string');
@@ -359,6 +375,17 @@ export class Prompter {
                 await this._saveLog(prompt, messages, generation, 'conversation');
 
             } catch (error) {
+                const failedAt = Date.now();
+                this.performance.conversation = {
+                    sampledAt: failedAt,
+                    attempt: i + 1,
+                    promptBuildMs: Math.max(0, promptBuiltAt - promptBuildStartedAt),
+                    providerMs: providerStartedAt === null
+                        ? null
+                        : Math.max(0, (providerFinishedAt || failedAt) - providerStartedAt),
+                    totalMs: Math.max(0, failedAt - turnStartedAt),
+                    outcome: providerFinishedAt === null ? 'provider_failed' : 'postprocess_failed',
+                };
                 console.error('Error during message generation or file writing:', error);
                 continue;
             }

@@ -162,10 +162,69 @@ test('Given live inventory and cover, survival situation reports armor upgrades 
   });
 
   assert.deepEqual(situation.armor, [
-    { name: 'leather_boots', slot: 'feet', score: 1, equipped: true },
-    { name: 'iron_boots', slot: 'feet', score: 4, equipped: false },
+    {
+      name: 'leather_boots',
+      slot: 'feet',
+      score: 1,
+      durabilityRemaining: null,
+      durabilityMax: null,
+      worn: false,
+      equipped: true,
+    },
+    {
+      name: 'iron_boots',
+      slot: 'feet',
+      score: 4,
+      durabilityRemaining: null,
+      durabilityMax: null,
+      worn: false,
+      equipped: false,
+    },
   ]);
   assert.equal(situation.sheltered, true);
+});
+
+test('Given nearly broken high-tier armor and a healthy replacement, survival situation makes the replacement actionable', () => {
+  const wornDiamondBoots = { name: 'diamond_boots', type: 1, count: 1, durabilityUsed: 420 };
+  const ironBoots = { name: 'iron_boots', type: 2, count: 1, durabilityUsed: 0 };
+  const slots = Array(9).fill(null);
+  slots[8] = wornDiamondBoots;
+  const situation = summarizeSurvivalSituation({
+    bot: {
+      entity: {
+        position: {
+          x: 0,
+          y: 64,
+          z: 0,
+          distanceTo: () => 0,
+        },
+      },
+      health: 20,
+      food: 20,
+      lastDamageTime: 0,
+      inventory: { slots, items: () => [ironBoots] },
+      registry: {
+        foodsByName: {},
+        items: {
+          1: { maxDurability: 429 },
+          2: { maxDurability: 195 },
+        },
+      },
+      modes: { getStatus: () => [] },
+      time: { timeOfDay: 6000 },
+      game: { dimension: 'minecraft:overworld' },
+      rainState: 0,
+      thunderState: 0,
+      findBlocks: () => [],
+      blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
+      nearestEntity: () => null,
+    },
+    isOperatorHeld: () => false,
+    isIdle: () => true,
+  });
+
+  assert.equal(situation.armor.find(item => item.equipped).score, 0);
+  assert.equal(situation.armor.find(item => !item.equipped).score, 4);
 });
 
 test('Given a verified armor upgrade, SurvivalDirector dispatches it through ActionManager command ownership', async () => {

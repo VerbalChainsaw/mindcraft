@@ -133,6 +133,18 @@ async function runLiveBenchmark(options) {
       reject(error);
     });
   });
+  const stateDeliveries = [];
+  const stateIntervals = [];
+  let previousStateAt = null;
+  socket.on('state-update', (states) => {
+    const receivedAt = Date.now();
+    if (previousStateAt !== null) stateIntervals.push(receivedAt - previousStateAt);
+    previousStateAt = receivedAt;
+    for (const state of Object.values(states || {})) {
+      const sampledAt = Number(state?._meta?.sampledAt);
+      if (Number.isFinite(sampledAt)) stateDeliveries.push(Math.max(0, receivedAt - sampledAt));
+    }
+  });
   socket.emit('listen-to-agents');
   await delay(1_250);
   const durations = [];
@@ -152,6 +164,10 @@ async function runLiveBenchmark(options) {
       const states = parsed?.latest || parsed?.states || parsed?.agents || {};
       liveBots = Math.max(liveBots, Object.keys(states && typeof states === 'object' ? states : {}).length);
     }
+    if (liveBots > 0 && stateDeliveries.length < 3) {
+      const deadline = Date.now() + 3_500;
+      while (stateDeliveries.length < 3 && Date.now() < deadline) await delay(100);
+    }
   } finally {
     socket.close();
   }
@@ -162,6 +178,10 @@ async function runLiveBenchmark(options) {
     responseP50Ms: round(percentile(durations, 0.5)),
     responseP95Ms: round(percentile(durations, 0.95)),
     payloadP50Bytes: Math.round(percentile(payloadBytes, 0.5)),
+    statePushSamples: stateDeliveries.length,
+    stateDeliveryP50Ms: round(percentile(stateDeliveries, 0.5)),
+    stateDeliveryP95Ms: round(percentile(stateDeliveries, 0.95)),
+    stateIntervalP50Ms: round(percentile(stateIntervals, 0.5)),
   };
 }
 

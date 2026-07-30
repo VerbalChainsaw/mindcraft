@@ -539,9 +539,17 @@ export class JobDirector extends RoleDirector {
     this.lastOrder = null;
     this.completedOrderIds = new Set();
     try {
-      if (this.agent.runtime?.autonomy !== 'command') {
-        const persisted = this.store.load();
-        if (persisted && !TERMINAL_PHASES.has(persisted.phase)) {
+      const persisted = this.store.load();
+      if (this.store.lastError) {
+        this.setStatus('failed', 'job_state_load_failed', null, this.store.lastError, false);
+      } else if (persisted && !TERMINAL_PHASES.has(persisted.phase)) {
+        const automaticSuppressed = (
+          this.agent.runtime?.autonomy === 'command'
+          && persisted.source === 'role'
+        );
+        if (automaticSuppressed) {
+          this.store.save(null);
+        } else {
           this.activeOrder = reconcileWorkOrder(
             persisted,
             this.getJobSnapshot(this.agent, persisted),
@@ -756,6 +764,16 @@ export class JobDirector extends RoleDirector {
         return;
       }
       if (step.complete) {
+        if (step.checkpoint) {
+          this.persist({
+            ...this.activeOrder,
+            checkpoint: {
+              ...this.activeOrder.checkpoint,
+              ...step.checkpoint,
+            },
+            updatedAt: this.now(),
+          });
+        }
         this.finishOrder('complete', step.code || 'job_complete', step.detail || 'Work order completed.', false);
         return;
       }

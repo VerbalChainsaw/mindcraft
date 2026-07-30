@@ -25,6 +25,86 @@ function canonicalBuildingMaterial(value) {
   return material;
 }
 
+function boundedDimension(value, label, { minimum = 1, maximum = 16 } = {}) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new TypeError(`${label} must be an integer from ${minimum} to ${maximum}.`);
+  }
+  return number;
+}
+
+export function createConstructionBlueprint({
+  shape,
+  width,
+  depth,
+  height,
+  material,
+} = {}) {
+  const normalizedShape = String(shape || '').trim().toLowerCase();
+  if (!['platform', 'wall', 'room', 'bridge', 'column'].includes(normalizedShape)) {
+    throw new TypeError('Construction shape must be platform, wall, room, bridge, or column.');
+  }
+  const block = canonicalBuildingMaterial(material);
+  const resolvedWidth = normalizedShape === 'column'
+    ? 1
+    : boundedDimension(width, 'Construction width');
+  const resolvedDepth = ['wall', 'bridge', 'column'].includes(normalizedShape)
+    ? 1
+    : boundedDimension(depth, 'Construction depth');
+  const resolvedHeight = ['platform', 'bridge'].includes(normalizedShape)
+    ? 1
+    : boundedDimension(height, 'Construction height', { maximum: 4 });
+  if (normalizedShape === 'room' && (
+    resolvedWidth < 3
+    || resolvedDepth < 3
+    || resolvedHeight < 3
+  )) throw new TypeError('A room must be at least 3x3x3.');
+
+  const cells = [];
+  const add = (x, y, z, stage, cellFunction) => {
+    cells.push({ x, y, z, material: block, stage, function: cellFunction });
+  };
+  if (['platform', 'bridge'].includes(normalizedShape)) {
+    for (let x = 0; x < resolvedWidth; x += 1) {
+      for (let z = 0; z < resolvedDepth; z += 1) add(x, 0, z, 0, 'supported_surface');
+    }
+  } else if (normalizedShape === 'wall') {
+    for (let y = 0; y < resolvedHeight; y += 1) {
+      for (let x = 0; x < resolvedWidth; x += 1) add(x, y, 0, y, 'wall');
+    }
+  } else if (normalizedShape === 'column') {
+    for (let y = 0; y < resolvedHeight; y += 1) add(0, y, 0, y, 'column');
+  } else {
+    const doorZ = Math.floor(resolvedDepth / 2);
+    for (let x = 0; x < resolvedWidth; x += 1) {
+      for (let z = 0; z < resolvedDepth; z += 1) add(x, 0, z, 0, 'foundation');
+    }
+    for (let y = 1; y < resolvedHeight - 1; y += 1) {
+      for (let x = 0; x < resolvedWidth; x += 1) {
+        for (let z = 0; z < resolvedDepth; z += 1) {
+          const perimeter = x === 0 || x === resolvedWidth - 1 || z === 0 || z === resolvedDepth - 1;
+          const doorway = x === 0 && z === doorZ && y <= 2;
+          if (perimeter && !doorway) add(x, y, z, y, 'enclosure');
+        }
+      }
+    }
+    for (let x = 0; x < resolvedWidth; x += 1) {
+      for (let z = 0; z < resolvedDepth; z += 1) {
+        add(x, resolvedHeight - 1, z, resolvedHeight, 'weather_cover');
+      }
+    }
+  }
+  if (cells.length > 4096) throw new TypeError('Construction exceeds the safe 4096-cell limit.');
+  return Object.freeze({
+    id: `${normalizedShape}_${resolvedWidth}x${resolvedDepth}x${resolvedHeight}_${block}`.slice(0, 64),
+    version: 1,
+    width: resolvedWidth,
+    depth: resolvedDepth,
+    height: resolvedHeight,
+    cells: Object.freeze(cells.map(cell => Object.freeze(cell))),
+  });
+}
+
 function createFunctionalShelterBlueprint(material) {
   const wallMaterial = canonicalBuildingMaterial(material);
   const width = 5;
@@ -188,6 +268,42 @@ export function createBuilderFunctionalShelterOrder({
   });
 }
 
+export function createBuilderConstructionOrder({
+  x,
+  y,
+  z,
+  shape,
+  width,
+  depth,
+  height,
+  material,
+  requester = 'player',
+  constraints,
+} = {}) {
+  const blueprint = createConstructionBlueprint({
+    shape,
+    width,
+    depth,
+    height,
+    material,
+  });
+  return createWorkOrder({
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester,
+    target: {
+      name: 'construction_site',
+      x,
+      y,
+      z,
+    },
+    quota: blueprint.cells.length,
+    blueprint,
+    constraints,
+  });
+}
+
 export function nextBuilderStep(order, snapshot = {}) {
   if (order.kind === 'build' && order.source !== 'player') {
     return { terminal: true, code: 'construction_not_authorized', retryable: false };
@@ -265,7 +381,14 @@ export function nextBuilderStep(order, snapshot = {}) {
     return { terminal: true, code: 'blueprint_incorrect_block', retryable: false };
   }
   if (missing.length === 0 && incorrect.length === 0) {
-    return { complete: true, code: 'blueprint_complete' };
+    return {
+      complete: true,
+      code: 'blueprint_complete',
+      checkpoint: {
+        verifiedCount: Math.max(0, Number(audit.correct) || 0),
+        nextCell: Math.max(0, Number(audit.correct) || 0),
+      },
+    };
   }
 
   if (order.phase === 'assess' || order.phase === 'recover') {
@@ -325,6 +448,15 @@ export function nextBuilderStep(order, snapshot = {}) {
   if (order.phase === 'verify') {
     return { phase: 'execute', code: 'cell_verified' };
   }
-  if (order.phase === 'deliver') return { complete: true, code: 'blueprint_complete' };
+  if (order.phase === 'deliver') {
+    return {
+      complete: true,
+      code: 'blueprint_complete',
+      checkpoint: {
+        verifiedCount: Math.max(0, Number(audit.correct) || 0),
+        nextCell: Math.max(0, Number(audit.correct) || 0),
+      },
+    };
+  }
   return { terminal: true, code: 'unsupported_builder_phase', retryable: false };
 }

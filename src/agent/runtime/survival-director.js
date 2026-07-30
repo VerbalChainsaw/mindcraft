@@ -74,13 +74,36 @@ function armorDescriptor(name) {
   return score ? { name, slot, score } : null;
 }
 
+function armorDurability(bot, item) {
+  const max = Number(
+    item?.maxDurability
+    ?? bot.registry?.items?.[item?.type]?.maxDurability
+    ?? bot.registry?.itemsByName?.[item?.name]?.maxDurability,
+  );
+  if (!Number.isFinite(max) || max <= 0) {
+    return { durabilityRemaining: null, durabilityMax: null, worn: false };
+  }
+  const remaining = Math.max(0, max - Math.max(0, Number(item?.durabilityUsed) || 0));
+  return {
+    durabilityRemaining: remaining,
+    durabilityMax: max,
+    worn: remaining <= Math.max(16, Math.ceil(max * 0.1)),
+  };
+}
+
 function armorInventory(bot) {
   const equipped = ARMOR_SLOTS
     .map(({ index, slot }) => {
       const item = bot.inventory?.slots?.[index];
       const descriptor = armorDescriptor(item?.name);
+      const durability = armorDurability(bot, item);
       return descriptor && descriptor.slot === slot
-        ? { ...descriptor, equipped: true }
+        ? {
+            ...descriptor,
+            score: durability.worn ? 0 : descriptor.score,
+            ...durability,
+            equipped: true,
+          }
         : null;
     })
     .filter(Boolean);
@@ -89,7 +112,13 @@ function armorInventory(bot) {
     .filter(item => !equippedItems.has(item))
     .map(item => {
       const descriptor = armorDescriptor(item?.name);
-      return descriptor ? { ...descriptor, equipped: false } : null;
+      const durability = armorDurability(bot, item);
+      return descriptor ? {
+        ...descriptor,
+        score: durability.worn ? 0 : descriptor.score,
+        ...durability,
+        equipped: false,
+      } : null;
     })
     .filter(Boolean);
   return [...equipped, ...carried];

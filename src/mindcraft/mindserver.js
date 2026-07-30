@@ -35,6 +35,7 @@ import {
   fingerprintAgentStates,
   normalizeAgentTelemetryConfig,
   resetAgentStateCache,
+  selectAgentConnectionsForPolling,
 } from './agent-state-pump.js';
 import { normalizeAgentSettings } from './agent-settings.js';
 import { createBedrockClientController } from './bedrock-client.js';
@@ -216,6 +217,9 @@ class AgentConnection {
         this.full_state = null;
         this.viewer_port = viewer_port;
         this.processToken = processToken;
+        this.lastStatePushAt = 0;
+        this.lastStateSequence = 0;
+        this.statePushCount = 0;
     }
     setSettings(settings) {
         this.settings = settings;
@@ -1595,11 +1599,21 @@ async function createMindServerAtPort(port, dependencies = {}) {
     app.get('/api/agent-telemetry', (_req, res) => {
       const latest = {};
       for (const [agentName, state] of Object.entries(lastAgentStates)) {
+        const connection = agent_connections[agentName];
+        const sampledAt = Number.isFinite(Number(state?._meta?.sampledAt))
+          ? Number(state._meta.sampledAt)
+          : null;
         latest[agentName] = {
-          sampledAt: Number.isFinite(Number(state?._meta?.sampledAt))
-            ? Number(state._meta.sampledAt)
-            : null,
-          transport: state?._meta?.transport || null,
+          sampledAt,
+          transport: connection?.lastStatePushAt ? {
+            status: 'push',
+            receivedAt: connection.lastStatePushAt,
+            deliveryMs: sampledAt === null
+              ? null
+              : Math.max(0, connection.lastStatePushAt - sampledAt),
+            sequence: connection.lastStateSequence,
+            pushes: connection.statePushCount,
+          } : state?._meta?.transport || null,
           available: Boolean(state && !state.error),
         };
       }
@@ -2050,6 +2064,9 @@ async function createMindServerAtPort(port, dependencies = {}) {
                 agent_connections[agentName].socket = socket;
                 agent_connections[agentName].in_game = false;
                 agent_connections[agentName].stage = 'minecraft_login';
+                agent_connections[agentName].lastStatePushAt = 0;
+                agent_connections[agentName].lastStateSequence = 0;
+                agent_connections[agentName].statePushCount = 0;
                 mindcraft.getAgentProcess(agentName)?.markReadinessStage?.('minecraft_login');
                 curAgentName = agentName;
                 agentsStatusUpdate();
@@ -2077,6 +2094,7 @@ async function createMindServerAtPort(port, dependencies = {}) {
             connection.stage = 'world_ready';
             curAgentName = agentName;
             agentsStatusUpdate();
+            socket.emit('state-stream-demand', agent_listeners.length > 0);
             reply({ success: true, error: null });
         });
 
@@ -2086,6 +2104,8 @@ async function createMindServerAtPort(port, dependencies = {}) {
                 agent_connections[curAgentName].in_game = false;
                 agent_connections[curAgentName].socket = null;
                 agent_connections[curAgentName].stage = 'disconnected';
+                agent_connections[curAgentName].lastStatePushAt = 0;
+                agent_connections[curAgentName].lastStateSequence = 0;
                 resetAgentStateCache(agent_connections[curAgentName]);
                 delete lastAgentStates[curAgentName];
                 agentsStatusUpdate();
@@ -2452,6 +2472,29 @@ async function createMindServerAtPort(port, dependencies = {}) {
             if (output) io.emit('bot-output', agentName, output);
         });
 
+        socket.on('agent-state', (payload) => {
+            const agentName = socket.data?.agentName;
+            const connection = agent_connections[agentName];
+            const state = payload?.state;
+            const sequence = Number(payload?.sequence);
+            if (
+                !ownsAgentIdentity(socket, agentName)
+                || connection?.socket !== socket
+                || connection.in_game !== true
+                || !state
+                || typeof state !== 'object'
+                || Array.isArray(state)
+                || state.name !== agentName
+                || !Number.isSafeInteger(sequence)
+                || sequence <= connection.lastStateSequence
+            ) return;
+            connection.lastStateSequence = sequence;
+            connection.lastStatePushAt = Date.now();
+            connection.statePushCount += 1;
+            lastAgentStates[agentName] = state;
+            publishAgentStates(currentLiveAgentStates());
+        });
+
         socket.on('listen-to-agents', () => {
             if (!requireDashboardSocket(socket)) return;
             addListener(socket);
@@ -2567,6 +2610,40 @@ function agentsStatusUpdate(socket) {
 let listenerPump = null;
 let lastStateFingerprint = '';
 let lastStatePublishedAt = 0;
+
+function currentLiveAgentStates(additional = {}) {
+    const states = {};
+    for (const [agentName, connection] of Object.entries(agent_connections)) {
+        if (!connection?.in_game) continue;
+        const state = additional[agentName] || lastAgentStates[agentName];
+        if (state) states[agentName] = state;
+    }
+    return states;
+}
+
+function publishAgentStates(states) {
+    const now = Date.now();
+    lastAgentStates = states;
+    const fingerprint = fingerprintAgentStates(states);
+    if (
+        fingerprint === lastStateFingerprint
+        && now - lastStatePublishedAt < agentTelemetryConfig.heartbeatMs
+    ) return false;
+    lastStateFingerprint = fingerprint;
+    lastStatePublishedAt = now;
+    const room = io?.to?.(AGENT_TELEMETRY_ROOM);
+    if (room?.volatile?.emit) {
+        room.volatile.emit('state-update', states);
+        return true;
+    }
+    for (const listener of agent_listeners) {
+        if (listener?.connected) {
+            try { listener.emit('state-update', states); } catch { /* stale listener */ }
+        }
+    }
+    return true;
+}
+
 function addListener(listener_socket) {
     if (!listener_socket || agent_listeners.includes(listener_socket)) return;
     agent_listeners.push(listener_socket);
@@ -2586,36 +2663,24 @@ function addListener(listener_socket) {
         lastStateFingerprint = '';
         lastStatePublishedAt = 0;
         listenerPump ??= createAgentStatePump({
-            collect: () => collectAgentStates(agent_connections, agentTelemetryConfig),
-            publish: (states) => {
-                const now = Date.now();
-                lastAgentStates = states;
-                const fingerprint = fingerprintAgentStates(states);
-                if (
-                    fingerprint === lastStateFingerprint
-                    && now - lastStatePublishedAt < agentTelemetryConfig.heartbeatMs
-                ) {
-                    return;
-                }
-                lastStateFingerprint = fingerprint;
-                lastStatePublishedAt = now;
-                const room = io?.to?.(AGENT_TELEMETRY_ROOM);
-                if (room?.volatile?.emit) {
-                    room.volatile.emit('state-update', states);
-                    return;
-                }
-                for (const listener of agent_listeners) {
-                    if (listener?.connected) {
-                        try { listener.emit('state-update', states); } catch { /* stale listener */ }
-                    }
-                }
-            },
+            collect: () => collectAgentStates(selectAgentConnectionsForPolling(agent_connections, {
+                staleAfterMs: Math.max(
+                    agentTelemetryConfig.heartbeatMs * 2,
+                    agentTelemetryConfig.intervalMs * 3,
+                ),
+            }), agentTelemetryConfig),
+            publish: (states) => publishAgentStates(currentLiveAgentStates(states)),
             onError: (error) => {
                 console.warn('[agents] State sampling failed:', error?.message || error);
             },
             shouldContinue: () => agent_listeners.length > 0,
             intervalMs: agentTelemetryConfig.intervalMs,
         });
+        for (const connection of Object.values(agent_connections)) {
+            if (connection?.in_game && connection.socket?.connected !== false) {
+                connection.socket.emit('state-stream-demand', true);
+            }
+        }
         listenerPump.start();
     }
 }
@@ -2632,6 +2697,11 @@ function removeListener(listener_socket) {
     }
     if (agent_listeners.length === 0) {
         listenerPump?.stop();
+        for (const connection of Object.values(agent_connections)) {
+            if (connection?.socket?.connected !== false) {
+                connection.socket?.emit?.('state-stream-demand', false);
+            }
+        }
         lastAgentStates = {};
         lastStateFingerprint = '';
         lastStatePublishedAt = 0;

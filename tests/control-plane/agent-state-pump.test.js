@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   collectAgentStates,
   createAgentStatePump,
+  selectAgentConnectionsForPolling,
 } from '../../src/mindcraft/agent-state-pump.js';
 
 test('Given multiple live bots, when state is sampled, then requests run concurrently and remain keyed by bot name', async () => {
@@ -82,4 +83,20 @@ test('Given one state cycle fails, when listeners remain active, then the failur
 
   assert.deepEqual(errors, ['temporary bridge failure']);
   assert.deepEqual(published, [{ cycle: 2 }]);
+});
+
+test('Given fresh pushed state, fallback polling selects only legacy or stale agent connections', () => {
+  const now = 20_000;
+  const fresh = { in_game: true, lastStatePushAt: 19_500 };
+  const stale = { in_game: true, lastStatePushAt: 10_000 };
+  const legacy = { in_game: true };
+  const stopped = { in_game: false };
+
+  assert.deepEqual(
+    Object.keys(selectAgentConnectionsForPolling(
+      { fresh, stale, legacy, stopped },
+      { now, staleAfterMs: 2_000 },
+    )).sort(),
+    ['legacy', 'stale'],
+  );
 });

@@ -8077,6 +8077,12 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
         return false;
     }
     const target = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) };
+    const expectedCrop = seedType ? {
+        wheat_seeds: 'wheat',
+        beetroot_seeds: 'beetroots',
+        carrot: 'carrots',
+        potato: 'potatoes',
+    }[seedType] || seedType.replace(/_seeds?$/, '') : null;
     let pos = new Vec3(target.x, target.y, target.z);
     let block = bot.blockAt(pos);
     if (!block) {
@@ -8110,7 +8116,7 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
         return false;
     }
     if (above.name !== 'air') {
-        if (block.name === 'farmland') {
+        if (block.name === 'farmland' && above.name === expectedCrop) {
             log(bot, `Land is already farmed with ${above.name}.`);
             return true;
         }
@@ -8147,6 +8153,18 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
             log(bot, `Could not till the block: ${error.message}.`);
             return false;
         }
+        const tilled = await waitForWorldCondition(
+            bot,
+            () => bot.blockAt(pos)?.name === 'farmland',
+            1_500,
+            50,
+        );
+        if (!tilled) {
+            setActionEvidence(bot, { kind: 'farm', outcome: 'till_unverified', target, retryable: true });
+            log(bot, 'Minecraft did not confirm farmland after hoe use.');
+            return false;
+        }
+        block = bot.blockAt(pos);
         log(bot, `Tilled block x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
     
@@ -8167,29 +8185,352 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
             return false;
         }
         await new Promise(resolve => setTimeout(resolve, 100));
-        const expectedCrop = {
+        const plantedCrop = {
             wheat_seeds: 'wheat',
             beetroot_seeds: 'beetroots',
             carrot: 'carrots',
             potato: 'potatoes',
         }[seedType] || seedType.replace(/_seeds?$/, '');
         const planted = bot.blockAt(new Vec3(x, y + 1, z));
-        if (planted?.name !== expectedCrop) {
+        if (planted?.name !== plantedCrop) {
             setActionEvidence(bot, {
                 kind: 'farm',
                 outcome: 'plant_unverified',
                 target,
                 seed: seedType,
-                expected: expectedCrop,
+                expected: plantedCrop,
                 observed: planted?.name || null,
                 retryable: true,
             });
-            log(bot, `Minecraft did not confirm ${expectedCrop} above the farmland.`);
+            log(bot, `Minecraft did not confirm ${plantedCrop} above the farmland.`);
             return false;
         }
         log(bot, `Planted ${seedType} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
     setActionEvidence(bot, { kind: 'farm', outcome: seedType ? 'planted' : 'tilled', target, seed: seedType || null, retryable: false });
+    return true;
+}
+
+const FARM_CROP_INPUTS = Object.freeze({
+    wheat: Object.freeze({ crop: 'wheat', seed: 'wheat_seeds' }),
+    wheat_seeds: Object.freeze({ crop: 'wheat', seed: 'wheat_seeds' }),
+    carrot: Object.freeze({ crop: 'carrots', seed: 'carrot' }),
+    carrots: Object.freeze({ crop: 'carrots', seed: 'carrot' }),
+    potato: Object.freeze({ crop: 'potatoes', seed: 'potato' }),
+    potatoes: Object.freeze({ crop: 'potatoes', seed: 'potato' }),
+    beetroot: Object.freeze({ crop: 'beetroots', seed: 'beetroot_seeds' }),
+    beetroots: Object.freeze({ crop: 'beetroots', seed: 'beetroot_seeds' }),
+    beetroot_seeds: Object.freeze({ crop: 'beetroots', seed: 'beetroot_seeds' }),
+});
+
+function dimensionName(bot) {
+    return String(bot.game?.dimension || 'overworld').replace(/^minecraft:/, '');
+}
+
+function normalizeFarmState(raw) {
+    const spec = FARM_CROP_INPUTS[String(raw?.crop || '').trim().toLowerCase()];
+    if (!spec || !Array.isArray(raw?.cells) || raw.cells.length < 1 || raw.cells.length > 64) return null;
+    const cells = raw.cells
+        .filter(cell => [cell?.x, cell?.y, cell?.z].every(Number.isFinite))
+        .map(cell => ({ x: Math.floor(cell.x), y: Math.floor(cell.y), z: Math.floor(cell.z) }));
+    if (cells.length !== raw.cells.length) return null;
+    return {
+        dimension: String(raw.dimension || 'overworld').replace(/^minecraft:/, ''),
+        crop: spec.crop,
+        seed: spec.seed,
+        water: raw.water,
+        cells,
+    };
+}
+
+function farmCellStatus(bot, farm, cell) {
+    const soil = bot.blockAt(new Vec3(cell.x, cell.y, cell.z));
+    const crop = bot.blockAt(new Vec3(cell.x, cell.y + 1, cell.z));
+    const cropSpec = CROP_FOOD_SPECS[farm.crop];
+    return {
+        soil,
+        crop,
+        planted: soil?.name === 'farmland' && crop?.name === farm.crop,
+        mature: soil?.name === 'farmland'
+            && crop?.name === farm.crop
+            && Number(crop?._properties?.age) >= cropSpec.maxAge,
+    };
+}
+
+export async function establishFarm(bot, cropName='wheat', width=3, depth=3, range=32) {
+    const spec = FARM_CROP_INPUTS[String(cropName || '').trim().toLowerCase()];
+    const farmWidth = Math.max(1, Math.min(4, Math.floor(Number(width) || 3)));
+    const farmDepth = Math.max(1, Math.min(4, Math.floor(Number(depth) || 3)));
+    const searchRange = Math.max(8, Math.min(64, Math.floor(Number(range) || 32)));
+    if (!spec) {
+        setActionEvidence(bot, { kind: 'farm_establish', outcome: 'unsupported_crop', retryable: false });
+        log(bot, 'Farm crop must be wheat, carrots, potatoes, or beetroots.');
+        return false;
+    }
+    const water = world.getNearestBlock(bot, 'water', searchRange);
+    if (!water) {
+        setActionEvidence(bot, { kind: 'farm_establish', outcome: 'missing_water', target: { name: spec.crop }, retryable: true });
+        log(bot, `No loaded water source is available within ${searchRange} blocks for hydrated farmland.`);
+        return false;
+    }
+    const candidates = [];
+    for (let dx = -4; dx <= 4; dx += 1) {
+        for (let dz = -4; dz <= 4; dz += 1) {
+            if (dx === 0 && dz === 0) continue;
+            const soil = bot.blockAt(water.position.offset(dx, 0, dz));
+            const above = bot.blockAt(water.position.offset(dx, 1, dz));
+            if (
+                ['dirt', 'grass_block', 'farmland'].includes(soil?.name)
+                && (
+                    above?.name === 'air'
+                    || above?.name === spec.crop
+                    || isReplaceableGameplayBlock(above)
+                )
+            ) candidates.push({
+                x: soil.position.x,
+                y: soil.position.y,
+                z: soil.position.z,
+                distance: Math.abs(dx) + Math.abs(dz),
+            });
+        }
+    }
+    candidates.sort((left, right) => left.distance - right.distance || left.x - right.x || left.z - right.z);
+    const requested = farmWidth * farmDepth;
+    const cells = candidates.slice(0, requested).map(({ x, y, z }) => ({ x, y, z }));
+    if (cells.length < requested) {
+        setActionEvidence(bot, {
+            kind: 'farm_establish',
+            outcome: 'insufficient_hydrated_soil',
+            target: { name: spec.crop, x: water.position.x, y: water.position.y, z: water.position.z },
+            requested,
+            available: cells.length,
+            retryable: true,
+        });
+        log(bot, `Only ${cells.length} safe hydrated farm plots are loaded; ${requested} were requested.`);
+        return false;
+    }
+    const alreadyPlanted = cells.filter(cell => farmCellStatus(bot, { crop: spec.crop }, cell).planted).length;
+    const seedsNeeded = requested - alreadyPlanted;
+    if (inventoryCount(bot, spec.seed) < seedsNeeded) {
+        setActionEvidence(bot, {
+            kind: 'farm_establish',
+            outcome: 'missing_seeds',
+            target: { name: spec.crop },
+            seed: spec.seed,
+            required: seedsNeeded,
+            available: inventoryCount(bot, spec.seed),
+            retryable: true,
+        });
+        log(bot, `Establishing this farm requires ${seedsNeeded} ${spec.seed}; only ${inventoryCount(bot, spec.seed)} are carried.`);
+        return false;
+    }
+    for (const cell of cells) {
+        if (bot.interrupt_code) return false;
+        if (farmCellStatus(bot, { crop: spec.crop }, cell).planted) continue;
+        if (!await tillAndSow(bot, cell.x, cell.y, cell.z, spec.seed)) return false;
+    }
+    const verified = cells.filter(cell => farmCellStatus(bot, { crop: spec.crop }, cell).planted).length;
+    const farm = {
+        dimension: dimensionName(bot),
+        crop: spec.crop,
+        seed: spec.seed,
+        water: { x: water.position.x, y: water.position.y, z: water.position.z },
+        cells,
+    };
+    setActionEvidence(bot, {
+        kind: 'farm_establish',
+        outcome: verified === requested ? 'established' : 'verification_failed',
+        target: { name: spec.crop, ...farm.water },
+        farm,
+        requested,
+        verified,
+        retryable: verified !== requested,
+    });
+    if (verified !== requested) return false;
+    log(bot, `Established and verified ${verified} hydrated ${spec.crop} plots.`);
+    return true;
+}
+
+export async function maintainFarm(bot, rawFarm) {
+    const farm = normalizeFarmState(rawFarm);
+    if (!farm) {
+        setActionEvidence(bot, { kind: 'farm_maintain', outcome: 'invalid_farm_state', retryable: false });
+        return false;
+    }
+    if (farm.dimension !== dimensionName(bot)) {
+        setActionEvidence(bot, {
+            kind: 'farm_maintain',
+            outcome: 'wrong_dimension',
+            target: { name: farm.crop },
+            expected: farm.dimension,
+            observed: dimensionName(bot),
+            retryable: true,
+        });
+        log(bot, `The remembered farm is in ${farm.dimension}; return there before maintaining it.`);
+        return false;
+    }
+    const statuses = farm.cells.map(cell => ({ cell, ...farmCellStatus(bot, farm, cell) }));
+    const actionable = statuses.filter(status => (
+        !status.planted || status.mature
+    ));
+    const missingPlots = statuses.filter(status => !status.planted).length;
+    if (inventoryCount(bot, farm.seed) < missingPlots) {
+        setActionEvidence(bot, {
+            kind: 'farm_maintain',
+            outcome: 'missing_seed_reserve',
+            target: { name: farm.crop },
+            seed: farm.seed,
+            required: missingPlots,
+            available: inventoryCount(bot, farm.seed),
+            retryable: true,
+        });
+        log(bot, `Repairing missing farm plots requires ${missingPlots} ${farm.seed}; mature plots can supply their own replanting seed.`);
+        return false;
+    }
+    let harvested = 0;
+    let replanted = 0;
+    for (const { cell } of actionable) {
+        if (bot.interrupt_code) return false;
+        const status = farmCellStatus(bot, farm, cell);
+        if (status.mature) {
+            if (!await breakBlockAt(bot, cell.x, cell.y + 1, cell.z)) return false;
+            harvested += 1;
+            await new Promise(resolve => setTimeout(resolve, 150));
+            try { await pickupNearbyItems(bot); } catch { /* inventory verification follows */ }
+        }
+        if (inventoryCount(bot, farm.seed) < 1) {
+            setActionEvidence(bot, {
+                kind: 'farm_maintain',
+                outcome: 'harvest_yield_missing_seed',
+                target: { name: farm.crop, x: cell.x, y: cell.y, z: cell.z },
+                seed: farm.seed,
+                retryable: true,
+            });
+            return false;
+        }
+        if (!await tillAndSow(bot, cell.x, cell.y, cell.z, farm.seed)) return false;
+        replanted += 1;
+    }
+    const verified = farm.cells.filter(cell => farmCellStatus(bot, farm, cell).planted).length;
+    setActionEvidence(bot, {
+        kind: 'farm_maintain',
+        outcome: verified === farm.cells.length ? 'maintained' : 'verification_failed',
+        target: { name: farm.crop },
+        farm,
+        harvested,
+        replanted,
+        verified,
+        expected: farm.cells.length,
+        retryable: verified !== farm.cells.length,
+    });
+    if (verified !== farm.cells.length) return false;
+    log(bot, `Maintained ${verified} remembered farm plots; harvested ${harvested} and replanted ${replanted}.`);
+    return true;
+}
+
+const BREEDING_FOOD = Object.freeze({
+    cow: 'wheat',
+    sheep: 'wheat',
+    pig: 'carrot',
+    chicken: 'wheat_seeds',
+    rabbit: 'carrot',
+});
+
+function isAdultBreedingAnimal(entity, animal) {
+    if (entity?.name !== animal || !entity.position) return false;
+    const babyFlag = entity.metadata?.[16];
+    return babyFlag !== true && babyFlag !== 1;
+}
+
+function isBabyBreedingAnimal(entity, animal) {
+    return entity?.name === animal
+        && Boolean(entity.position)
+        && (entity.metadata?.[16] === true || entity.metadata?.[16] === 1);
+}
+
+export async function breedAnimals(bot, animalName, pairs=1, range=24) {
+    const animal = String(animalName || '').trim().toLowerCase();
+    const food = BREEDING_FOOD[animal];
+    const pairCount = Math.max(1, Math.min(4, Math.floor(Number(pairs) || 1)));
+    const searchRange = Math.max(8, Math.min(48, Math.floor(Number(range) || 24)));
+    if (!food) {
+        setActionEvidence(bot, { kind: 'breed', outcome: 'unsupported_animal', target: { name: animal }, retryable: false });
+        log(bot, 'Breeding supports cows, sheep, pigs, chickens, and rabbits.');
+        return false;
+    }
+    const adults = world.getNearbyEntities(bot, searchRange)
+        .filter(entity => isAdultBreedingAnimal(entity, animal))
+        .sort((left, right) => bot.entity.position.distanceTo(left.position) - bot.entity.position.distanceTo(right.position));
+    const requiredAdults = pairCount * 2;
+    if (adults.length < requiredAdults) {
+        setActionEvidence(bot, {
+            kind: 'breed',
+            outcome: 'insufficient_adults',
+            target: { name: animal },
+            requiredAdults,
+            availableAdults: adults.length,
+            retryable: true,
+        });
+        log(bot, `Breeding ${pairCount} pair(s) requires ${requiredAdults} nearby adult ${animal}; ${adults.length} are loaded.`);
+        return false;
+    }
+    if (inventoryCount(bot, food) < requiredAdults) {
+        setActionEvidence(bot, {
+            kind: 'breed',
+            outcome: 'missing_breeding_food',
+            target: { name: animal },
+            food,
+            required: requiredAdults,
+            available: inventoryCount(bot, food),
+            retryable: true,
+        });
+        log(bot, `Breeding requires ${requiredAdults} ${food}; only ${inventoryCount(bot, food)} are carried.`);
+        return false;
+    }
+    const beforeIds = new Set(world.getNearbyEntities(bot, searchRange)
+        .filter(entity => entity?.name === animal)
+        .map(entity => entity.id));
+    for (const parent of adults.slice(0, requiredAdults)) {
+        if (bot.interrupt_code) return false;
+        const reached = await goToGoal(bot, new pf.goals.GoalFollow(parent, 2));
+        if (!reached || !parent.position || bot.entity.position.distanceTo(parent.position) > 4.5) {
+            setActionEvidence(bot, { kind: 'breed', outcome: 'parent_unreachable', target: { name: animal, id: parent.id }, retryable: true });
+            return false;
+        }
+        if (!await equip(bot, food)) return false;
+        const beforeFood = inventoryCount(bot, food);
+        try {
+            await bot.activateEntity(parent);
+        } catch (error) {
+            setActionEvidence(bot, { kind: 'breed', outcome: 'feeding_blocked', target: { name: animal, id: parent.id }, error: error.message, retryable: true });
+            return false;
+        }
+        const consumed = await waitForWorldCondition(bot, () => inventoryCount(bot, food) < beforeFood, 1_500, 50);
+        if (!consumed) {
+            setActionEvidence(bot, { kind: 'breed', outcome: 'feeding_unverified', target: { name: animal, id: parent.id }, retryable: true });
+            return false;
+        }
+    }
+    const expectedBabies = pairCount;
+    const bred = await waitForWorldCondition(bot, () => (
+        world.getNearbyEntities(bot, searchRange)
+            .filter(entity => isBabyBreedingAnimal(entity, animal) && !beforeIds.has(entity.id))
+            .length >= expectedBabies
+    ), 12_000, 100);
+    const newAnimals = world.getNearbyEntities(bot, searchRange)
+        .filter(entity => isBabyBreedingAnimal(entity, animal) && !beforeIds.has(entity.id))
+        .length;
+    setActionEvidence(bot, {
+        kind: 'breed',
+        outcome: bred ? 'bred' : 'offspring_unverified',
+        target: { name: animal },
+        pairs: pairCount,
+        offspring: newAnimals,
+        adultsPreserved: adults.length,
+        retryable: !bred,
+    });
+    if (!bred) return false;
+    log(bot, `Bred ${pairCount} ${animal} pair(s) and verified ${newAnimals} new offspring.`);
     return true;
 }
 

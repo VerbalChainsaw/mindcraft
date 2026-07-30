@@ -280,6 +280,20 @@ export async function collectAgentStates(agentConnections, options = {}) {
   return Object.fromEntries(entries.filter((entry) => Array.isArray(entry) && entry[1] !== null));
 }
 
+export function selectAgentConnectionsForPolling(agentConnections, {
+  now = Date.now(),
+  staleAfterMs = DEFAULT_AGENT_TELEMETRY_CONFIG.heartbeatMs * 2,
+} = {}) {
+  const cutoff = Math.max(MIN_INTERVAL_MS, Number(staleAfterMs) || 0);
+  return Object.fromEntries(Object.entries(agentConnections || {}).filter(([, connection]) => (
+    connection?.in_game
+    && (
+      !Number.isFinite(connection.lastStatePushAt)
+      || now - connection.lastStatePushAt >= cutoff
+    )
+  )));
+}
+
 export function fingerprintAgentStates(states) {
   return JSON.stringify(states, (key, value) => (
     [

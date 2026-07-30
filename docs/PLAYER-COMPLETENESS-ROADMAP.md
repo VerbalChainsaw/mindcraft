@@ -1,12 +1,15 @@
 # Player completeness and runtime performance
 
-Status: commanded companion gameplay is operational. The bot can already
+Status: commanded companion gameplay is operational and the two required
+player-completeness groups are delivered. The bot can
 navigate, follow/guard, collect, craft, smelt, prepare food, sleep, seek/build
 emergency shelter, equip armor upgrades, use doors and items, trade, ride,
 construct fixed verified shelters, build/use Nether portals, run a Nether
 quartz round trip, fight tactically, explore landmarks, recover death items,
-and brew potions. "Player-complete" still has two major gameplay groups and
-two operational hardening gates.
+brew potions, establish and maintain a farm, breed animals, remember and
+repair a home structure, and execute bounded general construction projects.
+The advanced mechanics table below remains an explicit backlog rather than
+an implied capability claim.
 
 ## Delivered in this slice
 
@@ -92,40 +95,78 @@ Wall-clock model response still depends primarily on the selected provider and
 model. Use the benchmark to keep bot-side/control-plane regressions separate
 from provider inference latency.
 
-## Remaining major gameplay groups
+## Completed major gameplay groups
 
-### 1. Renewable home and equipment lifecycle — required
+### 1. Renewable home and equipment lifecycle
 
-Existing food preparation can harvest/replant mature crops and hunt
-sustainably, but it does not establish and maintain a renewable base loop.
-Player-complete survival still needs:
+Durable per-bot home state now owns a remembered position, one verified farm,
+and the latest player-authorized structure blueprint. The deterministic action
+surface includes:
 
-- select hydrated farmland and plant missing crop rows;
-- revisit, harvest, and replant a remembered farm;
-- breed a bounded adult pair while preserving breeding stock;
-- track equipped tool/armor durability and replace it before breakage;
-- choose repair, replacement, or retirement using available materials;
-- re-audit and repair the remembered shelter after damage.
+- `!rememberHome()`;
+- `!establishFarm(crop, width, depth)` for 1-16 hydrated plots;
+- `!maintainFarm()` for mature harvest, pickup, replant, and exact audit;
+- `!breedAnimals(animal, pairs)` for one to four adult pairs with verified
+  offspring;
+- `!repairHome()` to resubmit the remembered blueprint and replace only
+  missing cells.
 
-This is one major group because the same persistent home/upkeep state should
-own farm, supplies, equipment, and shelter maintenance.
+Tool preparation already retires tools below the safe remaining-durability
+threshold. Armor upkeep now applies the same threshold, allowing a healthy
+lower-tier replacement to supersede nearly broken high-tier armor. Anvil and
+Mending repair are intentionally still listed as advanced mechanics because
+they require separate level/material/enchantment contracts.
 
-### 2. General safe construction projects — required
+Physical proof on Paper 1.21.11:
 
-The bot has verified emergency and functional shelter blueprints. It still
-needs a typed construction goal that can compile an operator-approved bounded
-shape into supported cells, reserve materials, checkpoint progress, recover
-after interruption/restart, and verify the exact finished structure. This must
-extend GoalDirector/JobDirector rather than re-enable generated code.
+- established and persisted nine hydrated wheat plots;
+- matured, harvested, collected, and replanted all nine plots;
+- fed two adult cows and verified one new baby entity;
+- removed one cell from a remembered platform and restored it through
+  `!repairHome()`, ending at a 4/4 exact blueprint audit.
+
+### 2. General safe construction projects
+
+`!assignConstructionJob(shape, width, depth, height, material)` compiles
+operator-approved platforms, bridges, walls, columns, and rooms into the
+existing persistent Builder work-order path. It reserves/acquires material,
+orders supported cells causally, checkpoints every verified placement,
+revalidates after restart, and completes only after an exact world audit.
+Horizontal dimensions are bounded to 16. Vertical walls, columns, and rooms
+are bounded to the physically reachable verified height of four; taller work
+is deferred until scaffolding is a first-class verified mechanic.
+
+Physical proof built and audited a 3x3 stone platform, resumed an active wall
+order after a process restart with `restart_revalidation`, and built a second
+2x2 platform with a final checkpoint of 4/4.
 
 ## Operational hardening gates
 
-These are not new gameplay features, but they should be green before calling a
-multi-bot deployment unattended:
+Restart continuity is green for typed goals in the state-store contract and
+for live player work orders/home state. A confirmed loose handoff had skipped
+all persisted work-order loading when autonomy was `command`; player and
+survival orders now always restore through restart revalidation, while only
+automatic role orders are suppressed. Corrupt state is surfaced without
+overwriting the evidence.
 
-- live restart continuity for active goals/work orders and remembered home;
-- a longer live benchmark separating prompt build, provider inference,
-  command dispatch, and physical action duration.
+Canonical full-state telemetry is now pushed from an agent only while a
+dashboard listener exists. Meaningful movement/action changes are debounced
+at 80 ms, server broadcast is immediate, and the old concurrent poller remains
+as a stale/legacy fallback. No second or reduced-fidelity state schema exists.
+The stream reports prompt-build/provider timing, physical action duration, and
+push transport timing.
+
+The live one-bot benchmark measured:
+
+- telemetry HTTP p50: 1.31 ms;
+- canonical state-push delivery p50: 2 ms;
+- first/cold-sample-inclusive delivery p95: 124 ms;
+- idle dashboards receive the configured three-second broadcast heartbeat,
+  while moving bots publish meaningful changed state at the debounced rate.
+
+One instrumented live conversation measured 167 ms of local prompt assembly,
+6.65 s of provider inference, and 6.82 s total. This confirms that the
+canonical communication path is no longer the dominant latency in that sample.
 
 The stale pre-arbiter and disabled-quickstart expectations were updated to the
 current contracts; the complete control-plane run is green at 213/213.
@@ -136,11 +177,11 @@ Good next bounded additions:
 
 | Mechanic | Size | Safe implementation boundary |
 | --- | --- | --- |
-| Contextual potion use | Small/medium | Survival/combat intent chooses only a verified carried potion and confirms consumption/effect |
-| Fishing | Medium | One bounded cast/reel skill with water, interruption, pickup, and rod-durability evidence |
-| Enchanting | Medium | Enchanting-table window with exact item/lapis/level preflight and changed enchantment evidence |
-| Anvil repair | Medium | Exact input/material/level contract; verify durability and XP before output claim |
-| Smithing/netherite | Medium | Version-aware smithing-template window with exact consumed inputs and output |
+| Contextual potion use | Small/medium, deferred | Needs effect-aware survival/combat intent and verified consumption rather than generic item use |
+| Fishing | Medium, deferred | Needs a bounded cast/reel state machine, water proof, pickup, interruption, and rod-durability evidence |
+| Enchanting | Medium, deferred | Needs exact table-window option, item/lapis/level preflight, and changed enchantment evidence |
+| Anvil/Mending repair | Medium, deferred | Needs exact input/material/level contract and before/after durability, XP, and enchantment proof |
+| Smithing/netherite | Medium, deferred | Needs version-aware template/window handling with exact consumed inputs and output |
 | Villager economy | Medium/large | Persist profession/trade observations and restock state around the existing verified trade skill |
 | End progression/dragon | Large | New cross-dimension progression contract, stronghold/portal proof, bounded combat, return/recovery |
 | Elytra flight/fireworks | Large | Dedicated flight controller, collision model, landing proof, and durability policy |
@@ -148,6 +189,10 @@ Good next bounded additions:
 
 No current control should claim these mechanics exist before their physical
 skill and verification boundary are implemented.
+
+The deferred items are deliberately not folded into the general builder or
+generic `useItem` paths: doing so would create narration without the workstation
+or entity-state evidence needed for player-like fidelity.
 
 ## CodePlan record
 
@@ -166,4 +211,8 @@ single cognitive loop.
 
 ```text
 [codeplan · player-completeness+performance · EXEC-OUT · implemented: verified-brewing+real-behavior-controls+compact-command-context+cached-survival-environment+runtime-benchmark+one-shot-action-guard · verification: Paper-1.21.11-strength-and-natural-language-swiftness-pass · drift: live-proof-revealed-and-fixed-duplicate-action-retry · remaining-major-gameplay-groups: 2 · hardening-gates: 2]
+```
+
+```text
+[codeplan · player-completion+fast-state-flow · EXEC-OUT · implemented: durable-home+verified-farm-lifecycle+verified-breeding+bounded-general-construction+restart-order-revalidation+event-driven-canonical-state-push+phase-timing · verification: Paper-1.21.11-farm-maintain-breed-build-repair-restart-pass+control-plane-214-pass+live-push-benchmark · drift: live-tall-wall-run-constrained-vertical-builds-to-verified-height-4+final-blueprint-checkpoint-fixed · remaining-required-gameplay-groups: 0 · advanced-backlog: documented]
 ```

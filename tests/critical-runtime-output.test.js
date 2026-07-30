@@ -59,6 +59,7 @@ test('critical action results preserve phase, sanitize output, and expose bounde
     detail: 'Refused protected chest',
     target: { name: 'chest', x: 4, y: 70, z: -2 },
     retryable: false,
+    durationMs: 10,
     finishedAt: 20,
   });
 

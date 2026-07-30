@@ -770,6 +770,10 @@ export function getFullState(agent, { deep = false } = {}) {
                 && !deathRecoveryPending
             ),
             deathRecoveryPending,
+            home: agent.home_state?.telemetry?.() || null,
+        },
+        performance: {
+            prompt: agent.prompter?.performance?.conversation || null,
         },
     };
 
