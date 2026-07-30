@@ -834,6 +834,16 @@ export const actionsList = [
         }, false, 10)
     },
     {
+        name: '!completeNetherQuartzRun',
+        description: 'Use a nearby active portal to enter the Nether, collect new quartz through the normal bounded collection skill, and return alive to verified Overworld ground. Raised portals use two prepared bottom-slab ramps.',
+        params: {
+            'quartz_count': { type: 'int', description: 'New quartz items to bring back.', domain: [1, 8, '[]'] },
+        },
+        perform: runAsAction(async (agent, quartz_count) => {
+            return await skills.completeNetherQuartzRun(agent.bot, quartz_count);
+        }, false, 10)
+    },
+    {
         name: '!attack',
         description: 'Attack and kill the nearest entity of a given type.',
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},

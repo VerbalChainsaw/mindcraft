@@ -69,6 +69,9 @@ const COLLECTION_ROUTE_PROBE_TICK_MS = 15;
 const MAX_COLLECTION_ROUTE_SLICES = 8;
 const PORTAL_ACTIVATION_TIMEOUT_MS = 3_000;
 const PORTAL_SEARCH_MIN_DISTANCE = 4;
+const PORTAL_TRANSITION_TIMEOUT_MS = 30_000;
+const PORTAL_DESTINATION_SETTLE_MS = 5_000;
+const PORTAL_EXIT_TIMEOUT_MS = 5_000;
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -2947,6 +2950,45 @@ function carriedPortalScaffolds(bot) {
     return scaffolds;
 }
 
+function carriedPortalRamps(bot) {
+    const preferred = [
+        'cobblestone_slab',
+        'cobbled_deepslate_slab',
+        'stone_slab',
+    ];
+    const items = bot.inventory.items()
+        .filter(item => item.name.endsWith('_slab'))
+        .sort((left, right) => {
+            const leftRank = preferred.includes(left.name)
+                ? preferred.indexOf(left.name)
+                : preferred.length;
+            const rightRank = preferred.includes(right.name)
+                ? preferred.indexOf(right.name)
+                : preferred.length;
+            return leftRank - rightRank
+                || right.count - left.count
+                || left.name.localeCompare(right.name);
+        });
+    const ramps = [];
+    for (const item of items) {
+        for (let count = 0; count < item.count && ramps.length < 2; count++) {
+            ramps.push(item.name);
+        }
+        if (ramps.length >= 2) break;
+    }
+    return ramps;
+}
+
+function portalRampIsReady(block) {
+    if (!block?.name?.endsWith('_slab')) return false;
+    try {
+        const type = block.getProperties?.()?.type;
+        return type !== 'top' && type !== 'double';
+    } catch {
+        return true;
+    }
+}
+
 function portalCellPosition(origin, axis, width, height, normal=0) {
     return axis === 'x'
         ? origin.offset(width, height, normal)
@@ -3081,6 +3123,277 @@ function portalTarget(site) {
         z: site.origin.z,
         axis: site.axis,
     };
+}
+
+function normalizedDimension(value) {
+    const dimension = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^minecraft:/, '');
+    if (dimension === 'nether') return 'the_nether';
+    if (dimension === 'end') return 'the_end';
+    return dimension;
+}
+
+function botIsInsideNetherPortal(bot) {
+    const feet = bot.entity?.position?.floored?.();
+    if (!feet) return false;
+    return [feet, feet.offset(0, 1, 0)].some(position => (
+        bot.blockAt(position)?.name === 'nether_portal'
+    ));
+}
+
+function portalTraversalSiteForBlock(bot, block) {
+    if (block?.name !== 'nether_portal' || !block.position) return null;
+    const support = bot.blockAt(block.position.offset(0, -1, 0));
+    if (!isSafeGameplaySupport(support)) return null;
+    let axis = 'x';
+    try {
+        if (block.getProperties?.()?.axis === 'z') axis = 'z';
+    } catch {
+        // The connected registry normally exposes portal axis properties.
+    }
+    const approaches = [];
+    for (const sign of [-1, 1]) {
+        const normal = axis === 'x'
+            ? new Vec3(0, 0, sign)
+            : new Vec3(sign, 0, 0);
+        const position = block.position.offset(normal.x * 2, -1, normal.z * 2);
+        const step = block.position.offset(normal.x, -1, normal.z);
+        const feet = bot.blockAt(position);
+        const head = bot.blockAt(position.offset(0, 1, 0));
+        const floor = bot.blockAt(position.offset(0, -1, 0));
+        const stepBlock = bot.blockAt(step);
+        const stepHead = bot.blockAt(step.offset(0, 1, 0));
+        if (
+            !isReplaceableGameplayBlock(feet)
+            || !isReplaceableGameplayBlock(head)
+            || !isSafeGameplaySupport(floor)
+            || (
+                !portalRampIsReady(stepBlock)
+                && !isReplaceableGameplayBlock(stepBlock)
+            )
+            || !isReplaceableGameplayBlock(stepHead)
+        ) continue;
+        approaches.push({
+            position,
+            step,
+            stepReady: portalRampIsReady(stepBlock),
+            distance: position.distanceTo(bot.entity.position),
+        });
+    }
+    if (approaches.length === 0) return null;
+    approaches.sort((left, right) => left.distance - right.distance);
+    return {
+        block,
+        axis,
+        approach: approaches[0].position,
+        step: approaches[0].step,
+        stepReady: approaches[0].stepReady,
+        distance: block.position.distanceTo(bot.entity.position),
+    };
+}
+
+function findPortalTraversalSite(bot, range, preferredPosition=null) {
+    const searchRange = Math.max(6, Math.min(64, Math.floor(Number(range) || 24)));
+    const portals = world.getNearestBlocks(bot, 'nether_portal', searchRange, 48);
+    const candidates = portals
+        .map(block => portalTraversalSiteForBlock(bot, block))
+        .filter(Boolean);
+    candidates.sort((left, right) => {
+        const preferredDifference = preferredPosition
+            ? left.block.position.distanceTo(preferredPosition)
+                - right.block.position.distanceTo(preferredPosition)
+            : 0;
+        return preferredDifference
+            || left.distance - right.distance
+            || left.block.position.y - right.block.position.y
+            || left.block.position.x - right.block.position.x
+            || left.block.position.z - right.block.position.z;
+    });
+    return candidates[0] || null;
+}
+
+async function walkTowardPositionUntil(bot, position, predicate, timeoutMs) {
+    try {
+        await bot.lookAt(position.offset(0.5, 0.8, 0.5), true);
+        bot.setControlState('forward', true);
+        return await waitForWorldCondition(bot, predicate, timeoutMs, 50);
+    } finally {
+        try { bot.setControlState('forward', false); } catch { /* bounded portal control cleanup */ }
+    }
+}
+
+async function traverseActiveNetherPortal(
+    bot,
+    expectedDimension,
+    range=24,
+    preferredPosition=null,
+    rampBlock=null,
+) {
+    const destinationDimension = normalizedDimension(expectedDimension);
+    const startingDimension = normalizedDimension(bot.game?.dimension);
+    const site = findPortalTraversalSite(bot, range, preferredPosition);
+    if (!site) {
+        return {
+            ok: false,
+            outcome: 'portal_not_found',
+            startingDimension,
+            destinationDimension,
+        };
+    }
+    const sourcePortal = {
+        x: site.block.position.x,
+        y: site.block.position.y,
+        z: site.block.position.z,
+        axis: site.axis,
+    };
+    bot.modes.pause('unstuck');
+    bot.modes.pause('elbow_room');
+    try {
+        if (
+            !botIsInsideNetherPortal(bot)
+            && !await goToPosition(
+                bot,
+                site.approach.x,
+                site.approach.y,
+                site.approach.z,
+                0.75,
+            )
+        ) {
+            return {
+                ok: false,
+                outcome: 'portal_approach_unreachable',
+                sourcePortal,
+                startingDimension,
+                destinationDimension,
+            };
+        }
+        let rampUsed = false;
+        if (!site.stepReady) {
+            if (!rampBlock) {
+                return {
+                    ok: false,
+                    outcome: 'missing_portal_ramp',
+                    sourcePortal,
+                    startingDimension,
+                    destinationDimension,
+                };
+            }
+            const placed = await placeBlock(
+                bot,
+                rampBlock,
+                site.step.x,
+                site.step.y,
+                site.step.z,
+                'bottom',
+                true,
+                false,
+            );
+            if (!placed || !portalRampIsReady(bot.blockAt(site.step))) {
+                return {
+                    ok: false,
+                    outcome: 'portal_ramp_placement_failed',
+                    sourcePortal,
+                    startingDimension,
+                    destinationDimension,
+                    rampBlock,
+                };
+            }
+            rampUsed = true;
+        }
+
+        let contacted = botIsInsideNetherPortal(bot);
+        if (!contacted) {
+            const routedIntoPortal = await goToGoal(
+                bot,
+                new pf.goals.GoalBlock(
+                    site.block.position.x,
+                    site.block.position.y,
+                    site.block.position.z,
+                ),
+            );
+            contacted = (
+                routedIntoPortal
+                && (
+                    botIsInsideNetherPortal(bot)
+                    || normalizedDimension(bot.game?.dimension) === destinationDimension
+                )
+            );
+        }
+        if (!contacted) {
+            return {
+                ok: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'portal_contact_unverified',
+                sourcePortal,
+                startingDimension,
+                destinationDimension,
+                rampUsed,
+            };
+        }
+        const transitioned = await waitForWorldCondition(
+            bot,
+            () => normalizedDimension(bot.game?.dimension) === destinationDimension,
+            PORTAL_TRANSITION_TIMEOUT_MS,
+            100,
+        );
+        if (!transitioned) {
+            return {
+                ok: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'dimension_transition_timeout',
+                sourcePortal,
+                startingDimension,
+                destinationDimension,
+                rampUsed,
+            };
+        }
+        await waitForWorldCondition(
+            bot,
+            () => Boolean(findPortalTraversalSite(bot, Math.max(12, range))),
+            PORTAL_DESTINATION_SETTLE_MS,
+            100,
+        );
+        const destinationSite = findPortalTraversalSite(bot, Math.max(12, range));
+        if (!destinationSite) {
+            return {
+                ok: false,
+                outcome: 'destination_portal_unverified',
+                sourcePortal,
+                startingDimension,
+                destinationDimension,
+                rampUsed,
+            };
+        }
+        const exited = !botIsInsideNetherPortal(bot) || await walkTowardPositionUntil(
+            bot,
+            destinationSite.approach,
+            () => (
+                !botIsInsideNetherPortal(bot)
+                && bot.entity.position.distanceTo(destinationSite.approach) <= 1.25
+            ),
+            PORTAL_EXIT_TIMEOUT_MS,
+        );
+        return {
+            ok: exited,
+            outcome: exited ? 'dimension_reached' : 'portal_exit_unverified',
+            sourcePortal,
+            destinationPortal: {
+                x: destinationSite.block.position.x,
+                y: destinationSite.block.position.y,
+                z: destinationSite.block.position.z,
+                axis: destinationSite.axis,
+            },
+            startingDimension,
+            destinationDimension,
+            exited,
+            rampUsed,
+        };
+    } finally {
+        try { bot.setControlState('forward', false); } catch { /* bounded portal control cleanup */ }
+        try { bot.setControlState('jump', false); } catch { /* bounded portal control cleanup */ }
+        bot.modes.unpause('unstuck');
+        bot.modes.unpause('elbow_room');
+    }
 }
 
 
@@ -3615,6 +3928,286 @@ export async function buildNetherPortal(bot, range=12) {
         ignitionTool,
         retryable: !bot.interrupt_code,
     });
+}
+
+export async function completeNetherQuartzRun(bot, quartzCount=1) {
+    const requested = Math.floor(Number(quartzCount));
+    const target = { name: 'nether_quartz_ore' };
+    if (!Number.isFinite(requested) || requested < 1 || requested > 8) {
+        setActionEvidence(bot, {
+            kind: 'nether_round_trip',
+            outcome: 'invalid_request',
+            target,
+            requested: quartzCount,
+            retryable: false,
+        });
+        log(bot, 'A Nether quartz run requires between one and eight quartz.');
+        return false;
+    }
+
+    const startDimension = normalizedDimension(bot.game?.dimension);
+    if (!['overworld', 'the_nether'].includes(startDimension)) {
+        setActionEvidence(bot, {
+            kind: 'nether_round_trip',
+            outcome: 'wrong_starting_dimension',
+            target,
+            startDimension,
+            retryable: true,
+        });
+        log(bot, `A Nether quartz run cannot start in ${startDimension || 'an unknown dimension'}.`);
+        return false;
+    }
+    const startingPortalSite = findPortalTraversalSite(bot, 24);
+    if (!startingPortalSite) {
+        setActionEvidence(bot, {
+            kind: 'nether_round_trip',
+            outcome: 'portal_not_found',
+            target,
+            startDimension,
+            retryable: true,
+        });
+        log(bot, 'No safely approachable active Nether portal is nearby.');
+        return false;
+    }
+    const startingPortalPosition = startingPortalSite.block.position.clone();
+    const requiredRamps = (
+        startDimension === 'overworld'
+            ? (startingPortalSite.stepReady ? 1 : 2)
+            : (startingPortalSite.stepReady ? 0 : 1)
+    );
+    let rampItems = carriedPortalRamps(bot);
+    if (rampItems.length < requiredRamps && startDimension === 'overworld') {
+        const missingCobblestone = Math.max(0, 3 - inventoryCount(bot, 'cobblestone'));
+        if (missingCobblestone > 0) {
+            await prepareMaterial(bot, 'cobblestone', missingCobblestone, 48);
+        }
+        if (
+            !bot.interrupt_code
+            && inventoryCount(bot, 'cobblestone') >= 3
+        ) {
+            await craftRecipe(bot, 'cobblestone_slab', 1);
+        }
+        rampItems = carriedPortalRamps(bot);
+    }
+    if (rampItems.length < requiredRamps || bot.interrupt_code) {
+        setActionEvidence(bot, {
+            kind: 'nether_round_trip',
+            outcome: bot.interrupt_code ? 'interrupted' : 'missing_portal_ramp',
+            target,
+            startDimension,
+            requiredRamps,
+            availableRamps: rampItems.length,
+            retryable: !bot.interrupt_code,
+        });
+        if (!bot.interrupt_code) {
+            log(
+                bot,
+                `The raised portal route needs ${requiredRamps} bottom slab ramp${requiredRamps === 1 ? '' : 's'}.`,
+            );
+        }
+        return false;
+    }
+
+    const quartzBefore = inventoryCount(bot, 'quartz');
+    const recoveringCarriedQuartz = (
+        startDimension === 'the_nether'
+        && quartzBefore >= requested
+    );
+    let enteredNether = false;
+    let returnedOverworld = false;
+    let exitedReturnPortal = false;
+    let died = false;
+    let finalized = false;
+    let collectionOutcome = null;
+    let portalRampsPlaced = 0;
+    const onDeath = () => {
+        died = true;
+    };
+    bot.on('death', onDeath);
+    const finish = (success, outcome, detail={}) => {
+        if (!finalized) {
+            bot.off('death', onDeath);
+            finalized = true;
+        }
+        const observedDimension = normalizedDimension(bot.game?.dimension);
+        const quartzAfter = inventoryCount(bot, 'quartz');
+        const collectedQuartz = Math.max(0, quartzAfter - quartzBefore);
+        setActionEvidence(bot, {
+            kind: 'nether_round_trip',
+            outcome,
+            target,
+            requested,
+            startDimension,
+            observedDimension,
+            enteredNether,
+            returnedOverworld,
+            exitedReturnPortal,
+            died,
+            quartzBefore,
+            quartzAfter,
+            collectedQuartz,
+            recoveringCarriedQuartz,
+            collectionOutcome,
+            portalRampsPlaced,
+            retryable: !success && !bot.interrupt_code,
+            ...detail,
+        });
+        if (success) {
+            const securedQuartz = recoveringCarriedQuartz
+                ? Math.min(quartzAfter, requested)
+                : collectedQuartz;
+            log(
+                bot,
+                `Returned safely to the Overworld with ${securedQuartz} quartz secured for the trip.`,
+            );
+        } else if (outcome !== 'interrupted') {
+            log(bot, `Nether quartz round trip stopped (${outcome.replaceAll('_', ' ')}).`);
+        }
+        return success;
+    };
+
+    try {
+        let entry = null;
+        let returnPortal = null;
+        if (startDimension === 'overworld') {
+            if (bot.entity.position.distanceTo(startingPortalPosition) > 8) {
+                await goToPosition(
+                    bot,
+                    startingPortalPosition.x,
+                    startingPortalPosition.y,
+                    startingPortalPosition.z,
+                    4,
+                );
+            }
+            entry = await traverseActiveNetherPortal(
+                bot,
+                'the_nether',
+                24,
+                startingPortalPosition,
+                rampItems[0] || null,
+            );
+            if (entry.rampUsed) {
+                rampItems.shift();
+                portalRampsPlaced += 1;
+            }
+            enteredNether = (
+                entry.ok
+                && normalizedDimension(bot.game?.dimension) === 'the_nether'
+            );
+            if (!entry.ok || !enteredNether) {
+                return finish(false, entry.outcome || 'nether_entry_unverified', { entry });
+            }
+            if (died) return finish(false, 'died_during_entry', { entry, retryable: false });
+            if (bot.interrupt_code) return finish(false, 'interrupted', { entry, retryable: false });
+            returnPortal = entry.destinationPortal;
+        } else {
+            enteredNether = true;
+            const recoveryPortal = findPortalTraversalSite(bot, 24);
+            returnPortal = recoveryPortal
+                ? {
+                    x: recoveryPortal.block.position.x,
+                    y: recoveryPortal.block.position.y,
+                    z: recoveryPortal.block.position.z,
+                    axis: recoveryPortal.axis,
+                }
+                : null;
+        }
+        const collected = recoveringCarriedQuartz || await collectBlock(
+            bot,
+            'nether_quartz_ore',
+            requested,
+            null,
+            48,
+        );
+        collectionOutcome = recoveringCarriedQuartz
+            ? {
+                outcome: 'already_carried',
+                count: requested,
+                target: { name: 'quartz' },
+            }
+            : bot.lastActionEvidence?.kind === 'collect'
+                ? {
+                    outcome: bot.lastActionEvidence.outcome,
+                    count: bot.lastActionEvidence.count || 0,
+                    target: bot.lastActionEvidence.target || null,
+                }
+                : { outcome: collected ? 'collected' : 'unverified' };
+        if (bot.interrupt_code) {
+            return finish(false, 'interrupted', { entry, retryable: false });
+        }
+        if (died) return finish(false, 'died_in_nether', { entry, retryable: false });
+
+        if (
+            returnPortal
+            && bot.entity.position.distanceTo(new Vec3(
+                returnPortal.x,
+                returnPortal.y,
+                returnPortal.z,
+            )) > 8
+        ) {
+            await goToPosition(
+                bot,
+                returnPortal.x,
+                returnPortal.y,
+                returnPortal.z,
+                4,
+            );
+        }
+        const returned = await traverseActiveNetherPortal(
+            bot,
+            'overworld',
+            24,
+            returnPortal
+                ? new Vec3(returnPortal.x, returnPortal.y, returnPortal.z)
+                : null,
+            rampItems[0] || null,
+        );
+        if (returned.rampUsed) {
+            rampItems.shift();
+            portalRampsPlaced += 1;
+        }
+        returnedOverworld = (
+            returned.ok
+            && normalizedDimension(bot.game?.dimension) === 'overworld'
+        );
+        exitedReturnPortal = returned.exited === true;
+        if (!returnedOverworld || !exitedReturnPortal) {
+            return finish(false, returned.outcome || 'overworld_return_unverified', {
+                entry,
+                returned,
+            });
+        }
+        if (died || Number(bot.health) <= 0) {
+            return finish(false, 'return_not_survived', {
+                entry,
+                returned,
+                retryable: false,
+            });
+        }
+
+        const collectedQuartz = Math.max(0, inventoryCount(bot, 'quartz') - quartzBefore);
+        const securedQuartz = recoveringCarriedQuartz
+            ? inventoryCount(bot, 'quartz') >= requested
+            : collectedQuartz >= requested;
+        if (!collected || !securedQuartz) {
+            return finish(false, 'quartz_incomplete_returned', {
+                entry,
+                returned,
+                collectedQuartz,
+            });
+        }
+        return finish(true, 'completed', {
+            entry,
+            returned,
+            retryable: false,
+        });
+    } catch (error) {
+        return finish(false, 'runtime_error', {
+            error: String(error?.message || error).slice(0, 240),
+        });
+    } finally {
+        if (!finalized) bot.off('death', onDeath);
+    }
 }
 
 export async function placeNearPlayer(bot, username, blockType, num=1) {

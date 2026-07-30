@@ -200,8 +200,45 @@ Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
   interior coordinates.
 - Repeating `!buildNetherPortal(12)` detected and reused the active portal
   without consuming more material.
-- The next explicit progression blocker is now verified Nether entry, quartz
-  collection, and safe return rather than portal construction.
+- The next progression operation is the verified Nether round trip below.
+
+#### Nether quartz round trip — implemented
+
+CodePlan compared a single bounded skill, planner-separated entry/collect/return
+commands, and a persistent dimension controller. The single local-state skill
+won (`53/60`) because the existing action boundary can own entry, collection,
+cleanup return, and final verification without adding another controller.
+
+- `!completeNetherQuartzRun(quartz_count)` starts from a nearby active portal,
+  prepares two bottom slabs when raised frames need walkable half-step ramps,
+  and keeps the remaining ramp available after entering the Nether.
+- Portal transitions are accepted only after Mineflayer reports the expected
+  dimension. Destination portal blocks must load, and the bot must step out
+  onto verified support before the phase completes.
+- Quartz uses the normal bounded candidate-ranking and collection skill. The
+  final result requires the requested new inventory delta, a live bot, an
+  Overworld dimension, and a completed portal exit.
+- If interrupted in the Nether after quartz entered inventory, repeating the
+  same command reuses the carried quartz and nearby return portal rather than
+  forcing a second collection.
+- Full-block scaffolds and raw jump input were rejected by Paper evidence:
+  Mineflayer stopped at the raised obsidian base. A bottom slab produced two
+  legal half-height steps and completed the same physical route without
+  teleportation or server movement.
+
+Physical proof completed on Paper 1.21.11 with `MindcraftBot` in survival:
+
+- The clean run began in the Overworld with no slabs: three cobblestone, one
+  crafting table, a diamond pickaxe, and food.
+- The skill crafted six cobblestone slabs, placed one ramp at the source portal
+  and one at the prepared Nether receiver, and retained four slabs.
+- The bot entered the Nether, collected one quartz, returned through the paired
+  portal, and stepped out in the Overworld at full health and hunger.
+- Structured action state reported `phase=succeeded`,
+  `code=skill_completed`, and target `nether_quartz_ore`; independent Paper
+  state reported dimension `minecraft:overworld` and one carried quartz.
+- The next explicit progression blocker is tactical combat choice rather than
+  dimension traversal.
 
 ## Slice 1 acceptance contract
 

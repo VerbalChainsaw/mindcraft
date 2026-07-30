@@ -8,6 +8,7 @@ test('an active portal preserves consumed material and assembly milestones', () 
         gameplay: {
             health: 20,
             hunger: 20,
+            dimension: 'overworld',
         },
         inventory: {
             counts: {
@@ -34,7 +35,81 @@ test('an active portal preserves consumed material and assembly milestones', () 
         },
     });
 
-    assert.equal(progression.currentStage, 'nether_entry');
+    assert.equal(progression.currentStage, 'nether_round_trip');
+    assert.equal(progression.completedMilestones, progression.totalMilestones - 1);
+    assert.equal(progression.recommendedCommand, '!completeNetherQuartzRun(1)');
+});
+
+test('carried quartz in the Nether does not claim a safe return', () => {
+    const progression = evaluateGameplayProgression({
+        gameplay: {
+            health: 20,
+            hunger: 20,
+            dimension: 'the_nether',
+        },
+        inventory: {
+            counts: {
+                oak_planks: 4,
+                crafting_table: 1,
+                stone_pickaxe: 1,
+                furnace: 1,
+                coal: 2,
+                torch: 4,
+                iron_ingot: 4,
+                iron_pickaxe: 1,
+                quartz: 1,
+                diamond_pickaxe: 1,
+                shield: 1,
+                bucket: 1,
+            },
+        },
+        perception: {
+            hostiles: [],
+            hazards: [],
+            usefulBlocks: [
+                { name: 'nether_portal', count: 6 },
+            ],
+        },
+    });
+
+    assert.equal(progression.currentStage, 'nether_round_trip');
+    assert.deepEqual(progression.missingPrerequisites, ['verified Overworld return']);
+    assert.equal(progression.recommendedCommand, '!completeNetherQuartzRun(1)');
+});
+
+test('quartz carried alive in the Overworld completes the round trip milestone', () => {
+    const progression = evaluateGameplayProgression({
+        gameplay: {
+            health: 20,
+            hunger: 20,
+            dimension: 'minecraft:overworld',
+        },
+        inventory: {
+            counts: {
+                oak_planks: 4,
+                crafting_table: 1,
+                stone_pickaxe: 1,
+                furnace: 1,
+                coal: 2,
+                torch: 4,
+                iron_ingot: 4,
+                iron_pickaxe: 1,
+                quartz: 1,
+                diamond_pickaxe: 1,
+                shield: 1,
+                bucket: 1,
+            },
+        },
+        perception: {
+            hostiles: [],
+            hazards: [],
+            usefulBlocks: [
+                { name: 'nether_portal', count: 6 },
+            ],
+        },
+    });
+
+    assert.equal(progression.currentStage, 'tactical_combat');
     assert.equal(progression.completedMilestones, progression.totalMilestones);
-    assert.match(progression.blocker, /Nether entry and return/);
+    assert.match(progression.blocker, /tactical combat/);
 });

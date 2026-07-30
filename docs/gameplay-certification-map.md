@@ -63,13 +63,16 @@ For independent survival progression, the bot must obey this dependency chain:
 9. iron pickaxe, shield, and bucket;
 10. three diamonds, then a diamond pickaxe;
 11. ten obsidian and an ignition item;
-12. verified portal assembly and ignition.
+12. verified portal assembly and ignition;
+13. Nether entry, quartz collection, and a live Overworld return.
 
 The bot may reuse valid equipment or nearby workstations. Higher-tier equipment
 is valid evidence that its lower-tier prerequisites were previously satisfied.
 It may not claim a later operation from intention alone. Portal assembly now
-uses the verified `!buildNetherPortal` command; cross-dimensional entry, quartz
-collection, and safe return remain separate physical gates.
+uses the verified `!buildNetherPortal` command. The paired
+`!completeNetherQuartzRun` command owns cross-dimensional entry, quartz
+collection, safe return, and final world-state verification as one bounded
+physical loop.
 
 ## Course stations and physical pass conditions
 
@@ -83,7 +86,7 @@ collection, and safe return remain separate physical gates.
 | Construction | `1070..1100, 1040..1072` | On the yellow footprint, build a lit, roofed enclosure with a usable door, bed, chest, and furnace. Verify enclosure and utility blocks in world state. |
 | Combat | `1105..1145, 1040..1072` | After `spawn-combat`, defeat the zombie, skeleton, and creeper without creative mode, teleport, or command damage. Shield/range/spacing choices must reflect the active threat. |
 | Exploration | `995..1065, 1080..1125` | Discover the gold, emerald, and diamond landmarks, recover the echo shard, remember their locations, then return to the entrance without teleporting. |
-| Portal lab | `1070..1145, 1080..1125` | Acquire diamonds before obsidian, assemble and ignite a portal on the yellow frame marker, enter the prepared Nether receiver, mine quartz, and return alive. A missing physical ability is a failed station, not permission to narrate success. |
+| Portal lab | `1070..1145, 1080..1125` | Acquire diamonds before obsidian, assemble and ignite a portal on the yellow frame marker, then use `!completeNetherQuartzRun` to prepare raised-frame ramps, enter the prepared Nether receiver, mine quartz, and return alive. A missing physical ability is a failed station, not permission to narrate success. |
 
 Coordinates in the table are `x` and `z`; all Overworld station floors are at
 `y=99`. The course deliberately includes lava, water, drops, hostiles, doors,

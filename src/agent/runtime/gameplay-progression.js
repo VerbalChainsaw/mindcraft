@@ -34,6 +34,16 @@ function firstCarriedFood(counts) {
     return Object.keys(counts || {}).find(name => (counts[name] || 0) > 0 && FOOD_PATTERN.test(name)) || null;
 }
 
+function normalizedDimension(value) {
+    const dimension = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^minecraft:/, '');
+    if (dimension === 'nether') return 'the_nether';
+    if (dimension === 'end') return 'the_end';
+    return dimension;
+}
+
 function survivalOverride(state) {
     const health = Number(state.gameplay?.health) || 0;
     const hunger = Number(state.gameplay?.hunger) || 0;
@@ -133,6 +143,9 @@ export function evaluateGameplayProgression(state) {
     const obsidianCount = Math.max(0, Number(counts.obsidian) || 0);
     const ignitionReady = (counts.flint_and_steel || 0) > 0 || (counts.fire_charge || 0) > 0;
     const portalReady = hasNearby(state, 'nether_portal');
+    const dimension = normalizedDimension(state.gameplay?.dimension);
+    const quartzCount = Math.max(0, Number(counts.quartz) || 0);
+    const netherRoundTripReady = quartzCount > 0 && dimension === 'overworld';
 
     const milestones = [
         milestone(
@@ -273,26 +286,39 @@ export function evaluateGameplayProgression(state) {
             '!buildNetherPortal(12)',
             ['active Nether portal'],
         ),
+        milestone(
+            'nether_round_trip',
+            'Collect Nether quartz and return safely',
+            netherRoundTripReady,
+            dimension === 'the_nether'
+                ? 'Collect verified quartz if needed, then use the active return portal and verify the bot is alive in the Overworld.'
+                : 'Enter through the active portal, collect verified quartz, return through the paired portal, and step onto safe Overworld ground.',
+            '!completeNetherQuartzRun(1)',
+            [
+                quartzCount > 0 ? null : 'newly collected quartz',
+                dimension === 'overworld' ? null : 'verified Overworld return',
+            ].filter(Boolean),
+        ),
     ];
 
     const next = milestones.find(entry => !entry.complete) || null;
     const completed = milestones.filter(entry => entry.complete).length;
     const override = survivalOverride(state);
-    const dimensionTraversalBlocked = !next;
+    const tacticalCombatBlocked = !next;
 
     return {
         model: 'survival_progression_v1',
         completedMilestones: completed,
         totalMilestones: milestones.length,
-        currentStage: override ? 'survival_override' : (next?.id || 'nether_entry'),
-        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Enter the Nether and return safely'),
-        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified Nether entry and return loop']),
+        currentStage: override ? 'survival_override' : (next?.id || 'tactical_combat'),
+        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Choose and execute tactical combat responses'),
+        missingPrerequisites: override ? [override.reason] : (next?.missing || ['verified tactical combat choice']),
         nextOperation: override
             ? override.nextOperation
-            : (next?.nextOperation || 'The portal is active; verified cross-dimensional entry, quartz collection, and return remain the next progression loop.'),
+            : (next?.nextOperation || 'Dimension progression is verified; bounded threat prioritization, shield use, range choice, and retreat remain the next gameplay loop.'),
         recommendedCommand: override ? override.command : (next?.command || null),
-        blocker: dimensionTraversalBlocked
-            ? 'Verified Nether entry and return are not implemented as one deterministic progression loop; do not claim dimension completion.'
+        blocker: tacticalCombatBlocked
+            ? 'General tactical combat selection is not implemented as one verified decision loop; do not claim autonomous combat judgment.'
             : null,
         safetyOverride: override,
         milestones: milestones.map(({ id, label, complete }) => ({ id, label, complete })),
