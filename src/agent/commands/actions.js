@@ -432,7 +432,12 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, type, num) => {
-            return await skills.collectBlock(agent.bot, type, num);
+            return await skills.collectBlock(
+                agent.bot,
+                type,
+                num,
+                agent.goal_director?.collectionExclusions?.() || null,
+            );
         }, false, 10) // 10 minute timeout
     },
     {
@@ -454,7 +459,13 @@ export const actionsList = [
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
         },
         perform: runAsAction(async (agent, type, num, range) => {
-            return await skills.collectBlock(agent.bot, type, num, null, range);
+            return await skills.collectBlock(
+                agent.bot,
+                type,
+                num,
+                agent.goal_director?.collectionExclusions?.() || null,
+                range,
+            );
         }, false, 10)
     },
     {
@@ -507,7 +518,12 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of logs to collect.', domain: [1, 64, '[]'] }
         },
         perform: runAsAction(async (agent, num) => {
-            return await skills.collectWood(agent.bot, num);
+            return await skills.collectWood(
+                agent.bot,
+                num,
+                64,
+                agent.goal_director?.collectionExclusions?.() || null,
+            );
         }, false, 10)
     },
     {
@@ -518,7 +534,12 @@ export const actionsList = [
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
         },
         perform: runAsAction(async (agent, num, range) => {
-            return await skills.collectWood(agent.bot, num, range);
+            return await skills.collectWood(
+                agent.bot,
+                num,
+                range,
+                agent.goal_director?.collectionExclusions?.() || null,
+            );
         }, false, 10)
     },
     {

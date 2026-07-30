@@ -21,6 +21,7 @@ const SAFE_PLAYER = /^[A-Za-z0-9_. -]{1,64}$/;
 const CANONICAL_NAME = /^[a-z0-9_]{1,80}$/;
 const MAX_SUBGOALS = 64;
 const MAX_QUANTITY = 2304;
+const MAX_FAILED_TARGETS = 24;
 
 const SMALL_NUMBERS = Object.freeze({
   zero: 0,
@@ -300,6 +301,46 @@ function normalizeEvidence(raw) {
   });
 }
 
+function normalizeFailedTarget(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const position = raw.position && typeof raw.position === 'object' && !Array.isArray(raw.position)
+    ? raw.position
+    : raw;
+  const coordinates = ['x', 'y', 'z'].map(axis => Number(position[axis]));
+  if (!coordinates.every(Number.isFinite)) return null;
+  const name = canonicalName(raw.name);
+  if (!name) return null;
+  const firstFailedAt = Number.isFinite(raw.firstFailedAt) ? raw.firstFailedAt : Date.now();
+  const lastFailedAt = Number.isFinite(raw.lastFailedAt) ? raw.lastFailedAt : firstFailedAt;
+  return Object.freeze({
+    kind: boundedText(raw.kind || 'action', 32),
+    name,
+    position: Object.freeze({
+      x: Math.floor(coordinates[0]),
+      y: Math.floor(coordinates[1]),
+      z: Math.floor(coordinates[2]),
+    }),
+    code: boundedText(raw.code, 80),
+    failures: finiteInteger(raw.failures, 1, 1, 8),
+    firstFailedAt,
+    lastFailedAt,
+    avoidUntil: Number.isFinite(raw.avoidUntil) ? raw.avoidUntil : lastFailedAt,
+  });
+}
+
+function normalizeOperationalMemory(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const failedTargets = Array.isArray(source.failedTargets)
+    ? source.failedTargets
+      .slice(-MAX_FAILED_TARGETS)
+      .map(normalizeFailedTarget)
+      .filter(Boolean)
+    : [];
+  return Object.freeze({
+    failedTargets: Object.freeze(failedTargets),
+  });
+}
+
 function normalizeSubgoal(raw, index) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new TypeError('Goal subgoal must be an object.');
@@ -385,6 +426,7 @@ export function normalizeGoalContract(raw) {
     maxSubgoals,
     subgoals: Object.freeze(subgoals),
     checkpoint,
+    memory: normalizeOperationalMemory(raw.memory),
     evidence: normalizeEvidence(raw.evidence),
     procedureId: boundedText(raw.procedureId, 96) || null,
     createdAt,
@@ -419,6 +461,7 @@ export function createItemGoalContract({
     maxAttempts: 4,
     maxSubgoals: Math.min(MAX_SUBGOALS, Math.max(32, Math.ceil(numericQuantity / 32) * 4 + 8)),
     subgoals: [],
+    memory: { failedTargets: [] },
     checkpoint: {
       baselineInventory,
       targetInventory: kind === 'acquire' ? baselineInventory + numericQuantity : baselineInventory,

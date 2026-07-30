@@ -41,6 +41,9 @@ const DOOR_TRAVERSE_POLL_MS = 50;
 const MIN_DOOR_TRAVERSE_PROGRESS = 0.75;
 const INTERACTION_CONFIRM_TIMEOUT_MS = 750;
 const INTERACTION_CONFIRM_POLL_MS = 50;
+const NAVIGATION_PROGRESS_POLL_MS = 500;
+const NAVIGATION_STALL_TIMEOUT_MS = 20_000;
+const NAVIGATION_PROGRESS_DISTANCE = 0.75;
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -2013,6 +2016,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         blocktypes.push('stone');
     const isLiquid = blockType === 'lava' || blockType === 'water';
     const searchRange = Math.max(1, Math.min(512, Math.floor(Number(range) || 64)));
+    const excludedPositions = Array.isArray(exclude)
+        ? exclude.filter(position => (
+            position
+            && [position.x, position.y, position.z].every(Number.isFinite)
+        ))
+        : [];
 
     let collected = 0;
     let lowestCollectedTarget = null;
@@ -2022,11 +2031,15 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
 
     for (let i=0; i<num; i++) {
         let blocks = world.getNearestBlocksWhere(bot, block => {
-            if (!blocktypes.includes(block.name)) {
+            if (!blocktypes.includes(block?.name)) {
                 return false;
             }
-            if (exclude) {
-                for (let position of exclude) {
+            // Mineflayer first calls functional matchers with palette-only
+            // blocks that intentionally have no world position. A matching
+            // palette entry means the section still needs a full scan.
+            if (!block.position) return true;
+            if (excludedPositions.length > 0) {
+                for (let position of excludedPositions) {
                     if (block.position.x === position.x && block.position.y === position.y && block.position.z === position.z) {
                         return false;
                     }
@@ -2123,7 +2136,16 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             else if (mc.mustCollectManually(blockType)) {
                 const reached = await goToPosition(bot, block.position.x, block.position.y, block.position.z, 2);
                 if (!reached || bot.entity.position.distanceTo(block.position) > 4.5) {
-                    setActionEvidence(bot, { kind: 'collect', outcome: 'unreachable', target, retryable: true });
+                    const navigation = bot.lastActionEvidence?.kind === 'movement'
+                        ? bot.lastActionEvidence
+                        : null;
+                    setActionEvidence(bot, {
+                        kind: 'collect',
+                        outcome: navigation?.outcome || 'unreachable',
+                        target,
+                        ...(navigation?.progress ? { progress: navigation.progress } : {}),
+                        retryable: true,
+                    });
                     log(bot, `Cannot reach ${block.name} to collect it.`);
                     return false;
                 }
@@ -2156,6 +2178,22 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             block.position.z,
                             4,
                         );
+                        if (!reached) {
+                            const navigation = bot.lastActionEvidence?.kind === 'movement'
+                                ? bot.lastActionEvidence
+                                : null;
+                            setActionEvidence(bot, {
+                                kind: 'collect',
+                                outcome: navigation?.outcome || 'unreachable',
+                                target,
+                                ...(navigation?.progress ? { progress: navigation.progress } : {}),
+                                retryable: true,
+                            });
+                            log(bot, navigation?.outcome === 'path_stalled'
+                                ? `Stopped the stalled route to ${block.name}; another target can be selected.`
+                                : `Cannot reach ${block.name} to collect it.`);
+                            return false;
+                        }
                         liveTarget = bot.blockAt(block.position);
                         directReach = reached
                             && liveTarget?.type === block.type
@@ -2335,18 +2373,30 @@ const WOOD_BLOCK_TYPES = Object.freeze([
         'warped_stem',
 ]);
 
-export function findNearestCollectibleBlock(bot, blockTypes, range=64) {
+export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=null) {
     const allowed = blockTypes instanceof Set ? blockTypes : new Set(blockTypes);
     const movements = collectionSafetyMovements(bot);
     return world.getNearestBlocksWhere(
         bot,
-        (block) => allowed.has(block?.name) && movements.safeToBreak(block),
+        (block) => {
+            if (!allowed.has(block?.name)) return false;
+            if (!block.position) return true;
+            return (
+                movements.safeToBreak(block)
+                && !(exclude || []).some(position => (
+                    position
+                    && block.position.x === position.x
+                    && block.position.y === position.y
+                    && block.position.z === position.z
+                ))
+            );
+        },
         Math.max(1, Math.min(512, Number(range) || 64)),
         1,
     ).find(Boolean) || null;
 }
 
-export async function collectWood(bot, num=1, range=64) {
+export async function collectWood(bot, num=1, range=64, exclude=null) {
     const woodTypes = new Set(WOOD_BLOCK_TYPES);
     const target = Math.max(1, Math.min(64, Number(num) || 1));
     const searchRange = Math.max(1, Math.min(512, Math.floor(Number(range) || 64)));
@@ -2354,7 +2404,7 @@ export async function collectWood(bot, num=1, range=64) {
     let stumpTarget = null;
 
     while (collected < target && !bot.interrupt_code) {
-        const nearest = findNearestCollectibleBlock(bot, woodTypes, searchRange);
+        const nearest = findNearestCollectibleBlock(bot, woodTypes, searchRange, exclude);
         if (!nearest) {
             if (collected === 0) {
                 setActionEvidence(bot, {
@@ -2370,7 +2420,7 @@ export async function collectWood(bot, num=1, range=64) {
                 : 'No safely collectible trees found within 64 blocks.');
             break;
         }
-        const success = await collectBlock(bot, nearest.name, 1);
+        const success = await collectBlock(bot, nearest.name, 1, exclude, searchRange);
         if (!success) break;
         const collectedTarget = bot.lastActionEvidence?.target;
         if (
@@ -3891,6 +3941,60 @@ export async function giveFamilyToPlayer(bot, family, username, num=1) {
     return success;
 }
 
+function navigationTarget(goal) {
+    if (![goal?.x, goal?.y, goal?.z].every(Number.isFinite)) return null;
+    return {
+        x: Math.floor(goal.x),
+        y: Math.floor(goal.y),
+        z: Math.floor(goal.z),
+    };
+}
+
+function startNavigationProgressWatchdog(bot) {
+    const startedAt = Date.now();
+    const startPosition = bot.entity.position.clone();
+    let checkpoint = startPosition.clone();
+    let lastPosition = startPosition.clone();
+    let lastProgressAt = startedAt;
+    let lastDigTarget = bot.targetDigBlock?.position?.toString?.() || null;
+    let interval = null;
+    const stalled = new Promise(resolve => {
+        interval = setInterval(() => {
+            const current = bot.entity?.position;
+            if (!current) return;
+            lastPosition = current.clone();
+            const digTarget = bot.targetDigBlock?.position?.toString?.() || null;
+            if (
+                checkpoint.distanceTo(current) >= NAVIGATION_PROGRESS_DISTANCE
+                || digTarget !== lastDigTarget
+            ) {
+                checkpoint = current.clone();
+                lastDigTarget = digTarget;
+                lastProgressAt = Date.now();
+                return;
+            }
+            if (Date.now() - lastProgressAt >= NAVIGATION_STALL_TIMEOUT_MS) {
+                clearInterval(interval);
+                interval = null;
+                resolve({
+                    state: 'stalled',
+                    startedAt,
+                    stalledMs: Date.now() - lastProgressAt,
+                    startPosition,
+                    lastPosition,
+                });
+            }
+        }, NAVIGATION_PROGRESS_POLL_MS);
+    });
+    return {
+        stalled,
+        stop() {
+            if (interval) clearInterval(interval);
+            interval = null;
+        },
+    };
+}
+
 export async function goToGoal(bot, goal) {
     /**
      * Navigate to the given goal. Use doors and attempt minimally destructive movements.
@@ -3900,10 +4004,49 @@ export async function goToGoal(bot, goal) {
 
     const movements = safeMovements(bot);
     const doorCheckInterval = startDoorInterval(bot);
+    const progressWatchdog = startNavigationProgressWatchdog(bot);
 
     bot.pathfinder.setMovements(movements);
     try {
-        await bot.pathfinder.goto(goal);
+        const navigation = Promise.resolve()
+            .then(() => bot.pathfinder.goto(goal))
+            .then(
+                () => ({ state: 'resolved' }),
+                error => ({ state: 'rejected', error }),
+            );
+        const outcome = await Promise.race([navigation, progressWatchdog.stalled]);
+        if (outcome.state === 'stalled') {
+            try {
+                bot.pathfinder.setGoal(null);
+            } catch {
+                try { bot.pathfinder.stop(); } catch { /* best-effort navigation cleanup */ }
+            }
+            const target = navigationTarget(goal);
+            const progress = {
+                startedAt: outcome.startedAt,
+                stalledMs: outcome.stalledMs,
+                startPosition: {
+                    x: outcome.startPosition.x,
+                    y: outcome.startPosition.y,
+                    z: outcome.startPosition.z,
+                },
+                lastPosition: {
+                    x: outcome.lastPosition.x,
+                    y: outcome.lastPosition.y,
+                    z: outcome.lastPosition.z,
+                },
+            };
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: 'path_stalled',
+                ...(target ? { target } : {}),
+                progress,
+                retryable: true,
+            });
+            log(bot, `Navigation stopped after ${Math.round(outcome.stalledMs / 1000)} seconds without physical progress.`);
+            return false;
+        }
+        if (outcome.state === 'rejected') throw outcome.error;
         if (bot.interrupt_code) {
             setActionEvidence(bot, {
                 kind: 'movement',
@@ -3938,6 +4081,7 @@ export async function goToGoal(bot, goal) {
             : `Navigation stopped (${outcome.replace(/_/g, ' ')}): ${err?.message || err}.`);
         return false;
     } finally {
+        progressWatchdog.stop();
         clearDoorInterval(bot, doorCheckInterval);
     }
 }

@@ -18,6 +18,9 @@ const SAFE_AGENT_NAME = /^[A-Za-z0-9_]{3,16}$/;
 const SUCCESS_DELAY_MS = 500;
 const RETRY_DELAY_MS = 2_500;
 const PLAYER_WAIT_MS = 5_000;
+const FAILED_TARGET_COOLDOWN_MS = 90_000;
+const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
+const MAX_FAILED_TARGETS = 24;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 function boundedText(value, maximum = 280, fallback = '') {
@@ -165,6 +168,15 @@ function recoveryCommand(goal) {
   return null;
 }
 
+function plannedDisengagementCommand(goal) {
+  const code = String(goal.evidence?.code || '');
+  if (
+    goal.subgoals.at(-1)?.kind === 'plan'
+    && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken)/.test(code)
+  ) return '!moveAway(4)';
+  return null;
+}
+
 export class GoalDirector {
   constructor(agent, {
     executeCommand = executeAgentCommand,
@@ -229,6 +241,7 @@ export class GoalDirector {
         attempts: goal.attempts,
         maxAttempts: goal.maxAttempts,
         checkpoint: goal.checkpoint,
+        memory: goal.memory,
         evidence: goal.evidence,
         procedureId: goal.procedureId,
         subgoals: goal.subgoals.slice(-12),
@@ -492,6 +505,70 @@ export class GoalDirector {
     });
   }
 
+  rememberFailedTarget(result) {
+    if (!this.activeGoal || result?.phase === 'succeeded') return this.activeGoal;
+    const code = String(result?.code || '');
+    if (!/(?:path_stalled|path_timeout|unreachable|no_path)/.test(code)) return this.activeGoal;
+    const skill = actionResultEvidence(result);
+    const target = result?.target || skill?.target;
+    if (
+      !target?.name
+      || ![target.x, target.y, target.z].every(Number.isFinite)
+    ) return this.activeGoal;
+
+    const now = this.now();
+    const position = {
+      x: Math.floor(target.x),
+      y: Math.floor(target.y),
+      z: Math.floor(target.z),
+    };
+    const kind = boundedText(skill?.kind || 'action', 32, 'action');
+    const name = boundedText(target.name, 80);
+    const retained = (this.activeGoal.memory?.failedTargets || []).filter(entry => (
+      now - entry.lastFailedAt <= FAILED_TARGET_RETENTION_MS
+      && !(
+        entry.kind === kind
+        && entry.name === name
+        && entry.position.x === position.x
+        && entry.position.y === position.y
+        && entry.position.z === position.z
+      )
+    ));
+    const prior = (this.activeGoal.memory?.failedTargets || []).find(entry => (
+      entry.kind === kind
+      && entry.name === name
+      && entry.position.x === position.x
+      && entry.position.y === position.y
+      && entry.position.z === position.z
+    ));
+    const failures = Math.min(8, (prior?.failures || 0) + 1);
+    const failedTarget = {
+      kind,
+      name,
+      position,
+      code: boundedText(code, 80),
+      failures,
+      firstFailedAt: prior?.firstFailedAt || now,
+      lastFailedAt: now,
+      avoidUntil: now + FAILED_TARGET_COOLDOWN_MS,
+    };
+    return this.persist({
+      ...this.activeGoal,
+      memory: {
+        ...this.activeGoal.memory,
+        failedTargets: [...retained, failedTarget].slice(-MAX_FAILED_TARGETS),
+      },
+      updatedAt: now,
+    });
+  }
+
+  collectionExclusions() {
+    const now = this.now();
+    return (this.activeGoal?.memory?.failedTargets || [])
+      .filter(entry => entry.kind === 'collect' && entry.avoidUntil > now)
+      .map(entry => ({ ...entry.position }));
+  }
+
   handleResult(kind, result) {
     if (!this.activeGoal) return;
     const actingSubgoal = this.activeGoal.subgoals.at(-1);
@@ -541,6 +618,7 @@ export class GoalDirector {
       };
     }
     this.finishLatestSubgoal(effectiveResult);
+    this.rememberFailedTarget(effectiveResult);
     const goal = this.activeGoal;
     const skill = actionResultEvidence(effectiveResult);
     let checkpoint = goal.checkpoint;
@@ -740,6 +818,23 @@ export class GoalDirector {
       }
 
       if (goal.phase === 'recover') {
+        if (goal.subgoals.at(-1)?.kind === 'plan') {
+          const disengagement = plannedDisengagementCommand(goal);
+          if (disengagement) {
+            this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
+            this.dispatch('recover', disengagement);
+            return;
+          }
+          this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
+          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+          this.setStatus(
+            'waiting',
+            'causal_replan',
+            `The last prerequisite changed or failed (${goal.evidence?.code || 'unknown'}); live inventory, world state, and failed-target memory will be planned again.`,
+            true,
+          );
+          return;
+        }
         const command = recoveryCommand(goal);
         if (command) {
           this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
@@ -755,17 +850,6 @@ export class GoalDirector {
         if (/delivery_player_(?:absent|ambiguous)|skill_(?:lost_target|missing_item|family_missing)|delivery_unverified/.test(String(goal.evidence?.code || ''))) {
           this.persist({ ...goal, phase: 'deliver', updatedAt: this.now() });
           this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
-          return;
-        }
-        if (goal.subgoals.at(-1)?.kind === 'plan') {
-          this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
-          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
-          this.setStatus(
-            'waiting',
-            'causal_replan',
-            `The last prerequisite changed or failed (${goal.evidence?.code || 'unknown'}); live inventory and world state will be planned again.`,
-            true,
-          );
           return;
         }
         this.fail(
