@@ -1097,6 +1097,72 @@ export const actionsList = [
         })
     },
     {
+        name: '!addToAgenda',
+        description: 'Queue ONE step of a multi-part plan. When a player asks for several things in one sentence, call this once per step, in the order they said them, and the bot will work through the whole plan on its own. Kinds: acquire, deliver, mine, harvest, stockpile, shelter, goto.',
+        params: {
+            'kind': { type: 'string', description: 'One of: acquire, deliver, mine, harvest, stockpile, shelter, goto.' },
+            'target': { type: 'string', description: 'Canonical item, block, or material name. Use "none" for shelter and goto.' },
+            'quantity': { type: 'int', description: 'How many. Use 1 for shelter and goto.', domain: [1, 2304, '[]'] },
+            'player_name': { type: 'string', description: 'The player this step is for: the recipient for deliver, the destination for goto, otherwise the requester.' },
+        },
+        perform: function (agent, kind, target, quantity, playerName) {
+            const director = agent.agenda_director;
+            if (!director?.add) return 'The agenda is unavailable on this bot.';
+            const result = director.add({
+                kind,
+                target: String(target || '').toLowerCase() === 'none' ? '' : target,
+                quantity,
+                recipient: playerName,
+                requester: playerName,
+                note: `${kind} ${target}`,
+            });
+            if (!result.accepted) {
+                return `That step was not queued: ${result.detail || result.code}.`;
+            }
+            return `Queued step ${result.position}: ${result.description}.`;
+        }
+    },
+    {
+        name: '!showAgenda',
+        description: 'Report the queued plan: what is running now, what is waiting, and how the last steps ended.',
+        perform: function (agent) {
+            const snapshot = agent.agenda_director?.snapshot?.();
+            if (!snapshot) return 'The agenda is unavailable on this bot.';
+            if (!snapshot.remaining && !snapshot.recent.length) return 'My agenda is empty.';
+            const lines = [];
+            if (snapshot.active) lines.push(`Now: ${snapshot.active.description}`);
+            if (snapshot.queue.length) {
+                lines.push(`Next: ${snapshot.queue.map((entry, index) => `${index + 1}. ${entry.description}`).join('; ')}`);
+            }
+            if (snapshot.recent.length) {
+                lines.push(`Recent: ${snapshot.recent.map(entry => `${entry.description} (${entry.state})`).join('; ')}`);
+            }
+            return lines.join('\n') || 'My agenda is empty.';
+        }
+    },
+    {
+        name: '!clearAgenda',
+        description: 'Cancel every queued and running agenda step.',
+        perform: function (agent) {
+            const result = agent.agenda_director?.clear?.('Cleared by the player.');
+            if (!result) return 'The agenda is unavailable on this bot.';
+            return result.cleared
+                ? `Cleared ${result.cleared} agenda step(s).`
+                : 'My agenda was already empty.';
+        }
+    },
+    {
+        name: '!skipAgendaItem',
+        description: 'Abandon the current agenda step and move on to the next one.',
+        perform: function (agent) {
+            const result = agent.agenda_director?.skipCurrent?.('Skipped by the player.');
+            if (!result) return 'The agenda is unavailable on this bot.';
+            return result.skipped
+                ? `Skipped: ${result.skipped}.`
+                : 'There is no agenda step to skip.';
+        }
+    },
+    {
         name: '!fish',
         description: 'Fish in nearby water until the requested number of catches is verified.',
         params: {'count': { type: 'int', description: 'How many catches to verify.', domain: [1, 64] }},

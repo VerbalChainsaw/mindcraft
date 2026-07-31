@@ -31,6 +31,7 @@ import { CompanionContext } from './runtime/companion-context.js';
 import { HomeStateStore } from './runtime/home-state-store.js';
 import { LandmarkMemory } from './runtime/landmark-memory.js';
 import { ProgressionDirector } from './runtime/progression-director.js';
+import { AgendaDirector } from './runtime/agenda-director.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
@@ -265,6 +266,7 @@ export class Agent {
         this.reaction_director = new ReactionDirector(this);
         this.environment_observer = new EnvironmentObserver(this);
         this.progression_director = new ProgressionDirector(this);
+        this.agenda_director = new AgendaDirector(this);
         try {
             this.landmark_memory = new LandmarkMemory(this.name);
         } catch (error) {

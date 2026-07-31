@@ -422,6 +422,18 @@ export class BehaviorArbiter {
         }
         return this.select('basic_survival', job.status?.code || 'survival_job_selected', 'A survival recovery work order selected the tick.', true, perception);
       }
+      // The agenda decides what comes next and hands it to an executor; it
+      // never acts itself. Running it before the goal and job lanes means a
+      // step it dispatches is picked up by those lanes on this same tick.
+      const agenda = this.agent.agenda_director;
+      if (agenda?.update) {
+        try {
+          agenda.update();
+        } catch (error) {
+          return this.select('player_goal', 'agenda_update_failed', `Agenda dispatch failed safely: ${boundedText(error?.message || error)}`, true, perception);
+        }
+      }
+
       const goal = this.agent.goal_director;
       if (goal?.activeGoal) {
         try {

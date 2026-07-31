@@ -362,6 +362,15 @@ function emptyBlockPerception() {
     };
 }
 
+function getAgendaState(agent) {
+    try {
+        return agent.agenda_director?.snapshot?.() || null;
+    } catch {
+        // The plan view must never be able to break state reporting.
+        return null;
+    }
+}
+
 function getLandmarkState(agent) {
     try {
         return agent.landmark_memory?.telemetry?.(8) || null;
@@ -934,6 +943,7 @@ export function getFullState(agent, { deep = false } = {}) {
             behaviorArbiter: agent.behavior_arbiter?.snapshot?.() || null,
             progressionDirector: agent.progression_director?.snapshot?.() || null,
         },
+        agenda: getAgendaState(agent),
         landmarks: getLandmarkState(agent),
         attention: getAttentionState(agent),
         companion: agent.companion_context?.snapshot?.() || null,
