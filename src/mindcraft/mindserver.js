@@ -276,6 +276,11 @@ const MAX_RELAY_MESSAGE_LENGTH = 4_096;
 const MAX_BOT_OUTPUT_LENGTH = 16_384;
 const MAX_SQUAD_RADIO_LENGTH = 1_200;
 const SQUAD_RADIO_KINDS = new Set(['order', 'status', 'request', 'warning', 'completion']);
+// A bot may ask for more bots, but Minecraft chat is untrusted input reaching a
+// language model, so a request that starts a process needs a floor on how often
+// it can happen regardless of what anyone types.
+const AGENT_SPAWN_COOLDOWN_MS = 20_000;
+const agent_spawn_cooldowns = new Map();
 
 function isAgentSocket(socket) {
     return socket?.data?.role === 'agent';
@@ -2282,6 +2287,53 @@ async function createMindServerAtPort(port, dependencies = {}) {
         socket.on('squad-launch', (spec, callback) => {
             if (!requireDashboardSocket(socket, callback)) return;
             void runSquadAction(callback, () => botSquadManager.launch(spec || {}));
+        });
+
+        // A bot asking for help. Until now the only way to put a bot in the
+        // world was the dashboard, so a player in game could not say "bring
+        // someone to help me dig" without leaving the game.
+        //
+        // This is the one place where untrusted Minecraft chat can start a
+        // process, so it is bounded on every axis: only a live agent socket may
+        // ask, one request per bot per cooldown, and the squad manager's own
+        // session and size caps decide how many bots may exist at all.
+        socket.on('agent-spawn-request', (spec, callback) => {
+            const reply = typeof callback === 'function' ? callback : () => {};
+            if (!isAgentSocket(socket)) {
+                reply({ success: false, error: 'Only a connected bot may request help.' });
+                return;
+            }
+            const sourceName = socket.data.agentName;
+            if (agent_connections[sourceName]?.socket !== socket) {
+                reply({ success: false, error: 'This agent socket is not the active connection.' });
+                return;
+            }
+            const now = Date.now();
+            const readyAt = Number(agent_spawn_cooldowns.get(sourceName)) || 0;
+            if (now < readyAt) {
+                reply({
+                    success: false,
+                    error: `Wait ${Math.ceil((readyAt - now) / 1000)}s before asking for more bots.`,
+                });
+                return;
+            }
+            void runSquadAction(callback, () => {
+                const result = botSquadManager.launch({
+                    // An agent may clone only its own server-owned settings. Do
+                    // not trust a requested template name from Minecraft chat.
+                    templateName: sourceName,
+                    prefix: spec?.prefix,
+                    size: spec?.size,
+                    staggerMs: 750,
+                    identity: { displayName: spec?.displayName || spec?.prefix },
+                });
+                // A typo or occupied prefix should be immediately correctable;
+                // only a launch that actually reserved bots consumes cooldown.
+                if (result?.success) {
+                    agent_spawn_cooldowns.set(sourceName, now + AGENT_SPAWN_COOLDOWN_MS);
+                }
+                return result;
+            });
         });
 
         socket.on('squad-stop', (id, callback) => {

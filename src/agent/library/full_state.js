@@ -912,6 +912,12 @@ export function getFullState(agent, { deep = false } = {}) {
             style: agent.runtime?.identity?.style || '',
             attitude: agent.runtime?.identity?.attitude || '',
             specialties: [...(agent.runtime?.identity?.specialties || [])],
+            runtime: {
+                autonomy: agent.runtime?.autonomy || 'balanced',
+                comportment: agent.runtime?.comportment?.preset || 'neutral',
+                traversal: agent.runtime?.traversal || 'preserve',
+                narration: agent.runtime?.narration || 'quiet',
+            },
         },
         persona: agent.getPersona?.() || '',
         gameplay: {

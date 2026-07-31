@@ -186,6 +186,15 @@ const CONTROL_GROUPS = Object.freeze([
     ],
   },
   {
+    key: 'narration',
+    label: 'Talks about what it is doing',
+    command: '!setNarration',
+    options: [
+      ['quiet', 'Only when I ask'],
+      ['chatty', 'Calls out everything'],
+    ],
+  },
+  {
     key: 'traversal',
     label: 'May reshape the world',
     command: '!setTraversal',
@@ -210,6 +219,7 @@ export function renderControls(state, { send = null } = {}) {
     autonomy: runtime.autonomy || state?.action?.behaviorArbiter?.autonomy || '',
     comportment: state?.action?.behaviorArbiter?.comportment || runtime.comportment || '',
     traversal: runtime.traversal || '',
+    narration: runtime.narration || '',
   };
 
   const section = panel('Controls', 'Takes effect immediately. The same commands work in game chat.');

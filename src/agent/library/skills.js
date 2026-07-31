@@ -502,8 +502,7 @@ function traversalPolicy(bot) {
     return TRAVERSAL_POLICIES.has(policy) ? policy : 'preserve';
 }
 
-export function isNaturalFillBlock(bot, block) {
-    if (!block?.name || !NATURAL_FILL_BLOCKS.has(block.name)) return false;
+function isEnvironmentallySafeToClear(bot, block) {
     if (isProtectedGameplayBlock(block) || isHazardousGameplayBlock(block)) return false;
     const position = block.position;
     if (!position?.offset) return true;
@@ -520,6 +519,23 @@ export function isNaturalFillBlock(bot, block) {
         if (dy === 1 && isFallingGameplayBlock(neighbour)) return false;
     }
     return true;
+}
+
+export function isNaturalFillBlock(bot, block) {
+    if (!block?.name || !NATURAL_FILL_BLOCKS.has(block.name)) return false;
+    return isEnvironmentallySafeToClear(bot, block);
+}
+
+/**
+ * Natural material a player-authorized build may remove from its exact
+ * footprint. Foliage belongs here but not in traversal: a builder must be able
+ * to clear a tree canopy from a worksite, while an ordinary pathfinder should
+ * not chew through decorative hedges just to shorten a route.
+ */
+export function isClearableWorksiteBlock(bot, block) {
+    const name = String(block?.name || '');
+    if (!NATURAL_FILL_BLOCKS.has(name) && !name.endsWith('_leaves')) return false;
+    return isEnvironmentallySafeToClear(bot, block);
 }
 
 function safeMovements(bot) {

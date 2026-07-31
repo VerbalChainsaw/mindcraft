@@ -20,6 +20,9 @@ const AUTONOMY = new Set(['command', 'balanced', 'autonomous']);
 // This is a capability, deliberately independent of comportment: choosing a
 // persona must never silently grant world-modification rights.
 const TRAVERSAL_POLICIES = new Set(['preserve', 'careful', 'full']);
+// 'chatty' narrates routine actions, 'quiet' keeps them to the behavior log and
+// the dashboard. Answers to the player are never affected either way.
+const NARRATION_POLICIES = new Set(['chatty', 'quiet']);
 const COMBAT_REFLEX_POLICIES = new Set(['role', 'defend', 'avoid', 'off']);
 const VISION_MODES = new Set(['off', 'hybrid', 'on_demand']);
 const LOADOUT_MODES = new Set(['survival', 'provisioned']);
@@ -143,6 +146,12 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
     rolePreset: ROLE_PRESETS[role],
     autonomy,
     comportment,
+    // How much a bot says about its own routine ('Picking up item!'). This was
+    // a single global setting, so quieting one chatty bot silenced every bot in
+    // the world and needed a restart. Unset follows the global compatibility
+    // switch, whose safe default is quiet; only an explicit true opts into
+    // routine action chatter.
+    narration: enumValue(raw.narration, NARRATION_POLICIES, legacySettings.narrate_behavior === true ? 'chatty' : 'quiet'),
     traversal: enumValue(raw.traversal, TRAVERSAL_POLICIES, 'preserve'),
     reflexes: Object.freeze({
       combat: enumValue(reflexes.combat, COMBAT_REFLEX_POLICIES, 'role'),
@@ -218,6 +227,7 @@ export function describeRuntimeBehavior(behavior) {
     title: config.identity.title,
     role: config.role,
     autonomy: config.autonomy,
+    narration: config.narration,
     comportment: config.comportment.preset,
     traversal: config.traversal,
     combatReflex: config.reflexes.combat,
@@ -234,6 +244,7 @@ export function runtimeBehaviorToProfile(behavior) {
     schemaVersion: 1,
     role: config.role,
     autonomy: config.autonomy,
+    narration: config.narration,
     traversal: config.traversal,
     comportment: {
       preset: config.comportment.preset,

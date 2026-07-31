@@ -1,7 +1,7 @@
 import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
-import { sendSquadRadio } from '../mindserver_proxy.js';
+import { requestBotSpawn, sendSquadRadio } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
 import { createWorkOrder } from '../runtime/work-order.js';
 import {
@@ -225,6 +225,33 @@ export const actionsList = [
             agent.shutUp();
             return;
         }
+    },
+    {
+        name: '!spawnBots',
+        description: 'Bring more bots into the world. Use this when the player asks for help, for another bot, for a partner, or for a whole team or squad. Use count 1 for a single helper and a larger count for a squad. The new bots copy this bot\'s profile and are named from the prefix. There is a short cooldown and a limit on how many bots may be live at once.',
+        params: {
+            'prefix': { type: 'string', description: 'Name stem for the new bots, 2-12 letters or numbers, starting with a letter. Members are numbered from it, so "Miner" gives Miner1, Miner2.' },
+            'count': { type: 'int', description: 'How many bots to bring in. 1 for a single helper.', domain: [1, 8, '[]'] },
+        },
+        perform: async function (agent, prefix, count) {
+            const stem = String(prefix || '').trim();
+            if (!/^[A-Za-z][A-Za-z0-9_]{1,11}$/.test(stem)) {
+                return `'${stem}' will not work as a name: use 2 to 12 letters or numbers starting with a letter.`;
+            }
+            const size = Math.max(1, Math.min(8, Math.floor(Number(count) || 1)));
+            const response = await requestBotSpawn({
+                prefix: stem,
+                size,
+                displayName: stem,
+            });
+            if (!response?.success) {
+                return `I could not bring anyone in: ${String(response?.error || 'the control centre refused the request.').slice(0, 180)}`;
+            }
+            const members = response.squad?.members?.map(member => member.name).filter(Boolean) || [];
+            return members.length
+                ? `Bringing in ${members.join(', ')}. They take a few seconds to load in.`
+                : `Bringing in ${size} bot(s) named from ${stem}. They take a few seconds to load in.`;
+        },
     },
     {
         name: '!leaveGame',
@@ -1253,8 +1280,22 @@ export const actionsList = [
         }
     },
     {
+        name: '!setNarration',
+        description: 'Change how much this bot says about its own routine actions in chat. Use this when the player says to be quiet, stop narrating, stop announcing everything, or asks it to speak up again. quiet still answers questions and reports results; it only stops the running commentary.',
+        params: {
+            'policy': { type: 'string', description: 'quiet or chatty.' },
+        },
+        perform: function (agent, policy) {
+            const result = applyRuntimeChange(agent, { narration: policy });
+            if (!result.ok) return `Narration was not changed: ${result.detail}`;
+            return result.runtime.narration === 'quiet'
+                ? 'Going quiet. I will still answer you and report what I finish.'
+                : 'I will call out what I am doing again.';
+        }
+    },
+    {
         name: '!showRuntime',
-        description: 'Report this bot\'s current autonomy, comportment, traversal, and role.',
+        description: 'Report this bot\'s current role, autonomy, comportment, traversal, narration, jobs, and reactions.',
         perform: function (agent) {
             const runtime = agent.runtime;
             if (!runtime) return 'Runtime configuration is unavailable.';
@@ -1263,6 +1304,7 @@ export const actionsList = [
                 `Autonomy: ${runtime.autonomy}`,
                 `Comportment: ${runtime.comportment?.preset || 'neutral'}`,
                 `Traversal: ${runtime.traversal}`,
+                `Narration: ${runtime.narration}`,
                 `Jobs: ${runtime.jobs?.mode}`,
                 `Reactions: ${runtime.reactions?.mode}`,
             ].join(' · ');

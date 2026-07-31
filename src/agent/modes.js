@@ -5,8 +5,13 @@ import settings from './settings.js';
 import convoManager from './conversation.js';
 
 function say(agent, message) {
+    // The log always records it. Whether the bot says it out loud in chat is a
+    // per-bot dial, so quieting one chatty bot no longer silences every bot in
+    // the world and no longer needs a restart.
     agent.bot.modes.behavior_log += message + '\n';
-    if (agent.shut_up || !settings.narrate_behavior) return;
+    const narration = agent.runtime?.narration
+        || (settings.narrate_behavior === true ? 'chatty' : 'quiet');
+    if (agent.shut_up || narration === 'quiet') return;
     void Promise.resolve()
         .then(() => agent.openChat(message))
         .catch(error => {

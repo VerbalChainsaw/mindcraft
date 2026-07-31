@@ -140,6 +140,42 @@ test('Given a hazardous, occupied, or trapping worksite, Builder chooses the saf
   assert.equal(occupied.blocked, true);
   assert.equal(occupied.code, 'blueprint_occupied');
   assert.equal(occupied.retryable, true);
+
+  const naturalObstruction = nextBuilderStep({ ...order, phase: 'execute' }, {
+    blueprintAudit: {
+      valid: true,
+      missing: [],
+      incorrect: [{
+        x: 2,
+        y: 64,
+        z: 1,
+        expected: 'stone',
+        observed: 'dirt',
+        clearable: true,
+      }],
+    },
+  });
+  assert.equal(naturalObstruction.command, '!breakBlock(2, 64, 1)');
+  assert.equal(naturalObstruction.nextPhase, 'execute');
+  assert.equal(naturalObstruction.code, 'worksite_clearing');
+
+  const structuralObstruction = nextBuilderStep({ ...order, phase: 'execute' }, {
+    blueprintAudit: {
+      valid: true,
+      missing: [],
+      incorrect: [{
+        x: 2,
+        y: 64,
+        z: 1,
+        expected: 'stone',
+        observed: 'oak_planks',
+        clearable: false,
+      }],
+    },
+  });
+  assert.equal(structuralObstruction.terminal, true);
+  assert.equal(structuralObstruction.code, 'blueprint_incorrect_block');
+  assert.match(structuralObstruction.detail, /not safe natural terrain/i);
 });
 
 test('Given verified cells and inventory, Builder places only the next missing cell and completes only after an exact audit', () => {

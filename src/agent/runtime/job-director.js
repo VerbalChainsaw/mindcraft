@@ -20,6 +20,7 @@ import {
   isProtectedGameplayBlock,
   isReplaceableGameplayBlock,
 } from './gameplay-safety.js';
+import { isClearableWorksiteBlock } from '../library/skills.js';
 
 const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
@@ -305,7 +306,21 @@ function auditBlueprint(bot, order, inventory) {
       return { valid: false, code: 'occupied', missing: [], incorrect: [] };
     }
     if (!isReplaceableGameplayBlock(current)) {
-      incorrect.push({ x, y, z, expected, observed: current.name, index });
+      // Something solid is standing where a cell goes. Whether the build can
+      // continue depends entirely on what it is. Only safe natural terrain
+      // may be cleared; protected, hazardous, structural, liquid-adjacent, and
+      // falling-block sites remain untouched. This is the same predicate
+      // traversal digging uses, so "may I break this" has one answer across
+      // the whole runtime.
+      incorrect.push({
+        x,
+        y,
+        z,
+        expected,
+        observed: current.name,
+        index,
+        clearable: isClearableWorksiteBlock(bot, current),
+      });
       continue;
     }
     const relativeBelow = `${cell.x}:${cell.y - 1}:${cell.z}`;

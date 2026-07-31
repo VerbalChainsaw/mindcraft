@@ -18,6 +18,7 @@ import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { resolveBlockedActions } from './command-policy.js';
+import { addressesAgent } from './chat-address.js';
 import { resolvePlayerDirective } from './player-directives.js';
 import { normalizeRuntimeBehavior } from './runtime/behavior-config.js';
 import { JobDirector } from './runtime/job-director.js';
@@ -452,8 +453,15 @@ export class Agent {
         this.bot.on('whisper', respondFunc);
         
         this.bot.on('chat', (username, message) => {
-            if (serverProxy.getNumOtherAgents() > 0) return;
-            // only respond to open chat messages when there are no other agents
+            // Alone, every open message is obviously for this bot. In company,
+            // answering everything means the whole squad talks over the player,
+            // so a bot answers only when it is addressed -- by name, by its
+            // squad prefix, or by a word meant for everyone. Requiring a
+            // whisper instead made playing with more than one bot a chore.
+            if (
+                serverProxy.getNumOtherAgents() > 0
+                && !addressesAgent(message, this.name)
+            ) return;
             respondFunc(username, message);
         });
 

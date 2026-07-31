@@ -407,6 +407,40 @@ export function sendBotChatToServer(agentName, json) {
     return true;
 }
 
+/**
+ * Ask the control centre to put more bots in the world. The server decides
+ * whether it may happen -- session caps, squad size, and a per-bot cooldown all
+ * live there, because that is the only side that can see every bot at once.
+ */
+export function requestBotSpawn(spec = {}) {
+    return new Promise((resolve) => {
+        const socket = serverProxy.getSocket();
+        if (!socket?.connected) return resolve({ success: false, error: 'MindServer is not connected.' });
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(result || { success: false, error: 'The spawn request returned no response.' });
+        };
+        // Starting bots means spawning processes and waiting for them to reach
+        // the world, so this waits far longer than a chat relay would.
+        const timeout = setTimeout(
+            () => finish({ success: false, error: 'The spawn request timed out after 60 seconds.' }),
+            60_000,
+        );
+        try {
+            socket.emit('agent-spawn-request', {
+                prefix: String(spec.prefix || '').slice(0, 12),
+                size: Number(spec.size) || 1,
+                displayName: String(spec.displayName || '').slice(0, 48),
+            }, finish);
+        } catch (error) {
+            finish({ success: false, error: String(error?.message || error || 'Spawn request failed.').slice(0, 240) });
+        }
+    });
+}
+
 export function sendSquadRadio(message, kind = 'status') {
     return new Promise((resolve) => {
         const socket = serverProxy.getSocket();

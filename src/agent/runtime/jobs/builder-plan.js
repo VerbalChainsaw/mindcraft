@@ -378,7 +378,26 @@ export function nextBuilderStep(order, snapshot = {}) {
   const missing = Array.isArray(audit.missing) ? audit.missing : [];
   const incorrect = Array.isArray(audit.incorrect) ? audit.incorrect : [];
   if (incorrect.length > 0) {
-    return { terminal: true, code: 'blueprint_incorrect_block', retryable: false };
+    // A boulder or a tree in the footprint used to kill the whole order, so
+    // building anywhere but bare flat ground meant clearing the site by hand
+    // first. The bot clears safe natural terrain itself now. Anything outside that
+    // narrow safety predicate remains untouched and produces an exact blocker.
+    const clearable = incorrect.find(cell => cell.clearable);
+    if (!clearable) {
+      return {
+        terminal: true,
+        code: 'blueprint_incorrect_block',
+        detail: `${incorrect[0].observed} at ${incorrect[0].x}, ${incorrect[0].y}, ${incorrect[0].z} is in the way and is not safe natural terrain to clear. Move the site or clear it yourself.`,
+        retryable: false,
+      };
+    }
+    return {
+      command: `!breakBlock(${clearable.x}, ${clearable.y}, ${clearable.z})`,
+      nextPhase: order.phase,
+      code: 'worksite_clearing',
+      target: { name: 'obstruction', x: clearable.x, y: clearable.y, z: clearable.z },
+      reason: `Clear the ${clearable.observed} standing where the ${clearable.expected} goes.`,
+    };
   }
   if (missing.length === 0 && incorrect.length === 0) {
     return {
