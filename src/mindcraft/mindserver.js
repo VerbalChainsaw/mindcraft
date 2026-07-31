@@ -1596,6 +1596,28 @@ async function createMindServerAtPort(port, dependencies = {}) {
       res.json({ success: true, agents: serializePublicAgents() });
     });
 
+    // The command registry pulls in the whole gameplay skill library, so it is
+    // loaded on first request rather than at boot and cached afterwards. A
+    // failure here costs the console its palette, never the control plane.
+    let commandManifestCache = null;
+    app.get('/api/commands', async (_req, res) => {
+      if (commandManifestCache) {
+        res.json({ success: true, commands: commandManifestCache });
+        return;
+      }
+      try {
+        const { getCommandManifest } = await import('../agent/commands/index.js');
+        commandManifestCache = getCommandManifest();
+        res.json({ success: true, commands: commandManifestCache });
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          commands: [],
+          error: `Command list unavailable: ${String(error?.message || error).slice(0, 240)}`,
+        });
+      }
+    });
+
     app.get('/api/agent-telemetry', (_req, res) => {
       const latest = {};
       for (const [agentName, state] of Object.entries(lastAgentStates)) {

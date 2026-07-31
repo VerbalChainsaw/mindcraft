@@ -6,6 +6,7 @@ import { DirectorWorkspace } from './director.js';
 import { MinecraftServerWorkspace } from './minecraft-server.js';
 import { ProfilesWorkspace } from './profiles.js';
 import { SwarmWorkspace } from './swarm.js';
+import { ConsoleWorkspace } from './console.js';
 import { $, button, clear, input, node, normalizeState, stateLabels } from './utils.js';
 
 const workspaceEl=$('workspace'), nav=$('primaryNav'), diagnostics=$('diagnostics'), live=$('liveRegion'), context=$('workspaceContext');
@@ -15,8 +16,8 @@ let settingsSpec={};let health={};let localServices={};let agents=[];let current
 let managedServer=null;
 let refreshPromise=null;let refreshTimer=null;let lastLocalServicesAt=0;let botStartPromise=null;
 const HEALTH_REFRESH_MS=7000,LOCAL_DISCOVERY_REFRESH_MS=60000,HIDDEN_REFRESH_MS=30000;
-const profileRoot=node('div'),serverRoot=node('div'),agentRoot=node('div'),directorRoot=node('div'),swarmRoot=node('div');
-const ALLOWED_WORKSPACES=new Set(['overview','server','agents','profiles','director','swarm','activity']);
+const profileRoot=node('div'),serverRoot=node('div'),agentRoot=node('div'),directorRoot=node('div'),swarmRoot=node('div'),consoleRoot=node('div');
+const ALLOWED_WORKSPACES=new Set(['overview','server','agents','console','profiles','director','swarm','activity']);
 const mobileMenu=$('mobileMenu');
 
 function announce(message){live.textContent='';requestAnimationFrame(()=>{live.textContent=String(message||'');});}
@@ -34,6 +35,7 @@ agentsView.onSquadsChanged=()=>renderDashboardIfVisible();
 const serverView=new MinecraftServerWorkspace(serverRoot,activity,announce,(status)=>{managedServer=status;renderDiagnostics();renderDashboardIfVisible();},(status)=>{const quick=profiles.localModels?.quickstart;if(quick)quick.minecraft={host:status.host,port:status.port};void refreshHealth();},requestShutdownControlCenter,()=>agentsView.states||{});
 const director=new DirectorWorkspace(directorRoot,socket,activity,agents);
 const swarm=new SwarmWorkspace(swarmRoot,socket,activity);
+const commandConsole=new ConsoleWorkspace(consoleRoot,{activity,announce,getAgents:()=>agents});
 const dashboardView=new DashboardWorkspace(workspaceEl,{
   getState:()=>({
     controlOnline:socket.connected,
@@ -85,7 +87,7 @@ window.addEventListener('mindcraft-action-error',(event)=>{
 });
 
 function setServer(online){const el=$('serverStatus');el.className=`server-status ${online?'online':'offline'}`;el.textContent=`● Control ${online?'online':'offline'}`;renderDashboardIfVisible();renderDiagnostics();}
-function workspaceTitle(key){return ({overview:'Dashboard',server:'Minecraft Server',agents:'Bots',profiles:'Bot Profiles',director:'Director',swarm:'Task Runners',activity:'Activity'})[key]||'Dashboard';}
+function workspaceTitle(key){return ({overview:'Dashboard',server:'Minecraft Server',agents:'Bots',console:'Console',profiles:'Bot Profiles',director:'Director',swarm:'Task Runners',activity:'Activity'})[key]||'Dashboard';}
 function normalizeWorkspace(key){return ALLOWED_WORKSPACES.has(key)?key:'overview';}
 function closeMobileNav(){nav.dataset.open='false';mobileMenu.setAttribute('aria-expanded','false');}
 function navigate(key){
@@ -106,6 +108,7 @@ function renderWorkspace(key,{focus=true}={}){
   if(currentWorkspace==='overview')dashboardView.mount();
   if(currentWorkspace==='server'){workspaceEl.append(serverRoot);serverView.mount();serverView.load();}
   if(currentWorkspace==='agents'){workspaceEl.append(agentRoot);agentsView.mount();}
+  if(currentWorkspace==='console'){workspaceEl.append(consoleRoot);commandConsole.mount();}
   if(currentWorkspace==='profiles'){workspaceEl.append(profileRoot);profiles.mount();profiles.load();}
   if(currentWorkspace==='director'){workspaceEl.append(directorRoot);director.mount();}
   if(currentWorkspace==='swarm'){workspaceEl.append(swarmRoot);swarm.mount();}

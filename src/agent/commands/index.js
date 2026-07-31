@@ -14,6 +14,57 @@ export function getCommand(name) {
     return commandMap[name];
 }
 
+// Grouping is declared here rather than in the dashboard so the console and the
+// model documentation cannot drift apart. First match wins; anything unmatched
+// lands in Other, which is visible enough that a new command gets noticed.
+const COMMAND_CATEGORIES = Object.freeze([
+    Object.freeze({ category: 'Control', pattern: /^!(stop|stfu|restart|clearChat|stay|setMode|setPersona|endGoal|cancelJob|cancelGoal|goal|newAction)$/ }),
+    Object.freeze({ category: 'Plan', pattern: /^!(addToAgenda|showAgenda|clearAgenda|skipAgendaItem|requestItemGoal|assign\w*Job)$/ }),
+    Object.freeze({ category: 'Movement', pattern: /^!(goTo\w*|follow\w*|moveAway|come|stay|searchFor\w*|completeExplorationRoute|goToSurface|goToMiningDepth|dismount|mountEntity|rideToCoordinates)$/ }),
+    Object.freeze({ category: 'Combat', pattern: /^!(attack\w*|resolveTacticalCombat|guardPlayer|defend)$/ }),
+    Object.freeze({ category: 'Gathering', pattern: /^!(collect\w*|pickup\w*|fish|prepare\w*|breakBlock|digDown)$/ }),
+    Object.freeze({ category: 'Crafting', pattern: /^!(craftRecipe|smeltItem|brewPotion|clearFurnace|enchantItem|repairItem)$/ }),
+    Object.freeze({ category: 'Building', pattern: /^!(place\w*|build\w*|repairHome|establishFarm|maintainFarm|rememberHome)$/ }),
+    Object.freeze({ category: 'Inventory', pattern: /^!(equip|consume|discard|give\w*|putIn\w*|putFamily\w*|takeFrom\w*|viewChest|deposit\w*|useItem|useOn)$/ }),
+    Object.freeze({ category: 'Memory', pattern: /^!(rememberHere|goToRememberedPlace|savedPlaces|recoverDeathItems)$/ }),
+    Object.freeze({ category: 'Social', pattern: /^!(startConversation|endConversation|squadRadio|lookAt\w*|showVillagerTrades|tradeWithVillager)$/ }),
+    Object.freeze({ category: 'Survival', pattern: /^!(goToBed|breedAnimals)$/ }),
+    Object.freeze({ category: 'Info', pattern: /^!(inspect\w*|check\w*|get\w*|search\w*|help|stats|inventory|entities|modes|savedPlaces)$/ }),
+]);
+
+function categoryFor(name) {
+    for (const entry of COMMAND_CATEGORIES) {
+        if (entry.pattern.test(name)) return entry.category;
+    }
+    return 'Other';
+}
+
+/**
+ * Serializable description of every command, with no agent required. The
+ * console renders forms from this, so a command added to actions.js shows up
+ * without anyone remembering to update the dashboard.
+ */
+export function getCommandManifest({ blocked = [] } = {}) {
+    const blockedSet = new Set(Array.isArray(blocked) ? blocked : []);
+    return commandList
+        .filter((command) => !blockedSet.has(command.name))
+        .map((command) => ({
+            name: command.name,
+            description: String(command.description || '').replace(/\s+/g, ' ').trim(),
+            category: categoryFor(command.name),
+            isAction: typeof command.perform === 'function' && !queryList.includes(command),
+            params: Object.entries(command.params || {}).map(([paramName, param]) => ({
+                name: paramName,
+                type: String(param?.type || 'string'),
+                description: String(param?.description || '').replace(/\s+/g, ' ').trim(),
+                domain: Array.isArray(param?.domain)
+                    ? param.domain.filter((value) => typeof value === 'number' || typeof value === 'string')
+                    : null,
+            })),
+        }))
+        .sort((left, right) => left.category.localeCompare(right.category) || left.name.localeCompare(right.name));
+}
+
 export function blacklistCommands(commands) {
     const unblockable = ['!stop', '!stats', '!inventory', '!goal'];
     for (let command_name of commands) {
