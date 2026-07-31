@@ -2,15 +2,20 @@ import {
     appendFileSync,
     existsSync,
     mkdirSync,
+    readdirSync,
     readFileSync,
     renameSync,
     statSync,
+    unlinkSync,
 } from 'fs';
+import path from 'node:path';
 import { NPCData } from './npc/data.js';
 import settings from './settings.js';
 import { writeJsonAtomicSync } from '../utils/atomic-file.js';
 
 const MAX_MEMORY_FILE_BYTES = 2 * 1024 * 1024;
+// Session transcripts, newest kept. One bot had 89 of these and climbing.
+const MAX_HISTORY_FILES = 20;
 const MAX_STORED_TURNS = 100;
 const MAX_STORED_TURN_CHARS = 32_000;
 const MAX_STORED_MEMORY_CHARS = 4_000;
@@ -100,10 +105,37 @@ export class History {
         console.log("Memory updated to: ", this.memory);
     }
 
+    /**
+     * Transcript files are written one per session and were never cleaned up,
+     * so a bot that had been run often accumulated them indefinitely. Keep the
+     * most recent sessions and delete the rest. Retention failures are logged
+     * and ignored: losing an old transcript must never interrupt a live bot.
+     */
+    pruneHistories(directory) {
+        try {
+            const files = readdirSync(directory)
+                .filter((name) => name.endsWith('.jsonl'))
+                .map((name) => {
+                    const filePath = path.join(directory, name);
+                    let modifiedAt = 0;
+                    try { modifiedAt = statSync(filePath).mtimeMs; } catch { modifiedAt = 0; }
+                    return { filePath, modifiedAt };
+                })
+                .sort((left, right) => right.modifiedAt - left.modifiedAt);
+            for (const stale of files.slice(MAX_HISTORY_FILES)) {
+                try { unlinkSync(stale.filePath); } catch { /* another process may have removed it */ }
+            }
+        } catch (err) {
+            console.warn(`Could not prune ${this.name}'s history files: ${err.message}`);
+        }
+    }
+
     appendFullHistory(to_store) {
         if (this.full_history_fp === undefined) {
+            const directory = `./bots/${this.name}/histories`;
             const string_timestamp = new Date().toLocaleString().replace(/[/:]/g, '-').replace(/ /g, '').replace(/,/g, '_');
-            this.full_history_fp = `./bots/${this.name}/histories/${string_timestamp}.jsonl`;
+            this.full_history_fp = path.join(directory, `${string_timestamp}.jsonl`);
+            this.pruneHistories(directory);
         }
         try {
             const records = to_store.map((entry) => JSON.stringify(entry)).join('\n');
