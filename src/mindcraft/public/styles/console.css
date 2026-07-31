@@ -694,3 +694,15 @@ button.full-width { width:100%; }
   .overview-connection-row button { flex:0 0 auto; }
 }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
+
+/* Bot brain: the runtime already publishes why it chose what it chose. */
+.bot-brain { display:grid; gap:12px; margin-top:14px; }
+.bot-brain-panel { padding:14px; }
+.bot-brain-panel .panel-title { margin:0 0 4px; font-size:13px; color:#8cebd6; }
+.bot-brain-panel .telemetry-row { display:flex; gap:10px; justify-content:space-between; align-items:baseline; padding:4px 0; border-bottom:1px solid rgba(255,255,255,.05); }
+.bot-brain-panel .telemetry-row:last-child { border-bottom:0; }
+.bot-brain-panel .telemetry-row .telemetry-value { margin-top:0; text-align:right; }
+.bot-brain-queue, .bot-brain-recent { margin:6px 0 0; padding-left:20px; color:var(--text-muted); font-size:12px; }
+.bot-brain-queue li, .bot-brain-recent li { margin:2px 0; }
+.bot-brain-panel .panel-actions { display:flex; gap:8px; margin-top:10px; }
+.ok-copy { color:#a9f0d1; }

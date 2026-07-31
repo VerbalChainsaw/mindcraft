@@ -1,5 +1,6 @@
 import { actionTargetLabel, attentionStatusLabel, behaviorStatusLabel, button, canStartAgent, clear, dialogueStatusLabel, errorText, gridField, input, isCredentialReason, localServiceUrl, node, normalizeState, operatorControlLabel, runtimeRecoveryMessage, select, stateLabels, telemetryFreshness } from './utils.js';
 import { api } from './api.js';
+import { renderBotBrain } from './bot-brain.js';
 
 const AGENT_REQUEST_TIMEOUT_MS = 15_000;
 const AGENT_START_TIMEOUT_MS = 60_000;
@@ -971,6 +972,14 @@ export class AgentsWorkspace {
       outcome.append(node('div','telemetry-label','Verified action detail'),node('div','telemetry-value',result.detail));
       body.append(outcome);
     }
+
+    // The runtime has always published why it chose what it chose; until now
+    // nothing showed it.
+    const brain=renderBotBrain(st,{
+      onSkip:button('Skip step',()=>this.send(agent.name,'!skipAgendaItem')),
+      onClear:button('Clear plan',()=>this.send(agent.name,'!clearAgenda')),
+    });
+    if(brain)body.append(brain);
 
     const world=node('div','stack');
     world.append(node('h3','','World around this bot'),node('div','muted small',perceptionStatusLabel(perception)));
