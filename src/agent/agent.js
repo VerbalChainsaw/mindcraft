@@ -247,6 +247,10 @@ export class Agent {
 
         console.log(this.name, 'logging into minecraft...');
         this.bot = initBot(this.name);
+        // Route policy is read where Movements are built, which only ever
+        // receives the bot. A plain string keeps LLM-reachable objects free of
+        // any agent reference.
+        this.bot.traversalPolicy = this.runtime?.traversal || 'preserve';
         this.companion_context = new CompanionContext(this, {
             onReappeared: () => this.behavior_arbiter?.requestDirectiveResume?.(),
         });

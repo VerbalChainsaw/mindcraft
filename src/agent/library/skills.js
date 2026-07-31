@@ -480,8 +480,51 @@ async function closeContainerQuietly(container) {
     }
 }
 
+// Blocks a route may tunnel through when the profile permits it. This is an
+// allow-list of unambiguously natural fill, never a deny-list: anything a
+// player could have built — planks, bricks, glass, wool, concrete, sandstone,
+// terracotta, beds, doors, torches — is absent, so a digging bot cannot chew
+// through someone's house. Ores are absent too; breaking those is collection,
+// which is authorized separately and explicitly.
+const NATURAL_FILL_BLOCKS = new Set([
+    'dirt', 'coarse_dirt', 'rooted_dirt', 'grass_block', 'podzol', 'mycelium', 'mud',
+    'clay', 'gravel', 'sand', 'red_sand', 'snow_block', 'moss_block',
+    'stone', 'cobblestone', 'deepslate', 'cobbled_deepslate', 'tuff',
+    'andesite', 'diorite', 'granite', 'calcite', 'dripstone_block',
+    'netherrack', 'soul_sand', 'soul_soil', 'basalt', 'blackstone',
+    'end_stone',
+]);
+const TRAVERSAL_POLICIES = new Set(['preserve', 'careful', 'full']);
+
+function traversalPolicy(bot) {
+    const policy = String(bot?.traversalPolicy || '').trim().toLowerCase();
+    // Anything unrecognized falls back to the non-destructive policy.
+    return TRAVERSAL_POLICIES.has(policy) ? policy : 'preserve';
+}
+
+export function isNaturalFillBlock(bot, block) {
+    if (!block?.name || !NATURAL_FILL_BLOCKS.has(block.name)) return false;
+    if (isProtectedGameplayBlock(block) || isHazardousGameplayBlock(block)) return false;
+    const position = block.position;
+    if (!position?.offset) return true;
+    // Never open a face onto liquid: a single wrong block floods a tunnel.
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+        let neighbour;
+        try {
+            neighbour = bot.blockAt(position.offset(dx, dy, dz));
+        } catch {
+            return false;
+        }
+        if (!neighbour) return false;
+        if (isLiquidGameplayBlock(neighbour)) return false;
+        if (dy === 1 && isFallingGameplayBlock(neighbour)) return false;
+    }
+    return true;
+}
+
 function safeMovements(bot) {
     const movements = new pf.Movements(bot);
+    const defaultSafeToBreak = movements.safeToBreak.bind(movements);
     // Natural traversal is allowed; destructive escape behaviors are not.
     movements.canDig = false;
     movements.allow1by1towers = false;
@@ -494,14 +537,33 @@ function safeMovements(bot) {
     movements.placeCost = 8;
     movements.digCost = 10;
     for (const block of ['glass', 'glass_pane']) movements.blocksCantBreak.add(mc.getBlockId(block));
+
+    const policy = traversalPolicy(bot);
+    if (policy !== 'preserve') {
+        // The destructive surface is identical for 'careful' and 'full': natural
+        // fill only. 'full' widens mobility, never what may be broken.
+        movements.canDig = true;
+        movements.safeToBreak = candidate => (
+            defaultSafeToBreak(candidate) && isNaturalFillBlock(bot, candidate)
+        );
+        if (policy === 'full') {
+            movements.allow1by1towers = true;
+            movements.allowParkour = true;
+        }
+    }
+    // Collection restores this to authorize an explicitly selected resource,
+    // which is deliberately not ordinary terrain.
+    movements.defaultSafeToBreak = defaultSafeToBreak;
     return movements;
 }
 
 function collectionSafetyMovements(bot) {
     const movements = safeMovements(bot);
     // This instance evaluates whether an explicitly selected resource may be
-    // broken. It is never used as the ordinary route policy.
+    // broken. It is never used as the ordinary route policy, so the traversal
+    // allow-list must not be allowed to veto the chosen target.
     movements.canDig = true;
+    movements.safeToBreak = movements.defaultSafeToBreak;
     return movements;
 }
 

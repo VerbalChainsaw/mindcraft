@@ -13,6 +13,13 @@ const ROLE_PRESETS = Object.freeze({
 });
 
 const AUTONOMY = new Set(['command', 'balanced', 'autonomous']);
+// What a bot is permitted to do to the world in order to get somewhere.
+// 'preserve' breaks nothing while routing and is the default, so no existing
+// profile starts modifying terrain. 'careful' may tunnel through natural fill
+// only. 'full' adds towering and parkour but breaks exactly the same blocks.
+// This is a capability, deliberately independent of comportment: choosing a
+// persona must never silently grant world-modification rights.
+const TRAVERSAL_POLICIES = new Set(['preserve', 'careful', 'full']);
 const COMBAT_REFLEX_POLICIES = new Set(['role', 'defend', 'avoid', 'off']);
 const VISION_MODES = new Set(['off', 'hybrid', 'on_demand']);
 const LOADOUT_MODES = new Set(['survival', 'provisioned']);
@@ -136,6 +143,7 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
     rolePreset: ROLE_PRESETS[role],
     autonomy,
     comportment,
+    traversal: enumValue(raw.traversal, TRAVERSAL_POLICIES, 'preserve'),
     reflexes: Object.freeze({
       combat: enumValue(reflexes.combat, COMBAT_REFLEX_POLICIES, 'role'),
     }),
@@ -211,6 +219,7 @@ export function describeRuntimeBehavior(behavior) {
     role: config.role,
     autonomy: config.autonomy,
     comportment: config.comportment.preset,
+    traversal: config.traversal,
     combatReflex: config.reflexes.combat,
     language: config.identity.language,
     traits,
@@ -225,6 +234,7 @@ export function runtimeBehaviorToProfile(behavior) {
     schemaVersion: 1,
     role: config.role,
     autonomy: config.autonomy,
+    traversal: config.traversal,
     comportment: {
       preset: config.comportment.preset,
       cadenceScale: config.comportment.cadenceScale,
