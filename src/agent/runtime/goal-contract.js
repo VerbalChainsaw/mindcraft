@@ -367,6 +367,7 @@ function normalizeSubgoal(raw, index) {
     expectedIncrease: finiteInteger(raw.expectedIncrease, 0, 0, 100_000),
     targetInventoryBefore: finiteInteger(raw.targetInventoryBefore, 0, 0, 100_000),
     targetInventoryAfter: finiteInteger(raw.targetInventoryAfter, 0, 0, 100_000),
+    learningKey: boundedText(raw.learningKey, 160) || null,
     reason: boundedText(raw.reason, 280),
     inventoryBefore: finiteInteger(raw.inventoryBefore, 0, 0, 100_000),
     inventoryAfter: finiteInteger(raw.inventoryAfter, 0, 0, 100_000),

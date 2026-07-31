@@ -524,9 +524,23 @@ export class Prompter {
         return response.replace(/[\r\n]+/g, ' ').trim().slice(0, 180);
     }
 
-    async promptVision(messages, imageBuffer) {
+    async promptVision(messages, imageBuffer, { grounding = null } = {}) {
         await this.checkCooldown();
         let prompt = this.profile.image_analysis;
+        if (grounding) {
+            const structuredGrounding = [
+                'STRUCTURED CAPTURE-TIME GROUNDING (authoritative):',
+                JSON.stringify(grounding),
+            ].join('\n');
+            if (prompt.includes('$STATS')) prompt = prompt.replaceAll('$STATS', structuredGrounding);
+            else prompt += `\n${structuredGrounding}`;
+            prompt += [
+                '\nGround the image description in the structured facts above.',
+                'Use the screenshot only for visual properties that protocol state cannot establish, such as shape, layout, appearance, and visual obstruction.',
+                'Never invent an entity, block identity, coordinate, count, visibility claim, action result, or plan state.',
+                'When image pixels and protocol facts cannot be reconciled, state the uncertainty briefly.',
+            ].join('\n');
+        }
         prompt = await this.replaceStrings(prompt, messages, null, null, null);
         return await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer);
     }

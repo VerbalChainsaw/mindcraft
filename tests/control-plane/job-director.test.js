@@ -82,6 +82,36 @@ test('Given work-order submissions, JobDirector owns exactly one active order', 
   assert.equal(director.snapshot().workOrder.id, 'one');
 });
 
+test('Given an active typed player goal, survival shelter cannot seize persistent job ownership', () => {
+  const agent = createAgent('builder');
+  agent.goal_director = { activeGoal: { id: 'goal-player-1' } };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({ inventory: {} }),
+    now: () => 10_000,
+  });
+
+  assert.deepEqual(director.requestWorkOrder({ kind: 'emergency_shelter' }), {
+    accepted: false,
+    code: 'player_goal_active',
+    id: 'goal-player-1',
+  });
+  assert.equal(director.activeOrder, null);
+
+  const automatic = director.submit(createWorkOrder({
+    id: 'automatic-role-order',
+    role: 'builder',
+    kind: 'stockpile',
+    source: 'role',
+    target: { name: 'cobblestone' },
+    quota: 8,
+  }));
+  assert.equal(automatic.accepted, true);
+  director.update();
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.snapshot().code, 'job_cancelled');
+});
+
 test('Given an explicit construction task, Builder converts it into an exact player-authorized work order', () => {
   const agent = createAgent('builder');
   agent.task = {

@@ -46,10 +46,21 @@ export const queryList = [
                 ? entries.map(entry => {
                     const count = entry.count > 1 ? ` x${entry.count}` : '';
                     const danger = entry.hostile ? ' HOSTILE' : '';
+                    const visibility = entry.visible === true && entry.inView
+                        ? ' visible'
+                        : entry.visible === false
+                            ? ' occluded'
+                            : '';
+                    const motion = entry.motion && entry.motion !== 'unknown'
+                        ? ` ${entry.motion}`
+                        : '';
+                    const priority = entry.threatPriority && entry.threatPriority !== 'none'
+                        ? ` threat=${entry.threatPriority}`
+                        : '';
                     const location = Number.isFinite(entry.distance)
                         ? ` (${entry.distance} blocks ${entry.direction})`
                         : '';
-                    return `${entry.name}${count}${location}${danger}`;
+                    return `${entry.name}${count}${location}${danger}${visibility}${motion}${priority}`;
                 }).join(', ')
                 : empty;
             const modeState = modes.status
@@ -73,6 +84,9 @@ export const queryList = [
             res += `\n- Food: ${describe(inventory.food)}`;
             res += `\n- Dropped items recognized: ${describe(perception.droppedItems)}`;
             res += `\n- Nearby hostiles: ${describe(perception.hostiles)}`;
+            if (perception.primaryThreat) {
+                res += `\n- Primary threat: ${perception.primaryThreat.name}; score=${perception.primaryThreat.threatScore}; ${perception.primaryThreat.threatPriority}; ${perception.primaryThreat.motion}`;
+            }
             res += `\n- Nearby entities: ${describe(perception.entities.filter(entity => entity.kind !== 'dropped_item'))}`;
             res += `\n- Hazards: ${describe(perception.hazards)}`;
             res += `\n- Useful blocks/resources: ${describe(perception.usefulBlocks)}`;
@@ -94,11 +108,21 @@ export const queryList = [
                 res += `\n- Typed goal: ${goal.phase}; ${goal.kind} ${goal.quantity} ${target}; ${progress}; attempts ${goal.attempts}/${goal.maxAttempts}`;
                 const plan = action.goalDirector.plan;
                 if (plan?.nextStep) {
+                    res += `\n- Causal plan: revision ${plan.revision}; ${plan.remainingActions} remaining action(s); learned ranking applied=${plan.experienceApplied}`;
                     res += `\n- Causal next step: ${plan.nextStep.reason}`;
                     res += `\n- Planned verified command: ${plan.nextStep.command}`;
+                    if (plan.actions?.length > 1) {
+                        res += `\n- Following plan steps: ${plan.actions.slice(1, 5).map(step => `${step.kind} ${step.target}`).join(' -> ')}`;
+                    }
                 } else if (plan?.blocker) {
                     res += `\n- Causal plan blocker: ${plan.blocker}; ${plan.detail}`;
                 }
+            }
+            if (state.memory?.learnedOutcomes?.length > 0) {
+                res += `\n- Learned verified methods: ${state.memory.learnedOutcomes
+                    .slice(0, 4)
+                    .map(outcome => `${outcome.method} ${outcome.successes}/${outcome.attempts}`)
+                    .join(', ')}`;
             }
             return pad(res);
         }

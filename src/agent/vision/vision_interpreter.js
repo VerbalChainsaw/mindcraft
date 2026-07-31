@@ -2,9 +2,45 @@ import { Vec3 } from 'vec3';
 import { Camera } from "./camera.js";
 import fs from 'node:fs/promises';
 import { resolvePlayerTarget } from '../player-target.js';
+import { getFullState } from '../library/full_state.js';
 
 const CAMERA_READY_TIMEOUT_MS = 8_000;
 const MINUTE_MS = 60_000;
+
+export function buildVisionGrounding(agent, target = null, capturedAt = Date.now()) {
+    const state = getFullState(agent, { deep: true });
+    const perception = state.perception || {};
+    const inFrame = entry => entry?.inView === true;
+    return {
+        capturedAt,
+        authority: 'Minecraft protocol state is authoritative; image interpretation is advisory.',
+        camera: {
+            position: state.gameplay?.position || null,
+            facing: state.body?.facing || null,
+            yaw: state.body?.yaw ?? null,
+            pitch: state.body?.pitch ?? null,
+            target,
+        },
+        bodySpace: state.surroundings || null,
+        protocolDetections: {
+            status: perception.status || 'unknown',
+            ageMs: perception.ageMs ?? null,
+            entitiesLikelyInFrame: (perception.entities || []).filter(inFrame).slice(0, 12),
+            hazardsLikelyInFrame: (perception.hazards || []).filter(inFrame).slice(0, 8),
+            usefulBlocksLikelyInFrame: (perception.usefulBlocks || []).filter(inFrame).slice(0, 12),
+            primaryThreat: perception.primaryThreat || null,
+        },
+        activeIntent: {
+            assignedGoal: agent.self_prompter?.isStopped?.() === false
+                ? String(agent.self_prompter?.prompt || '').slice(0, 500)
+                : null,
+            typedGoal: state.action?.goalDirector?.goal || null,
+            causalPlan: state.action?.goalDirector?.plan || null,
+            currentAction: state.action?.current || null,
+        },
+        learnedMethods: state.memory?.learnedOutcomes || [],
+    };
+}
 
 export class VisionInterpreter {
     constructor(agent, allow_vision) {
@@ -97,8 +133,9 @@ export class VisionInterpreter {
             try {
                 await this.camera.waitUntilReady(CAMERA_READY_TIMEOUT_MS);
                 await aim();
+                const capturedAt = Date.now();
                 const filename = await this.camera.capture();
-                const analysis = await this.analyzeImage(filename);
+                const analysis = await this.analyzeImage(filename, { target, capturedAt });
                 return this._record({
                     success: true,
                     code: 'analyzed',
@@ -120,7 +157,7 @@ export class VisionInterpreter {
         }
     }
 
-    async lookAtPlayer(player_name, direction) {
+    lookAtPlayer(player_name, direction) {
         const bot = this.agent.bot;
         const resolution = resolvePlayerTarget(bot, player_name, {
             knownBotNames: this.agent.task?.agent_names || [],
@@ -155,7 +192,7 @@ export class VisionInterpreter {
         });
     }
 
-    async lookAtPosition(x, y, z) {
+    lookAtPosition(x, y, z) {
         if (![x, y, z].every(Number.isFinite)) {
             return this._unavailable('invalid_target', 'Vision needs valid coordinates.', null, false);
         }
@@ -165,6 +202,20 @@ export class VisionInterpreter {
             target,
             lookingMessage: `Looking at coordinate ${x}, ${y}, ${z}.`,
             aim: () => bot.lookAt(new Vec3(x, y + 2, z)),
+        });
+    }
+
+    inspectCurrentView() {
+        const bot = this.agent.bot;
+        const target = {
+            kind: 'current_view',
+            yaw: Number(bot.entity?.yaw) || 0,
+            pitch: Number(bot.entity?.pitch) || 0,
+        };
+        return this._runVision({
+            target,
+            lookingMessage: 'Inspecting the current first-person view.',
+            aim: async () => {},
         });
     }
 
@@ -182,10 +233,11 @@ export class VisionInterpreter {
         return 'No block is currently resolved at the center view.';
     }
 
-    async analyzeImage(filename) {
+    async analyzeImage(filename, { target = null, capturedAt = Date.now() } = {}) {
         const imageBuffer = await fs.readFile(`${this.fp}/${filename}.jpg`);
         const messages = this.agent.history.getHistory();
-        const result = await this.agent.prompter.promptVision(messages, imageBuffer);
+        const grounding = buildVisionGrounding(this.agent, target, capturedAt);
+        const result = await this.agent.prompter.promptVision(messages, imageBuffer, { grounding });
         if (!String(result || '').trim()) {
             throw new Error('Vision model returned no analysis.');
         }

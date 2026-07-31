@@ -75,6 +75,15 @@ function acceptContext(target, candidate) {
   target.actions = candidate.actions;
 }
 
+function learnedPreference(context, learningKey) {
+  if (!learningKey || typeof context.experience !== 'function') return 0;
+  try {
+    return Math.max(-12, Math.min(12, Number(context.experience(learningKey)) || 0));
+  } catch {
+    return 0;
+  }
+}
+
 function isLog(name) {
   return /_(?:log|stem)$/.test(name);
 }
@@ -111,6 +120,8 @@ function addAction(context, action) {
     expectedIncrease: Math.max(1, Math.floor(Number(action.expectedIncrease) || 1)),
     reason: String(action.reason || '').slice(0, 280),
     trail: Object.freeze((action.trail || []).slice(0, 24)),
+    learningKey: String(action.learningKey || '').slice(0, 160) || null,
+    learnedPreference: learnedPreference(context, action.learningKey),
   }));
   return null;
 }
@@ -194,15 +205,27 @@ function sourceBlocks(bot, target) {
   return sources;
 }
 
-function sourceScore(block) {
+function sourceLearningKey(blockName, target) {
+  return `collect:${canonicalName(blockName)}->${canonicalName(target)}`;
+}
+
+function sourceScore(context, block, target) {
   let score = 0;
   if (block.name === 'stone' || block.name === 'dirt' || block.name === 'sand') score += 20;
   if (!block.name.startsWith('deepslate_')) score += 5;
   if (block.name.endsWith('_ore')) score += 12;
-  return score;
+  return score + learnedPreference(context, sourceLearningKey(block.name, target));
 }
 
-function recipeScore(bot, context, recipe) {
+function recipeLearningKey(bot, target, recipe) {
+  const ingredients = recipeIngredientEntries(bot, recipe)
+    .map(ingredient => `${ingredient.count}x${ingredient.name}`)
+    .sort()
+    .join('+');
+  return `craft:${canonicalName(target)}<-${ingredients}`.slice(0, 160);
+}
+
+function recipeScore(bot, context, target, recipe) {
   const ingredients = recipeIngredientEntries(bot, recipe);
   let score = 0;
   for (const ingredient of ingredients) {
@@ -211,7 +234,10 @@ function recipeScore(bot, context, recipe) {
     if (ingredient.name.endsWith('_planks')) score += 8;
     if (ingredient.name === 'oak_planks') score += 20;
   }
-  return score - ingredients.length;
+  return score - ingredients.length + learnedPreference(
+    context,
+    recipeLearningKey(bot, target, recipe),
+  );
 }
 
 function toolScore(name) {
@@ -288,6 +314,7 @@ function planFromRecipe(bot, context, target, amount, recipe, trail) {
     expectedIncrease: produced,
     reason: `${target} is produced from ${ingredients.map(ingredient => `${ingredient.count * batches} ${ingredient.name}`).join(' + ')}.`,
     trail: [...trail, target],
+    learningKey: recipeLearningKey(bot, target, recipe),
   });
   if (actionFailure) return actionFailure;
   setLedgerCount(context, target, ledgerCount(context, target) + produced);
@@ -310,6 +337,7 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
     expectedIncrease: amount,
     reason: `${input} plus furnace fuel produces ${target}.`,
     trail: [...trail, target],
+    learningKey: `smelt:${canonicalName(input)}->${canonicalName(target)}`,
   });
   if (actionFailure) return actionFailure;
   setLedgerCount(context, target, ledgerCount(context, target) + amount);
@@ -318,7 +346,10 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
 
 function planFromWorldSource(bot, context, target, amount, trail) {
   const sources = sourceBlocks(bot, target)
-    .sort((left, right) => sourceScore(right) - sourceScore(left) || left.name.localeCompare(right.name));
+    .sort((left, right) => (
+      sourceScore(context, right, target) - sourceScore(context, left, target)
+      || left.name.localeCompare(right.name)
+    ));
   if (sources.length === 0) {
     return blocked(
       'unsupported_acquisition_leaf',
@@ -354,6 +385,7 @@ function planFromWorldSource(bot, context, target, amount, trail) {
       expectedIncrease: amount,
       reason: `${source.name} is a connected-registry block source whose drop produces ${target}.`,
       trail: [...trail, target, source.name],
+      learningKey: sourceLearningKey(source.name, target),
     });
     if (actionFailure) {
       failures.push(actionFailure);
@@ -407,7 +439,9 @@ function produceItem(bot, context, target, amount, trail) {
   const recipes = Number.isInteger(itemId)
     ? (bot.registry?.recipes?.[itemId] || [])
       .slice()
-      .sort((left, right) => recipeScore(bot, context, right) - recipeScore(bot, context, left))
+      .sort((left, right) => (
+        recipeScore(bot, context, target, right) - recipeScore(bot, context, target, left)
+      ))
     : [];
   const recipeFailures = [];
   for (const recipe of recipes.slice(0, 32)) {
@@ -449,6 +483,8 @@ function publicAction(action) {
     expectedIncrease: action.expectedIncrease,
     reason: action.reason,
     trail: [...action.trail],
+    learningKey: action.learningKey,
+    learnedPreference: action.learnedPreference,
   };
 }
 
@@ -459,6 +495,7 @@ export function buildPrerequisitePlan(bot, {
   maxDepth = DEFAULT_MAX_DEPTH,
   maxNodes = DEFAULT_MAX_NODES,
   maxActions = DEFAULT_MAX_ACTIONS,
+  experience = null,
 } = {}) {
   const canonicalTarget = canonicalName(target);
   const desired = boundedInteger(quantity, 1, 1, 100_000);
@@ -499,6 +536,7 @@ export function buildPrerequisitePlan(bot, {
     maxDepth: boundedInteger(maxDepth, DEFAULT_MAX_DEPTH, 4, 64),
     maxNodes: boundedInteger(maxNodes, DEFAULT_MAX_NODES, 32, 2_048),
     maxActions: boundedInteger(maxActions, DEFAULT_MAX_ACTIONS, 4, 128),
+    experience: typeof experience === 'function' ? experience : null,
   };
   const failure = ensureItem(bot, context, canonicalTarget, desired, []);
   if (failure) {

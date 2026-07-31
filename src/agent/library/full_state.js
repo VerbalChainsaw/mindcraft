@@ -3,7 +3,8 @@ import {
     getBiomeName,
     getNearestBlocksWhere,
     getBlockAtPosition,
-    getFirstBlockAboveHead
+    getFirstBlockAboveHead,
+    hasLineOfSightToEntity,
 } from "./world.js";
 import convoManager from '../conversation.js';
 import * as mc from '../../utils/mcdata.js';
@@ -63,6 +64,68 @@ function relativeDirection(bot, targetPosition) {
     if (Math.abs(right) > 0.75) parts.push(right > 0 ? 'right' : 'left');
     if (Math.abs(vertical) > 1.5) parts.push(vertical > 0 ? 'above' : 'below');
     return parts.join('-') || 'here';
+}
+
+function viewAlignment(bot, targetPosition) {
+    const origin = bot.entity?.position;
+    if (!origin || !targetPosition) return 0;
+    const eyeY = origin.y + (Number(bot.entity.height) || 1.62);
+    const dx = targetPosition.x - origin.x;
+    const dy = targetPosition.y - eyeY;
+    const dz = targetPosition.z - origin.z;
+    const length = Math.hypot(dx, dy, dz);
+    if (length < 0.001) return 1;
+    const yaw = Number(bot.entity.yaw) || 0;
+    const pitch = Number(bot.entity.pitch) || 0;
+    const forward = {
+        x: -Math.sin(yaw) * Math.cos(pitch),
+        y: -Math.sin(pitch),
+        z: Math.cos(yaw) * Math.cos(pitch),
+    };
+    return round(((dx * forward.x) + (dy * forward.y) + (dz * forward.z)) / length, 3);
+}
+
+export function classifyEntityMotion(bot, entity) {
+    const origin = bot.entity?.position;
+    const position = entity?.position;
+    if (!origin || !position) return { state: 'unknown', closingSpeed: 0 };
+    const dx = position.x - origin.x;
+    const dy = position.y - origin.y;
+    const dz = position.z - origin.z;
+    const distance = Math.hypot(dx, dy, dz);
+    if (distance < 0.001) return { state: 'stationary', closingSpeed: 0 };
+    const entityVelocity = entity.velocity || {};
+    const botVelocity = bot.entity?.velocity || {};
+    const relative = {
+        x: (Number(entityVelocity.x) || 0) - (Number(botVelocity.x) || 0),
+        y: (Number(entityVelocity.y) || 0) - (Number(botVelocity.y) || 0),
+        z: (Number(entityVelocity.z) || 0) - (Number(botVelocity.z) || 0),
+    };
+    const radialVelocity = ((relative.x * dx) + (relative.y * dy) + (relative.z * dz)) / distance;
+    const closingSpeed = round(-radialVelocity, 3);
+    return {
+        state: closingSpeed > 0.04 ? 'approaching' : closingSpeed < -0.04 ? 'retreating' : 'stationary',
+        closingSpeed,
+    };
+}
+
+export function scoreEntityThreat({
+    name = '',
+    distance = Infinity,
+    hostile = false,
+    disposition = '',
+    visible = null,
+    motion = 'unknown',
+} = {}) {
+    if (!hostile) return 0;
+    let score = Math.max(0, 24 - Math.max(0, Number(distance) || 0));
+    if (visible === true) score += 6;
+    if (motion === 'approaching') score += 7;
+    if (/creeper/.test(name)) score += 18;
+    else if (/(?:skeleton|pillager|blaze|ghast|witch)/.test(name)) score += 11;
+    else if (/(?:warden|ravager|hoglin|vindicator)/.test(name)) score += 15;
+    if (/(?:avoid|critical|hostile)/.test(String(disposition))) score += 4;
+    return Math.max(0, Math.round(score));
 }
 
 function describeGoal(goal) {
@@ -139,38 +202,85 @@ function captureNearbyEntities(bot, maxDistance = 64) {
     return entities;
 }
 
-function buildPerception(bot, nearbyEntities) {
+function buildEntityPerception(bot, nearbyEntities) {
     const entities = nearbyEntities
         .filter(({ entity, distance }) => entity !== bot.entity && distance <= 24)
         .slice(0, 16)
         .map(({ entity, distance }) => {
             const roundedDistance = round(distance);
+            const alignment = viewAlignment(bot, entity.position);
+            const inView = alignment >= 0.55;
+            let visible = null;
+            try {
+                visible = hasLineOfSightToEntity(bot, entity);
+            } catch {
+                // A missing raycast is unknown, not proof that the entity is hidden.
+            }
+            const motion = classifyEntityMotion(bot, entity);
+            const position = {
+                x: round(entity.position.x),
+                y: round(entity.position.y),
+                z: round(entity.position.z),
+            };
             if (entity.name === 'item') {
                 return {
                     kind: 'dropped_item',
                     ...recognizeDroppedItem(entity),
+                    entityId: Number.isFinite(entity.id) ? entity.id : null,
                     distance: roundedDistance,
                     direction: relativeDirection(bot, entity.position),
+                    position,
+                    visible,
+                    inView,
+                    viewAlignment: alignment,
+                    motion: motion.state,
+                    closingSpeed: motion.closingSpeed,
                 };
             }
             const rideable = rideableEntityKnowledge(entity.name);
+            const hostile = mc.isHostile(entity);
+            const threatDisposition = mc.getThreatDisposition(entity);
+            const threatScore = scoreEntityThreat({
+                name: entity.name,
+                distance,
+                hostile,
+                disposition: threatDisposition,
+                visible,
+                motion: motion.state,
+            });
             return {
                 kind: entity.type === 'player' ? 'player' : 'entity',
                 name: entity.username || entity.name || 'unknown',
+                entityId: Number.isFinite(entity.id) ? entity.id : null,
                 distance: roundedDistance,
                 direction: relativeDirection(bot, entity.position),
-                position: {
-                    x: round(entity.position.x),
-                    y: round(entity.position.y),
-                    z: round(entity.position.z),
-                },
-                hostile: mc.isHostile(entity),
-                threatDisposition: mc.getThreatDisposition(entity),
+                position,
+                visible,
+                inView,
+                viewAlignment: alignment,
+                motion: motion.state,
+                closingSpeed: motion.closingSpeed,
+                hostile,
+                threatDisposition,
+                threatScore,
+                threatPriority: threatScore >= 36 ? 'critical' : threatScore >= 24 ? 'high' : threatScore > 0 ? 'moderate' : 'none',
                 huntable: mc.isHuntable(entity),
                 rideable,
             };
         });
 
+    const hostiles = entities
+        .filter(entity => entity.hostile)
+        .sort((left, right) => right.threatScore - left.threatScore || left.distance - right.distance);
+    return {
+        entities,
+        droppedItems: entities.filter(entity => entity.kind === 'dropped_item'),
+        hostiles,
+        primaryThreat: hostiles[0] || null,
+    };
+}
+
+function buildBlockPerception(bot) {
     const hazards = getNearestBlocksWhere(
         bot,
         block => HAZARD_BLOCKS.has(block?.name),
@@ -180,6 +290,7 @@ function buildPerception(bot, nearbyEntities) {
         name: block.name,
         distance: round(block.position.distanceTo(bot.entity.position)),
         direction: relativeDirection(bot, block.position),
+        inView: viewAlignment(bot, block.position) >= 0.55,
         position: {
             x: block.position.x,
             y: block.position.y,
@@ -196,22 +307,56 @@ function buildPerception(bot, nearbyEntities) {
         name: block.name,
         distance: round(block.position.distanceTo(bot.entity.position)),
         direction: relativeDirection(bot, block.position),
+        inView: viewAlignment(bot, block.position) >= 0.55,
+        position: {
+            x: block.position.x,
+            y: block.position.y,
+            z: block.position.z,
+        },
     }));
 
     return {
-        entities,
-        droppedItems: entities.filter(entity => entity.kind === 'dropped_item'),
-        hostiles: entities.filter(entity => entity.hostile),
         hazards,
         usefulBlocks,
     };
 }
 
-function emptyPerception() {
+function mergePerception(entityPerception, blockPerception) {
+    const entities = entityPerception.entities || [];
+    const hostiles = entityPerception.hostiles || [];
+    const droppedItems = entityPerception.droppedItems || [];
+    const hazards = blockPerception.hazards || [];
+    const usefulBlocks = blockPerception.usefulBlocks || [];
+    return {
+        entities,
+        droppedItems,
+        hostiles,
+        hazards,
+        usefulBlocks,
+        primaryThreat: entityPerception.primaryThreat || null,
+        summary: {
+            detectedEntities: entities.length,
+            visibleEntities: entities.filter(entity => entity.visible === true && entity.inView).length,
+            hostiles: hostiles.length,
+            approachingHostiles: hostiles.filter(entity => entity.motion === 'approaching').length,
+            droppedItems: droppedItems.length,
+            hazards: hazards.length,
+            usefulBlocks: usefulBlocks.length,
+        },
+    };
+}
+
+function emptyEntityPerception() {
     return {
         entities: [],
         droppedItems: [],
         hostiles: [],
+        primaryThreat: null,
+    };
+}
+
+function emptyBlockPerception() {
+    return {
         hazards: [],
         usefulBlocks: [],
     };
@@ -351,14 +496,34 @@ export function getGoalDirectorState(agent) {
                 quantity: Math.max(0, Number(plan.quantity) || 0),
                 blocker: plan.blocker ? String(plan.blocker).slice(0, 80) : null,
                 exploredNodes: Math.max(0, Number(plan.exploredNodes) || 0),
+                revision: Math.max(0, Number(plan.revision) || 0),
+                remainingActions: Math.max(0, Number(plan.remainingActions) || 0),
+                experienceApplied: plan.experienceApplied === true,
                 nextStep: plan.nextStep && typeof plan.nextStep === 'object'
                     ? {
                         kind: String(plan.nextStep.kind || '').slice(0, 32),
                         target: String(plan.nextStep.target || '').slice(0, 80),
                         command: String(plan.nextStep.command || '').slice(0, 240),
                         reason: String(plan.nextStep.reason || '').slice(0, 280),
+                        learningKey: plan.nextStep.learningKey
+                            ? String(plan.nextStep.learningKey).slice(0, 160)
+                            : null,
+                        learnedPreference: Number(plan.nextStep.learnedPreference) || 0,
                     }
                     : null,
+                actions: Array.isArray(plan.actions)
+                    ? plan.actions.slice(0, 8).map(action => ({
+                        kind: String(action.kind || '').slice(0, 32),
+                        target: String(action.target || '').slice(0, 80),
+                        command: String(action.command || '').slice(0, 240),
+                        expectedIncrease: Math.max(0, Number(action.expectedIncrease) || 0),
+                        reason: String(action.reason || '').slice(0, 280),
+                        learningKey: action.learningKey
+                            ? String(action.learningKey).slice(0, 160)
+                            : null,
+                        learnedPreference: Number(action.learnedPreference) || 0,
+                    }))
+                    : [],
             }
             : null,
         goal: goal && typeof goal === 'object' && !Array.isArray(goal)
@@ -381,6 +546,16 @@ export function getGoalDirectorState(agent) {
                 },
                 procedureId: goal.procedureId ? String(goal.procedureId).slice(0, 96) : null,
                 subgoals: Array.isArray(goal.subgoals) ? goal.subgoals.length : 0,
+                activeSubgoal: Array.isArray(goal.subgoals) && goal.subgoals.length > 0
+                    ? {
+                        kind: String(goal.subgoals.at(-1)?.kind || '').slice(0, 32),
+                        state: String(goal.subgoals.at(-1)?.state || '').slice(0, 24),
+                        commandName: String(goal.subgoals.at(-1)?.commandName || '').slice(0, 80),
+                        targetName: String(goal.subgoals.at(-1)?.targetName || '').slice(0, 80),
+                        expectedIncrease: Math.max(0, Number(goal.subgoals.at(-1)?.expectedIncrease) || 0),
+                        code: String(goal.subgoals.at(-1)?.code || '').slice(0, 80),
+                    }
+                    : null,
             }
             : null,
     };
@@ -463,20 +638,39 @@ function withPerceptionMeta(snapshot, status, sampledAt, now) {
 // Deep scans are intentionally decoupled from the fast state heartbeat. A
 // shallow heartbeat reuses the last known scan and reports exactly how old it
 // is; it never pretends that "not sampled" means there are no threats/items.
+export function invalidatePerception(agent, reason = 'world_event') {
+    const cached = perceptionSnapshots.get(agent);
+    if (!cached) return false;
+    perceptionSnapshots.set(agent, {
+        ...cached,
+        nextRefreshAt: 0,
+        invalidatedBy: String(reason || 'world_event').slice(0, 64),
+    });
+    return true;
+}
+
 function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now = Date.now() } = {}) {
     const cached = perceptionSnapshots.get(agent);
+    let liveEntities;
+    try {
+        liveEntities = buildEntityPerception(bot, nearbyEntities);
+    } catch (error) {
+        console.warn(`[awareness] Entity detection failed for ${agent.name || 'bot'}: ${error?.message || error}`);
+        liveEntities = emptyEntityPerception();
+    }
     const refreshDue = deep || !cached || now >= (cached.nextRefreshAt || 0);
     if (refreshDue) {
         try {
-            const snapshot = buildPerception(bot, nearbyEntities);
+            const snapshot = buildBlockPerception(bot);
             perceptionSnapshots.set(agent, {
                 sampledAt: now,
                 snapshot,
                 nextRefreshAt: now + PERCEPTION_CACHE_REFRESH_MS,
                 lastRefreshFailed: false,
                 unavailable: false,
+                invalidatedBy: null,
             });
-            return withPerceptionMeta(snapshot, 'fresh', now, now);
+            return withPerceptionMeta(mergePerception(liveEntities, snapshot), 'fresh', now, now);
         } catch (error) {
             console.warn(`[awareness] Perception scan failed for ${agent.name || 'bot'}: ${error?.message || error}`);
             if (cached && !cached.unavailable) {
@@ -485,24 +679,34 @@ function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now =
                     nextRefreshAt: now + PERCEPTION_RETRY_MS,
                     lastRefreshFailed: true,
                 });
-                return withPerceptionMeta(cached.snapshot, 'stale', cached.sampledAt, now);
+                return withPerceptionMeta(
+                    mergePerception(liveEntities, cached.snapshot),
+                    'stale',
+                    cached.sampledAt,
+                    now,
+                );
             }
             perceptionSnapshots.set(agent, {
                 sampledAt: null,
-                snapshot: emptyPerception(),
+                snapshot: emptyBlockPerception(),
                 nextRefreshAt: now + PERCEPTION_RETRY_MS,
                 lastRefreshFailed: true,
                 unavailable: true,
             });
-            return withPerceptionMeta(emptyPerception(), 'unavailable', null, now);
+            return withPerceptionMeta(
+                mergePerception(liveEntities, emptyBlockPerception()),
+                'unavailable',
+                null,
+                now,
+            );
         }
     }
 
-    if (!cached) return withPerceptionMeta(emptyPerception(), 'unsampled', null, now);
-    if (cached.unavailable) return withPerceptionMeta(emptyPerception(), 'unavailable', null, now);
+    if (!cached) return withPerceptionMeta(mergePerception(liveEntities, emptyBlockPerception()), 'unsampled', null, now);
+    if (cached.unavailable) return withPerceptionMeta(mergePerception(liveEntities, emptyBlockPerception()), 'unavailable', null, now);
     const ageMs = Math.max(0, now - cached.sampledAt);
     return withPerceptionMeta(
-        cached.snapshot,
+        mergePerception(liveEntities, cached.snapshot),
         cached.lastRefreshFailed || ageMs > PERCEPTION_CACHE_MAX_AGE_MS ? 'stale' : 'cached',
         cached.sampledAt,
         now,
@@ -771,6 +975,7 @@ export function getFullState(agent, { deep = false } = {}) {
             ),
             deathRecoveryPending,
             home: agent.home_state?.telemetry?.() || null,
+            learnedOutcomes: agent.memory_bank?.personal?.getOutcomeSummary?.(6) || [],
         },
         performance: {
             prompt: agent.prompter?.performance?.conversation || null,

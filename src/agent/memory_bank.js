@@ -32,6 +32,14 @@ export class MemoryBank {
 		return this.personal.rememberFact(name, value);
 	}
 
+	rememberOutcome(method, outcome) {
+		return this.personal.rememberOutcome(method, outcome);
+	}
+
+	outcomePreference(method) {
+		return this.personal.outcomePreference(method);
+	}
+
 	recallFact(name) {
 		const normalized = String(name || '').toLowerCase();
 		return this.personal.export().facts?.[normalized]?.value || null;

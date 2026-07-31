@@ -604,6 +604,13 @@ export class JobDirector extends RoleDirector {
     if (request.kind !== 'emergency_shelter') return this.submit(request);
     const position = this.agent.bot?.entity?.position;
     if (!position) return { accepted: false, code: 'spawn_state_unavailable' };
+    if (this.agent.goal_director?.activeGoal) {
+      return {
+        accepted: false,
+        code: 'player_goal_active',
+        id: this.agent.goal_director.activeGoal.id,
+      };
+    }
     if (this.activeOrder && !TERMINAL_PHASES.has(this.activeOrder.phase)) {
       if (this.activeOrder.source !== 'role') {
         return { accepted: false, code: 'explicit_job_active', id: this.activeOrder.id };
@@ -712,6 +719,14 @@ export class JobDirector extends RoleDirector {
     }
     if (this.agent.isOperatorHeld?.()) {
       this.setStatus('suppressed', 'operator_hold', null, this.agent.operator_hold_reason || 'Operator Stop is active.', false);
+      return;
+    }
+    if (
+      this.agent.goal_director?.activeGoal
+      && this.activeOrder
+      && ['role', 'survival'].includes(this.activeOrder.source)
+    ) {
+      this.cancel('Automatic work yielded to the active typed player goal.');
       return;
     }
     if (

@@ -1,6 +1,7 @@
 import convoManager from '../conversation.js';
 import * as mc from '../../utils/mcdata.js';
 import { hasLineOfSightToEntity } from '../library/world.js';
+import { invalidatePerception } from '../library/full_state.js';
 
 const SAMPLE_INTERVAL_MS = 750;
 const APPROACH_DISTANCE = 10;
@@ -241,6 +242,7 @@ export class EnvironmentObserver {
   }
 
   observeBlockUpdate(oldBlock, newBlock) {
+    if (oldBlock?.name !== newBlock?.name) invalidatePerception(this.agent, 'block_update');
     const block = newBlock || oldBlock;
     const origin = this.agent.bot?.entity?.position;
     if (!origin || !block?.position || oldBlock?.name === newBlock?.name) return;

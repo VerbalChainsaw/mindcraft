@@ -192,6 +192,8 @@ export class GoalDirector {
     this.activeGoal = null;
     this.lastGoal = null;
     this.lastPlan = null;
+    this.planRevision = 0;
+    this.lastPlanSignature = '';
     this.inFlight = false;
     this.nextAttemptAt = 0;
     this.status = {
@@ -273,6 +275,8 @@ export class GoalDirector {
       this.activeGoal = goal;
       this.lastGoal = null;
       this.lastPlan = null;
+      this.planRevision = 0;
+      this.lastPlanSignature = '';
       this.nextAttemptAt = 0;
       this.store.save(goal, null);
       this.setStatus('assess', 'goal_accepted', `Accepted typed goal: ${goalContractDescription(goal)}.`, true);
@@ -459,6 +463,7 @@ export class GoalDirector {
       expectedIncrease: step?.expectedIncrease || 0,
       targetInventoryBefore: targetInventory,
       targetInventoryAfter: targetInventory,
+      learningKey: step?.learningKey || null,
       reason: step?.reason || '',
       inventoryBefore: this.currentInventory(),
       inventoryAfter: this.currentInventory(),
@@ -480,6 +485,8 @@ export class GoalDirector {
     const targetInventoryAfter = current.targetName
       ? plannedInventoryCount(this.agent.bot, current.targetName, current.targetFamily)
       : current.targetInventoryAfter;
+    const finishedAt = this.now();
+    const yieldCount = Math.max(0, targetInventoryAfter - current.targetInventoryBefore);
     subgoals[index] = {
       ...current,
       state: result.phase === 'succeeded' ? 'succeeded' : 'failed',
@@ -488,9 +495,9 @@ export class GoalDirector {
       detail: result.detail || '',
       targetInventoryAfter,
       inventoryAfter: this.currentInventory(),
-      finishedAt: this.now(),
+      finishedAt,
     };
-    return this.persist({
+    const persisted = this.persist({
       ...this.activeGoal,
       subgoals,
       evidence: {
@@ -501,8 +508,25 @@ export class GoalDirector {
         verified: result.phase === 'succeeded',
         at: this.now(),
       },
-      updatedAt: this.now(),
+      updatedAt: finishedAt,
     });
+    if (current.learningKey) {
+      try {
+        this.agent.memory_bank?.rememberOutcome?.(current.learningKey, {
+          success: result.phase === 'succeeded',
+          durationMs: Number(result.durationMs) || (
+            Number.isFinite(current.startedAt)
+              ? Math.max(0, finishedAt - current.startedAt)
+              : 0
+          ),
+          yieldCount,
+          code: result.code || 'unknown',
+        });
+      } catch (error) {
+        console.warn(`[goal-learning] Could not remember ${current.learningKey}: ${boundedText(error?.message || error)}`);
+      }
+    }
+    return persisted;
   }
 
   rememberFailedTarget(result) {
@@ -865,11 +889,22 @@ export class GoalDirector {
             target: goal.target.inventoryName,
             quantity: required,
             range: 64,
+            experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
           });
+          const planSignature = JSON.stringify(
+            (plan.actions || []).map(action => [action.command, action.learningKey]),
+          );
+          if (planSignature !== this.lastPlanSignature) {
+            this.planRevision += 1;
+            this.lastPlanSignature = planSignature;
+          }
           this.lastPlan = {
             ...plan,
             actions: (plan.actions || []).slice(0, 12),
             plannedAt: this.now(),
+            revision: this.planRevision,
+            remainingActions: (plan.actions || []).length,
+            experienceApplied: (plan.actions || []).some(action => action.learnedPreference !== 0),
           };
           if (plan.status === 'complete') {
             this.persist({

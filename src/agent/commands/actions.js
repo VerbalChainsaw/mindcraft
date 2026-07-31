@@ -1219,6 +1219,15 @@ export const actionsList = [
         }
     },
     {
+        name: '!inspectView',
+        description: 'Analyze the current first-person view with the configured vision model, grounded by exact protocol detections and the active causal plan.',
+        params: {},
+        perform: async function(agent) {
+            return await runVisionAction(agent, 'action:inspectView', () =>
+                agent.vision_interpreter.inspectCurrentView());
+        }
+    },
+    {
         name: '!lookAtPlayer',
         description: 'Look at a player or look in the same direction as the player.',
         params: {

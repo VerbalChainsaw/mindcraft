@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
-import { wordOverlapScore } from '../../utils/text.js';
 import { goalContractDescription } from './goal-contract.js';
 
 const STORE_VERSION = 1;
@@ -161,19 +160,16 @@ export class ProcedureStore {
 
   find(goal) {
     const targetKey = goal.target.family || goal.target.canonicalName;
-    const query = goalContractDescription(goal);
     const ranked = this.procedures
       .filter(procedure => (
         procedure.kind === goal.kind
+        && procedure.targetKey === targetKey
         && procedure.destinationKind === goal.destination.kind
       ))
       .map(procedure => ({
         procedure,
-        score: (procedure.targetKey === targetKey ? 1000 : 0)
-          + wordOverlapScore(query, procedure.description)
-          + Math.min(50, procedure.successfulRuns),
+        score: Math.min(50, procedure.successfulRuns),
       }))
-      .filter(entry => entry.score > 0)
       .sort((left, right) => (
         right.score - left.score
         || right.procedure.lastVerifiedAt - left.procedure.lastVerifiedAt
