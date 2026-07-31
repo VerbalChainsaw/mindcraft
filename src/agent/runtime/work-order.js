@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { isPreemption } from './action-result.js';
+
 const ROLES = new Set(['builder', 'miner', 'lumberjack']);
 const KINDS = new Set(['stockpile', 'build', 'emergency_shelter', 'mine', 'harvest']);
 const SOURCES = new Set(['player', 'role', 'survival', 'restart']);
@@ -19,23 +21,16 @@ const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_REQUESTER = /^[A-Za-z0-9_ -]{0,32}$/;
 const MAX_BLUEPRINT_CELLS = 4096;
-// A higher-priority lane taking ActionManager is not the work order failing.
-// The bot was mid-swing when a creeper arrived: nothing about the order became
-// wrong, and the same step is still the right next step. Folding a preemption
-// in as a retryable failure burned an attempt, so three interruptions killed a
-// job permanently, and it routed the order through `recover` -- which for the
-// miner and lumberjack means `!moveAway(32)`, walking the bot away from the
-// very trees or ore it was working.
-const PREEMPTION_CODE = /^(?:action_)?interrupted$/;
-// Preemption still needs a ceiling. A bot pinned by something it cannot escape
-// would otherwise re-derive the same step forever with no failure to report.
+// A preemption is not the work order failing. The bot was mid-swing when a
+// creeper arrived: nothing about the order became wrong, and the same step is
+// still the right next step. Folding one in as a retryable failure burned an
+// attempt, so three interruptions killed a job permanently, and it routed the
+// order through `recover` -- which for the miner and lumberjack means
+// `!moveAway(32)`, walking the bot away from the very trees or ore it was
+// working. Preemption still needs a ceiling: a bot pinned by something it
+// cannot escape would otherwise re-derive the same step forever with no
+// failure to report.
 const MAX_PREEMPTIONS = 24;
-
-/** True when a result means "something outranked us", not "this did not work". */
-export function isPreemption(result) {
-  return result?.phase === 'interrupted'
-    || PREEMPTION_CODE.test(String(result?.code || ''));
-}
 
 function finiteInteger(value, fallback, minimum, maximum) {
   const number = Number.isFinite(value) ? Math.floor(value) : fallback;

@@ -74,6 +74,16 @@ export function actionResultFromError(error, context = {}) {
   });
 }
 
+// A higher-priority lane taking ActionManager is not the work failing. Every
+// executor that folds a result back into its own plan needs to tell those two
+// apart, so the distinction lives with the result contract rather than being
+// re-derived in each director.
+const PREEMPTION_CODE = /^(?:action_)?interrupted$/;
+
+export function isPreemption(result) {
+  return result?.phase === 'interrupted' || PREEMPTION_CODE.test(text(result?.code));
+}
+
 export function actionResultToMessage(result) {
   if (!result) return 'Action did not return a result.';
   const prefix = result.phase === 'succeeded'

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { getCommand, executeCommand as executeAgentCommand } from '../commands/index.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
+import { isPreemption } from './action-result.js';
 import {
   goalContractDescription,
   inventoryCountForGoalTarget,
@@ -683,10 +684,13 @@ export class GoalDirector {
       return;
     }
 
-    const attempts = goal.attempts + 1;
+    const preemptionRecovery = isPreemption(effectiveResult);
+    // Being outranked is not an attempt at the goal. Charging one meant a few
+    // fights on the way to the iron drained the same budget a genuinely
+    // unreachable target does, and the goal gave up on work that was fine.
+    const attempts = preemptionRecovery ? goal.attempts : goal.attempts + 1;
     const deliveryRecovery = kind === 'deliver'
       && /(?:lost_target|not_received|delivery_unverified)/.test(String(effectiveResult.code || ''));
-    const preemptionRecovery = /^(?:action_)?interrupted$/.test(String(effectiveResult.code || ''));
     if (
       (effectiveResult.retryable === true || deliveryRecovery || preemptionRecovery)
       && attempts <= goal.maxAttempts
