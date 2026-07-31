@@ -10,6 +10,11 @@ import {
     createBuilderShelterOrder,
     createBuilderStockpileOrder,
 } from '../runtime/jobs/builder-plan.js';
+import {
+    createStructureOrder,
+    describeStructureCatalog,
+    STRUCTURE_NAMES,
+} from '../runtime/jobs/structure-catalog.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
 import {
@@ -893,6 +898,39 @@ export const actionsList = [
                 return submitRememberedStructure(agent, order);
             } catch (error) {
                 return `Construction work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
+        name: '!buildStructure',
+        description: `Build one complete named building beside the bot. Use this when the player asks for a building by what it is rather than by its shape - a tower, a house, somewhere to store things, a pen for the animals. Known structures: ${describeStructureCatalog()}`,
+        params: {
+            'structure': { type: 'string', description: `Structure to build: ${STRUCTURE_NAMES.join(', ')}.` },
+            'material': { type: 'BlockName', description: 'Canonical full support block for the walls, floor, and roof. Doors, glass, fences, chests, and torches are chosen by the structure.' },
+        },
+        perform: persistentJobCommand(function (agent, structure, material) {
+            try {
+                const canonicalMaterial = String(material || '').trim().toLowerCase();
+                const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
+                const item = agent.bot?.registry?.itemsByName?.[canonicalMaterial];
+                if (!block || !item || block.boundingBox !== 'block') {
+                    return `Structure work order was not accepted: ${canonicalMaterial || 'the requested material'} is not a placeable full support block in the connected registry.`;
+                }
+                const position = agent.bot?.entity?.position;
+                if (!position) return 'Structure work order was not accepted: Minecraft spawn state is unavailable.';
+                const order = createStructureOrder({
+                    name: structure,
+                    // Offset so the bot is never standing inside its own worksite,
+                    // which the blueprint audit reports as an occupied cell.
+                    x: Math.floor(position.x) + 2,
+                    y: Math.floor(position.y),
+                    z: Math.floor(position.z) + 2,
+                    material: canonicalMaterial,
+                    requester: 'player',
+                });
+                return submitRememberedStructure(agent, order);
+            } catch (error) {
+                return `Structure work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
             }
         }),
     },
