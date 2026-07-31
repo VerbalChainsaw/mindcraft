@@ -227,6 +227,27 @@ export const actionsList = [
         }
     },
     {
+        name: '!leaveGame',
+        description: 'Disconnect this bot from Minecraft and shut its process down. Use this when the player says to leave, log off, go away, get out, or that they are done with this bot. The bot stays gone until it is started again from the dashboard.',
+        params: {
+            'reason': { type: 'string', description: 'Short reason to say before leaving.' },
+        },
+        perform: function (agent, reason) {
+            const note = String(reason || 'the player asked me to leave')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 120);
+            // teardownAndExit stops the runtime and ends the process, so nothing
+            // can be said after it. Give the goodbye time to reach chat first.
+            // Exit code 0 means the supervisor treats this as intended and does
+            // not bring the bot back.
+            setTimeout(() => {
+                void agent.teardownAndExit(`Left the game: ${note}`, 0);
+            }, 1_500);
+            return `Leaving the game: ${note}. Start me again from the dashboard when you want me back.`;
+        },
+    },
+    {
         name: '!restart',
         description: 'Restart the agent process.',
         perform: async function (agent) {
