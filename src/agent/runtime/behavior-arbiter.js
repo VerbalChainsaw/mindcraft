@@ -7,6 +7,11 @@ const NEUTRAL_COMPORTMENT = normalizeComportment();
 const EMERGENCY_MODES = Object.freeze(['self_preservation']);
 const PROTECTION_MODES = Object.freeze(['self_defense', 'cowardice']);
 const RECOVERY_MODES = Object.freeze(['unstuck']);
+// These three shipped enabled but belonged to no band, so nothing ever
+// evaluated them: the bot never picked up a drop it walked past, never lit a
+// dark room, and never hunted. They are the difference between a bot that
+// executes orders and a player who notices things.
+const OPPORTUNITY_MODES = Object.freeze(['item_collecting', 'torch_placing', 'hunting']);
 const IDLE_EMBODIMENT_MODES = Object.freeze(['elbow_room', 'idle_staring']);
 const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
 // Automatic role work also owns a live order. Without this set the role lane
@@ -29,6 +34,7 @@ const LANE_TICK_MS = Object.freeze({
   player_job: 240,
   role_work: 280,
   self_progression: 320,
+  opportunity: 350,
   factual_reaction: 300,
   active_action: 240,
   idle_embodiment: 400,
@@ -490,6 +496,11 @@ export class BehaviorArbiter {
           return this.select('self_progression', progression.status?.code || 'progression_selected', 'Self-directed survival progression selected the tick.', true, perception);
         }
       }
+
+      // Noticing things outranks standing around, and sits below every form of
+      // assigned work so it can never steal a job.
+      selected = await this.evaluateModeBand('opportunity', OPPORTUNITY_MODES, perception);
+      if (selected) return selected;
 
       if (this.comportment().idleEmbodiment) {
         selected = await this.evaluateModeBand('idle_embodiment', IDLE_EMBODIMENT_MODES, perception);
