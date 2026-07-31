@@ -11,6 +11,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createModel, resolveConfiguredModel } from './_model_map.js';
+import { createRoutedModel } from './fallback-router.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,24 +101,48 @@ export class Prompter {
         if (this.profile.max_tokens)
             max_tokens = this.profile.max_tokens;
 
-        let chat_model_profile = resolveConfiguredModel(this.profile, 'model');
-        this.chat_model = createModel(chat_model_profile);
+        // A model key may name one provider or several in preference order.
+        // Several becomes a router, so a local model can cover for a hosted one
+        // that is rate-limited, unpaid, or simply not running.
+        const resolveEntry = (key, entry) => resolveConfiguredModel({ ...this.profile, [key]: entry }, key);
+        const buildModel = (key) => {
+            const configured = this.profile[key];
+            const entries = Array.isArray(configured) ? configured : [configured];
+            return createRoutedModel(entries, (entry) => createModel(resolveEntry(key, entry)));
+        };
+
+        // The embedding fallback below inherits transport settings from the
+        // preferred chat provider, so resolve that one entry on its own.
+        const chat_model_profile = resolveEntry(
+            'model',
+            Array.isArray(this.profile.model) ? this.profile.model[0] : this.profile.model,
+        );
+
+        this.chat_model = buildModel('model');
 
         if (this.profile.code_model) {
-            let code_model_profile = resolveConfiguredModel(this.profile, 'code_model');
-            this.code_model = createModel(code_model_profile);
+            this.code_model = buildModel('code_model');
         }
         else {
             this.code_model = this.chat_model;
         }
 
         if (this.profile.vision_model) {
-            let vision_model_profile = resolveConfiguredModel(this.profile, 'vision_model');
-            this.vision_model = createModel(vision_model_profile);
+            this.vision_model = buildModel('vision_model');
         }
         else {
             this.vision_model = this.chat_model;
         }
+
+        // These jobs have genuinely different needs. Deciding whether to reply
+        // at all is a yes/no classification a tiny local model handles fine;
+        // compressing memory is summarization; choosing the next goal is the
+        // reasoning that actually benefits from an expensive model. Each falls
+        // back to `model`, so a profile that names none behaves exactly as it
+        // did before.
+        this.reasoning_model = this.profile.reasoning_model ? buildModel('reasoning_model') : this.chat_model;
+        this.memory_model = this.profile.memory_model ? buildModel('memory_model') : this.chat_model;
+        this.triage_model = this.profile.triage_model ? buildModel('triage_model') : this.chat_model;
 
         
         let embedding_model_profile = null;
@@ -465,7 +490,7 @@ export class Prompter {
         const maxTurns = this.agent.runtime?.limits?.maxPromptTurns ?? 3;
         for (let i = 0; i < maxTurns; i++) {
             await this.checkCooldown();
-            let generation = await this.chat_model.sendRequest([], prompt + actionCorrection);
+            let generation = await (this.reasoning_model || this.chat_model).sendRequest([], prompt + actionCorrection);
             if (typeof generation !== 'string') {
                 console.error('Error: Autonomy generation is not a string', generation);
                 return '';
@@ -489,7 +514,7 @@ export class Prompter {
         await this.checkCooldown();
         let prompt = this.profile.saving_memory;
         prompt = await this.replaceStrings(prompt, null, null, to_summarize);
-        let resp = await this.chat_model.sendRequest([], prompt);
+        let resp = await (this.memory_model || this.chat_model).sendRequest([], prompt);
         await this._saveLog(prompt, to_summarize, resp, 'memSaving');
         if (resp?.includes('</think>')) {
             const [_, afterThink] = resp.split('</think>');
@@ -504,7 +529,7 @@ export class Prompter {
         let messages = this.agent.history.getHistory();
         messages.push({role: 'user', content: new_message});
         prompt = await this.replaceStrings(prompt, null, null, messages);
-        let res = await this.chat_model.sendRequest([], prompt);
+        let res = await (this.triage_model || this.chat_model).sendRequest([], prompt);
         return res.trim().toLowerCase() === 'respond';
     }
 
@@ -555,7 +580,7 @@ export class Prompter {
         user_message = await this.replaceStrings(user_message, messages, null, null, last_goals);
         let user_messages = [{role: 'user', content: user_message}];
 
-        let res = await this.chat_model.sendRequest(user_messages, system_message);
+        let res = await (this.reasoning_model || this.chat_model).sendRequest(user_messages, system_message);
 
         let goal = null;
         try {
