@@ -11,6 +11,7 @@ import {
     createBuilderStockpileOrder,
 } from '../runtime/jobs/builder-plan.js';
 import { resolvePlayerTarget } from '../player-target.js';
+import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
 import {
     createItemGoalContract,
     inventoryCountForGoalTarget,
@@ -51,6 +52,36 @@ function setCompanionDirective(agent, directive, playerName) {
     agent.companion_context?.setDirective?.(directive, playerName);
     if (directive !== 'guard' && agent.runtime?.reflexes?.combat === 'off') {
         agent.bot?.modes?.setOn?.('self_defense', false);
+    }
+}
+
+/**
+ * Runtime configuration is a frozen normalized object, so a live change has to
+ * go back through the same normalizer the profile did. That keeps one source of
+ * truth for validation and means an invalid value is rejected here rather than
+ * corrupting the running bot. The profile on disk is left alone: this changes
+ * the session, not the saved character.
+ */
+function applyRuntimeChange(agent, patch) {
+    const previous = agent.runtime;
+    if (!previous) return { ok: false, detail: 'runtime configuration is unavailable.' };
+    try {
+        const source = runtimeBehaviorToProfile(previous);
+        const merged = { ...source, ...patch };
+        const runtime = normalizeRuntimeBehavior({ ...settings.profile, runtime: merged }, settings);
+        // enumValue silently falls back on an unknown value, so confirm the
+        // change actually took rather than reporting a success that did not.
+        for (const [key, requested] of Object.entries(patch)) {
+            const applied = key === 'comportment' ? runtime.comportment?.preset : runtime[key];
+            const wanted = String(requested || '').trim().toLowerCase();
+            if (wanted && String(applied || '').toLowerCase() !== wanted) {
+                return { ok: false, detail: `'${requested}' is not a supported ${key} value.` };
+            }
+        }
+        agent.runtime = runtime;
+        return { ok: true, runtime };
+    } catch (error) {
+        return { ok: false, detail: String(error?.message || error).slice(0, 180) };
     }
 }
 
@@ -1120,6 +1151,62 @@ export const actionsList = [
                 return `That step was not queued: ${result.detail || result.code}.`;
             }
             return `Queued step ${result.position}: ${result.description}.`;
+        }
+    },
+    {
+        name: '!setAutonomy',
+        description: 'Change how much this bot decides for itself: command (only does what it is told), balanced (works near its leader), or autonomous (pursues its own progression and role work).',
+        params: {
+            'mode': { type: 'string', description: 'command, balanced, or autonomous.' },
+        },
+        perform: function (agent, mode) {
+            const result = applyRuntimeChange(agent, { autonomy: mode });
+            return result.ok
+                ? `Autonomy is now ${result.runtime.autonomy}.`
+                : `Autonomy was not changed: ${result.detail}`;
+        }
+    },
+    {
+        name: '!setComportment',
+        description: 'Change how this bot carries itself: neutral, npc_precise, npc_steady, human_focused, or human_casual. Affects pacing, hesitation, idle behavior, and persistence, never what it is allowed to do.',
+        params: {
+            'preset': { type: 'string', description: 'neutral, npc_precise, npc_steady, human_focused, or human_casual.' },
+        },
+        perform: function (agent, preset) {
+            const result = applyRuntimeChange(agent, { comportment: preset });
+            return result.ok
+                ? `Comportment is now ${result.runtime.comportment.preset} (${result.runtime.comportment.label}).`
+                : `Comportment was not changed: ${result.detail}`;
+        }
+    },
+    {
+        name: '!setTraversal',
+        description: 'Change what this bot may do to the world to get somewhere: preserve (breaks nothing), careful (may tunnel through natural fill only), or full (also towers and parkours). Never lets it break anything a player built.',
+        params: {
+            'policy': { type: 'string', description: 'preserve, careful, or full.' },
+        },
+        perform: function (agent, policy) {
+            const result = applyRuntimeChange(agent, { traversal: policy });
+            if (!result.ok) return `Traversal was not changed: ${result.detail}`;
+            // Route policy is read where Movements are built, which only sees the bot.
+            agent.bot.traversalPolicy = result.runtime.traversal;
+            return `Traversal is now ${result.runtime.traversal}.`;
+        }
+    },
+    {
+        name: '!showRuntime',
+        description: 'Report this bot\'s current autonomy, comportment, traversal, and role.',
+        perform: function (agent) {
+            const runtime = agent.runtime;
+            if (!runtime) return 'Runtime configuration is unavailable.';
+            return [
+                `Role: ${runtime.role}`,
+                `Autonomy: ${runtime.autonomy}`,
+                `Comportment: ${runtime.comportment?.preset || 'neutral'}`,
+                `Traversal: ${runtime.traversal}`,
+                `Jobs: ${runtime.jobs?.mode}`,
+                `Reactions: ${runtime.reactions?.mode}`,
+            ].join(' · ');
         }
     },
     {

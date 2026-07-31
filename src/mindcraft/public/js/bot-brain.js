@@ -1,4 +1,4 @@
-import { node } from './utils.js';
+import { button, node } from './utils.js';
 
 // The runtime has been publishing the bot's reasoning for a while — which lane
 // owns the tick, what it is planning, where it has been, what it is working
@@ -161,12 +161,87 @@ export function renderMemory(state) {
   return section;
 }
 
+const CONTROL_GROUPS = Object.freeze([
+  {
+    key: 'autonomy',
+    label: 'Decides for itself',
+    command: '!setAutonomy',
+    options: [
+      ['command', 'Only what I say'],
+      ['balanced', 'Works near me'],
+      ['autonomous', 'Runs its own life'],
+    ],
+  },
+  {
+    key: 'comportment',
+    label: 'Acts like',
+    command: '!setComportment',
+    options: [
+      ['neutral', 'Neutral'],
+      ['npc_precise', 'Precise worker'],
+      ['npc_steady', 'Steady worker'],
+      ['human_focused', 'Focused player'],
+      ['human_casual', 'Casual player'],
+    ],
+  },
+  {
+    key: 'traversal',
+    label: 'May reshape the world',
+    command: '!setTraversal',
+    options: [
+      ['preserve', 'Never'],
+      ['careful', 'Tunnel only'],
+      ['full', 'Tunnel, tower, parkour'],
+    ],
+  },
+]);
+
+/**
+ * These three settings decided how the bot behaved and lived only in profile
+ * JSON, so changing them meant editing a file and restarting. Each control
+ * sends the same command a player could type in chat, which keeps one path for
+ * both and means nothing here can do something chat cannot.
+ */
+export function renderControls(state, { send = null } = {}) {
+  if (typeof send !== 'function') return null;
+  const runtime = state?.identity?.runtime || state?.runtime || {};
+  const current = {
+    autonomy: runtime.autonomy || state?.action?.behaviorArbiter?.autonomy || '',
+    comportment: state?.action?.behaviorArbiter?.comportment || runtime.comportment || '',
+    traversal: runtime.traversal || '',
+  };
+
+  const section = panel('Controls', 'Takes effect immediately. The same commands work in game chat.');
+  for (const group of CONTROL_GROUPS) {
+    const row = node('div', 'bot-brain-control');
+    row.append(node('div', 'telemetry-label', group.label));
+    const choices = node('div', 'bot-brain-choices');
+    for (const [value, label] of group.options) {
+      const control = button(label, () => send(`${group.command}("${value}")`), 'ghost');
+      if (current[group.key] === value) control.classList.add('selected');
+      choices.append(control);
+    }
+    row.append(choices);
+    section.append(row);
+  }
+
+  const actions = node('div', 'panel-actions');
+  actions.append(
+    button('Stop', () => send('!stop'), 'danger'),
+    button('Stay put', () => send('!stay(-1)')),
+    button("What's your setup?", () => send('!showRuntime')),
+  );
+  section.append(actions);
+  return section;
+}
+
 /**
  * Everything above, in the order a person asks it: what are you doing, what is
  * the plan, where are you headed, what do you know.
  */
 export function renderBotBrain(state, controls = {}) {
   const sections = [
+    renderControls(state, controls),
     renderThinking(state),
     renderAgenda(state, controls),
     renderProgression(state),

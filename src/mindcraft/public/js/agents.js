@@ -1000,6 +1000,7 @@ export class AgentsWorkspace {
     // The runtime has always published why it chose what it chose; until now
     // nothing showed it.
     const brain=renderBotBrain(st,{
+      send:(command)=>this.send(agent.name,command),
       onSkip:button('Skip step',()=>this.send(agent.name,'!skipAgendaItem')),
       onClear:button('Clear plan',()=>this.send(agent.name,'!clearAgenda')),
     });

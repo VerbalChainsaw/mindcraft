@@ -722,3 +722,10 @@ button.full-width { width:100%; }
 .console-history-row:last-child { border-bottom:0; }
 .console-history-row code { font-family:ui-monospace,Consolas,monospace; font-size:12px; }
 @media (max-width:900px) { .console-layout { grid-template-columns:1fr; } .console-list { max-height:34vh; } }
+
+/* Bot controls: the three settings that decide how it behaves. */
+.bot-brain-control { display:grid; gap:5px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,.05); }
+.bot-brain-control:last-of-type { border-bottom:0; }
+.bot-brain-choices { display:flex; flex-wrap:wrap; gap:6px; }
+.bot-brain-choices button { font-size:12px; padding:5px 9px; }
+.bot-brain-choices button.selected { outline:2px solid #2196f3; color:#fff; }
