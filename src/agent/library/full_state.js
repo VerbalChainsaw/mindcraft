@@ -924,6 +924,7 @@ export function getFullState(agent, { deep = false } = {}) {
             reactionDirector,
             roleDirector,
             behaviorArbiter: agent.behavior_arbiter?.snapshot?.() || null,
+            progressionDirector: agent.progression_director?.snapshot?.() || null,
         },
         landmarks: getLandmarkState(agent),
         attention: getAttentionState(agent),

@@ -28,6 +28,7 @@ const LANE_TICK_MS = Object.freeze({
   player_goal: 240,
   player_job: 240,
   role_work: 280,
+  self_progression: 320,
   factual_reaction: 300,
   active_action: 240,
   idle_embodiment: 400,
@@ -473,6 +474,20 @@ export class BehaviorArbiter {
         }
         if (job.inFlight || this.agent.actions?.executing || job.activeOrder) {
           return this.select('role_work', job.status?.code || 'role_work_selected', 'Existing role policy selected authorized work.', true, perception);
+        }
+      }
+
+      // With no player work and no role order outstanding, an autonomous bot
+      // pursues its own survival ladder instead of standing still.
+      const progression = this.agent.progression_director;
+      if (progression?.update && progression.permitted?.()) {
+        try {
+          progression.update();
+        } catch (error) {
+          return this.select('self_progression', 'progression_update_failed', `Self-directed progression failed safely: ${boundedText(error?.message || error)}`, true, perception);
+        }
+        if (progression.inFlight || this.agent.actions?.executing) {
+          return this.select('self_progression', progression.status?.code || 'progression_selected', 'Self-directed survival progression selected the tick.', true, perception);
         }
       }
 

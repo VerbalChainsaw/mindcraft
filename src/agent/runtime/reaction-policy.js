@@ -63,47 +63,102 @@ export function renderDeterministicReaction(reaction) {
   const { event, kind } = reaction || {};
   if (!event) return '';
   const name = titleCase(event.target?.name || event.target?.type);
+  const plain = String(event.target?.name || '').replace(/_/g, ' ');
+  // Urgent lines stay exact and unvaried. When a creeper is seven blocks away
+  // the message is information, not personality, and it must read the same way
+  // every single time.
   if (event.type === 'self.damaged') {
     return Number.isFinite(event.evidence?.amount)
       ? `Took ${Math.round(event.evidence.amount)} damage!`
       : 'I took damage!';
   }
-  if (event.type === 'self.died') return 'I died. Regrouping.';
-  if (event.type === 'entity.hurt') return `${name} took a hit.`;
-  if (event.type === 'entity.died') return `${name} went down.`;
-  if (event.type === 'squad.warning') return `Warning from ${name}.`;
-  if (event.type === 'squad.order') return `Copy, ${name}.`;
-  if (event.type === 'squad.request') return `${name} needs support.`;
-  if (event.type === 'survival.changed') {
-    if (['missing_safe_food', 'recovery_missing_food'].includes(event.evidence?.code)) return 'I need safe food.';
-    if (event.evidence?.phase === 'failed') return 'Survival action is blocked.';
-    return '';
-  }
-  if (event.type === 'job.changed' && event.evidence?.phase === 'recover') {
-    return 'That route is blocked; I am relocating.';
-  }
-  if (kind === 'warning') {
+  if (kind === 'warning' && event.type !== 'squad.warning') {
     return Number.isFinite(event.target?.distance)
       ? `${name}, ${Math.round(event.target.distance)} blocks away!`
       : `${name} nearby!`;
   }
-  if (event.type === 'threat.cleared') return `${name} is out of sight.`;
+  if (event.type === 'self.died') {
+    return stableVariant(event, [
+      'I died. Regrouping.',
+      'Well, that went badly. Heading back.',
+      'I died — going to get my things.',
+      'That got me. Respawning.',
+    ]);
+  }
+  if (event.type === 'entity.hurt') return `${name} took a hit.`;
+  if (event.type === 'entity.died') {
+    return stableVariant(event, [
+      `${name} went down.`,
+      `That's the ${plain} down.`,
+      `${name} is finished.`,
+      `Got the ${plain}.`,
+    ]);
+  }
+  if (event.type === 'squad.warning') return `Warning from ${name}.`;
+  if (event.type === 'squad.order') return `Copy, ${name}.`;
+  if (event.type === 'squad.request') return `${name} needs support.`;
+  if (event.type === 'survival.changed') {
+    if (['missing_safe_food', 'recovery_missing_food'].includes(event.evidence?.code)) {
+      return stableVariant(event, [
+        'I need safe food.',
+        'I am out of anything safe to eat.',
+        'Getting hungry and I have nothing good on me.',
+      ]);
+    }
+    if (event.evidence?.phase === 'failed') return 'Survival action is blocked.';
+    return '';
+  }
+  if (event.type === 'job.changed' && event.evidence?.phase === 'recover') {
+    return stableVariant(event, [
+      'That route is blocked; I am relocating.',
+      'No way through here. Trying another way.',
+      'Blocked. Moving somewhere better.',
+    ]);
+  }
+  if (event.type === 'threat.cleared') {
+    return stableVariant(event, [
+      `${name} is out of sight.`,
+      `Lost track of the ${plain}.`,
+      `${name} wandered off.`,
+      `No sign of the ${plain} now.`,
+    ]);
+  }
   if (kind === 'completion') {
-    if (event.type === 'job.completed') return event.target?.name
-      ? `Finished the ${String(event.target.name).replace(/_/g, ' ')} work.`
-      : 'Work order complete.';
+    // Work reports stay exact. A completion is information the player acts on,
+    // and the model path already gives it character when one is available.
+    if (event.type === 'job.completed') {
+      return event.target?.name
+        ? `Finished the ${plain} work.`
+        : 'Work order complete.';
+    }
     return 'Squad task complete.';
   }
-  if (event.type === 'time.sunrise') return 'Sunrise.';
-  if (event.type === 'time.sunset') return 'Sunset—stay alert.';
+  if (event.type === 'time.sunrise') {
+    return stableVariant(event, ['Sunrise.', 'Morning.', 'Sun is up.', 'Daylight — better out here.']);
+  }
+  if (event.type === 'time.sunset') {
+    return stableVariant(event, [
+      'Sunset—stay alert.',
+      'Getting dark. Watch yourself.',
+      'Night is coming.',
+      'Sun is going down; things will start spawning.',
+    ]);
+  }
   if (event.type === 'weather.changed') return `${name}.`;
-  if (event.type === 'player.joined') return `${name} joined us.`;
-  if (event.type === 'player.left') return `${name} left.`;
+  if (event.type === 'player.joined') {
+    return stableVariant(event, [`${name} joined us.`, `${name} is on.`, `Hey, ${name} is here.`]);
+  }
+  if (event.type === 'player.left') {
+    return stableVariant(event, [`${name} left.`, `${name} logged off.`, `And ${name} is gone.`]);
+  }
   if (event.type === 'player.approached') {
     return stableVariant(event, [
       `${name} is here.`,
       `Hey, ${name}.`,
       `I see you, ${name}.`,
+      `There you are, ${name}.`,
+      `Hi, ${name}.`,
+      `${name}.`,
     ]);
   }
   if (event.type === 'player.returned') {
@@ -111,6 +166,9 @@ export function renderDeterministicReaction(reaction) {
       `Welcome back, ${name}.`,
       `${name} is back.`,
       `Good to see you again, ${name}.`,
+      `You made it back, ${name}.`,
+      `There you are — was starting to wonder.`,
+      `Back already, ${name}?`,
     ]);
   }
   if (event.type === 'player.looked') {
@@ -118,6 +176,9 @@ export function renderDeterministicReaction(reaction) {
       `${name}?`,
       `Need something, ${name}?`,
       `I'm listening, ${name}.`,
+      `What is it, ${name}?`,
+      `Yeah, ${name}?`,
+      `You need me?`,
     ]);
   }
   if (event.type === 'player.order') return `Order received from ${name}.`;
@@ -126,13 +187,36 @@ export function renderDeterministicReaction(reaction) {
       `I spotted ${name}.`,
       `${name}, over there.`,
       `There's ${name} nearby.`,
+      `Look — ${plain}.`,
+      `${plain} on the ground here.`,
+      `Found some ${plain}.`,
     ]);
   }
-  if (event.type === 'observation.structure') return `I found ${name}.`;
-  if (event.type === 'observation.terrain') return `${name} nearby.`;
-  if (event.type === 'action.failed') return event.target?.name
-    ? `I couldn't finish ${String(event.target.name).replace(/_/g, ' ')}.`
-    : 'That action is blocked.';
+  if (event.type === 'observation.structure') {
+    return stableVariant(event, [
+      `I found ${name}.`,
+      `There's a ${plain} here.`,
+      `${name} over here.`,
+      `Spotted a ${plain}.`,
+    ]);
+  }
+  if (event.type === 'observation.terrain') {
+    return stableVariant(event, [
+      `${name} nearby.`,
+      `There's ${plain} here.`,
+      `${plain}, right here.`,
+      `I see ${plain}.`,
+    ]);
+  }
+  if (event.type === 'action.failed') {
+    return event.target?.name
+      ? stableVariant(event, [
+        `I couldn't finish ${plain}.`,
+        `${titleCase(plain)} didn't work out.`,
+        `No luck with ${plain}.`,
+      ])
+      : 'That action is blocked.';
+  }
   return event.target?.name ? `${name}.` : '';
 }
 

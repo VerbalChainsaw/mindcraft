@@ -8,12 +8,20 @@ import {
 
 const MAX_REACTION_TEXT = 180;
 const MAX_EVENTS_PER_TICK = 8;
+// Personality lives in the small, frequent moments, not the dramatic rare ones.
+// Greetings and finds are what a player hears all afternoon, so those get real
+// phrasing; the deterministic table remains the fallback and still owns every
+// urgent line, where exact wording matters more than character.
 const MODEL_WORTHY_EVENTS = new Set([
+  'player.approached',
   'player.returned',
   'player.looked',
+  'player.joined',
   'self.damaged',
   'self.died',
   'entity.died',
+  'observation.item',
+  'observation.structure',
   'job.completed',
   'squad.completion',
 ]);
