@@ -135,7 +135,9 @@ export class AgentsWorkspace {
     socket.on('connect',()=>{this.listenToAgentStates();void this.refreshSquads();});
     socket.on('disconnect',()=>{this.clearAllPending('Mindcraft disconnected before the bot action completed.');});
   }
-  mount(){this.render();this.listenToAgentStates();void this.refreshSquads();}
+  // Bots and squads are different jobs, so they get different rooms. One
+  // instance still owns the sockets and state; only what it draws changes.
+  mount(mode='bots'){this.mode=mode==='squads'?'squads':'bots';this.render();this.listenToAgentStates();void this.refreshSquads();}
   listenToAgentStates(){if(this.socket?.connected)this.socket.emit('listen-to-agents');}
   captureActionOutcomes(states){
     Object.entries(states||{}).forEach(([agentName,state])=>{
@@ -169,7 +171,29 @@ export class AgentsWorkspace {
   }
   async disconnectAll(){if(!this.agents.length)return {success:true};if(!window.confirm('Disconnect every bot from Minecraft? The server will keep running.'))return {success:false,cancelled:true,error:'Disconnect all cancelled.'};const result=await socketRequest(this.socket,'stop-all-agents',[],30_000);this.activity?.add('AGENT',result.success?'Every active bot stopped and exited.':result.error||'Disconnect all failed.',result.success?'ok':'err');this.announce(result.success?'Every active bot stopped and exited.':result.error||'Disconnect all failed.');return result;}
   heading(){const wrap=node('div','workspace-heading'),text=node('div');text.append(node('h1','','Bots'),node('p','','Start, stop, chat with, and inspect your Minecraft bots. Whole-stack power controls are on Dashboard.'));const actions=node('div','heading-actions');actions.append(button('Set Up a Bot',()=>this.onSetup?.(),'primary'),button('Create from JSON',()=>this.openCreate()),button('Disconnect All',()=>this.disconnectAll(),'danger'));wrap.append(text,actions);return wrap;}
-  render(){clear(this.root);this.root.append(this.heading(),this.scenarioLauncher(),this.squadLauncher(),this.squadCommandDeck());const layout=node('div','grid-2');const listPanel=node('section','panel');listPanel.append(node('h2','','Agent list'));this.listEl=node('div','agent-list');listPanel.append(this.listEl);layout.append(listPanel);this.focusPanel=node('section','panel focused-agent');layout.append(this.focusPanel);this.root.append(layout);this.renderList();this.renderFocused();this.renderSquads();}
+  render(){
+    clear(this.root);
+    if(this.mode==='squads'){
+      // Drop stale references so live updates cannot render into detached DOM.
+      this.listEl=null;this.focusPanel=null;
+      this.root.append(this.heading(),this.scenarioLauncher(),this.squadLauncher(),this.squadCommandDeck());
+      this.renderSquads();
+      return;
+    }
+    this.root.append(this.heading());
+    const layout=node('div','grid-2');
+    const listPanel=node('section','panel');
+    listPanel.append(node('h2','','Agent list'));
+    this.listEl=node('div','agent-list');
+    listPanel.append(this.listEl);
+    layout.append(listPanel);
+    this.focusPanel=node('section','panel focused-agent');
+    layout.append(this.focusPanel);
+    this.root.append(layout);
+    this.renderList();
+    this.renderFocused();
+    this.renderSquads();
+  }
   templateAgents(){
     const memberNames=new Set(this.squads.flatMap((squad)=>Array.isArray(squad.members)?squad.members.map((member)=>member.name):[]));
     return this.agents.filter((agent)=>!memberNames.has(agent.name));

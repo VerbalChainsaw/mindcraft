@@ -67,10 +67,15 @@ test('Given the loopback MindServer, when the unified shell is requested, then i
     assert.match(shell, /<main\b/i);
     assert.match(shell, /<aside\b/i);
 
+    // Rooms are named for what the operator is doing, not for the subsystem
+    // behind them. Squads and Console are listed here so a future change cannot
+    // quietly drop a room that has no other coverage.
     for (const [workspace, label] of [
-      ['overview', 'Dashboard'],
-      ['server', 'Server'],
+      ['overview', 'Home'],
+      ['server', 'World'],
       ['agents', 'Bots'],
+      ['squads', 'Squads'],
+      ['console', 'Console'],
       ['profiles', 'Bot Profiles'],
       ['director', 'Director'],
       ['swarm', 'Task Runners'],
