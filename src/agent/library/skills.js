@@ -9750,6 +9750,27 @@ function withDeadline(promise, timeoutMs, code) {
     ]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * A long single await cannot see an interrupt, so Stop has nothing to act on
+ * and a reflex that needs the body has to wait out the whole call. Racing the
+ * work against an interrupt poll gives ownership back within one poll interval.
+ * The abandoned promise settles later against a bot that has already moved on.
+ */
+function withInterrupt(bot, promise, timeoutMs, code, pollMs = 200) {
+    let poller;
+    return Promise.race([
+        Promise.resolve(promise),
+        new Promise((_resolve, reject) => {
+            poller = setInterval(() => {
+                if (bot.interrupt_code) reject(new Error('interrupted'));
+            }, Math.max(50, pollMs));
+        }),
+        new Promise((_resolve, reject) => {
+            setTimeout(() => reject(new Error(code)), Math.max(250, timeoutMs));
+        }),
+    ]).finally(() => clearInterval(poller));
+}
+
 async function closeWindowQuietly(bot, window) {
     if (!window) return;
     try {
@@ -9834,20 +9855,26 @@ export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_T
         const before = totalInventoryCount(bot);
         try {
             await bot.lookAt(water.position.offset(0.5, 1, 0.5), true);
-            await withDeadline(bot.fish(), castTimeoutMs, 'fish_timeout');
+            // A cast can sit for most a minute waiting for a bite, so it has to
+            // stay interruptible or Stop and every reflex above it are blocked.
+            await withInterrupt(bot, bot.fish(), castTimeoutMs, 'fish_timeout');
         } catch (error) {
             const message = String(error?.message || error);
+            const interrupted = message === 'interrupted' || bot.interrupt_code;
+            try { bot.activateItem(); } catch { /* reeling in is best effort */ }
             setActionEvidence(bot, {
                 kind: 'fish',
-                outcome: message === 'fish_timeout' ? 'cast_timeout' : 'cast_failed',
+                outcome: interrupted ? 'interrupted' : message === 'fish_timeout' ? 'cast_timeout' : 'cast_failed',
                 target,
                 caught,
-                ...(message === 'fish_timeout' ? {} : { error: message.slice(0, 240) }),
-                retryable: true,
+                ...(interrupted || message === 'fish_timeout' ? {} : { error: message.slice(0, 240) }),
+                retryable: !interrupted,
             });
-            log(bot, message === 'fish_timeout'
-                ? `Nothing bit after ${caught} catch${caught === 1 ? '' : 'es'}.`
-                : `Fishing stopped: ${message}.`);
+            log(bot, interrupted
+                ? `Stopped fishing after ${caught} catch${caught === 1 ? '' : 'es'}.`
+                : message === 'fish_timeout'
+                    ? `Nothing bit after ${caught} catch${caught === 1 ? '' : 'es'}.`
+                    : `Fishing stopped: ${message}.`);
             return caught > 0;
         }
         if (totalInventoryCount(bot) > before) {
