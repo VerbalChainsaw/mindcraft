@@ -20,6 +20,7 @@ const LANE_LABEL = Object.freeze({
   factual_reaction: 'Reacting',
   idle_embodiment: 'Idling',
   self_prompt: 'Self-directed',
+  active_action: 'Busy with something',
   operator_hold: 'Held by Stop',
   degraded: 'Degraded',
   idle: 'Idle',

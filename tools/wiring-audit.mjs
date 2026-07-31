@@ -134,12 +134,6 @@ function auditLanes() {
   const brain = read(path.join(SRC, 'mindcraft/public/js/bot-brain.js'));
   const agent = read(path.join(SRC, 'agent/agent.js'));
 
-  // Mode bands select their lane through evaluateModeBand, not select(), so
-  // both call sites count as "this lane can be chosen".
-  const selected = new Set([
-    ...[...arbiter.matchAll(/this\.select\(\s*'([a-z_]+)'/g)].map(match => match[1]),
-    ...[...arbiter.matchAll(/evaluateModeBand\(\s*'([a-z_]+)'/g)].map(match => match[1]),
-  ]);
   const named = (source, constant) => {
     const block = source.match(new RegExp(`const ${constant} = Object\\.freeze\\(\\{([\\s\\S]*?)\\n\\}\\);`));
     return new Set([...(block?.[1] || '').matchAll(/^\s*([a-z_]+):/gm)].map(match => match[1]));
@@ -147,12 +141,17 @@ function auditLanes() {
   const paced = named(arbiter, 'LANE_TICK_MS');
   const labelled = named(brain, 'LANE_LABEL');
 
-  for (const lane of selected) {
+  // The lane vocabulary is whatever the two tables between them declare. A
+  // lane reaches select() by several routes -- a literal argument, a mode
+  // band, a ternary chosen at the call site, the initial status value -- so
+  // reachability is "the arbiter names it" rather than a guess at call shape.
+  for (const lane of new Set([...paced, ...labelled])) {
+    if (!new RegExp(`'${lane}'`).test(arbiter)) {
+      report(broken, 'lane', `${lane} is a declared lane the arbiter never names, so nothing can select it`);
+      continue;
+    }
     if (!paced.has(lane)) report(broken, 'lane', `${lane} can be selected but has no tick period`);
     if (!labelled.has(lane)) report(broken, 'lane', `${lane} can be selected but the dashboard cannot name it`);
-  }
-  for (const lane of paced) {
-    if (!selected.has(lane)) report(notes, 'lane', `${lane} is paced but no code path selects it`);
   }
 
   // Every director the arbiter ticks must actually be constructed on the agent.
@@ -165,7 +164,7 @@ function auditLanes() {
       report(broken, 'lane', `the arbiter ticks agent.${director} but agent.js never assigns it`);
     }
   }
-  return { lanes: selected.size, directors: ticked.size };
+  return { lanes: paced.size, directors: ticked.size };
 }
 
 // --------------------------------------------------------------------------
@@ -227,20 +226,42 @@ function auditSockets() {
     }
     return found;
   };
-  const LISTEN = /socket\.on\(\s*'([a-z][a-z0-9-]*)'/g;
-  const EMIT = /(?:socket|io)(?:\.volatile)?\.(?:emit|to\([^)]*\)\.emit)\(\s*'([a-z][a-z0-9-]*)'/g;
+  // Neither side speaks socket.io through one literal shape. The server emits
+  // through `candidateIo`, `conn.socket`, `room.volatile`, and a bare `io`;
+  // the dashboard sends most of its requests through a `socketRequest(socket,
+  // event, ...)` helper. Matching only `socket.emit(` reported the entire
+  // squad control surface as dead when every event of it was wired, which is
+  // the most dangerous thing an audit can do.
+  const LISTEN = /\.on\(\s*'([a-z][a-z0-9-]*)'/g;
+  const EMIT = /(?:\.(?:volatile\.)?emit|socketRequest\([^,]+,)\s*\(?\s*'([a-z][a-z0-9-]*)'/g;
+
+  // Both sides also dispatch indirectly -- `runSquadAction('squad-stop', id)`
+  // hands the event name to a helper that emits it. No regex over call shapes
+  // can follow that, and guessing wrong reports a working control surface as
+  // dead. So an event named anywhere in a party's source counts as spoken by
+  // it. That trades precision for truth: this check answers "does anyone on
+  // the other side even know this name", which is the question worth asking.
+  const MENTION = /'([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'/g;
 
   const serverListens = collect([serverFile], LISTEN);
   const serverEmits = collect([serverFile], EMIT);
   const clientListens = collect(clientFiles, LISTEN);
   const clientEmits = collect(clientFiles, EMIT);
+  const clientMentions = collect(clientFiles, MENTION);
   const proxyListens = collect([proxyFile], LISTEN);
   const proxyEmits = collect([proxyFile], EMIT);
 
   // Socket.IO speaks these itself; no handler is required on either side.
-  const reserved = new Set(['connect', 'disconnect', 'connection', 'connect_error', 'error']);
+  const reserved = new Set([
+    'connect', 'disconnect', 'connection', 'connect_error', 'error',
+    // Node stream and server events that share the socket namespace.
+    'close', 'timeout', 'message', 'data', 'end', 'listening',
+  ]);
   const heard = event => serverListens.has(event) || clientListens.has(event) || proxyListens.has(event);
-  const spoken = event => serverEmits.has(event) || clientEmits.has(event) || proxyEmits.has(event);
+  const spoken = event => serverEmits.has(event)
+    || clientEmits.has(event)
+    || proxyEmits.has(event)
+    || clientMentions.has(event);
 
   for (const [event, files] of clientEmits) {
     if (reserved.has(event) || heard(event)) continue;
