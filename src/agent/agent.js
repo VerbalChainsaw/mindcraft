@@ -510,6 +510,10 @@ export class Agent {
         try { this.bot.pathfinder.setGoal(null); } catch { /* no pathfinder goal */ }
         try { this.bot.pvp.stop(); } catch { /* no combat target */ }
         try { this.bot.deactivateItem(); } catch { /* no active item */ }
+        // An open container or crafting window survives every other
+        // cancellation here, and a bot holding one cannot be moved. Closing it
+        // is what lets a reflex actually take the body back mid-craft.
+        try { if (this.bot.currentWindow) this.bot.closeWindow(this.bot.currentWindow); } catch { /* no open window */ }
         try { this.bot.moveVehicle?.(0, 0); } catch { /* no mounted vehicle */ }
         try { this.bot.clearControlStates(); } catch { /* disconnected body */ }
     }
