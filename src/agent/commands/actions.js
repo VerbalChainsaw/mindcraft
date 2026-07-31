@@ -1097,6 +1097,30 @@ export const actionsList = [
         })
     },
     {
+        name: '!fish',
+        description: 'Fish in nearby water until the requested number of catches is verified.',
+        params: {'count': { type: 'int', description: 'How many catches to verify.', domain: [1, 64] }},
+        perform: runAsAction(async (agent, count) => {
+            return await skills.fishForItems(agent.bot, count);
+        })
+    },
+    {
+        name: '!enchantItem',
+        description: 'Enchant a carried item at a nearby enchanting table using lapis and experience levels.',
+        params: {'item_name': { type: 'ItemName', description: 'The carried item to enchant.' }},
+        perform: runAsAction(async (agent, itemName) => {
+            return await skills.enchantItem(agent.bot, itemName);
+        })
+    },
+    {
+        name: '!repairItem',
+        description: 'Repair a damaged tool, weapon, or armour piece at a nearby anvil using a duplicate or its base material.',
+        params: {'item_name': { type: 'ItemName', description: 'The damaged item to repair.' }},
+        perform: runAsAction(async (agent, itemName) => {
+            return await skills.repairAtAnvil(agent.bot, itemName);
+        })
+    },
+    {
         name: '!stay',
         description: 'Stay in the current location no matter what. Pauses all modes.',
         params: {'type': { type: 'int', description: 'The number of seconds to stay. -1 for forever.', domain: [-1, Number.MAX_SAFE_INTEGER] }},

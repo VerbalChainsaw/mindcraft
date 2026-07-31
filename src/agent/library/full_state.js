@@ -904,6 +904,14 @@ export function getFullState(agent, { deep = false } = {}) {
             healthMax: 20,
             hunger: Math.round(bot.food),
             hungerMax: 20,
+            // Experience gates enchanting and anvil repair, so it has to be
+            // visible to anything deciding whether those are worth attempting.
+            experienceLevel: Number.isFinite(Number(bot.experience?.level))
+                ? Math.floor(Number(bot.experience.level))
+                : 0,
+            experiencePoints: Number.isFinite(Number(bot.experience?.points))
+                ? Math.floor(Number(bot.experience.points))
+                : 0,
             biome: getBiomeName(bot),
             weather,
             timeOfDay: bot.time.timeOfDay,

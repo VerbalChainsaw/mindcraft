@@ -9718,3 +9718,360 @@ export async function useItem(bot, itemName, durationMs = 0, requestedHand = 'ma
         : `Requested use of ${toolName} on ${block.name}; no authoritative state change is visible yet.`);
     return true;
  }
+
+const FISHING_ROD = 'fishing_rod';
+const FISH_CAST_TIMEOUT_MS = 45_000;
+const WORKSTATION_SEARCH_RANGE = 32;
+const WINDOW_READY_TIMEOUT_MS = 8_000;
+const FISH_LOOT_PATTERN = /(?:cod|salmon|pufferfish|tropical_fish|bowl|leather|stick|string|bone|ink_sac|lily_pad|rotten_flesh|saddle|name_tag|enchanted_book|_boots)$/;
+const ANVIL_MATERIAL = Object.freeze({
+    wooden: 'oak_planks',
+    stone: 'cobblestone',
+    copper: 'copper_ingot',
+    golden: 'gold_ingot',
+    iron: 'iron_ingot',
+    diamond: 'diamond',
+    netherite: 'netherite_ingot',
+});
+
+function experienceLevel(bot) {
+    const level = Number(bot?.experience?.level);
+    return Number.isFinite(level) ? level : 0;
+}
+
+/** Resolve a promise or give up, so a silent server can never wedge an action. */
+function withDeadline(promise, timeoutMs, code) {
+    let timer;
+    return Promise.race([
+        Promise.resolve(promise),
+        new Promise((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error(code)), Math.max(250, timeoutMs));
+        }),
+    ]).finally(() => clearTimeout(timer));
+}
+
+async function closeWindowQuietly(bot, window) {
+    if (!window) return;
+    try {
+        await bot.closeWindow(window);
+    } catch (error) {
+        console.warn(`[workstation] Failed to close window: ${String(error?.message || error).slice(0, 240)}`);
+    }
+}
+
+async function reachWorkstation(bot, blockName, navigate) {
+    let block = null;
+    try {
+        block = bot.findBlock({
+            matching: bot.registry?.blocksByName?.[blockName]?.id,
+            maxDistance: WORKSTATION_SEARCH_RANGE,
+        });
+    } catch {
+        block = null;
+    }
+    if (!block) return { block: null, code: `${blockName}_not_found` };
+    if (bot.entity.position.distanceTo(block.position) > 3.5) {
+        const reached = await navigate(bot, block.position.x, block.position.y, block.position.z, 2);
+        if (!reached) return { block, code: `${blockName}_unreachable` };
+    }
+    if (bot.interrupt_code) return { block, code: 'interrupted' };
+    return { block, code: null };
+}
+
+function totalInventoryCount(bot) {
+    return bot.inventory.items().reduce((total, item) => total + Math.max(0, Number(item.count) || 0), 0);
+}
+
+export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_TIMEOUT_MS } = {}) {
+    /**
+     * Fish until the requested number of catches is verified.
+     * @param {MinecraftBot} bot, reference to the minecraft bot.
+     * @param {number} count, how many catches to verify.
+     * @returns {Promise<boolean>} true if at least one catch was verified.
+     * @example
+     * await skills.fishForItems(bot, 3);
+     **/
+    const target = { name: FISHING_ROD };
+    const wanted = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
+    if (!bot.inventory.items().some(item => item.name === FISHING_ROD)) {
+        setActionEvidence(bot, { kind: 'fish', outcome: 'missing_rod', target, retryable: false });
+        log(bot, 'I have no fishing rod.');
+        return false;
+    }
+    if (!await equip(bot, FISHING_ROD)) {
+        setActionEvidence(bot, { kind: 'fish', outcome: 'equip_blocked', target, retryable: true });
+        return false;
+    }
+
+    let water = null;
+    try {
+        water = bot.findBlock({ matching: block => block?.name === 'water', maxDistance: 24 });
+    } catch {
+        water = null;
+    }
+    if (!water) {
+        setActionEvidence(bot, { kind: 'fish', outcome: 'no_water', target, retryable: true });
+        log(bot, 'There is no water in reach to fish in.');
+        return false;
+    }
+    if (bot.entity.position.distanceTo(water.position) > 5) {
+        if (!await goToPosition(bot, water.position.x, water.position.y + 1, water.position.z, 3)) {
+            setActionEvidence(bot, {
+                kind: 'fish',
+                outcome: 'water_unreachable',
+                target: { name: 'water', x: water.position.x, y: water.position.y, z: water.position.z },
+                retryable: true,
+            });
+            log(bot, 'I could not reach the water.');
+            return false;
+        }
+    }
+
+    let caught = 0;
+    const collected = [];
+    for (let attempt = 0; attempt < wanted; attempt += 1) {
+        if (bot.interrupt_code) break;
+        const before = totalInventoryCount(bot);
+        try {
+            await bot.lookAt(water.position.offset(0.5, 1, 0.5), true);
+            await withDeadline(bot.fish(), castTimeoutMs, 'fish_timeout');
+        } catch (error) {
+            const message = String(error?.message || error);
+            setActionEvidence(bot, {
+                kind: 'fish',
+                outcome: message === 'fish_timeout' ? 'cast_timeout' : 'cast_failed',
+                target,
+                caught,
+                ...(message === 'fish_timeout' ? {} : { error: message.slice(0, 240) }),
+                retryable: true,
+            });
+            log(bot, message === 'fish_timeout'
+                ? `Nothing bit after ${caught} catch${caught === 1 ? '' : 'es'}.`
+                : `Fishing stopped: ${message}.`);
+            return caught > 0;
+        }
+        if (totalInventoryCount(bot) > before) {
+            caught += 1;
+            const newest = bot.inventory.items()
+                .find(item => FISH_LOOT_PATTERN.test(item.name) && !collected.includes(item.name));
+            if (newest) collected.push(newest.name);
+        }
+    }
+
+    const interrupted = Boolean(bot.interrupt_code);
+    setActionEvidence(bot, {
+        kind: 'fish',
+        outcome: interrupted ? 'interrupted' : caught >= wanted ? 'catches_verified' : caught > 0 ? 'partial_catch' : 'no_catch',
+        target,
+        caught,
+        requested: wanted,
+        items: collected.slice(0, 8),
+        retryable: !interrupted && caught < wanted,
+    });
+    log(bot, caught > 0
+        ? `Caught ${caught} of ${wanted}${collected.length ? ` (${collected.join(', ')})` : ''}.`
+        : 'I fished but caught nothing.');
+    return caught > 0;
+}
+
+export async function enchantItem(bot, itemName, { navigate = goToPosition } = {}) {
+    /**
+     * Enchant a carried item at a nearby enchanting table.
+     * @param {MinecraftBot} bot, reference to the minecraft bot.
+     * @param {string} itemName, the item to enchant.
+     * @returns {Promise<boolean>} true if Minecraft confirmed a new enchantment.
+     * @example
+     * await skills.enchantItem(bot, "diamond_pickaxe");
+     **/
+    const name = String(itemName || '').trim();
+    const target = { name: name || 'item' };
+    const item = bot.inventory.items().find(candidate => candidate.name === name);
+    if (!item) {
+        setActionEvidence(bot, { kind: 'enchant', outcome: 'missing_item', target, retryable: false });
+        log(bot, `I am not carrying ${name || 'that item'}.`);
+        return false;
+    }
+    if (itemEnchantments(bot, item).size > 0) {
+        setActionEvidence(bot, { kind: 'enchant', outcome: 'already_enchanted', target, retryable: false });
+        log(bot, `${name} is already enchanted.`);
+        return false;
+    }
+    const lapis = bot.inventory.items().find(candidate => candidate.name === 'lapis_lazuli');
+    if (!lapis) {
+        setActionEvidence(bot, { kind: 'enchant', outcome: 'missing_lapis', target, retryable: true });
+        log(bot, 'I need lapis lazuli to enchant.');
+        return false;
+    }
+    if (experienceLevel(bot) < 1) {
+        setActionEvidence(bot, { kind: 'enchant', outcome: 'insufficient_levels', target, level: experienceLevel(bot), retryable: true });
+        log(bot, 'I have no experience levels to spend.');
+        return false;
+    }
+
+    const { block, code } = await reachWorkstation(bot, 'enchanting_table', navigate);
+    if (code) {
+        setActionEvidence(bot, { kind: 'enchant', outcome: code, target, retryable: code !== 'interrupted' });
+        log(bot, code === 'enchanting_table_not_found'
+            ? 'There is no enchanting table nearby.'
+            : code === 'interrupted' ? 'Stopped before enchanting.' : 'I could not reach the enchanting table.');
+        return false;
+    }
+
+    let table = null;
+    try {
+        table = await withDeadline(bot.openEnchantmentTable(block), WINDOW_READY_TIMEOUT_MS, 'table_open_timeout');
+        await table.putTargetItem(item);
+        await table.putLapis(lapis);
+        // The table only publishes real costs once the server answers, and its
+        // own enchant() waits on 'ready' forever if that answer never comes.
+        await withDeadline(
+            new Promise(resolve => {
+                if (table.enchantments.some(slot => Number(slot?.level) > 0)) resolve();
+                else table.once('ready', resolve);
+            }),
+            WINDOW_READY_TIMEOUT_MS,
+            'table_never_ready',
+        );
+        const affordable = table.enchantments
+            .map((slot, choice) => ({ choice, cost: Number(slot?.level) || -1 }))
+            .filter(slot => slot.cost > 0 && slot.cost <= experienceLevel(bot))
+            .sort((left, right) => right.cost - left.cost)[0];
+        if (!affordable) {
+            await closeWindowQuietly(bot, table);
+            setActionEvidence(bot, { kind: 'enchant', outcome: 'insufficient_levels', target, level: experienceLevel(bot), retryable: true });
+            log(bot, `I do not have the levels for any offered enchantment on ${name}.`);
+            return false;
+        }
+        await withDeadline(table.enchant(affordable.choice), WINDOW_READY_TIMEOUT_MS, 'enchant_timeout');
+        await table.takeTargetItem();
+        await closeWindowQuietly(bot, table);
+    } catch (error) {
+        await closeWindowQuietly(bot, table);
+        setActionEvidence(bot, {
+            kind: 'enchant',
+            outcome: 'enchant_failed',
+            target,
+            error: String(error?.message || error).slice(0, 240),
+            retryable: true,
+        });
+        log(bot, `Enchanting ${name} failed: ${error?.message || error}.`);
+        return false;
+    }
+
+    const enchanted = bot.inventory.items().find(candidate => (
+        candidate.name === name && itemEnchantments(bot, candidate).size > 0
+    ));
+    const applied = enchanted
+        ? [...itemEnchantments(bot, enchanted).entries()].map(([enchantment, lvl]) => `${enchantment} ${lvl}`)
+        : [];
+    setActionEvidence(bot, {
+        kind: 'enchant',
+        outcome: enchanted ? 'enchant_verified' : 'enchant_unverified',
+        ...(enchanted ? {} : { completion: 'requested' }),
+        target,
+        enchantments: applied,
+        retryable: !enchanted,
+    });
+    log(bot, enchanted
+        ? `Enchanted ${name} with ${applied.join(', ')}.`
+        : `I used the table on ${name} but no enchantment is visible yet.`);
+    return Boolean(enchanted);
+}
+
+export async function repairAtAnvil(bot, itemName, { navigate = goToPosition } = {}) {
+    /**
+     * Repair a damaged tool at a nearby anvil using a duplicate or its material.
+     * @param {MinecraftBot} bot, reference to the minecraft bot.
+     * @param {string} itemName, the damaged item to repair.
+     * @returns {Promise<boolean>} true if Minecraft confirmed restored durability.
+     * @example
+     * await skills.repairAtAnvil(bot, "iron_pickaxe");
+     **/
+    const name = String(itemName || '').trim();
+    const target = { name: name || 'item' };
+    const damaged = bot.inventory.items()
+        .filter(candidate => candidate.name === name)
+        .sort((left, right) => toolDurability(bot, left).remaining - toolDurability(bot, right).remaining)[0];
+    if (!damaged) {
+        setActionEvidence(bot, { kind: 'repair', outcome: 'missing_item', target, retryable: false });
+        log(bot, `I am not carrying ${name || 'that item'}.`);
+        return false;
+    }
+    const before = toolDurability(bot, damaged);
+    if (!Number.isFinite(before.max) || before.remaining >= before.max) {
+        setActionEvidence(bot, { kind: 'repair', outcome: 'not_damaged', target, retryable: false });
+        log(bot, `${name} does not need repair.`);
+        return false;
+    }
+    const duplicate = bot.inventory.items().find(candidate => (
+        candidate.name === name && candidate.slot !== damaged.slot
+    ));
+    const materialName = ANVIL_MATERIAL[name.split('_')[0]];
+    const material = duplicate || (materialName
+        ? bot.inventory.items().find(candidate => candidate.name === materialName)
+        : null);
+    if (!material) {
+        setActionEvidence(bot, {
+            kind: 'repair',
+            outcome: 'missing_repair_material',
+            target,
+            required: materialName || 'a second copy',
+            retryable: true,
+        });
+        log(bot, `I need ${materialName || `another ${name}`} to repair ${name}.`);
+        return false;
+    }
+    if (experienceLevel(bot) < 1) {
+        setActionEvidence(bot, { kind: 'repair', outcome: 'insufficient_levels', target, level: experienceLevel(bot), retryable: true });
+        log(bot, 'I have no experience levels to spend on repairs.');
+        return false;
+    }
+
+    const { block, code } = await reachWorkstation(bot, 'anvil', navigate);
+    if (code) {
+        setActionEvidence(bot, { kind: 'repair', outcome: code, target, retryable: code !== 'interrupted' });
+        log(bot, code === 'anvil_not_found'
+            ? 'There is no anvil nearby.'
+            : code === 'interrupted' ? 'Stopped before repairing.' : 'I could not reach the anvil.');
+        return false;
+    }
+
+    let anvil = null;
+    try {
+        anvil = await withDeadline(bot.openAnvil(block), WINDOW_READY_TIMEOUT_MS, 'anvil_open_timeout');
+        // combine() waits on an experience packet that a silent server may never
+        // send, so the deadline is the only thing guaranteeing this returns.
+        await withDeadline(anvil.combine(damaged, material), WINDOW_READY_TIMEOUT_MS * 2, 'anvil_combine_timeout');
+        await closeWindowQuietly(bot, anvil);
+    } catch (error) {
+        await closeWindowQuietly(bot, anvil);
+        setActionEvidence(bot, {
+            kind: 'repair',
+            outcome: 'repair_failed',
+            target,
+            error: String(error?.message || error).slice(0, 240),
+            retryable: true,
+        });
+        log(bot, `Repairing ${name} failed: ${error?.message || error}.`);
+        return false;
+    }
+
+    const best = bot.inventory.items()
+        .filter(candidate => candidate.name === name)
+        .map(candidate => toolDurability(bot, candidate).remaining)
+        .sort((left, right) => right - left)[0] ?? 0;
+    const improved = best > before.remaining;
+    setActionEvidence(bot, {
+        kind: 'repair',
+        outcome: improved ? 'repair_verified' : 'repair_unverified',
+        ...(improved ? {} : { completion: 'requested' }),
+        target,
+        durabilityBefore: before.remaining,
+        durabilityAfter: best,
+        retryable: !improved,
+    });
+    log(bot, improved
+        ? `Repaired ${name}: ${before.remaining} to ${best} durability.`
+        : `I used the anvil on ${name} but no durability change is visible yet.`);
+    return improved;
+}
