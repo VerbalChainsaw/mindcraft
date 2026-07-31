@@ -117,3 +117,90 @@ test('Given a persisted in-flight order after restart, reconciliation forces wor
   assert.deepEqual(reconciled.checkpoint, { verifiedCount: 3 });
   assert.equal(reconciled.evidence.code, 'restart_revalidation');
 });
+
+test('Given a reflex preemption, the work order holds its phase and spends no recovery attempt', () => {
+  const order = createWorkOrder({
+    id: 'chop-1',
+    role: 'lumberjack',
+    kind: 'harvest',
+    target: { name: 'oak_log' },
+    quota: 16,
+    phase: 'execute',
+  });
+
+  let held = order;
+  // Three fights in a row used to exhaust maxAttempts and kill the job, and
+  // each one routed the order through `recover`, which walks the bot 32 blocks
+  // away from the trees it was cutting.
+  for (let fight = 1; fight <= 3; fight += 1) {
+    held = advanceWorkOrder(held, {
+      actionId: `fight-${fight}`,
+      phase: 'interrupted',
+      code: 'interrupted',
+      retryable: true,
+    }, { previousActionId: `fight-${fight - 1}`, nextPhase: 'verify' });
+    assert.equal(held.phase, 'execute');
+    assert.equal(held.attempts, 0);
+    assert.equal(held.preemptions, fight);
+    assert.equal(held.evidence.code, 'preempted');
+  }
+
+  // Verified progress after the fight clears the preemption budget so a long
+  // job is never killed by interruptions it already recovered from.
+  const resumed = advanceWorkOrder(held, {
+    actionId: 'chopped',
+    phase: 'succeeded',
+    code: 'skill_checked',
+  }, { previousActionId: 'fight-3', nextPhase: 'verify' });
+  assert.equal(resumed.phase, 'verify');
+  assert.equal(resumed.preemptions, 0);
+
+  // A genuine failure still recovers boundedly; preemption did not weaken it.
+  const failed = advanceWorkOrder(held, {
+    actionId: 'no-trees',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    retryable: true,
+  }, { previousActionId: 'fight-3' });
+  assert.equal(failed.phase, 'recover');
+  assert.equal(failed.attempts, 1);
+});
+
+test('Given endless preemption, the work order still fails instead of retrying forever', () => {
+  let order = createWorkOrder({
+    id: 'pinned-1',
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'iron_ore' },
+    quota: 8,
+    phase: 'execute',
+  });
+  for (let tick = 1; tick <= 40; tick += 1) {
+    order = advanceWorkOrder(order, {
+      actionId: `tick-${tick}`,
+      phase: 'interrupted',
+      code: 'interrupted',
+      retryable: true,
+    }, { previousActionId: `tick-${tick - 1}` });
+    if (order.phase !== 'execute') break;
+  }
+  assert.notEqual(order.phase, 'execute');
+  assert.ok(order.preemptions <= 24);
+});
+
+test('Given a work order anchor, only finite coordinates are kept', () => {
+  const anchored = createWorkOrder({
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'iron_ore' },
+    anchor: { x: 10.9, y: 63.2, z: -4.1 },
+  });
+  assert.deepEqual(anchored.anchor, { x: 10, y: 63, z: -5 });
+  const unanchored = createWorkOrder({
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'iron_ore' },
+    anchor: { x: 10, y: Number.NaN, z: 4 },
+  });
+  assert.equal(unanchored.anchor, null);
+});

@@ -19,6 +19,23 @@ const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_REQUESTER = /^[A-Za-z0-9_ -]{0,32}$/;
 const MAX_BLUEPRINT_CELLS = 4096;
+// A higher-priority lane taking ActionManager is not the work order failing.
+// The bot was mid-swing when a creeper arrived: nothing about the order became
+// wrong, and the same step is still the right next step. Folding a preemption
+// in as a retryable failure burned an attempt, so three interruptions killed a
+// job permanently, and it routed the order through `recover` -- which for the
+// miner and lumberjack means `!moveAway(32)`, walking the bot away from the
+// very trees or ore it was working.
+const PREEMPTION_CODE = /^(?:action_)?interrupted$/;
+// Preemption still needs a ceiling. A bot pinned by something it cannot escape
+// would otherwise re-derive the same step forever with no failure to report.
+const MAX_PREEMPTIONS = 24;
+
+/** True when a result means "something outranked us", not "this did not work". */
+export function isPreemption(result) {
+  return result?.phase === 'interrupted'
+    || PREEMPTION_CODE.test(String(result?.code || ''));
+}
 
 function finiteInteger(value, fallback, minimum, maximum) {
   const number = Number.isFinite(value) ? Math.floor(value) : fallback;
@@ -105,6 +122,24 @@ function normalizeBlueprint(blueprint) {
   return Object.freeze({ id, width, depth, height, cells: Object.freeze(cells) });
 }
 
+/**
+ * Where the bot was standing when it last dispatched work. A fight can drag it
+ * a long way from its own worksite, and without this the order resumes from
+ * wherever the chase ended instead of from where the work is.
+ */
+function normalizeAnchor(anchor) {
+  if (anchor == null) return null;
+  if (typeof anchor !== 'object' || Array.isArray(anchor)) {
+    throw new TypeError('Work-order anchor must be an object.');
+  }
+  if (!['x', 'y', 'z'].every(axis => Number.isFinite(anchor[axis]))) return null;
+  return Object.freeze({
+    x: Math.floor(anchor.x),
+    y: Math.floor(anchor.y),
+    z: Math.floor(anchor.z),
+  });
+}
+
 function normalizeCheckpoint(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) return Object.freeze({});
   const normalized = {};
@@ -168,6 +203,7 @@ export function normalizeWorkOrder(raw) {
   const quota = finiteInteger(raw.quota, 1, 1, 2304);
   const attempts = finiteInteger(raw.attempts, 0, 0, 32);
   const maxAttempts = finiteInteger(raw.maxAttempts, 3, 1, 8);
+  const preemptions = finiteInteger(raw.preemptions, 0, 0, MAX_PREEMPTIONS);
   const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt;
   return Object.freeze({
@@ -184,6 +220,8 @@ export function normalizeWorkOrder(raw) {
     resumePhase,
     attempts,
     maxAttempts,
+    preemptions,
+    anchor: normalizeAnchor(raw.anchor),
     checkpoint: normalizeCheckpoint(raw.checkpoint),
     evidence: normalizeEvidence(raw.evidence),
     createdAt,
@@ -216,7 +254,25 @@ export function advanceWorkOrder(order, result, {
       ...current,
       phase: nextPhase,
       resumePhase: null,
+      // Verified progress clears the preemption budget. A long job should not
+      // be killed by interruptions accumulated across work it already finished.
+      preemptions: 0,
       evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      updatedAt: now,
+    });
+  }
+  if (isPreemption(result) && current.preemptions < MAX_PREEMPTIONS) {
+    // Hold the phase and the attempt budget. The next tick re-derives the same
+    // step against fresh world state, which is what "resume what I was doing"
+    // actually means.
+    return normalizeWorkOrder({
+      ...current,
+      preemptions: current.preemptions + 1,
+      evidence: {
+        code: 'preempted',
+        detail: result.detail || 'A higher-priority lane took ownership; the work order is unchanged.',
+        actionId: result.actionId,
+      },
       updatedAt: now,
     });
   }

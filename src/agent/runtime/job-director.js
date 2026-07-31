@@ -25,6 +25,10 @@ const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 const JOB_RETRY_MS = 5_000;
 const JOB_SUCCESS_MS = 1_000;
+// How far a preemption may drag the bot before resuming means walking back
+// first. A fight can pull it a long way from its own worksite, and resuming
+// from wherever the chase ended is how a bot loses the thread of its work.
+const WORKSITE_RETURN_DISTANCE = 16;
 const MANUAL_COMMAND_GRACE_MS = 120_000;
 const TOOL_TIER = Object.freeze({
   wooden: 1,
@@ -126,6 +130,31 @@ function nextJobUpkeepStep(order, snapshot) {
     };
   }
   return null;
+}
+
+/**
+ * Walk back to where the work is before continuing it. Only runs after a
+ * preemption, so ordinary job movement -- following a seam, ranging for
+ * materials -- never trips it. `keepAnchor` stops the return step from
+ * overwriting the very position it is walking to.
+ */
+function nextWorksiteReturnStep(order, snapshot) {
+  const anchor = order.anchor;
+  if (!anchor || order.evidence?.code !== 'preempted') return null;
+  if (![snapshot.x, snapshot.y, snapshot.z].every(Number.isFinite)) return null;
+  const distance = Math.hypot(
+    snapshot.x - anchor.x,
+    snapshot.y - anchor.y,
+    snapshot.z - anchor.z,
+  );
+  if (distance <= WORKSITE_RETURN_DISTANCE) return null;
+  return {
+    command: `!goToCoordinates(${anchor.x}, ${anchor.y}, ${anchor.z}, 2)`,
+    nextPhase: order.phase,
+    code: 'worksite_return_required',
+    keepAnchor: true,
+    target: { name: 'worksite', x: anchor.x, y: anchor.y, z: anchor.z },
+  };
 }
 
 function blockAt(bot, x, y, z) {
@@ -381,7 +410,9 @@ export function summarizeJobSituation(agent, order) {
     ),
     deposit: { mode: depositMode, leader, target: assignedDeposit },
     dimension: dimensionName(bot.game?.dimension),
+    x: Number(bot.entity?.position?.x),
     y: Number(bot.entity?.position?.y),
+    z: Number(bot.entity?.position?.z),
   };
   const resourceFound = selectedResourcePresence(bot, order);
   if (resourceFound !== undefined) snapshot.resourceFound = resourceFound;
@@ -772,6 +803,7 @@ export class JobDirector extends RoleDirector {
       try {
         snapshot = this.getJobSnapshot(this.agent, this.activeOrder);
         step = nextJobUpkeepStep(this.activeOrder, snapshot)
+          || nextWorksiteReturnStep(this.activeOrder, snapshot)
           || reducer(this.activeOrder, snapshot, this.agent.last_action_result);
       } catch (error) {
         this.setStatus('failed', 'job_snapshot_failed', this.activeOrder.target?.name, error?.message || error, true);
@@ -814,6 +846,15 @@ export class JobDirector extends RoleDirector {
 
       if (step.checkpoint) {
         this.persist({ ...this.activeOrder, checkpoint: step.checkpoint, updatedAt: this.now() });
+      }
+      // Remember where this step is being worked from, so a preemption that
+      // drags the bot away has somewhere to come back to.
+      if (!step.keepAnchor && Number.isFinite(snapshot.x) && Number.isFinite(snapshot.z)) {
+        this.persist({
+          ...this.activeOrder,
+          anchor: { x: snapshot.x, y: snapshot.y, z: snapshot.z },
+          updatedAt: this.now(),
+        });
       }
       this.inFlight = true;
       const orderAtDispatch = this.activeOrder;

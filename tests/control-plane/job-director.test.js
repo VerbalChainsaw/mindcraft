@@ -346,3 +346,55 @@ test('Given manual command grace, JobDirector suppresses job scheduling', () => 
   assert.deepEqual(commands, []);
   assert.equal(director.snapshot().code, 'manual_command');
 });
+
+test('Given a fight that dragged the bot off its worksite, the job walks back before resuming', async () => {
+  const agent = createAgent('miner');
+  const commands = [];
+  let position = { x: 0, y: 12, z: 0 };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({
+      ...safeMiningSnapshot({ iron_pickaxe: 1 }),
+      ...position,
+      resourceFound: true,
+    }),
+    now: () => 10_000,
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      return Promise.resolve();
+    },
+  });
+  director.submit(createWorkOrder({
+    id: 'mine-anchor',
+    role: 'miner',
+    kind: 'mine',
+    source: 'player',
+    requester: 'Gabriel',
+    target: { name: 'iron_ore' },
+    quota: 8,
+  }));
+
+  // First dispatch anchors the order to where the work is happening.
+  director.update();
+  await settle();
+  assert.ok(commands.length > 0, 'the miner should dispatch a first step');
+  assert.deepEqual(director.activeOrder.anchor, { x: 0, y: 12, z: 0 });
+
+  // A reflex takes ownership and the chase ends 40 blocks away.
+  agent.last_action_result = {
+    actionId: 'reflex-1',
+    phase: 'interrupted',
+    code: 'interrupted',
+    retryable: true,
+  };
+  director.activeOrder = { ...director.activeOrder, evidence: { code: 'preempted', detail: '', actionId: 'reflex-1' } };
+  position = { x: 40, y: 20, z: 12 };
+  director.nextAttemptAt = 0;
+  commands.length = 0;
+
+  director.update();
+  await settle();
+  assert.equal(commands[0], '!goToCoordinates(0, 12, 0, 2)');
+  // The return step must not reanchor the order to where the fight ended.
+  assert.deepEqual(director.activeOrder.anchor, { x: 0, y: 12, z: 0 });
+});
