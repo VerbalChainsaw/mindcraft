@@ -225,11 +225,36 @@ function recipeLearningKey(bot, target, recipe) {
   return `craft:${canonicalName(target)}<-${ingredients}`.slice(0, 160);
 }
 
+// Rough per-unit cost of obtaining an item the bot does not have. Surface wood
+// and stone are nearly free; anything that requires a deliberate underground
+// search is not. Without this the planner treated every missing ingredient as
+// equally cheap and would happily choose an iron recipe over a wooden one.
+const ACQUISITION_COST = Object.freeze([
+  Object.freeze({ cost: 1, pattern: /(?:_planks|_log|_stem|_wood|_hyphae|stick|dirt|sand|gravel|cobblestone|cobbled_deepslate|stone|netherrack|flint)$/ }),
+  Object.freeze({ cost: 3, pattern: /(?:coal|charcoal|clay_ball|string|leather|feather|bone|wheat|seeds)$/ }),
+  Object.freeze({ cost: 8, pattern: /(?:copper_ingot|raw_copper|quartz)$/ }),
+  Object.freeze({ cost: 12, pattern: /(?:iron_ingot|raw_iron|redstone|lapis_lazuli)$/ }),
+  Object.freeze({ cost: 16, pattern: /(?:gold_ingot|raw_gold|blaze_rod|ender_pearl)$/ }),
+  Object.freeze({ cost: 40, pattern: /(?:diamond|emerald)$/ }),
+  Object.freeze({ cost: 60, pattern: /(?:netherite_ingot|netherite_scrap|ancient_debris)$/ }),
+]);
+const DEFAULT_ACQUISITION_COST = 6;
+
+function acquisitionCost(name) {
+  for (const entry of ACQUISITION_COST) {
+    if (entry.pattern.test(name)) return entry.cost;
+  }
+  return DEFAULT_ACQUISITION_COST;
+}
+
 function recipeScore(bot, context, target, recipe) {
   const ingredients = recipeIngredientEntries(bot, recipe);
   let score = 0;
   for (const ingredient of ingredients) {
-    score += Math.min(ingredient.count, ledgerCount(context, ingredient.name)) * 100;
+    const available = ledgerCount(context, ingredient.name);
+    score += Math.min(ingredient.count, available) * 100;
+    // What the bot still has to go and get is what actually costs it time.
+    score -= Math.max(0, ingredient.count - available) * acquisitionCost(ingredient.name);
     if (ingredient.name === 'cobblestone') score += 12;
     if (ingredient.name.endsWith('_planks')) score += 8;
     if (ingredient.name === 'oak_planks') score += 20;

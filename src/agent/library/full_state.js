@@ -362,6 +362,15 @@ function emptyBlockPerception() {
     };
 }
 
+function getLandmarkState(agent) {
+    try {
+        return agent.landmark_memory?.telemetry?.(8) || null;
+    } catch {
+        // Spatial recall must never be able to break state reporting.
+        return null;
+    }
+}
+
 function getRoleDirectorState(agent) {
     const status = agent.role_director?.status;
     if (!status || typeof status !== 'object') return null;
@@ -916,6 +925,7 @@ export function getFullState(agent, { deep = false } = {}) {
             roleDirector,
             behaviorArbiter: agent.behavior_arbiter?.snapshot?.() || null,
         },
+        landmarks: getLandmarkState(agent),
         attention: getAttentionState(agent),
         companion: agent.companion_context?.snapshot?.() || null,
         dialogue: getDialogueState(agent),

@@ -561,12 +561,17 @@ function collectionHazardObservation(bot, targetBlock) {
 function collectionBreakTime(bot, block) {
     try {
         const tool = bot.pathfinder.bestHarvestTool?.(block);
+        // Break-time feeds route scoring. Passing an empty enchantment list made
+        // every estimate wrong for enchanted gear, so an Efficiency V pickaxe
+        // was costed as if it were plain.
+        const enchantments = [...itemEnchantments(bot, tool).entries()]
+            .map(([name, lvl]) => ({ name, lvl }));
         const digTime = block.digTime(
             tool?.type ?? null,
             false,
             false,
             false,
-            [],
+            enchantments,
             bot.entity?.effects || {},
         );
         return Number.isFinite(digTime) ? digTime : 0;
@@ -888,7 +893,69 @@ function toolDurability(bot, item) {
     return { max, used, remaining, healthy: remaining > replacementAt };
 }
 
-function bestInventoryTool(bot, family, { allowWorn=false } = {}) {
+// Blocks whose drop multiplies under Fortune. Silk Touch is preferred only when
+// the block itself is wanted, which is why it is requested explicitly rather
+// than scored as a general bonus.
+const FORTUNE_DROP_PATTERN = /(?:coal_ore|diamond_ore|emerald_ore|lapis_ore|redstone_ore|nether_gold_ore|nether_quartz_ore|copper_ore|amethyst_cluster|glowstone|melon|sweet_berry_bush)$/;
+const ENCHANT_NAME = /(?:^|:)([a-z_]+)$/;
+
+/**
+ * Enchantment levels keyed by canonical name. Reads mineflayer's parsed
+ * `enchants` first and falls back to raw NBT, because the shape differs across
+ * protocol versions. Never throws: an unreadable item simply has none.
+ */
+function itemEnchantments(bot, item) {
+    const levels = new Map();
+    if (!item) return levels;
+    const record = (rawName, rawLevel) => {
+        const name = String(rawName ?? '').toLowerCase().match(ENCHANT_NAME)?.[1];
+        const level = Math.floor(Number(rawLevel));
+        if (name && Number.isFinite(level) && level > 0) {
+            levels.set(name, Math.max(levels.get(name) || 0, level));
+        }
+    };
+    try {
+        // prismarine-item throws outright on protocol versions it cannot parse,
+        // so the raw-NBT fallback below must stay reachable.
+        if (Array.isArray(item.enchants)) {
+            for (const entry of item.enchants) record(entry?.name, entry?.lvl);
+        }
+    } catch {
+        // Fall through to the raw NBT read.
+    }
+    if (levels.size > 0) return levels;
+    try {
+        const raw = item.nbt?.value?.ench || item.nbt?.value?.StoredEnchantments;
+        for (const entry of raw?.value?.value || []) {
+            const id = entry?.id?.value;
+            const name = typeof id === 'number'
+                ? bot?.registry?.enchantments?.[id]?.name
+                : id;
+            record(name, entry?.lvl?.value);
+        }
+    } catch {
+        // A malformed or unfamiliar NBT layout is simply "no enchantments".
+    }
+    return levels;
+}
+
+function toolEnchantmentScore(bot, item, block) {
+    const levels = itemEnchantments(bot, item);
+    if (levels.size === 0) return 0;
+    let score = 0;
+    // Efficiency is always worth something; it is the difference between a
+    // player who finishes a vein and one who is still swinging.
+    score += Math.min(5, levels.get('efficiency') || 0) * 2;
+    score += Math.min(3, levels.get('unbreaking') || 0);
+    if (FORTUNE_DROP_PATTERN.test(String(block?.name || ''))) {
+        score += Math.min(3, levels.get('fortune') || 0) * 12;
+        // Silk Touch on a Fortune-eligible ore actively destroys yield.
+        if (levels.has('silk_touch')) score -= 10;
+    }
+    return score;
+}
+
+function bestInventoryTool(bot, family, { allowWorn=false, block=null } = {}) {
     return bot.inventory.items()
         .filter(item => (
             item.name.endsWith(`_${family}`)
@@ -898,6 +965,10 @@ function bestInventoryTool(bot, family, { allowWorn=false } = {}) {
             const leftTier = TOOL_TIER[left.name.split('_')[0]] || 0;
             const rightTier = TOOL_TIER[right.name.split('_')[0]] || 0;
             if (rightTier !== leftTier) return rightTier - leftTier;
+            // Within a tier, enchantments decide before durability: a Fortune
+            // pickaxe is worth more than a slightly fresher plain one.
+            const enchantDelta = toolEnchantmentScore(bot, right, block) - toolEnchantmentScore(bot, left, block);
+            if (enchantDelta !== 0) return enchantDelta;
             const leftDurability = toolDurability(bot, left);
             const rightDurability = toolDurability(bot, right);
             const leftRatio = leftDurability.remaining / leftDurability.max;
@@ -931,7 +1002,7 @@ function toolFamilyForBlock(block) {
 async function equipBestToolForBlock(bot, block) {
     const family = toolFamilyForBlock(block);
     const preferred = family
-        ? bestInventoryTool(bot, family)
+        ? bestInventoryTool(bot, family, { block })
         : null;
     if (preferred && block.canHarvest(preferred.type)) {
         await bot.equip(preferred, 'hand');
@@ -940,7 +1011,7 @@ async function equipBestToolForBlock(bot, block) {
     await bot.tool.equipForBlock(block);
     if (family && bot.heldItem?.name?.endsWith(`_${family}`)) {
         const heldDurability = toolDurability(bot, bot.heldItem);
-        const durableAlternative = bestInventoryTool(bot, family);
+        const durableAlternative = bestInventoryTool(bot, family, { block });
         if (!heldDurability.healthy && durableAlternative && block.canHarvest(durableAlternative.type)) {
             await bot.equip(durableAlternative, 'hand');
             return durableAlternative;

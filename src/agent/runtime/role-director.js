@@ -14,6 +14,11 @@ const SEARCH_EXHAUSTED_COOLDOWN_MS = 120_000;
 const RESOURCE_SCAN_RADIUS = 64;
 const RESOURCE_SEARCH_STEP = 32;
 const BALANCED_ROLE_WORK_RADIUS = 12;
+// A remembered vein is only worth walking to if it is outside the radius the
+// local scan just failed in, and close enough to still be cheaper than a fresh
+// search. Ore is the only sighting worth this: trees are never scarce.
+const REMEMBERED_RESOURCE_RANGE = 192;
+const MIN_RELOCATION_DISTANCE = 24;
 
 const CONTINUOUS_MOVEMENT_BEHAVIORS = new Set(['follow', 'guard']);
 const RESOURCE_ROLES = new Set(['builder', 'lumberjack', 'miner']);
@@ -106,6 +111,30 @@ function scoutCommand(agent, { step = 10, sequence = null } = {}) {
   return `!goToCoordinates(${Math.floor(position.x + xOffset)}, ${Math.floor(position.y)}, ${Math.floor(position.z + zOffset)}, 2)`;
 }
 
+function rememberedResourceRoute(agent, role) {
+  if (role !== 'miner') return null;
+  const origin = agent.bot?.entity?.position;
+  if (!agent.landmark_memory?.recall || !origin) return null;
+  let matches;
+  try {
+    matches = agent.landmark_memory.recall({
+      bot: agent.bot,
+      category: 'ore',
+      dimension: agent.bot?.game?.dimension,
+      origin,
+      maxDistance: REMEMBERED_RESOURCE_RANGE,
+      limit: 4,
+    });
+  } catch (error) {
+    console.warn(`[role-director] Landmark recall failed safely: ${boundedText(error?.message || error)}`);
+    return null;
+  }
+  if (!Array.isArray(matches)) return null;
+  // The local scan already failed where the bot stands, so only a genuinely
+  // different location is worth the walk.
+  return matches.find(entry => Number(entry.distance) >= MIN_RELOCATION_DISTANCE) || null;
+}
+
 function missingRoleTool(agent, role) {
   const requirement = ROLE_TOOL_REQUIREMENTS[role];
   if (!requirement) return null;
@@ -184,6 +213,14 @@ function chooseIntent(agent) {
     && RESOURCE_ROLES.has(role)
     && agent.role_director?.resourceSearchPending
   ) {
+    const remembered = rememberedResourceRoute(agent, role);
+    if (remembered) {
+      return {
+        command: `!goToCoordinates(${remembered.x}, ${remembered.y}, ${remembered.z}, 3)`,
+        target: `remembered ${remembered.name.replace(/_/g, ' ')}`,
+        behavior: 'resource_search',
+      };
+    }
     const attempt = agent.role_director.resourceSearchAttempts;
     // Keep block scans at the skill's normal bounded radius. A much larger
     // synchronous world scan can starve bot telemetry. Move through reachable

@@ -29,6 +29,7 @@ import { EnvironmentObserver } from './runtime/environment-observer.js';
 import * as mc from '../utils/mcdata.js';
 import { CompanionContext } from './runtime/companion-context.js';
 import { HomeStateStore } from './runtime/home-state-store.js';
+import { LandmarkMemory } from './runtime/landmark-memory.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
@@ -258,6 +259,13 @@ export class Agent {
         this.survival_director = new SurvivalDirector(this);
         this.reaction_director = new ReactionDirector(this);
         this.environment_observer = new EnvironmentObserver(this);
+        try {
+            this.landmark_memory = new LandmarkMemory(this.name);
+        } catch (error) {
+            // Spatial recall is an enhancement, never a spawn prerequisite.
+            this.landmark_memory = null;
+            console.warn(`[landmark] Spatial recall is unavailable: ${String(error?.message || error).slice(0, 240)}`);
+        }
         this.behavior_arbiter = new BehaviorArbiter(this);
         
         // Connection Handler
@@ -554,6 +562,13 @@ export class Agent {
     }
 
     publishBehaviorEvent(event) {
+        // Every coordinate-bearing sighting funnels through here, so this is the
+        // one place spatial recall has to be fed.
+        try {
+            this.landmark_memory?.observe(event, { dimension: this.bot?.game?.dimension });
+        } catch (error) {
+            console.warn(`[landmark] Sighting was not recorded: ${String(error?.message || error).slice(0, 240)}`);
+        }
         try {
             const published = this.behavior_events?.publish?.(event) === true;
             serverProxy.requestStatePush?.();
@@ -1131,8 +1146,13 @@ export class Agent {
         // Init NPC controller
         this.npc.init();
 
-        // This update loop ensures that each update() is called one at a time, even if it takes longer than the interval
+        // This update loop ensures that each update() is called one at a time, even if it takes longer than the interval.
+        // The period is not fixed: the arbiter reports how soon it needs to be
+        // re-evaluated based on the lane it selected, live urgency, and the
+        // bot's comportment, so reflexes run tight while idle bots back off.
         const INTERVAL = 300;
+        const MIN_INTERVAL = 60;
+        const MAX_INTERVAL = 1000;
         let last = Date.now();
         this._updateLoopTimer = setTimeout(async () => {
             let consecutiveFailures = 0;
@@ -1150,7 +1170,11 @@ export class Agent {
                         return;
                     }
                 }
-                let remaining = INTERVAL - (Date.now() - start);
+                const requested = Number(this.behavior_arbiter?.nextTickDelayMs);
+                const period = Number.isFinite(requested)
+                    ? Math.min(MAX_INTERVAL, Math.max(MIN_INTERVAL, requested))
+                    : INTERVAL;
+                let remaining = period - (Date.now() - start);
                 if (remaining > 0) {
                     await new Promise((resolve) => setTimeout(resolve, remaining));
                 }
