@@ -12,6 +12,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createModel, resolveConfiguredModel } from './_model_map.js';
 import { createRoutedModel } from './fallback-router.js';
+import { buildMemoryRecall } from '../agent/runtime/memory-recall.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -302,11 +303,20 @@ export class Prompter {
         }
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
-        if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', [
-                this.agent.history.memory,
-                this.agent.memory_bank?.personal?.getPromptSummary?.() || '',
-            ].filter(Boolean).join('\n'));
+        if (prompt.includes('$MEMORY')) {
+            // Relevance-ranked against a hard cap rather than the most recent
+            // N of everything, so remembering more never crowds out thinking.
+            let recalled = '';
+            try {
+                recalled = buildMemoryRecall(this.agent, {
+                    focusText: messages?.slice(-2).map(message => message?.content || '').join(' ') || '',
+                });
+            } catch (error) {
+                console.warn(`[memory] Recall failed, falling back to the plain summary: ${String(error?.message || error).slice(0, 160)}`);
+                recalled = this.agent.memory_bank?.personal?.getPromptSummary?.() || '';
+            }
+            prompt = prompt.replaceAll('$MEMORY', [this.agent.history.memory, recalled].filter(Boolean).join('\n'));
+        }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))

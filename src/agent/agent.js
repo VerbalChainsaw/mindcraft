@@ -30,6 +30,8 @@ import * as mc from '../utils/mcdata.js';
 import { CompanionContext } from './runtime/companion-context.js';
 import { HomeStateStore } from './runtime/home-state-store.js';
 import { LandmarkMemory } from './runtime/landmark-memory.js';
+import { PlayerMemory } from './runtime/player-memory.js';
+import { KnowledgeStore } from './runtime/knowledge-store.js';
 import { ProgressionDirector } from './runtime/progression-director.js';
 import { AgendaDirector } from './runtime/agenda-director.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
@@ -267,6 +269,16 @@ export class Agent {
         this.environment_observer = new EnvironmentObserver(this);
         this.progression_director = new ProgressionDirector(this);
         this.agenda_director = new AgendaDirector(this);
+        try {
+            this.player_memory = new PlayerMemory(this.name);
+            this.knowledge_store = new KnowledgeStore(this.name);
+        } catch (error) {
+            // Remembering people and facts is an enhancement, never a spawn
+            // prerequisite.
+            this.player_memory = null;
+            this.knowledge_store = null;
+            console.warn(`[memory] Player and knowledge memory are unavailable: ${String(error?.message || error).slice(0, 240)}`);
+        }
         try {
             this.landmark_memory = new LandmarkMemory(this.name);
         } catch (error) {
