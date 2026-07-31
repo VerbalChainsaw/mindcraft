@@ -1,10 +1,76 @@
+import { comportmentPauseMs, normalizeComportment } from './comportment.js';
+
+// Fallback for bots whose runtime config predates comportment. Neutral is the
+// exact pre-comportment pacing, so an unconfigured bot behaves as it always did.
+const NEUTRAL_COMPORTMENT = normalizeComportment();
+
 const EMERGENCY_MODES = Object.freeze(['self_preservation']);
 const PROTECTION_MODES = Object.freeze(['self_defense', 'cowardice']);
 const RECOVERY_MODES = Object.freeze(['unstuck']);
 const IDLE_EMBODIMENT_MODES = Object.freeze(['elbow_room', 'idle_staring']);
 const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
+// Automatic role work also owns a live order. Without this set the role lane
+// only ran while `activeOrder` was null, so a dispatched role order advanced
+// exactly once and then stalled with no lane willing to tick it again.
+const ROLE_JOB_SOURCES = new Set(['role']);
 const EXPLICIT_GOAL_SOURCES = new Set(['explicit', 'restored']);
 const MAX_STATUS_TEXT = 240;
+
+// Per-lane base tick period. Reflex lanes re-evaluate quickly so a threat is
+// answered in one frame rather than one third of a second; cosmetic and idle
+// lanes back off so a full squad does not burn CPU doing nothing.
+const LANE_TICK_MS = Object.freeze({
+  emergency_self_preservation: 80,
+  attributed_protection: 100,
+  bounded_recovery: 150,
+  basic_survival: 180,
+  player_directive: 220,
+  player_goal: 240,
+  player_job: 240,
+  role_work: 280,
+  factual_reaction: 300,
+  active_action: 240,
+  idle_embodiment: 400,
+  self_prompt: 400,
+  comportment_pause: 120,
+  degraded: 500,
+  idle: 500,
+  operator_hold: 600,
+  stopped: 600,
+  initializing: 300,
+});
+const DEFAULT_TICK_MS = 300;
+const MIN_TICK_MS = 60;
+const MAX_TICK_MS = 1_000;
+// Urgency is authoritative over comportment: a bot never dawdles while it is
+// drowning, starving, or being hit, no matter how casual its persona is.
+const URGENCY_TICK_CAP = Object.freeze({
+  critical: 80,
+  elevated: 160,
+  calm: MAX_TICK_MS,
+});
+
+/**
+ * Pure cadence selection. Exported so pacing can be reasoned about and tested
+ * without spinning a bot.
+ */
+export function tickDelayForStatus(status, {
+  urgency = 'calm',
+  cadenceScale = 1,
+  pauseRemainingMs = 0,
+} = {}) {
+  const remaining = Number(pauseRemainingMs);
+  if (Number.isFinite(remaining) && remaining > 0) {
+    return Math.min(MAX_TICK_MS, Math.max(MIN_TICK_MS, Math.round(remaining)));
+  }
+  const base = LANE_TICK_MS[String(status?.selectedLane || '')] ?? DEFAULT_TICK_MS;
+  const scale = Number.isFinite(Number(cadenceScale))
+    ? Math.min(3, Math.max(0.5, Number(cadenceScale)))
+    : 1;
+  const cap = URGENCY_TICK_CAP[urgency] ?? MAX_TICK_MS;
+  const scaled = urgency === 'calm' ? base * scale : base;
+  return Math.min(MAX_TICK_MS, Math.max(MIN_TICK_MS, Math.round(Math.min(scaled, cap))));
+}
 
 function boundedText(value, fallback = '') {
   return String(value || fallback)
@@ -15,14 +81,21 @@ function boundedText(value, fallback = '') {
 }
 
 export class BehaviorArbiter {
-  constructor(agent, { now = Date.now } = {}) {
+  constructor(agent, { now = Date.now, random = Math.random } = {}) {
     this.agent = agent;
     this.now = now;
+    this.random = typeof random === 'function' ? random : Math.random;
     this.stopped = false;
     this.updating = false;
     this.directiveResumeRequested = false;
     this.tick = 0;
     this.lastObservedAt = null;
+    this.nextTickDelayMs = DEFAULT_TICK_MS;
+    this.urgency = 'calm';
+    // Comportment pacing state: `wasActing` remembers whether the previous tick
+    // owned an action so the hesitation can be armed exactly once on release.
+    this.wasActing = false;
+    this.comportmentPauseUntil = 0;
     this.status = {
       selectedLane: 'initializing',
       code: 'not_started',
@@ -43,6 +116,8 @@ export class BehaviorArbiter {
     if (this.stopped) return false;
     this.stopped = true;
     this.directiveResumeRequested = false;
+    this.comportmentPauseUntil = 0;
+    this.wasActing = false;
     this.select('stopped', 'arbiter_stopped', 'Behavior arbitration stopped during teardown.', true);
     return true;
   }
@@ -55,9 +130,13 @@ export class BehaviorArbiter {
 
   actionState() {
     const actions = this.agent?.actions;
+    // `_executeResume` publishes the label a moment before `executing` flips, so
+    // gating purely on `executing` left a one-tick window where a resuming
+    // action looked idle and a lower lane could claim ownership underneath it.
+    const active = Boolean(actions?.executing) || Boolean(actions?.currentActionLabel);
     return {
-      owner: actions?.executing ? boundedText(actions.currentActionOwner, 'unknown') : null,
-      label: actions?.executing ? boundedText(actions.currentActionLabel, 'unknown') : null,
+      owner: active ? boundedText(actions.currentActionOwner, 'unknown') : null,
+      label: active ? boundedText(actions.currentActionLabel, 'unknown') : null,
     };
   }
 
@@ -79,7 +158,63 @@ export class BehaviorArbiter {
       tick: this.tick,
       updatedAt: now,
     };
+    this.nextTickDelayMs = tickDelayForStatus(this.status, {
+      urgency: this.urgency,
+      cadenceScale: this.comportment().cadenceScale,
+      pauseRemainingMs: this.comportmentPauseUntil - now,
+    });
     return this.snapshot();
+  }
+
+  comportment() {
+    return this.agent?.runtime?.comportment || NEUTRAL_COMPORTMENT;
+  }
+
+  /**
+   * Cheap urgency read from state the bot already holds. Deliberately performs
+   * no world scan so it can run on every tick without costing frame time.
+   */
+  urgencyOf() {
+    const bot = this.agent?.bot;
+    if (!bot) return 'calm';
+    const health = Number(bot.health);
+    const food = Number(bot.food);
+    const oxygen = Number(bot.oxygenLevel);
+    const lastDamageTime = Number(bot.lastDamageTime);
+    const sinceDamage = Number.isFinite(lastDamageTime) && lastDamageTime > 0
+      ? this.now() - lastDamageTime
+      : Infinity;
+    if (
+      (Number.isFinite(health) && health <= 10)
+      || (Number.isFinite(oxygen) && oxygen <= 12)
+      || sinceDamage <= 2_000
+    ) return 'critical';
+    if (
+      (Number.isFinite(health) && health <= 16)
+      || (Number.isFinite(food) && food <= 6)
+      || sinceDamage <= 6_000
+    ) return 'elevated';
+    return 'calm';
+  }
+
+  /**
+   * Human personas hesitate after finishing something before claiming the next
+   * piece of work. Emergency, protection, and recovery lanes sit above this and
+   * are never delayed; a critical urgency reading clears the pause outright.
+   */
+  observeActionRelease(acting) {
+    if (acting) {
+      this.wasActing = true;
+      this.comportmentPauseUntil = 0;
+      return;
+    }
+    if (!this.wasActing) return;
+    this.wasActing = false;
+    const pause = comportmentPauseMs(this.comportment(), {
+      afterAction: true,
+      random: this.random,
+    });
+    this.comportmentPauseUntil = pause > 0 ? this.now() + pause : 0;
   }
 
   async refreshPerception() {
@@ -184,6 +319,7 @@ export class BehaviorArbiter {
     this.updating = true;
     this.tick += 1;
     const modes = this.agent.bot?.modes;
+    this.urgency = this.urgencyOf();
     const perception = await this.refreshPerception();
     let modeCycleStarted = false;
     try {
@@ -217,7 +353,20 @@ export class BehaviorArbiter {
         }
       }
       selected = this.classifyActiveAction(perception);
+      this.observeActionRelease(Boolean(selected));
       if (selected) return selected;
+
+      if (this.urgency === 'critical') {
+        this.comportmentPauseUntil = 0;
+      } else if (this.comportmentPauseUntil > this.now()) {
+        return this.select(
+          'comportment_pause',
+          'comportment_pause',
+          `${this.comportment().label} persona is pausing briefly before taking new work.`,
+          true,
+          perception,
+        );
+      }
 
       const companion = this.agent.companion_context?.snapshot?.();
       if (!companion?.directive) this.directiveResumeRequested = false;
@@ -310,10 +459,13 @@ export class BehaviorArbiter {
         }
       }
 
-      selected = await this.evaluateModeBand('idle_embodiment', IDLE_EMBODIMENT_MODES, perception);
-      if (selected) return selected;
-
-      if (this.agent.runtime?.autonomy !== 'command' && !job?.activeOrder && job?.update) {
+      // Authorized work outranks cosmetic embodiment. Idle staring used to be
+      // evaluated first and could consume the tick that role work needed.
+      if (
+        this.agent.runtime?.autonomy !== 'command'
+        && job?.update
+        && (!job.activeOrder || ROLE_JOB_SOURCES.has(job.activeOrder.source))
+      ) {
         try {
           job.update();
         } catch (error) {
@@ -322,6 +474,11 @@ export class BehaviorArbiter {
         if (job.inFlight || this.agent.actions?.executing || job.activeOrder) {
           return this.select('role_work', job.status?.code || 'role_work_selected', 'Existing role policy selected authorized work.', true, perception);
         }
+      }
+
+      if (this.comportment().idleEmbodiment) {
+        selected = await this.evaluateModeBand('idle_embodiment', IDLE_EMBODIMENT_MODES, perception);
+        if (selected) return selected;
       }
 
       if (this.selfPromptPermitted()) {
@@ -352,6 +509,11 @@ export class BehaviorArbiter {
   }
 
   snapshot() {
-    return { ...this.status };
+    return {
+      ...this.status,
+      urgency: this.urgency,
+      nextTickDelayMs: this.nextTickDelayMs,
+      comportment: this.comportment().preset,
+    };
   }
 }

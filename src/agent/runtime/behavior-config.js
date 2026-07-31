@@ -1,4 +1,5 @@
 import { normalizeCharacterIdentity } from './identity-config.js';
+import { normalizeComportment } from './comportment.js';
 
 const ROLE_PRESETS = Object.freeze({
   companion: Object.freeze({ focus: ['follow', 'assist', 'conversation'], reflexes: ['self_preservation', 'self_defense'] }),
@@ -109,19 +110,39 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
   const visionMode = legacySettings.allow_vision === false && raw.vision?.mode === undefined
     ? 'off'
     : enumValue(vision.mode, VISION_MODES, legacySettings.allow_vision ? 'hybrid' : 'off');
+  const comportment = normalizeComportment(raw.comportment);
+
+  // Comportment biases policy only when a profile opts in AND leaves the field
+  // unset. Every pre-existing profile therefore normalizes to exactly the values
+  // it did before, and an explicit value always wins over the preset, which also
+  // keeps normalize -> runtimeBehaviorToProfile -> normalize a stable round trip
+  // instead of re-applying the bias on every save.
+  const criticalFood = boundedInteger(survival.criticalFood, 6, 0, 20);
+  const baseEatAt = boundedInteger(survival.eatAt, 14, 1, 20);
+  const eatAt = comportment.explicit && !Number.isInteger(Number(survival.eatAt))
+    ? Math.max(criticalFood + 1, boundedInteger(baseEatAt - comportment.hungerSlack, baseEatAt, 1, 20))
+    : baseEatAt;
+  const baseRecoveryAttempts = boundedInteger(limits.maxRecoveryAttempts, 2, 0, 6);
+  const maxRecoveryAttempts = comportment.explicit && !Number.isInteger(Number(limits.maxRecoveryAttempts))
+    ? boundedInteger(baseRecoveryAttempts + comportment.recoveryAttemptBias, baseRecoveryAttempts, 0, 6)
+    : baseRecoveryAttempts;
+  const reactionFallback = comportment.explicit && comportment.reactionMode
+    ? comportment.reactionMode
+    : hasExplicitRuntime ? 'natural' : 'minimal';
 
   return Object.freeze({
     schemaVersion: 1,
     role,
     rolePreset: ROLE_PRESETS[role],
     autonomy,
+    comportment,
     reflexes: Object.freeze({
       combat: enumValue(reflexes.combat, COMBAT_REFLEX_POLICIES, 'role'),
     }),
     survival: Object.freeze({
       mode: enumValue(survival.mode, SURVIVAL_MODES, hasExplicitRuntime ? 'full' : 'basic'),
-      eatAt: boundedInteger(survival.eatAt, 14, 1, 20),
-      criticalFood: boundedInteger(survival.criticalFood, 6, 0, 20),
+      eatAt,
+      criticalFood,
       reserveFoodPoints: boundedInteger(survival.reserveFoodPoints, 12, 0, 40),
       sleep: enumValue(survival.sleep, SLEEP_POLICIES, 'safe'),
       shelter: enumValue(survival.shelter, SHELTER_POLICIES, hasExplicitRuntime ? 'emergency' : 'seek'),
@@ -134,7 +155,7 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
       deposit: enumValue(jobs.deposit, DEPOSIT_POLICIES, 'inventory'),
     }),
     reactions: Object.freeze({
-      mode: enumValue(reactions.mode, REACTION_MODES, hasExplicitRuntime ? 'natural' : 'minimal'),
+      mode: enumValue(reactions.mode, REACTION_MODES, reactionFallback),
       maxSpeechPerMinute: boundedInteger(reactions.maxSpeechPerMinute, 4, 0, 12),
       maxGesturesPerMinute: boundedInteger(reactions.maxGesturesPerMinute, 8, 0, 24),
     }),
@@ -171,7 +192,7 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
     loadout: Object.freeze(normalizeLoadout(raw.loadout)),
     limits: Object.freeze({
       maxActionMinutes: boundedInteger(limits.maxActionMinutes, 10, 1, 60),
-      maxRecoveryAttempts: boundedInteger(limits.maxRecoveryAttempts, 2, 0, 6),
+      maxRecoveryAttempts,
       maxNoProgress: boundedInteger(limits.maxNoProgress, 3, 1, 8),
       maxPromptTurns: boundedInteger(limits.maxPromptTurns, 3, 1, 8),
       maxConversationTurns: boundedInteger(limits.maxConversationTurns, 6, 2, 20),
@@ -189,6 +210,7 @@ export function describeRuntimeBehavior(behavior) {
     title: config.identity.title,
     role: config.role,
     autonomy: config.autonomy,
+    comportment: config.comportment.preset,
     combatReflex: config.reflexes.combat,
     language: config.identity.language,
     traits,
@@ -203,6 +225,15 @@ export function runtimeBehaviorToProfile(behavior) {
     schemaVersion: 1,
     role: config.role,
     autonomy: config.autonomy,
+    comportment: {
+      preset: config.comportment.preset,
+      cadenceScale: config.comportment.cadenceScale,
+      decisionDelayMs: [...config.comportment.decisionDelayMs],
+      actionGapMs: [...config.comportment.actionGapMs],
+      idleEmbodiment: config.comportment.idleEmbodiment,
+      recoveryAttemptBias: config.comportment.recoveryAttemptBias,
+      hungerSlack: config.comportment.hungerSlack,
+    },
     reflexes: {
       combat: config.reflexes.combat,
     },

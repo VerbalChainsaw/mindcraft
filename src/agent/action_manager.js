@@ -3,6 +3,22 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { actionResultFromError, createActionResult } from './runtime/action-result.js';
 
 const STOP_WAIT_TIMEOUT_MS = 10_000;
+// Escalating stop poll. A cooperative skill checks `interrupt_code` within a
+// few milliseconds, so waiting a flat 300ms before re-testing put a hard floor
+// under every handoff — including an emergency reflex preempting a job. The
+// tail of the ladder keeps a stubborn action from being polled thousands of
+// times before the 10s ceiling.
+const STOP_POLL_LADDER_MS = Object.freeze([5, 10, 15, 25, 40, 60, 100, 150, 200, 300]);
+// `requestInterrupt` writes control states and cancels tasks, which puts packets
+// on the wire. The fast poll only re-reads `executing`; the interrupt itself is
+// re-issued on this slower beat so a tight poll cannot flood the server.
+const INTERRUPT_REISSUE_MS = 120;
+
+function stopPollDelayMs(attempt) {
+    const index = Math.min(Math.max(0, attempt), STOP_POLL_LADDER_MS.length - 1);
+    return STOP_POLL_LADDER_MS[index];
+}
+
 const ACTION_OWNER_PRIORITY = Object.freeze({
     background: 0,
     autonomy: 10,
@@ -53,8 +69,10 @@ export class ActionManager {
         );
     }
 
-    async resumeAction(actionFn, timeout) {
-        return this._executeResume(actionFn, timeout);
+    // Positional parameters must match `_executeResume`. The zero-argument form
+    // resumes whatever resume function is already registered.
+    async resumeAction(actionLabel = null, actionFn = null, timeout = 10, owner = null) {
+        return this._executeResume(actionLabel, actionFn, timeout, owner);
     }
 
     async runAction(actionLabel, actionFn, { timeout, resume = false, owner } = {}) {
@@ -83,12 +101,21 @@ export class ActionManager {
             : STOP_WAIT_TIMEOUT_MS;
         const deadline = requestedAt + boundedTimeoutMs;
         this.stopRequestedAt = requestedAt;
+        let attempt = 0;
+        let lastInterruptAt = 0;
         while (this.executing && Date.now() < deadline) {
             if (!continueWhile()) {
                 return { stopped: false, timedOut: false, superseded: true, requestedAt };
             }
-            try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
-            await new Promise(resolve => setTimeout(resolve, 300));
+            const now = Date.now();
+            if (attempt === 0 || now - lastInterruptAt >= INTERRUPT_REISSUE_MS) {
+                lastInterruptAt = now;
+                try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
+            }
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) break;
+            await new Promise(resolve => setTimeout(resolve, Math.min(stopPollDelayMs(attempt), remaining)));
+            attempt += 1;
         }
 
         if (!continueWhile()) {
