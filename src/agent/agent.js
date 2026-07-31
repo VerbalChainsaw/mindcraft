@@ -34,6 +34,7 @@ import { PlayerMemory } from './runtime/player-memory.js';
 import { KnowledgeStore } from './runtime/knowledge-store.js';
 import { ProgressionDirector } from './runtime/progression-director.js';
 import { AgendaDirector } from './runtime/agenda-director.js';
+import { RuleEngine } from './runtime/rule-engine.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
@@ -269,6 +270,13 @@ export class Agent {
         this.environment_observer = new EnvironmentObserver(this);
         this.progression_director = new ProgressionDirector(this);
         this.agenda_director = new AgendaDirector(this);
+        try {
+            this.rule_engine = new RuleEngine(this);
+        } catch (error) {
+            // Standing orders are an enhancement, never a spawn prerequisite.
+            this.rule_engine = null;
+            console.warn(`[rules] Standing orders are unavailable: ${String(error?.message || error).slice(0, 240)}`);
+        }
         try {
             this.player_memory = new PlayerMemory(this.name);
             this.knowledge_store = new KnowledgeStore(this.name);
@@ -586,6 +594,7 @@ export class Agent {
         // one place spatial recall has to be fed.
         try {
             this.landmark_memory?.observe(event, { dimension: this.bot?.game?.dimension });
+            this.rule_engine?.observe(event);
         } catch (error) {
             console.warn(`[landmark] Sighting was not recorded: ${String(error?.message || error).slice(0, 240)}`);
         }

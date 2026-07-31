@@ -1123,6 +1123,58 @@ export const actionsList = [
         }
     },
     {
+        name: '!addRule',
+        description: 'Create a standing order the bot follows on its own. Triggers: threat.detected, entity.hurt, self.damaged, self.died, player.approached, player.returned, player.joined, player.left, observation.item, observation.structure, observation.terrain, time.sunrise, time.sunset, weather.changed, job.completed, schedule. Actions: acquire, mine, harvest, stockpile, shelter, goto, visit, say.',
+        params: {
+            'trigger': { type: 'string', description: 'What starts the rule. Use "schedule" for a repeating patrol or chore.' },
+            'action': { type: 'string', description: 'What the bot then queues: acquire, mine, harvest, stockpile, shelter, goto, visit, or say.' },
+            'target': { type: 'string', description: 'Item or material for gathering actions; the sentence for say; "none" otherwise.' },
+            'quantity': { type: 'int', description: 'How many for gathering actions, otherwise 1.', domain: [1, 2304, '[]'] },
+            'player_name': { type: 'string', description: 'Restrict to one player, or the player to go to. Use "any" for anyone.' },
+            'place': { type: 'string', description: 'Remembered place category to require or patrol: ore, workstation, storage, shelter, portal, hazard, water, or "none".' },
+        },
+        perform: function (agent, trigger, action, target, quantity, playerName, place) {
+            const engine = agent.rule_engine;
+            if (!engine?.add) return 'Standing orders are unavailable on this bot.';
+            const none = value => (String(value || '').toLowerCase() === 'none' ? '' : value);
+            const result = engine.add({
+                trigger,
+                action,
+                target: none(target),
+                quantity,
+                player: String(playerName || '').toLowerCase() === 'any' ? '' : playerName,
+                place: none(place),
+            });
+            return result.accepted
+                ? `Standing order added: ${result.description}.`
+                : `That rule was not accepted: ${result.detail}.`;
+        }
+    },
+    {
+        name: '!listRules',
+        description: 'Report every standing order this bot follows on its own.',
+        perform: function (agent) {
+            const rules = agent.rule_engine?.list?.();
+            if (!rules) return 'Standing orders are unavailable on this bot.';
+            if (!rules.length) return 'I have no standing orders.';
+            return rules
+                .map((rule, index) => `${index + 1}. ${rule.description}${rule.enabled ? '' : ' (off)'} — fired ${rule.firedCount}x [${rule.id}]`)
+                .join('\n');
+        }
+    },
+    {
+        name: '!removeRule',
+        description: 'Delete a standing order by its id, as shown by !listRules.',
+        params: {
+            'rule_id': { type: 'string', description: 'The rule id to remove.' },
+        },
+        perform: function (agent, ruleId) {
+            const result = agent.rule_engine?.remove?.(ruleId);
+            if (!result) return 'Standing orders are unavailable on this bot.';
+            return result.removed ? 'Standing order removed.' : 'No standing order matched that id.';
+        }
+    },
+    {
         name: '!showAgenda',
         description: 'Report the queued plan: what is running now, what is waiting, and how the last steps ended.',
         perform: function (agent) {

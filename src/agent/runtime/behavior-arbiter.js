@@ -425,6 +425,17 @@ export class BehaviorArbiter {
       // The agenda decides what comes next and hands it to an executor; it
       // never acts itself. Running it before the goal and job lanes means a
       // step it dispatches is picked up by those lanes on this same tick.
+      // Scheduled standing orders have no event to react to, so the tick drives
+      // them. They only ever queue agenda steps, never act directly.
+      const rules = this.agent.rule_engine;
+      if (rules?.update) {
+        try {
+          rules.update();
+        } catch (error) {
+          console.warn(`[behavior-arbiter] Standing orders failed safely: ${boundedText(error?.message || error)}`);
+        }
+      }
+
       const agenda = this.agent.agenda_director;
       if (agenda?.update) {
         try {

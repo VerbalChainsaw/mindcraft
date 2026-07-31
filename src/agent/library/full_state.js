@@ -362,6 +362,15 @@ function emptyBlockPerception() {
     };
 }
 
+function getRuleState(agent) {
+    try {
+        return agent.rule_engine?.snapshot?.() || null;
+    } catch {
+        // Standing-order telemetry must never break state reporting.
+        return null;
+    }
+}
+
 function getAgendaState(agent) {
     try {
         return agent.agenda_director?.snapshot?.() || null;
@@ -944,6 +953,7 @@ export function getFullState(agent, { deep = false } = {}) {
             progressionDirector: agent.progression_director?.snapshot?.() || null,
         },
         agenda: getAgendaState(agent),
+        rules: getRuleState(agent),
         landmarks: getLandmarkState(agent),
         attention: getAttentionState(agent),
         companion: agent.companion_context?.snapshot?.() || null,
