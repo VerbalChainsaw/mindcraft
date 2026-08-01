@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "scenario": "natural-language-clear-and-obstructed-hostile-tactical-combat",
+  "command": "fight the hostile",
+  "expectedActionLabel": "action:attackHostile",
+  "bot": "MindcraftBot",
+  "fixture": {
+    "arena": {
+      "x1": 1109,
+      "x2": 1118,
+      "y1": 100,
+      "y2": 105,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "botStart": {
+      "x": 1111.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "targetStart": {
+      "x": 1117.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "wall": {
+      "x": 1114,
+      "y1": 100,
+      "y2": 102,
+      "z1": 1054,
+      "z2": 1060
+    },
+    "alternateRoutes": [
+      {
+        "z": 1053
+      },
+      {
+        "z": 1061
+      }
+    ],
+    "repairedFloor": {
+      "x1": 1109,
+      "x2": 1118,
+      "y": 99,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "target": {
+      "type": "zombie",
+      "tag": "mindcraft_com001",
+      "activeAI": false
+    }
+  },
+  "independentAttribution": {
+    "damageCriterion": "minecraft.custom:minecraft.damage_dealt",
+    "killCriterion": "minecraft.killed:minecraft.zombie"
+  },
+  "startedAt": 1785604540879,
+  "attempts": [
+    {
+      "attempt": 1,
+      "cases": [],
+      "passed": false
+    }
+  ],
+  "passed": false,
+  "error": "Error: Timed out waiting for clear hostile perception fixture. Last observation: {\"_meta\":{\"sampledAt\":1785604557758,\"source\":\"live\",\"depth\":\"shallow\"},\"name\":\"MindcraftBot\",\"identity\":{\"schemaVersion\":1,\"profileId\":\"\",\"instanceId\":\"\",\"displayName\":\"MindcraftBot\",\"callSign\":\"\",\"title\":\"\",\"appearance\":\"\",\"nameplate\":{\"badge\":\"\",\"color\":\"gray\"},\"squad\":{\"id\":\"\",\"displayName\":\"\",\"badge\":\"\",\"color\":\"gray\",\"motto\":\"\",\"naming\":{\"style\":\"numbered\",\"memberNames\":[]}},\"role\":\"companion\",\"autonomy\":\"command\",\"roleFocus\":[\"follow\",\"assist\",\"conversation\"],\"job\":\"\",\"language\":\"en\",\"style\":\"\",\"attitude\":\"\",\"specialties\":[],\"runtime\":{\"autonomy\":\"command\",\"comportment\":\"neutral\",\"traversal\":\"full\",\"narration\":\"quiet\"}},\"persona\":\"\",\"gameplay\":{\"position\":{\"x\":-161.5,\"y\":78,\"z\":-101.5},\"dimension\":\"overworld\",\"gamemode\":\"survival\",\"health\":20,\"healthMax\":20,\"hunger\":20,\"hungerMax\":20,\"experienceLevel\":0,\"experiencePoints\":0,\"biome\":\"birch_forest\",\"weather\":\"Clear\",\"timeOfDay\":18733,\"timeLabel\":\"Night\"},\"action\":{\"current\":\"Manual control\",\"kind\":\"stopped\",\"isIdle\":true,\"pathfinding\":null,\"held\":true,\"stopRequestedAt\":null,\"stopTimedOutAt\":null,\"lastResult\":{\"actionId\":\"MindcraftBot-7-1785604155356\",\"phase\":\"succeeded\",\"code\":\"skill_secured\",\"label\":\"action:resolveTacticalCombat\",\"detail\":\"Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: melee ag\",\"target\":{\"name\":\"zombie\"},\"retryable\":false,\"durationMs\":4965,\"startedAt\":1785604155356,\"finishedAt\":1785604160321},\"survivalDirector\":{\"name\":\"survival\",\"phase\":\"waiting\",\"code\":\"ready\",\"target\":null,\"detail\":\"Waiting for an eligible behavior.\",\"retryable\":true,\"nextEligibleAt\":null},\"goalDirector\":{\"phase\":\"idle\",\"code\":\"no_goal\",\"detail\":\"No typed gameplay goal is active.\",\"retryable\":false,\"inFlight\":false,\"nextAttemptAt\":0,\"plan\":null,\"goal\":{\"id\":\"goal-6a3913c1-c356-4230-841c-0f4ad5cfa124\",\"kind\":\"acquire\",\"requester\":\"ADMIN\",\"target\":{\"requestedName\":\"oak_log\",\"canonicalName\":\"oak_log\",\"inventoryName\":\"oak_log\",\"acquisitionKind\":\"collect_block\"},\"quantity\":2,\"destination\":{\"kind\":\"inventory\",\"player\":null},\"phase\":\"complete\",\"attempts\":0,\"maxAttempts\":4,\"checkpoint\":{\"baselineInventory\":0,\"targetInventory\":2,\"delivered\":0},\"procedureId\":\"procedure-acquire:oak_log:inventory\",\"subgoals\":0,\"activeSubgoal\":null}},\"jobDirector\":{\"phase\":\"suppressed\",\"code\":\"manual_command\",\"retryable\":true,\"nextAttemptAt\":1785604170356,\"workOrder\":{\"id\":\"builder-88e51f41-1f9c-4647-8d75-55473382f82b\",\"role\":\"builder\",\"kind\":\"emergency_shelter\",\"phase\":\"acquire\",\"target\":{\"name\":\"worksite\",\"x\":1031,\"y\":100,\"z\":1010},\"attempts\":0,\"maxAttempts\":3,\"checkpoint\":{},\"evidence\":{\"code\":\"preempted\",\"detail\":\"Action was interrupted.\",\"actionId\":\"MindcraftBot-1-1785604097347\"}}},\"reactionDirector\":{\"phase\":\"suppressed\",\"code\":\"no_eligible_reaction\",\"spoken\":4,\"gestures\":0,\"fallbacks\":0,\"lastEventId\":\"entity-hurt-68995-1785604127\",\"detail\":\"Events were remembered or observed without interrupting the current interaction.\",\"queued\":29},\"roleDirector\":{\"phase\":\"suppressed\",\"code\":\"manual_command\",\"role\":\"companion\",\"target\":null,\"evidence\":\"Direct player command owns action control.\",\"retryable\":true,\"at\":1785604106240,\"nextAttemptAt\":1785604170356},\"behaviorArbiter\":{\"selectedLane\":\"operator_hold\",\"code\":\"operator_hold\",\"reason\":\"operator stop command\",\"observedAt\":1785604561217,\"perceptionFreshness\":\"fresh\",\"perceptionAge\":342,\"perceptionError\":null,\"activeActionOwner\":null,\"activeActionLabel\":null,\"lowerLanesSuppressed\":true,\"tick\":946,\"updatedAt\":1785604561559,\"urgency\":\"elevated\",\"nextTickDelayMs\":160,\"comportment\":\"neutral\",\"decisionTrace\":{\"schemaVersion\":1,\"retained\":128,\"retentionLimit\":128,\"recent\":[{\"schemaVersion\":1,\"decisionId\":\"MindcraftBot-931-1785604559159-931\",\"agent\":\"MindcraftBot\",\"wallClock",
+  "cleanup": {
+    "held": true,
+    "position": {
+      "x": 1071.5,
+      "y": 100,
+      "z": 1007.5
+    },
+    "autonomy": "command",
+    "taggedTargetsRemoved": true,
+    "temporaryWallRemoved": true
+  },
+  "finishedAt": 1785604562308,
+  "durationMs": 21429
+}

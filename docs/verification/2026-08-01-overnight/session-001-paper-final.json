@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "scenario": "ten-minute-command-autonomy-session-paper-final",
+  "observedAt": 1785605438642,
+  "bot": "MindcraftBot",
+  "server": {
+    "phase": "running",
+    "target": {
+      "host": "127.0.0.1",
+      "port": 25579,
+      "auth": "offline",
+      "minecraft_version": "auto",
+      "source": "managed-runtime"
+    }
+  },
+  "markerWindow": [
+    "[command] > scoreboard players set #SES001_FINAL_BEGIN ses001proof 1",
+    "[command] > data get entity MindcraftBot Pos",
+    "[command] > data get entity MindcraftBot Health",
+    "> > > >   [12:30:38 INFO]: Created new objective [ses001proof]",
+    "> data get entity MindcraftBot Heal>   [12:30:38 INFO]: Set [ses001proof] for #SES001_FINAL_BEGIN to 1",
+    ">   [12:30:38 INFO]: MindcraftBot has the following entity data: [\u001b[33m1032.430603772614\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1012.6171950185965\u001b[91md\u001b[0m]",
+    ">   [12:30:38 INFO]: MindcraftBot has the following entity data: \u001b[33m20.0\u001b[91mf\u001b[0m",
+    "[command] > data get entity MindcraftBot foodLevel",
+    "[command] > data get entity MindcraftBot OnGround",
+    "[command] > scoreboard players set #SES001_FINAL_END ses001proof 1",
+    "> > > >   [12:30:38 INFO]: MindcraftBot has the following entity data: \u001b[33m20\u001b[0m",
+    ">   [12:30:38 INFO]: MindcraftBot has the following entity data: \u001b[33m1\u001b[91mb\u001b[0m",
+    ">   [12:30:38 INFO]: Set [ses001proof] for #SES001_FINAL_END to 1"
+  ]
+}

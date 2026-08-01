@@ -343,6 +343,63 @@
         "com-001-live-final.json"
       ],
       "commit": "COM-001 repair checkpoint"
+    },
+    {
+      "id": "COM-001-natural-language-defend",
+      "scenario": "natural-language-clear-and-obstructed-hostile-handling",
+      "command": "fight the hostile",
+      "observation": {
+        "resolvedActionLabel": "action:attackHostile",
+        "clear": { "result": "succeeded:skill_secured", "durationMs": 4011, "damage": "0->200", "kills": "0->1" },
+        "obstructed": { "result": "succeeded:skill_secured", "durationMs": 5043, "initialVisible": false, "damage": "0->200", "kills": "0->1" },
+        "stopQuiescenceMs": [5, 16],
+        "initialFixtureStateMismatch": "Paper teleport logged while canonical position remained stale for 15 seconds; not reproduced on identical rerun",
+        "cleanupVerified": true
+      },
+      "classification": "verified_natural_language_routing_with_unconfirmed_perception_observation",
+      "changedFiles": ["tools/verify-combat-field.mjs"],
+      "tests": ["verifier syntax and lint passed"],
+      "liveReruns": 2,
+      "result": "passed_clear_and_obstructed_acceptance",
+      "evidence": [
+        "com-001-natural-language-defend.json",
+        "com-001-natural-language-defend-r2.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "SESSION-001-ten-minute",
+      "scenario": "ten-minute-command-autonomy-session",
+      "command": "!setAutonomy(\"command\") then monitor for ten minutes and !stop",
+      "observation": {
+        "sessionDurationMs": 600638,
+        "canonicalSamples": 583,
+        "servicePolls": 117,
+        "decisionTraces": 145,
+        "idleDriftEvents": 0,
+        "thrashWindows": 0,
+        "disconnects": 0,
+        "health": "20->20",
+        "hunger": "20->20",
+        "boundedStartupWork": [
+          "prepareMaterial failed truthfully after 25748 ms",
+          "one block placement succeeded",
+          "parent emergency-shelter order terminally failed on blueprint_incorrect_block and stayed suppressed"
+        ],
+        "stopQuiescenceMs": 2,
+        "stableForTenSeconds": true,
+        "paperFinal": { "x": 1032.430603772614, "y": 100, "z": 1012.6171950185965, "health": 20, "hunger": 20, "onGround": true }
+      },
+      "classification": "verified_behavior",
+      "changedFiles": [],
+      "tests": [],
+      "liveReruns": 1,
+      "result": "passed_ten_minute_gate",
+      "evidence": [
+        "session-001-live.json",
+        "session-001-paper-final.json"
+      ],
+      "commit": null
     }
   ]
 }

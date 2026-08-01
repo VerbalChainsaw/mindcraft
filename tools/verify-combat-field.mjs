@@ -15,6 +15,7 @@ const PROOF_OBJECTIVE = 'com001proof';
 const DAMAGE_OBJECTIVE = 'com001damage';
 const KILL_OBJECTIVE = 'com001kills';
 const COMMAND = '!resolveTacticalCombat(8)';
+const NATURAL_LANGUAGE_COMMAND = 'fight the hostile';
 const POLL_MS = 100;
 const VERIFIED_FLOOR_CELLS = Object.freeze([
   { x: 1111, z: 1057, block: 'red_concrete' },
@@ -47,7 +48,14 @@ const COURSE_HOSTILE_TYPES = Object.freeze([
 ]);
 
 function parseArgs(argv) {
-  const options = { url: '', bot: 'MindcraftBot', attempts: 3, evidence: '', authorized: false };
+  const options = {
+    url: '',
+    bot: 'MindcraftBot',
+    attempts: 3,
+    evidence: '',
+    authorized: false,
+    naturalLanguageDefend: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--url') options.url = String(argv[++index] || '');
@@ -55,6 +63,7 @@ function parseArgs(argv) {
     else if (value === '--attempts') options.attempts = Number(argv[++index]);
     else if (value === '--evidence') options.evidence = String(argv[++index] || '');
     else if (value === '--authorized-active-world') options.authorized = true;
+    else if (value === '--natural-language-defend') options.naturalLanguageDefend = true;
     else throw new Error(`Unknown argument: ${value}`);
   }
   if (!options.url || !options.evidence) throw new Error('--url and --evidence are required.');
@@ -70,6 +79,10 @@ function parseArgs(argv) {
   parsed.hash = '';
   options.url = parsed.toString().replace(/\/$/, '');
   options.evidence = resolve(options.evidence);
+  options.command = options.naturalLanguageDefend ? NATURAL_LANGUAGE_COMMAND : COMMAND;
+  options.expectedActionLabel = options.naturalLanguageDefend
+    ? 'action:attackHostile'
+    : 'action:resolveTacticalCombat';
   return options;
 }
 
@@ -222,8 +235,11 @@ async function run() {
   const options = parseArgs(process.argv.slice(2));
   const evidence = {
     schemaVersion: 1,
-    scenario: 'clear-and-obstructed-hostile-tactical-combat',
-    command: COMMAND,
+    scenario: options.naturalLanguageDefend
+      ? 'natural-language-clear-and-obstructed-hostile-tactical-combat'
+      : 'clear-and-obstructed-hostile-tactical-combat',
+    command: options.command,
+    expectedActionLabel: options.expectedActionLabel,
     bot: options.bot,
     fixture: {
       arena: { x1: 1109, x2: 1118, y1: 100, y2: 105, z1: 1045, z2: 1067 },
@@ -434,7 +450,7 @@ async function run() {
       const result = compact.lastResult;
       if (
         !activeCase.terminalState
-        && result?.label === 'action:resolveTacticalCombat'
+        && result?.label === options.expectedActionLabel
         && typeof result.actionId === 'string'
         && Number(result.startedAt) >= activeCase.issuedAt
       ) {
@@ -480,7 +496,7 @@ async function run() {
           stopIssuedAt: null,
           resyncRequests: 0,
         };
-        const commandAck = await sendMessage(COMMAND);
+        const commandAck = await sendMessage(options.command);
         const terminalState = await waitFor(
           () => activeCase?.terminalState || null,
           Boolean,
@@ -663,6 +679,8 @@ async function run() {
 
   const summary = {
     passed: evidence.passed,
+    command: evidence.command,
+    expectedActionLabel: evidence.expectedActionLabel,
     error: evidence.error,
     cleanupError: evidence.cleanupError || null,
     durationMs: evidence.durationMs,

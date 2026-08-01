@@ -10,7 +10,9 @@
 - [x] Pass bounded deterministic hunger survival three consecutive times with independent Paper evidence.
 - [x] Reproduce and classify clear versus obstructed hostile handling with independent damage, kill, perception, trajectory, stop, and trace evidence.
 - [x] Repair COM-001 Pathfinder collision-corner execution and pass clear plus obstructed hostile handling three consecutive times on the instrumentation-free build.
+- [x] Pass natural-language defend through the deterministic `!attackHostile`/tactical-combat path with clear and obstructed Paper proof.
+- [x] Complete a ten-minute monitored command-autonomy session without crash, uncontrolled loop, duplicate movement ownership, false parent completion, or repeated action thrashing.
 - [ ] Run collect-and-deliver to a controlled player target when that target is available.
-- [ ] Pass follow, stop-during-follow/recovery, hostile handling, and the ten-minute monitored session.
-- [ ] Run typed-to-natural-language routing checks only after deterministic scenarios pass.
+- [ ] Pass follow and stop-during-follow/recovery against a real player or temporary controlled player target.
+- [ ] Run the remaining natural-language follow, stop, and collect/deliver checks after their deterministic scenarios pass.
 - [ ] Run broad behavior/critical gates at a coherent checkpoint and the full suite once at final handoff.
