@@ -119,6 +119,24 @@ function runSurvivalBenchmark({ iterations = 120, cached }) {
   };
 }
 
+// The wire carries three shapes: the v2 `snapshot` envelope, the v2 `delta`
+// envelope on its own socket event, and the pre-v2 bare state map. Reading only
+// the bare map made `Object.values` walk the envelope's own fields, so a busy
+// server reported zero delivery samples.
+function extractSampledStates(payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  if (payload.type === 'snapshot' && payload.states && typeof payload.states === 'object') {
+    return Object.values(payload.states);
+  }
+  if (payload.type === 'delta' && payload.changes && typeof payload.changes === 'object') {
+    return Object.values(payload.changes)
+      .map(change => change?.set)
+      .filter(set => set && typeof set === 'object');
+  }
+  if (payload.version || payload.type) return [];
+  return Object.values(payload);
+}
+
 async function runLiveBenchmark(options) {
   if (!options.url) return null;
   const socket = io(options.url, { transports: ['websocket'] });
@@ -136,15 +154,19 @@ async function runLiveBenchmark(options) {
   const stateDeliveries = [];
   const stateIntervals = [];
   let previousStateAt = null;
-  socket.on('state-update', (states) => {
+  const recordStatePayload = (payload) => {
     const receivedAt = Date.now();
     if (previousStateAt !== null) stateIntervals.push(receivedAt - previousStateAt);
     previousStateAt = receivedAt;
-    for (const state of Object.values(states || {})) {
+    for (const state of extractSampledStates(payload)) {
       const sampledAt = Number(state?._meta?.sampledAt);
       if (Number.isFinite(sampledAt)) stateDeliveries.push(Math.max(0, receivedAt - sampledAt));
     }
-  });
+  };
+  socket.on('state-update', recordStatePayload);
+  // Movement publishes deltas on a separate event; counting only snapshots
+  // undercounts exactly the traffic that matters while the bot is active.
+  socket.on('state-delta', recordStatePayload);
   socket.emit('listen-to-agents');
   await delay(1_250);
   const durations = [];
