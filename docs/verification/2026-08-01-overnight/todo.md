@@ -7,7 +7,8 @@
 - [x] Freeze and commit the evidence-proven typed collection repair.
 - [x] Pass cold start, world-ready, deterministic action, and clean process shutdown three consecutive times.
 - [x] Pass ordinary obstruction handling through an alternate route three consecutive times.
+- [x] Pass bounded deterministic hunger survival three consecutive times with independent Paper evidence.
 - [ ] Run collect-and-deliver to a controlled player target when that target is available.
-- [ ] Continue the remaining core playability scenarios in highest-impact failure order.
+- [ ] Pass follow, stop-during-follow/recovery, hostile handling, and the ten-minute monitored session.
 - [ ] Run typed-to-natural-language routing checks only after deterministic scenarios pass.
 - [ ] Run broad behavior/critical gates at a coherent checkpoint and the full suite once at final handoff.

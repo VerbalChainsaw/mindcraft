@@ -206,7 +206,43 @@
       "liveReruns": 3,
       "result": "passed_3_consecutive",
       "evidence": "nav-001-live.json",
-      "commit": "NAV-001 evidence checkpoint (this commit)"
+      "commit": "b5db5f5"
+    },
+    {
+      "id": "SUR-001-final-3x",
+      "scenario": "bounded-deterministic-hunger-survival",
+      "trigger": "Paper-provision hunger while operator-held, clear the effect, then release with !setAutonomy(\"command\")",
+      "reset": {
+        "position": { "x": 1071.5, "y": 100, "z": 1007.5 },
+        "health": 20,
+        "hungerBeforeRelease": 12,
+        "cookedBeef": 8,
+        "operatorHeld": true,
+        "sessionAutonomy": "command",
+        "profileOnDiskUnchanged": true
+      },
+      "observation": {
+        "attempts": 3,
+        "durationsMs": [1594, 1595, 1597],
+        "telemetryHungerDelta": ["12->20", "12->20", "12->20"],
+        "paperHungerDelta": ["12->20", "12->20", "12->20"],
+        "telemetryFoodDelta": ["8->7", "8->7", "8->7"],
+        "paperFoodDelta": ["8->7", "8->7", "8->7"],
+        "stopQuiescenceMs": [0, 1, 2],
+        "stableForThreeSeconds": [true, true, true],
+        "linkedDecisionIds": [
+          "MindcraftBot-1897-1785571481701-1897",
+          "MindcraftBot-1939-1785571503466-1939",
+          "MindcraftBot-1980-1785571524647-1980"
+        ]
+      },
+      "classification": "verified_behavior_no_defect",
+      "changedFiles": ["tools/verify-survival-field.mjs"],
+      "tests": ["verifier syntax and lint passed"],
+      "liveReruns": 4,
+      "result": "passed_3_consecutive",
+      "evidence": ["sur-001-live-reproduction.json", "sur-001-live.json"],
+      "commit": "SUR-001 evidence checkpoint (this commit)"
     }
   ]
 }
