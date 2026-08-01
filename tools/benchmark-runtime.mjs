@@ -190,7 +190,11 @@ async function main() {
   const fakeAgent = { blocked_actions: [] };
   const fullDocs = getCommandDocs(fakeAgent);
   const compactDocs = getCommandDocs(fakeAgent, { compact: true });
+  // The autonomy prompt is the one rebuilt before every action, so it is the
+  // number that actually tracks how fast self-directed play feels.
+  const autonomyDocs = getCommandDocs(fakeAgent, { compact: true, purpose: 'autonomy' });
   const promptReduction = 1 - (compactDocs.length / fullDocs.length);
+  const autonomyReduction = 1 - (autonomyDocs.length / compactDocs.length);
   const uncached = runSurvivalBenchmark({ cached: false });
   const cached = runSurvivalBenchmark({ cached: true });
   const scanReduction = 1 - (cached.findBlocksCalls / uncached.findBlocksCalls);
@@ -203,6 +207,9 @@ async function main() {
       fullEstimatedTokens: Math.ceil(fullDocs.length / 4),
       compactEstimatedTokens: Math.ceil(compactDocs.length / 4),
       reductionPercent: round(promptReduction * 100),
+      autonomyCharacters: autonomyDocs.length,
+      autonomyEstimatedTokens: Math.ceil(autonomyDocs.length / 4),
+      autonomyReductionPercent: round(autonomyReduction * 100),
     },
     survivalHotPath: {
       uncached,

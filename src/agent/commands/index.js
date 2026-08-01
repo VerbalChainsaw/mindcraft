@@ -318,7 +318,40 @@ export async function executeCommand(agent, message, { owner = 'player' } = {}) 
     }
 }
 
-export function getCommandDocs(agent, { compact = false } = {}) {
+// Commands an autonomous turn must never pick. Every one of them is operator
+// authority (session and runtime configuration), player-facing plan management,
+// or an action whose meaning depends on a person having just asked for it --
+// `!stay` and `!attackPlayer` are not decisions a bot playing by itself should
+// be reaching for at all.
+//
+// Withholding them from the autonomy prompt is a boundary first and a saving
+// second, but the saving is real: this context is rebuilt before every single
+// action, so anything the bot cannot legitimately choose is latency it pays on
+// every step of play. Documentation only -- an excluded command still executes
+// normally if something else legitimately issues it.
+const NON_AUTONOMY_COMMANDS = new Set([
+    // Session and process control.
+    '!spawnBots', '!leaveGame', '!restart', '!clearChat', '!stfu', '!squadRadio', '!newAction',
+    // Runtime configuration belongs to the operator, not to a per-action tick.
+    '!setAutonomy', '!setComportment', '!setTraversal', '!setNarration',
+    '!setMode', '!setPersona', '!showRuntime', '!persona',
+    // Standing orders and the plan queue are the player's steering wheel.
+    '!addRule', '!listRules', '!removeRule',
+    '!showAgenda', '!clearAgenda', '!skipAgendaItem', '!addToAgenda',
+    // Goal lifecycle is owned by goal selection, not by the action loop.
+    '!goal', '!endGoal', '!cancelJob', '!cancelGoal',
+    // A conversation is not something autonomy starts with itself.
+    '!startConversation', '!endConversation', '!help',
+    // Only ever correct as a reply to a person.
+    '!attackPlayer', '!stay', '!stop',
+]);
+
+export function isAutonomyCommand(name) {
+    return !NON_AUTONOMY_COMMANDS.has(String(name || ''));
+}
+
+export function getCommandDocs(agent, { compact = false, purpose = 'all' } = {}) {
+    const omitted = purpose === 'autonomy' ? NON_AUTONOMY_COMMANDS : null;
     const typeTranslations = {
         //This was added to keep the prompt the same as before type checks were implemented.
         //If the language model is giving invalid inputs changing this might help.
@@ -333,6 +366,7 @@ export function getCommandDocs(agent, { compact = false } = {}) {
         let docs = '\n*COMPACT COMMANDS\nUse exactly one command. Strings require double quotes.\n';
         for (const command of commandList) {
             if (agent.blocked_actions.includes(command.name)) continue;
+            if (omitted?.has(command.name)) continue;
             const params = command.params
                 ? Object.entries(command.params)
                     .map(([name, param]) => `${name}:${typeTranslations[param.type] ?? param.type}`)
@@ -352,6 +386,9 @@ export function getCommandDocs(agent, { compact = false } = {}) {
     Do not use codeblocks. Use double quotes for strings. Only use one command in each response, trailing commands and comments will be ignored.\n`;
     for (let command of commandList) {
         if (agent.blocked_actions.includes(command.name)) {
+            continue;
+        }
+        if (omitted?.has(command.name)) {
             continue;
         }
         docs += command.name + ': ' + command.description + '\n';
