@@ -173,7 +173,40 @@
         "start-001-live-r2.json",
         "start-001-live-r3.json"
       ],
-      "commit": "START-001 verifier repair (this commit)"
+      "commit": "bd78408"
+    },
+    {
+      "id": "NAV-001-final-3x",
+      "scenario": "ordinary-obstruction-alternate-route",
+      "command": "!goToCoordinates(1078.5, 100, 1007.5, 0.5)",
+      "reset": {
+        "start": { "x": 1071.5, "y": 100, "z": 1007.5 },
+        "target": { "x": 1078.5, "y": 100, "z": 1007.5 },
+        "directObstacle": { "x": 1074, "y": 100, "z": 1007, "block": "stone_bricks" },
+        "bypass": { "x": 1074, "y": 100, "z": 1006, "block": "air" }
+      },
+      "observation": {
+        "attempts": 3,
+        "durationsMs": [1499, 1523, 1538],
+        "firstPhysicalProgressMs": [1052, 1114, 847],
+        "paperTargetDistance": [0.142, 0.142, 0.142],
+        "detoured": [true, true, true],
+        "stayedLevel": [true, true, true],
+        "stopQuiescenceMs": [12, 11, 7],
+        "stableForThreeSeconds": [true, true, true],
+        "linkedDecisionIds": [
+          "MindcraftBot-363-1785570745670-363",
+          "MindcraftBot-377-1785570752400-377",
+          "MindcraftBot-392-1785570758969-392"
+        ]
+      },
+      "classification": "verified_behavior",
+      "changedFiles": ["tools/verify-obstruction-field.mjs"],
+      "tests": ["verifier syntax and lint passed"],
+      "liveReruns": 3,
+      "result": "passed_3_consecutive",
+      "evidence": "nav-001-live.json",
+      "commit": "NAV-001 evidence checkpoint (this commit)"
     }
   ]
 }
