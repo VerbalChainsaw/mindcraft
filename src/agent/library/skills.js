@@ -85,9 +85,17 @@ const MAX_NAVIGATION_RECOVERY_ATTEMPTS = 1;
 const NAVIGATION_CANCEL_SETTLE_MS = 250;
 const DIRECT_NAVIGATION_STEP_TIMEOUT_MS = 1_400;
 const DIRECT_NAVIGATION_STEP_PROGRESS = 0.65;
+const DIRECT_NAVIGATION_ASCENT_STAGE_TIMEOUT_MS = 1_000;
+const DIRECT_NAVIGATION_ASCENT_TIMEOUT_MS = 2_000;
+const DIRECT_NAVIGATION_ASCENT_SETTLE_TIMEOUT_MS = 800;
+const DIRECT_NAVIGATION_ASCENT_STAGE_TOLERANCE = 0.1;
 const DIRECT_NAVIGATION_APPROACH_RANGE = 4.5;
 const DIRECT_NAVIGATION_APPROACH_STEPS = 4;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
+const DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE = 1.6;
+const DELIVERY_RETRY_DROP_DISTANCE = 2;
+const DELIVERY_PICKUP_TIMEOUT_MS = 3_250;
+const MAX_DELIVERY_DROP_ATTEMPTS = 3;
 const MOUNT_INTERACTION_RANGE = 4.5;
 const MOUNT_CONFIRM_TIMEOUT_MS = 2_500;
 const MOUNT_STABILITY_MS = 400;
@@ -733,6 +741,10 @@ export function guardExecutableDiagonalCorners(movements) {
     movements.getMoveDiagonal = (node, direction, neighbours) => {
         const landing = movements.getBlock(node, direction.x, 0, direction.z);
         const yOffset = landing?.physical ? 1 : 0;
+        // Pathfinder drives directly at its next node. A raised diagonal makes
+        // that line intersect the landing block's outer corner, so the graph
+        // must align on a cardinal cell before asking the executor to jump.
+        if (yOffset > 0) return;
         const sideOffsets = [
             [0, yOffset, direction.z],
             [0, yOffset + 1, direction.z],
@@ -7533,6 +7545,15 @@ export async function consume(bot, itemName="") {
     return true;
 }
 
+export function deliveryDropSpacingNeedsRetreat(botPosition, playerPosition) {
+    if (![botPosition?.x, botPosition?.z, playerPosition?.x, playerPosition?.z].every(Number.isFinite)) {
+        return true;
+    }
+    return Math.hypot(
+        botPosition.x - playerPosition.x,
+        botPosition.z - playerPosition.z,
+    ) < DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE;
+}
 
 export async function giveToPlayer(bot, itemType, username, num=1) {
     /**
@@ -7601,8 +7622,10 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             return false;
         }
     }
-    // Avoid overlapping the player while remaining close enough for pickup.
-    if (bot.entity.position.distanceTo(player.position) < 1.25) {
+    // Inventory-window tosses become pickup-eligible after travelling roughly
+    // two blocks. Keep enough horizontal spacing for the item to enter the
+    // recipient's collision box instead of passing them and returning to us.
+    if (deliveryDropSpacingNeedsRetreat(bot.entity.position, player.position)) {
         let too_close = true;
         let start_moving_away = Date.now();
         if (!await moveAwayFromEntity(bot, player, 1.75)) {
@@ -7614,7 +7637,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             target = playerTargetEvidence(resolution);
             player = resolution.entity;
             if (!player) return false;
-            too_close = bot.entity.position.distanceTo(player.position) < 1.25;
+            too_close = deliveryDropSpacingNeedsRetreat(bot.entity.position, player.position);
             if (too_close) {
                 if (!await moveAwayFromEntity(bot, player, 1.75)) {
                     return false;
@@ -7630,9 +7653,11 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         }
     }
 
-    await bot.lookAt(player.position);
     let given = false;
+    let reclaimed = false;
     let droppedEntityId = null;
+    let deliveryAttempts = 0;
+    let reclaimedAttempts = 0;
     const existingEntityIds = new Set(Object.values(bot.entities || {}).map(entity => entity?.id));
     const markDelivered = entityId => {
         if (given) return;
@@ -7648,6 +7673,8 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             inventoryBefore,
             inventoryAfter: inventoryCount(bot, itemType),
             droppedEntityId,
+            deliveryAttempts,
+            reclaimedAttempts,
             retryable: !complete,
         });
         log(bot, `${username} received ${transferCount} ${itemType}.`);
@@ -7673,6 +7700,14 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         }
         if (
             droppedEntityId !== null
+            && collector?.id === bot.entity?.id
+            && collected?.id === droppedEntityId
+        ) {
+            reclaimed = true;
+            return;
+        }
+        if (
+            droppedEntityId !== null
             && collectorMatchesPlayerTarget(resolution, collector, {
                 expectedEntityId: droppedEntityId,
                 collected,
@@ -7691,48 +7726,87 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         const currentTarget = resolvePhysicalPlayer(bot, username);
         if (!Number.isFinite(collectorEntityId)
             || !Number.isFinite(collectedEntityId)
-            || currentTarget.entity?.id !== collectorEntityId
             || existingEntityIds.has(collectedEntityId)
             || (droppedEntityId !== null && droppedEntityId !== collectedEntityId)) {
             return;
         }
-        markDelivered(collectedEntityId);
+        if (currentTarget.entity?.id === collectorEntityId) {
+            markDelivered(collectedEntityId);
+        } else if (bot.entity?.id === collectorEntityId) {
+            droppedEntityId = collectedEntityId;
+            reclaimed = true;
+        }
     };
     bot.on('entitySpawn', onEntitySpawn);
     bot.on('playerCollect', onPlayerCollect);
     bot._client?.on?.('collect', onCollectPacket);
     try {
-        if (!await discard(bot, itemType, transferCount)) {
-            return false;
-        }
-        if (droppedEntityId === null) {
-            const dropped = Object.values(bot.entities || {}).find(isExpectedDroppedEntity);
-            droppedEntityId = Number.isFinite(dropped?.id) ? dropped.id : null;
-        }
-        const inventoryAfterDrop = inventoryCount(bot, itemType);
-        if (inventoryBefore - inventoryAfterDrop < transferCount) {
-            setActionEvidence(bot, {
-                kind: 'give',
-                outcome: 'inventory_not_decremented',
-                target,
-                item: itemType,
-                requested,
-                transferred: 0,
-                inventoryBefore,
-                inventoryAfter: inventoryAfterDrop,
-                retryable: true,
-            });
-            return false;
-        }
-        let start = Date.now();
-        while (!given && !bot.interrupt_code) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            if (given) {
-                return true;
+        while (deliveryAttempts < MAX_DELIVERY_DROP_ATTEMPTS && !bot.interrupt_code) {
+            deliveryAttempts += 1;
+            droppedEntityId = null;
+            reclaimed = false;
+            resolution = resolvePhysicalPlayer(bot, username);
+            target = playerTargetEvidence(resolution);
+            player = resolution.entity;
+            if (!player) {
+                setActionEvidence(bot, { kind: 'give', outcome: 'lost_target', target, retryable: false });
+                return false;
             }
-            if (Date.now() - start > 3000) {
-                break;
+
+            if (deliveryAttempts > 1) {
+                const retryDistance = Math.hypot(
+                    bot.entity.position.x - player.position.x,
+                    bot.entity.position.z - player.position.z,
+                );
+                if (
+                    retryDistance < DELIVERY_RETRY_DROP_DISTANCE - 0.1
+                    && !await moveAwayFromEntity(bot, player, DELIVERY_RETRY_DROP_DISTANCE)
+                ) return false;
+                resolution = resolvePhysicalPlayer(bot, username);
+                target = playerTargetEvidence(resolution);
+                player = resolution.entity;
+                if (!player) return false;
             }
+
+            await bot.lookAt(player.position);
+            if (!await discard(bot, itemType, transferCount)) return false;
+            if (droppedEntityId === null) {
+                const dropped = Object.values(bot.entities || {}).find(isExpectedDroppedEntity);
+                droppedEntityId = Number.isFinite(dropped?.id) ? dropped.id : null;
+            }
+            const inventoryAfterDrop = inventoryCount(bot, itemType);
+            if (inventoryBefore - inventoryAfterDrop < transferCount) {
+                setActionEvidence(bot, {
+                    kind: 'give',
+                    outcome: 'inventory_not_decremented',
+                    target,
+                    item: itemType,
+                    requested,
+                    transferred: 0,
+                    inventoryBefore,
+                    inventoryAfter: inventoryAfterDrop,
+                    deliveryAttempts,
+                    reclaimedAttempts,
+                    retryable: true,
+                });
+                return false;
+            }
+
+            const pickupStartedAt = Date.now();
+            while (!given && !reclaimed && !bot.interrupt_code) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                if (Date.now() - pickupStartedAt > DELIVERY_PICKUP_TIMEOUT_MS) break;
+            }
+            if (given) return true;
+            if (!reclaimed || deliveryAttempts >= MAX_DELIVERY_DROP_ATTEMPTS) break;
+            reclaimedAttempts += 1;
+            const reacquired = await waitForWorldCondition(
+                bot,
+                () => inventoryCount(bot, itemType) >= transferCount,
+                750,
+                25,
+            );
+            if (!reacquired) break;
         }
     } finally {
         bot.removeListener('entitySpawn', onEntitySpawn);
@@ -7750,6 +7824,8 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         inventoryBefore,
         inventoryAfter: inventoryCount(bot, itemType),
         droppedEntityId,
+        deliveryAttempts,
+        reclaimedAttempts,
         retryable: true,
     });
     log(bot, `Failed to give ${itemType} to ${username}, it was never received.`);
@@ -7991,6 +8067,10 @@ function directNavigationCandidate(bot, goal) {
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
         for (const yOffset of yOffsets) {
             if (yOffset > 0 && !isDirectNavigationClear(currentJumpClearance)) continue;
+            // The direct controller has the same collision envelope as
+            // Pathfinder's node executor. Use a same-level alignment step
+            // instead of driving diagonally into a raised block corner.
+            if (yOffset > 0 && dx !== 0 && dz !== 0) continue;
             const feetPosition = origin.offset(dx, yOffset, dz);
             const feet = bot.blockAt(feetPosition);
             const head = bot.blockAt(feetPosition.offset(0, 1, 0));
@@ -8029,6 +8109,41 @@ function directNavigationCandidate(bot, goal) {
     return candidates.sort((left, right) => right.score - left.score)[0] || null;
 }
 
+async function stageDirectNavigationAscent(bot, start, candidate) {
+    const origin = start.floored();
+    const stepX = Math.sign(candidate.position.x - origin.x);
+    const stepZ = Math.sign(candidate.position.z - origin.z);
+    if (Math.abs(stepX) + Math.abs(stepZ) !== 1) return false;
+
+    const feet = bot.blockAt(origin);
+    const head = bot.blockAt(origin.offset(0, 1, 0));
+    const support = bot.blockAt(origin.offset(0, -1, 0));
+    if (!isDirectNavigationClear(feet)
+        || !isDirectNavigationClear(head)
+        || !isDirectNavigationSupport(support)) return false;
+
+    // Back away from the step face and center on the perpendicular axis. This
+    // restores a grounded stance and a short run-up when Pathfinder has left
+    // the collision box pressed against the ledge with onGround=false.
+    const staging = new Vec3(
+        origin.x + 0.5 - (stepX * 0.15),
+        start.y,
+        origin.z + 0.5 - (stepZ * 0.15),
+    );
+    await bot.lookAt(staging.offset(0, 0.7, 0), true);
+    bot.setControlState('forward', true);
+    try {
+        return await waitForWorldCondition(bot, () => {
+            const current = bot.entity?.position;
+            if (!current || !bot.entity?.onGround) return false;
+            return Math.hypot(current.x - staging.x, current.z - staging.z)
+                <= DIRECT_NAVIGATION_ASCENT_STAGE_TOLERANCE;
+        }, DIRECT_NAVIGATION_ASCENT_STAGE_TIMEOUT_MS, 25);
+    } finally {
+        try { bot.setControlState('forward', false); } catch { /* best-effort staging cleanup */ }
+    }
+}
+
 async function attemptDirectNavigationStep(bot, goal = null) {
     const start = bot.entity?.position?.clone?.();
     if (!start || bot.interrupt_code) {
@@ -8040,17 +8155,68 @@ async function attemptDirectNavigationStep(bot, goal = null) {
     }
 
     stopNavigationGoal(bot);
-    let jumpRelease = null;
     try {
         bot.clearControlStates?.();
+        if (candidate.yOffset > 0) {
+            const staged = await stageDirectNavigationAscent(bot, start, candidate);
+            if (!staged || bot.interrupt_code) {
+                return {
+                    success: false,
+                    strategy: 'direct_local_jump',
+                    outcome: bot.interrupt_code ? 'interrupted' : 'ascent_staging_failed',
+                    distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
+                    target: {
+                        x: candidate.position.x,
+                        y: candidate.position.y,
+                        z: candidate.position.z,
+                        support: candidate.support,
+                    },
+                };
+            }
+
+            await bot.lookAt(candidate.center.offset(0, 0.7, 0), true);
+            bot.setControlState('forward', true);
+            bot.setControlState('jump', true);
+            const enteredLanding = await waitForWorldCondition(bot, () => {
+                const current = bot.entity?.position;
+                if (!current || current.y < candidate.position.y - 0.2) return false;
+                const standing = current.floored();
+                return standing.x === candidate.position.x
+                    && standing.z === candidate.position.z;
+            }, DIRECT_NAVIGATION_ASCENT_TIMEOUT_MS, 25);
+            bot.setControlState('forward', false);
+            bot.setControlState('jump', false);
+            const landedSafely = enteredLanding && await waitForWorldCondition(bot, () => {
+                const current = bot.entity?.position;
+                if (!current || !bot.entity?.onGround || current.y < candidate.position.y - 0.05) return false;
+                const standing = current.floored();
+                return isDirectNavigationClear(bot.blockAt(standing))
+                    && isDirectNavigationClear(bot.blockAt(standing.offset(0, 1, 0)))
+                    && isDirectNavigationSupport(bot.blockAt(standing.offset(0, -1, 0)));
+            }, DIRECT_NAVIGATION_ASCENT_SETTLE_TIMEOUT_MS, 25);
+            const distance = Math.round(bot.entity.position.distanceTo(start) * 100) / 100;
+            return {
+                success: landedSafely && !bot.interrupt_code,
+                strategy: 'direct_local_jump',
+                outcome: landedSafely
+                    ? 'safe_step_completed'
+                    : bot.interrupt_code
+                        ? 'interrupted'
+                        : enteredLanding
+                            ? 'ascent_landing_unstable'
+                            : 'ascent_stalled',
+                distance,
+                target: {
+                    x: candidate.position.x,
+                    y: candidate.position.y,
+                    z: candidate.position.z,
+                    support: candidate.support,
+                },
+            };
+        }
+
         await bot.lookAt(candidate.center.offset(0, 0.7, 0), true);
         bot.setControlState('forward', true);
-        if (candidate.yOffset > 0) {
-            bot.setControlState('jump', true);
-            jumpRelease = setTimeout(() => {
-                try { bot.setControlState('jump', false); } catch { /* movement already ended */ }
-            }, 300);
-        }
         const movedSafely = await waitForWorldCondition(bot, () => {
             const current = bot.entity?.position;
             if (!current || current.distanceTo(start) < DIRECT_NAVIGATION_STEP_PROGRESS) return false;
@@ -8063,11 +8229,7 @@ async function attemptDirectNavigationStep(bot, goal = null) {
         const distance = Math.round(bot.entity.position.distanceTo(start) * 100) / 100;
         return {
             success: movedSafely && !bot.interrupt_code,
-            strategy: candidate.yOffset > 0
-                ? 'direct_local_jump'
-                : candidate.yOffset < 0
-                    ? 'direct_local_drop'
-                    : 'direct_local_step',
+            strategy: candidate.yOffset < 0 ? 'direct_local_drop' : 'direct_local_step',
             outcome: movedSafely ? 'safe_step_completed' : bot.interrupt_code ? 'interrupted' : 'step_stalled',
             distance,
             target: {
@@ -8086,7 +8248,6 @@ async function attemptDirectNavigationStep(bot, goal = null) {
             distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
         };
     } finally {
-        if (jumpRelease) clearTimeout(jumpRelease);
         try { bot.setControlState('forward', false); } catch { /* best-effort local-step cleanup */ }
         try { bot.setControlState('jump', false); } catch { /* best-effort local-step cleanup */ }
     }

@@ -586,6 +586,14 @@ export class Agent {
         return { ready: false, detail };
     }
 
+    async takePersistentGoalControl() {
+        const handoff = await this.takePersistentJobControl();
+        if (!handoff.ready) return handoff;
+
+        this.job_director?.cancel?.('Superseded by an explicit player item goal.');
+        return handoff;
+    }
+
     recordActionResult(result) {
         this.last_action_result = result || null;
         this.behavior_arbiter?.recordOutcome?.(result);
@@ -790,7 +798,9 @@ export class Agent {
                         if (!assignsTypedGoal) {
                             this.goal_director?.cancel?.('Superseded by an explicit player work order.');
                         }
-                        const handoff = await this.takePersistentJobControl();
+                        const handoff = assignsTypedGoal
+                            ? await this.takePersistentGoalControl()
+                            : await this.takePersistentJobControl();
                         if (!handoff.ready) {
                             this.routeResponse(source, handoff.detail);
                             return true;
@@ -855,7 +865,9 @@ export class Agent {
                     if (!assignsTypedGoal) {
                         this.goal_director?.cancel?.('Superseded by an explicit player work order.');
                     }
-                    const handoff = await this.takePersistentJobControl();
+                    const handoff = assignsTypedGoal
+                        ? await this.takePersistentGoalControl()
+                        : await this.takePersistentJobControl();
                     if (!handoff.ready) {
                         this.routeResponse(source, handoff.detail);
                         return true;
@@ -937,7 +949,9 @@ export class Agent {
                         if (!assignsTypedGoal) {
                             this.goal_director?.cancel?.('Superseded by a player-requested work order.');
                         }
-                        const handoff = await this.takePersistentJobControl();
+                        const handoff = assignsTypedGoal
+                            ? await this.takePersistentGoalControl()
+                            : await this.takePersistentJobControl();
                         if (!handoff.ready) {
                             this.routeResponse(source, handoff.detail);
                             return true;

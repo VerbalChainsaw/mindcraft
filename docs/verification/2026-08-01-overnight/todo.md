@@ -12,7 +12,7 @@
 - [x] Repair COM-001 Pathfinder collision-corner execution and pass clear plus obstructed hostile handling three consecutive times on the instrumentation-free build.
 - [x] Pass natural-language defend through the deterministic `!attackHostile`/tactical-combat path with clear and obstructed Paper proof.
 - [x] Complete a ten-minute monitored command-autonomy session without crash, uncontrolled loop, duplicate movement ownership, false parent completion, or repeated action thrashing.
-- [ ] Run collect-and-deliver to a controlled player target when that target is available.
-- [ ] Pass follow and stop-during-follow/recovery against a real player or temporary controlled player target.
-- [ ] Run the remaining natural-language follow, stop, and collect/deliver checks after their deterministic scenarios pass.
-- [ ] Run broad behavior/critical gates at a coherent checkpoint and the full suite once at final handoff.
+- [x] Run collect-and-deliver to a controlled player target when that target is available.
+- [x] Pass follow and stop-during-follow/recovery against a real player or temporary controlled player target.
+- [x] Run the remaining natural-language follow, stop, and collect/deliver checks after their deterministic scenarios pass.
+- [x] Run broad behavior/critical gates at a coherent checkpoint and the full suite once at final handoff.

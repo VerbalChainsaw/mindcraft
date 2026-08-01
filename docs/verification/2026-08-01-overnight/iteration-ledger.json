@@ -4,8 +4,16 @@
   "branch": "phase0-follow-baseline",
   "baselineCommit": "b3a8bbee459c8bbfe11f0bf0884c9428b12ee204",
   "playableDeclared": false,
-  "newTestCount": 9,
-  "fullSuiteRun": false,
+  "declarationStatus": "all physical gameplay works; strict declaration withheld because only one clean ten-minute duration gate was run",
+  "newTestCount": 12,
+  "fullSuiteRun": true,
+  "fullSuiteResult": {
+    "command": "node --test --test-concurrency=1",
+    "passed": 420,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 84283
+  },
   "iterations": [
     {
       "id": "MIN-001-prechange-1",
@@ -398,6 +406,135 @@
       "evidence": [
         "session-001-live.json",
         "session-001-paper-final.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "FOL-001-staged-ascent-final",
+      "scenario": "follow-through-two-turns-doorway-and-one-block-elevation",
+      "command": "!followPlayer(\"FollowTarget\", 2)",
+      "observation": {
+        "preRepair": "Bot remained pressed against the one-block ledge with onGround=false and made no ascent progress.",
+        "travelDistance": [20.59, 16.81, 16.91],
+        "doorwayObserved": [true, true, true],
+        "elevationObserved": [true, true, true],
+        "stopQuiescenceMs": [187, 190, 189],
+        "stableForTenSeconds": [true, true, true],
+        "naturalLanguageFollow": "passed",
+        "naturalLanguageStop": "passed",
+        "cleanupVerified": true
+      },
+      "classification": "verified_pathfinding_recovery_repair",
+      "explanation": "Raised diagonal nodes and an unstaged direct jump intersected the landing corner. Cardinal staging restores a grounded centered stance before the bounded ascent.",
+      "changedFiles": [
+        "src/agent/library/skills.js",
+        "tests/tactical-melee-stance.test.js",
+        "tools/verify-follow-field.mjs"
+      ],
+      "tests": [
+        "movement policy rejects collision-corner and raised diagonals but preserves flat open-space diagonals"
+      ],
+      "liveReruns": 9,
+      "result": "typed_follow_3x_and_typed_stop_3x_and_natural_routes_passed",
+      "evidence": [
+        "fol-001-live-reproduction.json",
+        "fol-001-live-staged-ascent-3x.json",
+        "fol-002-live-stop-3x.json",
+        "fol-003-live-natural-follow-isolated.json",
+        "fol-004-live-natural-stop.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "DEL-001-recipient-pickup-final",
+      "scenario": "typed-visible-resource-collection-and-player-delivery",
+      "command": "!collectBlocksInRange(\"cobblestone\", 1, 64) then !give(\"FollowTarget\", \"cobblestone\", 1)",
+      "observation": {
+        "preRepair": "At 1.36 horizontal blocks, the tossed item passed the recipient and was recollected by MindcraftBot.",
+        "collectionDurationMs": [2316, 2286, 2324],
+        "deliveryDurationMs": [4758, 4731, 4802],
+        "paperInventory": ["0/0->1/0->0/1", "0/0->1/0->0/1", "0/0->1/0->0/1"],
+        "stopQuiescenceMs": [16, 3, 60],
+        "stableForTenSeconds": [true, true, true],
+        "cleanupVerified": true
+      },
+      "classification": "verified_delivery_recovery_repair",
+      "explanation": "Inventory-window ejection travels far enough to cross a recipient at the old close stance. Horizontal spacing plus bounded self-recollection retry puts the item inside the recipient pickup envelope.",
+      "changedFiles": [
+        "src/agent/library/skills.js",
+        "tests/delivery-spacing.test.js",
+        "tools/verify-delivery-field.mjs"
+      ],
+      "tests": [
+        "delivery retreats from the failed close toss stance but preserves a proven receiving stance"
+      ],
+      "liveReruns": 7,
+      "result": "passed_3_consecutive_typed_runs",
+      "evidence": [
+        "del-001-live-reproduction.json",
+        "del-001-live-drop-trajectory-diagnostic-r2.json",
+        "del-001-live-post-repair-3x.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "NL-001-player-goal-handoff-final",
+      "scenario": "natural-language-collect-and-deliver-over-stale-work-order",
+      "command": "FollowTarget: collect one cobblestone for me; bring me one cobblestone",
+      "observation": {
+        "preRepair": "Typed item goal was rejected as job_busy while persisted builder work remained active.",
+        "collectionResult": "succeeded:skill_collected",
+        "deliveryResult": "succeeded:skill_delivered",
+        "paperInventory": "0/0->1/0->0/1",
+        "transferEvents": 4,
+        "linkedPlayerDecisionCount": 38,
+        "stopQuiescenceMs": 4,
+        "stableForTenSeconds": true,
+        "fixtureRestored": true,
+        "mobSpawning": "true->false->true"
+      },
+      "classification": "verified_preemption_cancellation_repair",
+      "explanation": "Explicit player item goals yielded the body but did not clear JobDirector.activeOrder before GoalDirector.submit. The player handoff now cancels only that stale work-order record after a successful body yield.",
+      "changedFiles": [
+        "src/agent/agent.js",
+        "tests/control-plane/agent-persistent-goal-handoff.test.js",
+        "tools/verify-delivery-field.mjs"
+      ],
+      "tests": [
+        "explicit player item goal yields the body before cancelling a stale work order",
+        "failed body handoff preserves the work order and refuses the player item goal"
+      ],
+      "liveReruns": 4,
+      "result": "natural_language_collection_and_delivery_passed",
+      "evidence": [
+        "del-002-live-natural-language.json",
+        "del-002-live-natural-language-post-handoff-r2.json",
+        "del-002-live-natural-language-final.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "FINAL-001-repository-gates",
+      "scenario": "final-focused-adjacent-broad-and-full-suite",
+      "observation": {
+        "focusedAndAdjacent": "39/39",
+        "behavior": "87/87 plus lint",
+        "critical": "9/9 plus lint, format, and syntax",
+        "fullRepository": "420/420 in 84283 ms",
+        "liveFinalState": "MindcraftBot world-ready and held; Paper running on 25579; target disconnected; fixture restored"
+      },
+      "classification": "verification",
+      "changedFiles": [],
+      "tests": [
+        "node --test --test-concurrency=1",
+        "npm run check:behavior",
+        "npm run check:critical"
+      ],
+      "liveReruns": 0,
+      "result": "passed",
+      "evidence": [
+        "scratchpad.md",
+        "defect-log.jsonl"
       ],
       "commit": null
     }

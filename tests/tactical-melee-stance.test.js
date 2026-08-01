@@ -73,13 +73,13 @@ test('tactical melee replans on new geometry evidence but not a repeated static 
     }), false);
 });
 
-test('movement policy rejects collision-corner diagonals but preserves open-space diagonals', () => {
-    const movementFixture = blockedOffsets => {
+test('movement policy rejects collision-corner and raised diagonals but preserves flat open-space diagonals', () => {
+    const movementFixture = (blockedOffsets, raised = false) => {
         let accepted = 0;
         const movements = {
             getBlock(_node, dx, dy, dz) {
                 return {
-                    physical: false,
+                    physical: raised && dx === 1 && dy === 0 && dz === 1,
                     safe: !blockedOffsets.has(`${dx}:${dy}:${dz}`),
                 };
             },
@@ -97,5 +97,6 @@ test('movement policy rejects collision-corner diagonals but preserves open-spac
     };
 
     assert.equal(movementFixture(new Set(['1:0:0'])), 0);
+    assert.equal(movementFixture(new Set(), true), 0);
     assert.equal(movementFixture(new Set()), 1);
 });
