@@ -1,0 +1,152 @@
+{
+  "mode": "live",
+  "baseUrl": "http://[::1]:8080",
+  "bot": "MindcraftBot",
+  "startedAt": "2026-08-01T07:43:32.260Z",
+  "selectedCases": [
+    "bot-lifecycle"
+  ],
+  "results": [
+    {
+      "id": "bot-lifecycle",
+      "passed": false,
+      "error": "Timed out waiting for MindcraftBot expected action:stay result. Last value: null",
+      "observed": {
+        "initial": {
+          "name": "MindcraftBot",
+          "in_game": false,
+          "retryable": true,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": false,
+          "connection_stage": "stopped",
+          "readiness_stage": "stopped",
+          "provider": null,
+          "model": [
+            {
+              "api": "openai",
+              "model": "gpt-4.1",
+              "params": {
+                "timeout": 12
+              }
+            },
+            {
+              "api": "openai",
+              "model": "gpt-4.1-mini",
+              "params": {
+                "timeout": 10
+              }
+            }
+          ],
+          "state": "stopped",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "worldOccupancy": {
+          "provedEmpty": true,
+          "authorizedOverride": false,
+          "playerCount": 0,
+          "players": [],
+          "evidence": "> >   [02:43:32 INFO]: There are 0 of a max of 10 players online:"
+        },
+        "ready": {
+          "name": "MindcraftBot",
+          "in_game": true,
+          "retryable": false,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": true,
+          "connection_stage": "world_ready",
+          "readiness_stage": "world_ready",
+          "provider": null,
+          "model": [
+            {
+              "api": "openai",
+              "model": "gpt-4.1",
+              "params": {
+                "timeout": 12
+              }
+            },
+            {
+              "api": "openai",
+              "model": "gpt-4.1-mini",
+              "params": {
+                "timeout": 10
+              }
+            }
+          ],
+          "state": "running",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "command": {
+          "success": true,
+          "agentName": "MindcraftBot",
+          "acceptedAt": 1785570219523
+        },
+        "actionResult": null,
+        "sampledAt": null,
+        "outputs": [
+          "hello world, I am MindcraftBot",
+          "Action output: Stayed for 1.007 seconds."
+        ],
+        "cleanupAttempts": [
+          {
+            "required": true,
+            "attempted": true,
+            "success": true,
+            "acknowledgement": {
+              "success": true,
+              "error": null,
+              "agents": [
+                {
+                  "name": "MindcraftBot",
+                  "stopped": true,
+                  "forced": false,
+                  "error": null
+                }
+              ]
+            },
+            "stopped": {
+              "name": "MindcraftBot",
+              "in_game": false,
+              "retryable": true,
+              "viewerEnabled": false,
+              "viewerAvailable": false,
+              "viewerPort": null,
+              "socket_connected": false,
+              "connection_stage": "stopped",
+              "readiness_stage": "stopped",
+              "provider": null,
+              "model": [
+                {
+                  "api": "openai",
+                  "model": "gpt-4.1",
+                  "params": {
+                    "timeout": 12
+                  }
+                },
+                {
+                  "api": "openai",
+                  "model": "gpt-4.1-mini",
+                  "params": {
+                    "timeout": 10
+                  }
+                }
+              ],
+              "state": "stopped",
+              "lastError": null,
+              "diagnostics": []
+            },
+            "error": null
+          }
+        ],
+        "elapsedMs": 52673
+      }
+    }
+  ],
+  "passed": false,
+  "finishedAt": "2026-08-01T07:44:24.981Z"
+}

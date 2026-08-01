@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 import { io } from 'socket.io-client';
 
+import { applyStateUpdate } from '../src/mindcraft/public/js/agent-state-protocol.js';
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CASES_PATH = resolve(ROOT, 'tests/runtime/behavior-runtime-cases.json');
 const DEFAULT_DEADLINE_MS = 120_000;
@@ -199,6 +201,15 @@ export function parsePlayerList(lines) {
   return null;
 }
 
+export function parsePlayerListAfterLatestCommand(lines) {
+  if (!Array.isArray(lines)) return null;
+  const commandIndex = lines.findLastIndex((line) => (
+    /\[command\]\s*>\s*\/?list\s*$/i.test(String(line || ''))
+  ));
+  if (commandIndex < 0) return null;
+  return parsePlayerList(lines.slice(commandIndex + 1));
+}
+
 async function runPreflight(baseUrl, bot) {
   let health = null;
   let agentsPayload = null;
@@ -276,17 +287,19 @@ async function proveWorldAvailable(baseUrl, options) {
     { command: 'list' },
     Math.min(10_000, options.deadlineMs),
   );
-  const baselineLogCount = commandPayload?.server?.logs?.length;
-  if (!Number.isInteger(baselineLogCount)) {
-    throw new Error('Managed server did not provide a log boundary for the player check.');
+  if (!Array.isArray(commandPayload?.server?.logs)) {
+    throw new Error('Managed server did not provide logs for the player check.');
+  }
+  if (!commandPayload.server.logs.some(line => /\[command\]\s*>\s*\/?list\s*$/i.test(String(line)))) {
+    throw new Error('Managed server did not retain the acknowledged player-list command.');
   }
   const listedPayload = await waitForCondition(
     () => fetchJson(baseUrl, '/api/minecraft-server?logs=1'),
-    (payload) => parsePlayerList(payload?.server?.logs?.slice(baselineLogCount)) !== null,
+    (payload) => parsePlayerListAfterLatestCommand(payload?.server?.logs) !== null,
     'a fresh managed-server player list',
     Math.min(10_000, options.deadlineMs),
   );
-  const playerList = parsePlayerList(listedPayload.server.logs.slice(baselineLogCount));
+  const playerList = parsePlayerListAfterLatestCommand(listedPayload.server.logs);
   if (playerList.count > 0) {
     const detail = playerList.players.length ? `: ${playerList.players.join(', ')}` : '';
     throw new Error(`Refusing an occupied Minecraft world with ${playerList.count} online player(s)${detail}.`);
@@ -302,6 +315,9 @@ async function proveWorldAvailable(baseUrl, options) {
 
 async function reconcileBotCleanup(baseUrl, bot, socket, deadlineMs) {
   const cleanup = {
+    startedAt: Date.now(),
+    finishedAt: null,
+    durationMs: null,
     required: false,
     attempted: false,
     success: false,
@@ -351,6 +367,8 @@ async function reconcileBotCleanup(baseUrl, bot, socket, deadlineMs) {
     cleanup.error = String(error?.message || error);
     return cleanup;
   } finally {
+    cleanup.finishedAt = Date.now();
+    cleanup.durationMs = cleanup.finishedAt - cleanup.startedAt;
     if (closeCleanupSocket) cleanupSocket?.close();
   }
 }
@@ -359,13 +377,22 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
   let socket = null;
   let startAttempted = false;
   let latestStates = {};
+  let latestRevisions = {};
   const outputs = [];
   const startedAt = Date.now();
   const observed = {
     initial: null,
     worldOccupancy: null,
+    startRequestedAt: null,
+    startAcknowledgedAt: null,
+    startAcknowledgement: null,
+    worldReadyObservedAt: null,
+    worldReadyMs: null,
     ready: null,
+    commandIssuedAt: null,
     command: null,
+    actionResultObservedAt: null,
+    actionResultLatencyMs: null,
     actionResult: null,
     sampledAt: null,
     outputs,
@@ -387,16 +414,25 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
     observed.worldOccupancy = await proveWorldAvailable(baseUrl, options);
 
     socket = await connectDashboard(baseUrl, Math.min(15_000, options.deadlineMs));
-    socket.on('state-update', (states) => {
-      if (states && typeof states === 'object') latestStates = states;
-    });
+    const receiveState = (payload) => {
+      const applied = applyStateUpdate(latestStates, latestRevisions, payload);
+      latestStates = applied.states;
+      latestRevisions = applied.revisions;
+      if (applied.resyncRequired) socket.emit('request-agent-state-snapshot');
+    };
+    socket.on('state-update', receiveState);
+    socket.on('state-delta', receiveState);
     socket.on('bot-output', (agentName, output) => {
       if (agentName === bot) outputs.push(String(output).slice(0, 2_000));
     });
     socket.emit('listen-to-agents');
+    socket.emit('request-agent-state-snapshot');
 
     startAttempted = true;
+    observed.startRequestedAt = Date.now();
     const startResult = await emitAcknowledged(socket, 'start-agent', [bot], options.deadlineMs);
+    observed.startAcknowledgedAt = Date.now();
+    observed.startAcknowledgement = startResult;
     if (startResult?.success !== true) {
       throw new Error(`Bot start failed: ${String(startResult?.error || 'no lifecycle result')}`);
     }
@@ -410,10 +446,13 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
       `${bot} world-ready state`,
       options.deadlineMs,
     );
+    observed.worldReadyObservedAt = Date.now();
+    observed.worldReadyMs = observed.worldReadyObservedAt - observed.startRequestedAt;
     const readyAgent = agentFrom(readyPayload, bot);
     observed.ready = readyAgent;
 
     const commandIssuedAt = Date.now();
+    observed.commandIssuedAt = commandIssuedAt;
     const commandResult = await emitAcknowledged(
       socket,
       'send-message',
@@ -435,6 +474,8 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
       `${bot} expected ${runtimeCase.expectedActionResult.label} result`,
       options.deadlineMs,
     );
+    observed.actionResultObservedAt = Date.now();
+    observed.actionResultLatencyMs = observed.actionResultObservedAt - commandIssuedAt;
     observed.actionResult = structuredState.action.lastResult;
     observed.sampledAt = structuredState._meta.sampledAt;
     const cleanup = await reconcileBotCleanup(baseUrl, bot, socket, options.deadlineMs);

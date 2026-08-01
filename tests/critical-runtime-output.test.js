@@ -20,6 +20,7 @@ import {
 import {
   matchesExpectedActionResult,
   parsePlayerList,
+  parsePlayerListAfterLatestCommand,
   validatePreflightPayloads,
 } from '../tools/verify-behavior-runtime.mjs';
 import { OwnedLocalServices } from '../src/mindcraft/owned-local-services.js';
@@ -175,6 +176,22 @@ test('runtime verifier parses authoritative managed-server player counts', () =>
     },
   );
   assert.equal(parsePlayerList(['Done (1.23s)!']), null);
+  assert.equal(parsePlayerListAfterLatestCommand([
+    '[command] > list',
+    'There are 1 of a max of 20 players online: StalePlayer',
+    '[command] > list',
+  ]), null, 'a prior count cannot satisfy a newer acknowledged list command');
+  assert.deepEqual(parsePlayerListAfterLatestCommand([
+    '[command] > list',
+    'There are 1 of a max of 20 players online: StalePlayer',
+    '[command] > list',
+    'There are 0 of a max of 20 players online:',
+  ]), {
+    count: 0,
+    max: 20,
+    players: [],
+    line: 'There are 0 of a max of 20 players online:',
+  });
 });
 
 test('runtime verifier dry-run reports the exact bounded live command without connecting', () => {

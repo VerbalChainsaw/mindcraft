@@ -4,7 +4,7 @@
   "branch": "phase0-follow-baseline",
   "baselineCommit": "b3a8bbee459c8bbfe11f0bf0884c9428b12ee204",
   "playableDeclared": false,
-  "newTestCount": 3,
+  "newTestCount": 4,
   "fullSuiteRun": false,
   "iterations": [
     {
@@ -122,7 +122,58 @@
       "liveReruns": 3,
       "result": "passed_3_consecutive",
       "evidence": "min-001-live.json",
-      "commit": "MIN-001 coherent repair (this commit)"
+      "commit": "cb2188b"
+    },
+    {
+      "id": "START-001-verifier-repair",
+      "scenario": "cold-start-world-ready-clean-stop",
+      "observation": "The first run could not see a fresh player count in a full 200-line Paper ring; the second reached world-ready and physically completed !stay but could not observe its structured result.",
+      "classification": "verification",
+      "explanation": "The verifier used a capped log length as an append cursor and consumed current snapshot/delta envelopes as a legacy raw state map.",
+      "changedFiles": [
+        "tools/verify-behavior-runtime.mjs",
+        "tests/critical-runtime-output.test.js"
+      ],
+      "tests": [
+        "runtime verifier parses authoritative managed-server player counts",
+        "runtime verifier requires the exact fresh successful action result",
+        "runtime verifier dry-run reports the exact bounded live command without connecting"
+      ],
+      "liveReruns": 2,
+      "result": "repaired",
+      "evidence": [
+        "start-001-live-pre-state-protocol.json",
+        "start-001-live-pre-envelope-fix.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "START-001-final-3x",
+      "scenario": "cold-start-world-ready-clean-stop",
+      "command": "!stay(1)",
+      "observation": {
+        "attempts": 3,
+        "emptyWorldVerified": [true, true, true],
+        "worldReadyMs": [6023, 5986, 6007],
+        "actionResultLatencyMs": [1512, 1520, 1515],
+        "actionDurationMs": [1017, 1013, 1015],
+        "shutdownMs": [38, 38, 38],
+        "forcedShutdown": [false, false, false]
+      },
+      "classification": "verified_behavior",
+      "changedFiles": [
+        "tools/verify-behavior-runtime.mjs",
+        "tests/critical-runtime-output.test.js"
+      ],
+      "tests": ["4 runtime verifier focused checks passed"],
+      "liveReruns": 3,
+      "result": "passed_3_consecutive",
+      "evidence": [
+        "start-001-live.json",
+        "start-001-live-r2.json",
+        "start-001-live-r3.json"
+      ],
+      "commit": "START-001 verifier repair (this commit)"
     }
   ]
 }
