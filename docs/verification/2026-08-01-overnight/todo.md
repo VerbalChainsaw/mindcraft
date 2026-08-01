@@ -16,3 +16,4 @@
 - [x] Pass follow and stop-during-follow/recovery against a real player or temporary controlled player target.
 - [x] Run the remaining natural-language follow, stop, and collect/deliver checks after their deterministic scenarios pass.
 - [x] Run broad behavior/critical gates at a coherent checkpoint and the full suite once at final handoff.
+- [x] Prove a single natural `bring me one cobblestone` request acquires and delivers without an intervening model-created job.

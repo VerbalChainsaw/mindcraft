@@ -537,6 +537,38 @@
         "defect-log.jsonl"
       ],
       "commit": null
+    },
+    {
+      "id": "DEL-003-single-natural-delivery-goal",
+      "scenario": "one-turn-natural-language-acquire-and-deliver",
+      "command": "FollowTarget: bring me one cobblestone",
+      "observation": {
+        "typedGoal": "deliver 1 cobblestone to FollowTarget",
+        "collectionResult": "succeeded:skill_collected",
+        "collectionDurationMs": 2349,
+        "deliveryResult": "succeeded:skill_delivered",
+        "deliveryDurationMs": 4634,
+        "actionOwners": ["player", "player"],
+        "unrelatedAutonomyBetweenPhases": false,
+        "paperInventory": "0/0->1/0->0/1",
+        "transferEvents": 4,
+        "stopQuiescenceMs": 6,
+        "stableForTenSeconds": true,
+        "fixtureRestored": true,
+        "mobSpawning": "true->false->true"
+      },
+      "classification": "verified_human_style_single_request_routing",
+      "explanation": "The existing typed deliver goal already owns acquisition and recipient-verified delivery; the stronger field gate proves the player does not need to split that intent into two commands.",
+      "changedFiles": [
+        "tools/verify-delivery-field.mjs"
+      ],
+      "tests": [
+        "verifier syntax and lint passed"
+      ],
+      "liveReruns": 1,
+      "result": "passed_without_production_change",
+      "evidence": "del-003-live-single-natural-delivery.json",
+      "commit": null
     }
   ]
 }

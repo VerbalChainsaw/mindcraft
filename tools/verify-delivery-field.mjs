@@ -29,6 +29,7 @@ function parseArgs(argv) {
     attempts: 1,
     evidence: '',
     naturalLanguage: false,
+    singleDeliveryRequest: false,
     authorized: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -38,6 +39,10 @@ function parseArgs(argv) {
     else if (value === '--attempts') options.attempts = Number(argv[++index]);
     else if (value === '--evidence') options.evidence = String(argv[++index] || '');
     else if (value === '--natural-language') options.naturalLanguage = true;
+    else if (value === '--single-delivery-request') {
+      options.naturalLanguage = true;
+      options.singleDeliveryRequest = true;
+    }
     else if (value === '--authorized-active-world') options.authorized = true;
     else throw new Error(`Unknown argument: ${value}`);
   }
@@ -325,9 +330,15 @@ async function run() {
   const evidence = {
     schemaVersion: 1,
     scenario: 'collect-visible-resource-and-deliver-to-player',
-    route: options.naturalLanguage ? 'natural-language-player-chat' : 'typed-dashboard-commands',
-    commands: options.naturalLanguage
-      ? [`FollowTarget chat: ${NATURAL_COLLECT_REQUEST}`, `FollowTarget chat: ${NATURAL_DELIVERY_REQUEST}`]
+    route: options.singleDeliveryRequest
+      ? 'natural-language-single-delivery-goal'
+      : options.naturalLanguage
+        ? 'natural-language-player-chat'
+        : 'typed-dashboard-commands',
+    commands: options.singleDeliveryRequest
+      ? [`FollowTarget chat: ${NATURAL_DELIVERY_REQUEST}`]
+      : options.naturalLanguage
+        ? [`FollowTarget chat: ${NATURAL_COLLECT_REQUEST}`, `FollowTarget chat: ${NATURAL_DELIVERY_REQUEST}`]
       : [COLLECT_COMMAND, GIVE_COMMAND],
     bot: options.bot,
     controlledTarget: {
@@ -632,7 +643,10 @@ async function run() {
         resyncRequests: 0,
       };
       activeAttempt.collectIssuedAt = Date.now();
-      if (options.naturalLanguage) {
+      if (options.singleDeliveryRequest) {
+        target.chat(NATURAL_DELIVERY_REQUEST);
+        activeAttempt.collectAck = { success: true, source: TARGET_NAME, acceptedAt: activeAttempt.collectIssuedAt };
+      } else if (options.naturalLanguage) {
         target.chat(NATURAL_COLLECT_REQUEST);
         activeAttempt.collectAck = { success: true, source: TARGET_NAME, acceptedAt: activeAttempt.collectIssuedAt };
       } else {
@@ -658,8 +672,12 @@ async function run() {
       );
       const paperCollected = await paperSnapshot(runId, 'COLLECTED', 'air');
 
-      activeAttempt.deliveryIssuedAt = Date.now();
-      if (options.naturalLanguage) {
+      activeAttempt.deliveryIssuedAt = options.singleDeliveryRequest
+        ? activeAttempt.collectIssuedAt
+        : Date.now();
+      if (options.singleDeliveryRequest) {
+        activeAttempt.deliveryAck = activeAttempt.collectAck;
+      } else if (options.naturalLanguage) {
         target.chat(NATURAL_DELIVERY_REQUEST);
         activeAttempt.deliveryAck = { success: true, source: TARGET_NAME, acceptedAt: activeAttempt.deliveryIssuedAt };
       } else {
