@@ -46,6 +46,11 @@ const DEFENSE_SWING_INTERVAL_MS = 550;
 const MAX_PVP_ENGAGEMENT_MS = 30_000;
 const MAX_BOT_OUTPUT_CHARS = 2_048;
 const MAX_MELEE_REACH = 3.2;
+const TACTICAL_MELEE_REACH_MARGIN = 0.25;
+const TACTICAL_MELEE_STANCE_RADIUS = 3;
+const MAX_TACTICAL_MELEE_STANCES = 24;
+const MAX_TACTICAL_MELEE_REPLANS = 2;
+const TACTICAL_MELEE_REPLAN_DISTANCE = 0.75;
 const ATTACK_CONFIRM_TIMEOUT_MS = 900;
 const ATTACK_INTERRUPT_POLL_MS = 50;
 const MAX_TACTICAL_COMBAT_STEPS = 24;
@@ -716,6 +721,31 @@ function safeMovements(bot) {
     // Collection restores this to authorize an explicitly selected resource,
     // which is deliberately not ordinary terrain.
     movements.defaultSafeToBreak = defaultSafeToBreak;
+    return guardExecutableDiagonalCorners(movements);
+}
+
+export function guardExecutableDiagonalCorners(movements) {
+    if (!movements || typeof movements.getBlock !== 'function'
+        || typeof movements.getMoveDiagonal !== 'function') {
+        return movements;
+    }
+    const getMoveDiagonal = movements.getMoveDiagonal.bind(movements);
+    movements.getMoveDiagonal = (node, direction, neighbours) => {
+        const landing = movements.getBlock(node, direction.x, 0, direction.z);
+        const yOffset = landing?.physical ? 1 : 0;
+        const sideOffsets = [
+            [0, yOffset, direction.z],
+            [0, yOffset + 1, direction.z],
+            [direction.x, yOffset, 0],
+            [direction.x, yOffset + 1, 0],
+        ];
+        const sideCorridorsOpen = sideOffsets.every(([dx, dy, dz]) => {
+            const block = movements.getBlock(node, dx, dy, dz);
+            return block?.safe === true;
+        });
+        if (!sideCorridorsOpen) return;
+        return getMoveDiagonal(node, direction, neighbours);
+    };
     return movements;
 }
 
@@ -2983,14 +3013,236 @@ async function holdShield(bot, durationMs) {
     }
 }
 
+function isTacticalMeleeStandingCellClear(block) {
+    return Boolean(
+        block
+        && block.boundingBox === 'empty'
+        && !isLiquidGameplayBlock(block)
+        && !isHazardousGameplayBlock(block)
+    );
+}
+
+function hasLineOfSightFromTacticalStance(bot, stance, entity) {
+    if (!bot?.world?.raycast || !stance || !entity?.position) return false;
+    const origin = new Vec3(
+        stance.x + 0.5,
+        stance.y + (Number(bot.entity?.eyeHeight) || 1.62),
+        stance.z + 0.5,
+    );
+    const entityHeight = Math.max(0.6, Number(entity.height) || Number(entity.eyeHeight) || 1.8);
+    const samples = [0.2, 0.55, 0.9].map(ratio => (
+        entity.position.offset(0, entityHeight * ratio, 0)
+    ));
+    for (const sample of samples) {
+        const direction = sample.minus(origin);
+        const distance = direction.norm();
+        if (!Number.isFinite(distance)) continue;
+        if (distance <= 0.25) return true;
+        if (!bot.world.raycast(origin, direction.scaled(1 / distance), distance)) return true;
+    }
+    return false;
+}
+
+function tacticalMeleeStanceClearance(bot, stance) {
+    let clearance = 0;
+    for (const [dx, dz] of [
+        [-1, -1], [0, -1], [1, -1],
+        [-1, 0], [1, 0],
+        [-1, 1], [0, 1], [1, 1],
+    ]) {
+        const feet = stance.offset(dx, 0, dz);
+        try {
+            if (!isTacticalMeleeStandingCellClear(bot.blockAt(feet))) continue;
+            if (!isTacticalMeleeStandingCellClear(bot.blockAt(feet.offset(0, 1, 0)))) continue;
+            if (!isSafeGameplaySupport(bot.blockAt(feet.offset(0, -1, 0)))) continue;
+            clearance += 1;
+        } catch {
+            // Unloaded neighbours cannot prove route clearance.
+        }
+    }
+    return clearance;
+}
+
+export function findTacticalMeleeStances(bot, entity) {
+    if (!bot?.entity?.position || !entity?.position?.floored) return [];
+    const targetFeet = entity.position.floored();
+    const stances = [];
+    for (let y = targetFeet.y - 1; y <= targetFeet.y + 1; y += 1) {
+        for (let x = targetFeet.x - TACTICAL_MELEE_STANCE_RADIUS;
+            x <= targetFeet.x + TACTICAL_MELEE_STANCE_RADIUS;
+            x += 1) {
+            for (let z = targetFeet.z - TACTICAL_MELEE_STANCE_RADIUS;
+                z <= targetFeet.z + TACTICAL_MELEE_STANCE_RADIUS;
+                z += 1) {
+                if (x === targetFeet.x && y === targetFeet.y && z === targetFeet.z) continue;
+                const feet = new Vec3(x, y, z);
+                const standingPosition = new Vec3(x + 0.5, y, z + 0.5);
+                if (standingPosition.distanceTo(entity.position) > MAX_MELEE_REACH - TACTICAL_MELEE_REACH_MARGIN) {
+                    continue;
+                }
+                let feetBlock;
+                let headBlock;
+                let supportBlock;
+                try {
+                    feetBlock = bot.blockAt(feet);
+                    headBlock = bot.blockAt(feet.offset(0, 1, 0));
+                    supportBlock = bot.blockAt(feet.offset(0, -1, 0));
+                } catch {
+                    continue;
+                }
+                if (!isTacticalMeleeStandingCellClear(feetBlock)) continue;
+                if (!isTacticalMeleeStandingCellClear(headBlock)) continue;
+                if (!isSafeGameplaySupport(supportBlock)) continue;
+                if (!hasLineOfSightFromTacticalStance(bot, feet, entity)) continue;
+                stances.push({
+                    position: feet,
+                    clearance: tacticalMeleeStanceClearance(bot, feet),
+                });
+            }
+        }
+    }
+    stances.sort((left, right) => {
+        const leftPosition = new Vec3(
+            left.position.x + 0.5,
+            left.position.y,
+            left.position.z + 0.5,
+        );
+        const rightPosition = new Vec3(
+            right.position.x + 0.5,
+            right.position.y,
+            right.position.z + 0.5,
+        );
+        return right.clearance - left.clearance
+            || bot.entity.position.distanceTo(leftPosition) - bot.entity.position.distanceTo(rightPosition)
+            || leftPosition.distanceTo(entity.position) - rightPosition.distanceTo(entity.position)
+            || left.position.y - right.position.y
+            || left.position.x - right.position.x
+            || left.position.z - right.position.z;
+    });
+    const bestClearance = stances[0]?.clearance;
+    return stances
+        .filter(candidate => candidate.clearance === bestClearance)
+        .slice(0, MAX_TACTICAL_MELEE_STANCES)
+        .map(candidate => candidate.position);
+}
+
+function tacticalMeleeApproachGoal(stances) {
+    if (!Array.isArray(stances) || stances.length === 0) return null;
+    return new pf.goals.GoalCompositeAny(
+        stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+    );
+}
+
+function isReadyForTacticalMelee(bot, entity) {
+    if (!bot?.entity?.position || !entity?.position) return false;
+    if (bot.entity.position.distanceTo(entity.position) > MAX_MELEE_REACH - TACTICAL_MELEE_REACH_MARGIN) {
+        return false;
+    }
+    return world.hasLineOfSightToEntity(bot, entity) !== false;
+}
+
+export function shouldReplanTacticalMeleeApproach({
+    replan,
+    navigated,
+    physicalProgress,
+    targetMovement,
+    lineOfSightBefore,
+    lineOfSightAfter,
+}) {
+    if (replan >= MAX_TACTICAL_MELEE_REPLANS) return false;
+    if (targetMovement >= TACTICAL_MELEE_REPLAN_DISTANCE) return true;
+    return !navigated
+        && physicalProgress >= NAVIGATION_PROGRESS_DISTANCE
+        && lineOfSightBefore === false
+        && lineOfSightAfter === true;
+}
+
+async function approachTacticalMeleeRange(bot, entity) {
+    const target = { name: entity?.username || entity?.name || 'entity', id: entity?.id };
+    const attempts = [];
+    const finish = (success, outcome, detail = {}) => {
+        setActionEvidence(bot, {
+            kind: 'combat_approach',
+            outcome,
+            target,
+            attempts,
+            retryable: !success && !bot.interrupt_code,
+            ...detail,
+        });
+        return success;
+    };
+
+    for (let replan = 0; replan <= MAX_TACTICAL_MELEE_REPLANS; replan += 1) {
+        if (bot.interrupt_code) return finish(false, 'interrupted', { replanCount: replan });
+        const liveEntity = bot.entities?.[entity?.id];
+        if (!liveEntity?.position) return finish(false, 'target_lost', { replanCount: replan });
+        if (isReadyForTacticalMelee(bot, liveEntity)) {
+            return finish(true, 'melee_range_reached', { replanCount: replan });
+        }
+
+        const plannedPosition = liveEntity.position.clone();
+        const routeStart = bot.entity.position.clone();
+        const lineOfSightBefore = world.hasLineOfSightToEntity(bot, liveEntity);
+        const stances = findTacticalMeleeStances(bot, liveEntity);
+        const attempt = {
+            replan,
+            targetPosition: {
+                x: plannedPosition.x,
+                y: plannedPosition.y,
+                z: plannedPosition.z,
+            },
+            stanceCount: stances.length,
+        };
+        attempts.push(attempt);
+        const goal = tacticalMeleeApproachGoal(stances);
+        if (!goal) return finish(false, 'no_safe_melee_stance', { replanCount: replan });
+
+        const navigated = await goToGoal(bot, goal);
+        attempt.navigationOutcome = bot.lastActionEvidence?.outcome || (navigated ? 'arrived' : 'route_blocked');
+        if (bot.interrupt_code) return finish(false, 'interrupted', { replanCount: replan });
+        const currentEntity = bot.entities?.[entity.id];
+        if (!currentEntity?.position) return finish(false, 'target_lost', { replanCount: replan });
+        if (isReadyForTacticalMelee(bot, currentEntity)) {
+            return finish(true, 'melee_range_reached', { replanCount: replan });
+        }
+
+        const targetMovement = currentEntity.position.distanceTo(plannedPosition);
+        const physicalProgress = bot.entity.position.distanceTo(routeStart);
+        const lineOfSightAfter = world.hasLineOfSightToEntity(bot, currentEntity);
+        attempt.targetMovement = Math.round(targetMovement * 100) / 100;
+        attempt.physicalProgress = Math.round(physicalProgress * 100) / 100;
+        attempt.lineOfSightBefore = lineOfSightBefore;
+        attempt.lineOfSightAfter = lineOfSightAfter;
+        if (shouldReplanTacticalMeleeApproach({
+            replan,
+            navigated,
+            physicalProgress,
+            targetMovement,
+            lineOfSightBefore,
+            lineOfSightAfter,
+        })) {
+            continue;
+        }
+        if (!navigated) {
+            return finish(false, 'melee_route_blocked', {
+                replanCount: replan,
+                navigation: bot.lastActionEvidence,
+            });
+        }
+        return finish(false, 'melee_stance_unverified', { replanCount: replan });
+    }
+    return finish(false, 'melee_replan_limit_reached', {
+        replanCount: MAX_TACTICAL_MELEE_REPLANS,
+    });
+}
+
 async function closeWithShield(bot, entity) {
     if (!entity?.position || !await equipCombatShield(bot)) return false;
     let activated = false;
     try {
         bot.activateItem(true);
         activated = true;
-        if (bot.entity.position.distanceTo(entity.position) <= MAX_MELEE_REACH) return true;
-        return await goToGoal(bot, new pf.goals.GoalFollow(entity, MAX_MELEE_REACH - 0.4));
+        return await approachTacticalMeleeRange(bot, entity);
     } catch (error) {
         log(bot, `Could not close safely behind the shield: ${error?.message || error}.`);
         return false;
@@ -3003,9 +3255,8 @@ async function closeWithShield(bot, entity) {
 
 async function closeForMelee(bot, entity) {
     if (!entity?.position) return false;
-    if (bot.entity.position.distanceTo(entity.position) <= MAX_MELEE_REACH - 0.2) return true;
     try {
-        return await goToGoal(bot, new pf.goals.GoalFollow(entity, MAX_MELEE_REACH - 0.4));
+        return await approachTacticalMeleeRange(bot, entity);
     } catch (error) {
         log(bot, `Could not close melee distance: ${error?.message || error}.`);
         return false;
@@ -3208,11 +3459,17 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
             } else {
                 if (decision.response === 'shield_melee') {
                     if (!await closeWithShield(bot, entity)) {
-                        return finish(false, 'shielded_approach_blocked', { steps });
+                        return finish(false, 'shielded_approach_blocked', {
+                            steps,
+                            approach: bot.lastActionEvidence,
+                        });
                     }
                     shieldWindows += 1;
                 } else if (!await closeForMelee(bot, entity)) {
-                    return finish(false, 'melee_approach_blocked', { steps });
+                    return finish(false, 'melee_approach_blocked', {
+                        steps,
+                        approach: bot.lastActionEvidence,
+                    });
                 }
                 const attacked = await attackEntity(bot, entity, false);
                 attack = {

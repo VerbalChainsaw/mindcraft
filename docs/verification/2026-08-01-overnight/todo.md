@@ -9,7 +9,7 @@
 - [x] Pass ordinary obstruction handling through an alternate route three consecutive times.
 - [x] Pass bounded deterministic hunger survival three consecutive times with independent Paper evidence.
 - [x] Reproduce and classify clear versus obstructed hostile handling with independent damage, kill, perception, trajectory, stop, and trace evidence.
-- [ ] COM-001 obstructed hostile is blocked by intermittent Pathfinder corner execution after three surgical navigation mechanisms; continue only from `com-001-blocker.md`, not with another scheduler or arbitration change.
+- [x] Repair COM-001 Pathfinder collision-corner execution and pass clear plus obstructed hostile handling three consecutive times on the instrumentation-free build.
 - [ ] Run collect-and-deliver to a controlled player target when that target is available.
 - [ ] Pass follow, stop-during-follow/recovery, hostile handling, and the ten-minute monitored session.
 - [ ] Run typed-to-natural-language routing checks only after deterministic scenarios pass.

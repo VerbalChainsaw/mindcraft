@@ -4,7 +4,7 @@
   "branch": "phase0-follow-baseline",
   "baselineCommit": "b3a8bbee459c8bbfe11f0bf0884c9428b12ee204",
   "playableDeclared": false,
-  "newTestCount": 6,
+  "newTestCount": 9,
   "fullSuiteRun": false,
   "iterations": [
     {
@@ -306,6 +306,43 @@
         "com-001-live.json"
       ],
       "commit": "COM-001 reproduction checkpoint"
+    },
+    {
+      "id": "COM-001-corner-repair-final-3x",
+      "scenario": "clear-and-obstructed-hostile-handling",
+      "command": "!resolveTacticalCombat(8)",
+      "observation": {
+        "confirmedPathTransition": "(1113.5,1060.5)->(1114.5,1061.5)",
+        "preRepairEndpoint": { "x": 1113.70, "y": 100, "z": 1060.67 },
+        "preRepairControls": "forward+sprint",
+        "diagnosticBuildResults": { "clear": "3/3", "obstructed": "3/3" },
+        "productionBuildResults": { "clear": "3/3", "obstructed": "3/3" },
+        "finalClearDurationMs": [3886, 3949, 3909],
+        "finalObstructedDurationMs": [4995, 4975, 4965],
+        "obstructedDamageDelta": ["0->200", "0->200", "0->200"],
+        "obstructedKillDelta": ["0->1", "0->1", "0->1"],
+        "obstructedStopQuiescenceMs": [5, 2, 7],
+        "cleanupVerified": true
+      },
+      "classification": "verified_pathfinding_repair",
+      "explanation": "The graph admitted a one-side-clear diagonal that the direct node executor could not traverse around a collision corner. Requiring both orthogonal body corridors makes the graph emit cardinal clearance nodes without removing open-space diagonals.",
+      "changedFiles": [
+        "src/agent/library/skills.js",
+        "tests/tactical-melee-stance.test.js"
+      ],
+      "tests": [
+        "tactical melee stances route around an obstruction to supported line-of-sight cells",
+        "tactical melee replans on new geometry evidence but not a repeated static visible stall",
+        "movement policy rejects collision-corner diagonals but preserves open-space diagonals"
+      ],
+      "liveReruns": 6,
+      "result": "passed_3_consecutive_on_instrumentation_free_build",
+      "evidence": [
+        "com-001-path-execution-trace.json",
+        "com-001-live-corner-guard.json",
+        "com-001-live-final.json"
+      ],
+      "commit": "COM-001 repair checkpoint"
     }
   ]
 }
