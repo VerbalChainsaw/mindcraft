@@ -64,6 +64,21 @@ function isSameActionArea(first, second) {
     return dx * dx + dy * dy + dz * dz <= ACTION_PATTERN_RADIUS_SQUARED;
 }
 
+function actionProgressTarget(result) {
+    const target = result?.target;
+    if (
+        result?.phase !== 'succeeded'
+        || !target
+        || ![target.x, target.y, target.z].every(Number.isFinite)
+    ) return null;
+    return JSON.stringify([
+        String(target.name || target.type || ''),
+        target.x,
+        target.y,
+        target.z,
+    ]);
+}
+
 function normalizeActionOwner(owner) {
     const normalized = String(owner || '').trim().toLowerCase();
     return Object.hasOwn(ACTION_OWNER_PRIORITY, normalized) ? normalized : 'player';
@@ -83,6 +98,7 @@ export class ActionManager {
         this.last_action_time = 0;
         this.currentActionStartedAt = 0;
         this.recentActionAttempts = [];
+        this.lastProgressTargetByAction = new Map();
         this.lastResult = null;
         this.nextActionId = 0;
         this.stopRequestedAt = null;
@@ -147,6 +163,23 @@ export class ActionManager {
             startedAt: now,
         });
         return null;
+    }
+
+    recordActionProgress(actionLabel, actionOwner, result) {
+        const target = actionProgressTarget(result);
+        if (!target) return false;
+        const key = JSON.stringify([actionOwner, actionLabel]);
+        const previousTarget = this.lastProgressTargetByAction.get(key);
+        this.lastProgressTargetByAction.set(key, target);
+        if (previousTarget === target) return false;
+
+        // A deterministic skill just changed a different world coordinate.
+        // That is productive batch work (placing a blueprint, mining a seam),
+        // not the same no-progress action reclaiming one patch of ground.
+        this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
+            attempt.owner !== actionOwner || attempt.label !== actionLabel
+        ));
+        return true;
     }
 
     isOwnerBlocked(owner) {
@@ -440,6 +473,7 @@ export class ActionManager {
                 startedAt,
             });
             this.lastResult = result;
+            this.recordActionProgress(actionLabel, actionOwner, result);
             this.agent.recordActionResult?.(result);
             return { success: result.phase === 'succeeded', message: output, interrupted, timedout, result };
         } catch (err) {
