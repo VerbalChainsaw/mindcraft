@@ -4,7 +4,7 @@
   "branch": "phase0-follow-baseline",
   "baselineCommit": "b3a8bbee459c8bbfe11f0bf0884c9428b12ee204",
   "playableDeclared": false,
-  "newTestCount": 4,
+  "newTestCount": 6,
   "fullSuiteRun": false,
   "iterations": [
     {
@@ -242,7 +242,70 @@
       "liveReruns": 4,
       "result": "passed_3_consecutive",
       "evidence": ["sur-001-live-reproduction.json", "sur-001-live.json"],
-      "commit": "SUR-001 evidence checkpoint (this commit)"
+      "commit": "0e9f36c"
+    },
+    {
+      "id": "COM-001-backend-stop",
+      "scenario": "clear-and-obstructed-hostile-handling",
+      "command": "!resolveTacticalCombat(8)",
+      "reset": {
+        "bot": { "x": 1111.5, "y": 100, "z": 1057.5 },
+        "target": { "type": "zombie", "x": 1117.5, "y": 100, "z": 1057.5, "noAI": true },
+        "wall": { "x": 1114, "y": "100..102", "z": "1054..1060", "gaps": [1053, 1061] },
+        "floorRestored": true,
+        "otherHostilesRemoved": true,
+        "operatorHeldBeforeAndAfter": true,
+        "sessionAutonomy": "command"
+      },
+      "observation": {
+        "clearCasesPassed": 5,
+        "clearCasesMeasured": 5,
+        "finalMechanismObstructedResults": ["passed", "passed", "failed"],
+        "successfulObstructedDurationMs": [14926, 15531],
+        "successfulDamageDelta": ["0->200", "0->200"],
+        "successfulKillDelta": ["0->1", "0->1"],
+        "failedEndpoint": { "x": 1113.70, "y": 100, "z": 1060.67 },
+        "failedTargetVisible": false,
+        "failedDamageDelta": "0->0",
+        "failedKillDelta": "0->0",
+        "failedOutcome": "skill_melee_approach_blocked",
+        "cleanupVerified": true
+      },
+      "classification": "execution_backend_limitation_stop_condition",
+      "falsifiedAlternatives": [
+        "walkability_based_threat_recognition",
+        "wrong_tactical_winner",
+        "arbiter_preemption",
+        "unsafe_or_missing_floor_support",
+        "unrelated_hostile_contamination",
+        "damage_attribution_failure"
+      ],
+      "experimentalChangedFiles": [
+        "src/agent/library/skills.js",
+        "tests/tactical-melee-stance.test.js"
+      ],
+      "durableChangedFiles": [
+        "tools/verify-combat-field.mjs",
+        "docs/verification/2026-08-01-overnight/com-001-blocker.md"
+      ],
+      "tests": [
+        "2 focused tactical stance/replan checks passed",
+        "verifier syntax and lint passed"
+      ],
+      "liveReruns": 9,
+      "result": "blocked_after_three_surgical_navigation_repairs",
+      "evidence": [
+        "com-001-live-reproduction.json",
+        "com-001-live-post-fixture-cleanup.json",
+        "com-001-live-post-verifier-fix.json",
+        "com-001-live-post-floor-repair.json",
+        "com-001-live-post-repair-r1.json",
+        "com-001-live-post-repair-r2.json",
+        "com-001-live-post-repair-r2b.json",
+        "com-001-live-post-repair-r3.json",
+        "com-001-live.json"
+      ],
+      "commit": "COM-001 reproduction checkpoint"
     }
   ]
 }

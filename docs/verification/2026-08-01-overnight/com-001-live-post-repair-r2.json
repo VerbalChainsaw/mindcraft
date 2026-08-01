@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "scenario": "clear-and-obstructed-hostile-tactical-combat",
+  "command": "!resolveTacticalCombat(8)",
+  "bot": "MindcraftBot",
+  "fixture": {
+    "arena": {
+      "x1": 1109,
+      "x2": 1118,
+      "y1": 100,
+      "y2": 105,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "botStart": {
+      "x": 1111.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "targetStart": {
+      "x": 1117.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "wall": {
+      "x": 1114,
+      "y1": 100,
+      "y2": 102,
+      "z1": 1054,
+      "z2": 1060
+    },
+    "alternateRoutes": [
+      {
+        "z": 1053
+      },
+      {
+        "z": 1061
+      }
+    ],
+    "repairedFloor": {
+      "x1": 1109,
+      "x2": 1118,
+      "y": 99,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "target": {
+      "type": "zombie",
+      "tag": "mindcraft_com001",
+      "activeAI": false
+    }
+  },
+  "independentAttribution": {
+    "damageCriterion": "minecraft.custom:minecraft.damage_dealt",
+    "killCriterion": "minecraft.killed:minecraft.zombie"
+  },
+  "startedAt": 1785573272781,
+  "attempts": [
+    {
+      "attempt": 1,
+      "cases": [],
+      "passed": false
+    }
+  ],
+  "passed": false,
+  "error": "Error: Timed out waiting for clear hostile perception fixture. Last observation: {\"_meta\":{\"sampledAt\":1785573289490,\"source\":\"live\",\"depth\":\"shallow\"},\"name\":\"MindcraftBot\",\"identity\":{\"schemaVersion\":1,\"profileId\":\"\",\"instanceId\":\"\",\"displayName\":\"MindcraftBot\",\"callSign\":\"\",\"title\":\"\",\"appearance\":\"\",\"nameplate\":{\"badge\":\"\",\"color\":\"gray\"},\"squad\":{\"id\":\"\",\"displayName\":\"\",\"badge\":\"\",\"color\":\"gray\",\"motto\":\"\",\"naming\":{\"style\":\"numbered\",\"memberNames\":[]}},\"role\":\"companion\",\"autonomy\":\"command\",\"roleFocus\":[\"follow\",\"assist\",\"conversation\"],\"job\":\"\",\"language\":\"en\",\"style\":\"\",\"attitude\":\"\",\"specialties\":[],\"runtime\":{\"autonomy\":\"command\",\"comportment\":\"neutral\",\"traversal\":\"full\",\"narration\":\"quiet\"}},\"persona\":\"\",\"gameplay\":{\"position\":{\"x\":1111.5,\"y\":100,\"z\":1057.5},\"dimension\":\"overworld\",\"gamemode\":\"survival\",\"health\":20,\"healthMax\":20,\"hunger\":20,\"hungerMax\":20,\"experienceLevel\":2,\"experiencePoints\":17,\"biome\":\"cold_ocean\",\"weather\":\"Rain\",\"timeOfDay\":17042,\"timeLabel\":\"Night\"},\"action\":{\"current\":\"Role initializing\",\"kind\":\"thinking\",\"isIdle\":true,\"pathfinding\":null,\"held\":true,\"stopRequestedAt\":null,\"stopTimedOutAt\":null,\"lastResult\":null,\"survivalDirector\":{\"name\":\"survival\",\"phase\":\"waiting\",\"code\":\"explicit_job_active\",\"target\":null,\"detail\":\"Emergency shelter work is waiting for an available job director.\",\"retryable\":true,\"nextEligibleAt\":null},\"goalDirector\":{\"phase\":\"idle\",\"code\":\"no_goal\",\"detail\":\"No typed gameplay goal is active.\",\"retryable\":false,\"inFlight\":false,\"nextAttemptAt\":0,\"plan\":null,\"goal\":{\"id\":\"goal-6a3913c1-c356-4230-841c-0f4ad5cfa124\",\"kind\":\"acquire\",\"requester\":\"ADMIN\",\"target\":{\"requestedName\":\"oak_log\",\"canonicalName\":\"oak_log\",\"inventoryName\":\"oak_log\",\"acquisitionKind\":\"collect_block\"},\"quantity\":2,\"destination\":{\"kind\":\"inventory\",\"player\":null},\"phase\":\"complete\",\"attempts\":0,\"maxAttempts\":4,\"checkpoint\":{\"baselineInventory\":0,\"targetInventory\":2,\"delivered\":0},\"procedureId\":\"procedure-acquire:oak_log:inventory\",\"subgoals\":0,\"activeSubgoal\":null}},\"jobDirector\":{\"phase\":\"waiting\",\"code\":\"startup_delay\",\"retryable\":true,\"nextAttemptAt\":1785573265445,\"workOrder\":{\"id\":\"builder-88e51f41-1f9c-4647-8d75-55473382f82b\",\"role\":\"builder\",\"kind\":\"emergency_shelter\",\"phase\":\"assess\",\"target\":{\"name\":\"worksite\",\"x\":1031,\"y\":100,\"z\":1010},\"attempts\":0,\"maxAttempts\":3,\"checkpoint\":{},\"evidence\":{\"code\":\"restart_revalidation\",\"detail\":\"Restart revalidation required at {\\\"inventory\\\":{},\\\"position\\\":null}\",\"actionId\":\"\"}}},\"reactionDirector\":{\"phase\":\"waiting\",\"code\":\"ready\",\"spoken\":0,\"gestures\":0,\"fallbacks\":0,\"lastEventId\":null,\"detail\":\"Waiting for a salient factual event.\",\"queued\":15},\"roleDirector\":{\"phase\":\"waiting\",\"code\":\"startup_delay\",\"role\":\"companion\",\"target\":null,\"evidence\":\"Waiting for Minecraft spawn state to settle.\",\"retryable\":true,\"at\":1785573260445,\"nextAttemptAt\":1785573265445},\"behaviorArbiter\":{\"selectedLane\":\"operator_hold\",\"code\":\"operator_hold\",\"reason\":\"operator stop command\",\"observedAt\":1785573292268,\"perceptionFreshness\":\"fresh\",\"perceptionAge\":615,\"perceptionError\":null,\"activeActionOwner\":null,\"activeActionLabel\":null,\"lowerLanesSuppressed\":true,\"tick\":54,\"updatedAt\":1785573292883,\"urgency\":\"calm\",\"nextTickDelayMs\":600,\"comportment\":\"neutral\",\"decisionTrace\":{\"schemaVersion\":1,\"retained\":54,\"retentionLimit\":128,\"recent\":[{\"schemaVersion\":1,\"decisionId\":\"MindcraftBot-39-1785573283746-39\",\"agent\":\"MindcraftBot\",\"wallClockTimestamp\":1785573283746,\"monotonicStartedMs\":27471.846,\"trigger\":{\"code\":\"scheduled_tick\",\"deltaMs\":609},\"activeAction\":{\"actionId\":null,\"owner\":null,\"label\":null,\"intent\":null,\"startedAt\":0,\"commitment\":{\"resumeAction\":null,\"goalId\":null,\"goalPhase\":null,\"workOrderId\":\"builder-88e51f41-1f9c-4647-8d75-55473382f82b\",\"workOrderPhase\":\"assess\"}},\"evidence\":[{\"id\":\"perception-39\",\"source\":\"environment_observer\",\"observedAt\":1785573283747,\"ageMs\":0,\"summary\":\"fresh\"}],\"lanes\":[{\"order\":0,\"lane\":\"operator_hold\",\"status\":\"eligible\",\"reasonCode\":\"operator_",
+  "cleanup": {
+    "held": true,
+    "position": {
+      "x": 1071.5,
+      "y": 100,
+      "z": 1007.5
+    },
+    "autonomy": "command",
+    "taggedTargetsRemoved": true,
+    "temporaryWallRemoved": true
+  },
+  "finishedAt": 1785573294262,
+  "durationMs": 21481
+}

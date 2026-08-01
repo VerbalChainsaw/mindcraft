@@ -1,0 +1,4816 @@
+{
+  "schemaVersion": 1,
+  "scenario": "clear-and-obstructed-hostile-tactical-combat",
+  "command": "!resolveTacticalCombat(8)",
+  "bot": "MindcraftBot",
+  "fixture": {
+    "arena": {
+      "x1": 1109,
+      "x2": 1118,
+      "y1": 100,
+      "y2": 105,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "botStart": {
+      "x": 1111.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "targetStart": {
+      "x": 1117.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "wall": {
+      "x": 1114,
+      "y1": 100,
+      "y2": 102,
+      "z1": 1054,
+      "z2": 1060
+    },
+    "alternateRoutes": [
+      {
+        "z": 1053
+      },
+      {
+        "z": 1061
+      }
+    ],
+    "target": {
+      "type": "zombie",
+      "tag": "mindcraft_com001",
+      "activeAI": false
+    }
+  },
+  "independentAttribution": {
+    "damageCriterion": "minecraft.custom:minecraft.damage_dealt",
+    "killCriterion": "minecraft.killed:minecraft.zombie"
+  },
+  "startedAt": 1785572032802,
+  "attempts": [
+    {
+      "attempt": 1,
+      "cases": [
+        {
+          "runId": "COM001-R1-C",
+          "kind": "clear",
+          "issuedAt": 1785572034345,
+          "commandAck": {
+            "success": true,
+            "agentName": "MindcraftBot",
+            "acceptedAt": 1785572034346
+          },
+          "initialHostile": {
+            "name": "zombie",
+            "entityId": 4743,
+            "distance": 6,
+            "position": {
+              "x": 1117.5,
+              "y": 100,
+              "z": 1057.5
+            },
+            "visible": true,
+            "inView": false,
+            "hostile": true,
+            "threatDisposition": "combat_safe",
+            "threatPriority": "high",
+            "motion": "stationary"
+          },
+          "terminal": {
+            "actionId": "MindcraftBot-9-1785572034347",
+            "phase": "succeeded",
+            "code": "skill_retreated",
+            "label": "action:resolveTacticalCombat",
+            "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+            "target": {
+              "name": "creeper"
+            },
+            "durationMs": 2244,
+            "startedAt": 1785572034347,
+            "finishedAt": 1785572036591
+          },
+          "terminalState": {
+            "sampledAt": 1785572036592,
+            "position": {
+              "x": 1111.48,
+              "y": 100,
+              "z": 1058.5
+            },
+            "health": 20,
+            "hunger": 20,
+            "held": false,
+            "idle": true,
+            "pathfinding": null,
+            "current": "Manual control",
+            "autonomy": "command",
+            "mainHand": "iron_axe",
+            "hostiles": [
+              {
+                "name": "creeper",
+                "entityId": 4716,
+                "distance": 5.8,
+                "position": {
+                  "x": 1112.5,
+                  "y": 100,
+                  "z": 1064.3
+                },
+                "visible": true,
+                "inView": false,
+                "hostile": true,
+                "threatDisposition": "combat_safe",
+                "threatPriority": "critical",
+                "motion": "stationary"
+              },
+              {
+                "name": "creeper",
+                "entityId": 4708,
+                "distance": 10.7,
+                "position": {
+                  "x": 1119.2,
+                  "y": 107,
+                  "z": 1056.2
+                },
+                "visible": false,
+                "inView": false,
+                "hostile": true,
+                "threatDisposition": "combat_safe",
+                "threatPriority": "high",
+                "motion": "retreating"
+              },
+              {
+                "name": "zombie",
+                "entityId": 4743,
+                "distance": 6.1,
+                "position": {
+                  "x": 1117.5,
+                  "y": 100,
+                  "z": 1057.5
+                },
+                "visible": true,
+                "inView": false,
+                "hostile": true,
+                "threatDisposition": "combat_safe",
+                "threatPriority": "high",
+                "motion": "stationary"
+              }
+            ],
+            "lastResult": {
+              "actionId": "MindcraftBot-9-1785572034347",
+              "phase": "succeeded",
+              "code": "skill_retreated",
+              "label": "action:resolveTacticalCombat",
+              "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+              "target": {
+                "name": "creeper"
+              },
+              "durationMs": 2244,
+              "startedAt": 1785572034347,
+              "finishedAt": 1785572036591
+            }
+          },
+          "afterState": {
+            "sampledAt": 1785572039626,
+            "position": {
+              "x": 1111.3,
+              "y": 100,
+              "z": 1058.06
+            },
+            "health": 8,
+            "hunger": 20,
+            "held": true,
+            "idle": true,
+            "pathfinding": null,
+            "current": "Manual control",
+            "autonomy": "command",
+            "mainHand": "iron_axe",
+            "hostiles": [
+              {
+                "name": "creeper",
+                "entityId": 4708,
+                "distance": 10.7,
+                "position": {
+                  "x": 1119.2,
+                  "y": 107,
+                  "z": 1056.2
+                },
+                "visible": false,
+                "inView": false,
+                "hostile": true,
+                "threatDisposition": "combat_safe",
+                "threatPriority": "high",
+                "motion": "retreating"
+              },
+              {
+                "name": "zombie",
+                "entityId": 4743,
+                "distance": 6.2,
+                "position": {
+                  "x": 1117.5,
+                  "y": 100,
+                  "z": 1057.5
+                },
+                "visible": true,
+                "inView": false,
+                "hostile": true,
+                "threatDisposition": "combat_safe",
+                "threatPriority": "high",
+                "motion": "stationary"
+              }
+            ],
+            "lastResult": {
+              "actionId": "MindcraftBot-9-1785572034347",
+              "phase": "succeeded",
+              "code": "skill_retreated",
+              "label": "action:resolveTacticalCombat",
+              "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+              "target": {
+                "name": "creeper"
+              },
+              "durationMs": 2244,
+              "startedAt": 1785572034347,
+              "finishedAt": 1785572036591
+            }
+          },
+          "tacticalChoiceCount": 1,
+          "resyncRequests": 0,
+          "detoured": true,
+          "stayedInArena": true,
+          "stop": {
+            "issuedAt": 1785572036599,
+            "acceptedAt": 1785572036600,
+            "heldAt": 1785572036606,
+            "quiescenceMs": 6,
+            "stableForThreeSeconds": false
+          },
+          "paper": {
+            "targetPresentBefore": true,
+            "targetAbsentAfter": false,
+            "targetHealth": "200->182",
+            "botHealth": "200->77",
+            "attributedDamage": "0->17",
+            "attributedKills": "0->0",
+            "targetPositionBefore": {
+              "x": 1117.5,
+              "y": 100,
+              "z": 1057.5
+            },
+            "botPositionBefore": {
+              "x": 1111.5,
+              "y": 100,
+              "z": 1057.5
+            },
+            "botPositionAfter": {
+              "x": 1111.2968057049243,
+              "y": 100,
+              "z": 1058.06010494334
+            },
+            "geometryVerified": true,
+            "before": [
+              "[command] > scoreboard players set #COM001_R1_C_BEFORE_BEGIN com001proof 1",
+              "[command] > scoreboard players set #targethealth com001proof -1",
+              "[command] > execute store result score #targethealth com001proof run data get entity @e[tag=mindcraft_com001,limit=1] Health 10",
+              "> > > >   [03:13:54 INFO]: \u001b[91mTarget doesn't have the requested effect\u001b[0m",
+              "> execute store result score #targethealth com001proof                                                      [03:13:54 INFO]: Set [com001proof] for #COM001_R1_C_BEFORE_BEGIN to 1",
+              "> execute store result score #targethealth com001proof run data get e                                                                     [03:13:54 INFO]: Set [com001proof] for #targethealth to -1",
+              "[command] > execute store result score #bothealth com001proof run data get entity MindcraftBot Health 10",
+              "[command] > data get entity @e[tag=mindcraft_com001,limit=1] Pos",
+              "[command] > data get entity MindcraftBot Pos",
+              "[command] > scoreboard players get MindcraftBot com001damage",
+              "[command] > scoreboard players get MindcraftBot com001kills",
+              "[command] > execute if entity @e[tag=mindcraft_com001] run scoreboard players set #COM001_R1_C_BEFORE_TARGET_PRESENT com001proof 1",
+              "[command] > execute unless entity @e[tag=mindcraft_com001] run scoreboard players set #COM001_R1_C_BEFORE_TARGET_ABSENT com001proof 1",
+              "[command] > execute if block 1114 100 1057 minecraft:air run scoreboard players set #COM001_R1_C_BEFORE_WALL_EXPECTED com001proof 1",
+              "[command] > execute if block 1114 100 1053 minecraft:air run scoreboard players set #COM001_R1_C_BEFORE_GAP_1053 com001proof 1",
+              "[command] > execute if block 1114 100 1061 minecraft:air run scoreboard players set #COM001_R1_C_BEFORE_GAP_1061 com001proof 1",
+              "[command] > scoreboard players get #targethealth com001proof",
+              "[command] > scoreboard players get #bothealth com001proof",
+              "[command] > scoreboard players set #COM001_R1_C_BEFORE_END com001proof 1",
+              "> execute store result score #targethealth com001proof run data get entity @e[tag=mindcraft_com001,limit=1]> > data get entity @e[tag=mindcraft_com001,limit=1]> > > > execute if entity @e[tag=mindcraft_com001]> execute unless entity @e[tag=mindcraft_com001]> > > > > > >   [03:13:54 INFO]: Health on Zombie after scale factor of 10.00 is 200",
+              ">   [03:13:54 INFO]: Health on MindcraftBot after scale factor of 10.00 is 200",
+              ">   [03:13:54 INFO]: Zombie has the following entity data: [\u001b[33m1117.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1057.5\u001b[91md\u001b[0m]",
+              ">   [03:13:54 INFO]: MindcraftBot has the following entity data: [\u001b[33m1111.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1057.5\u001b[91md\u001b[0m]",
+              ">   [03:13:54 INFO]: MindcraftBot has 0 [com001damage]",
+              ">   [03:13:54 INFO]: MindcraftBot has 0 [com001kills]",
+              ">   [03:13:54 INFO]: Set [com001proof] for #COM001_R1_C_BEFORE_TARGET_PRESENT to 1",
+              ">   [03:13:54 INFO]: Set [com001proof] for #COM001_R1_C_BEFORE_WALL_EXPECTED to 1",
+              ">   [03:13:54 INFO]: Set [com001proof] for #COM001_R1_C_BEFORE_GAP_1053 to 1",
+              ">   [03:13:54 INFO]: Set [com001proof] for #COM001_R1_C_BEFORE_GAP_1061 to 1",
+              ">   [03:13:54 INFO]: #targethealth has 200 [com001proof]",
+              ">   [03:13:54 INFO]: #bothealth has 200 [com001proof]",
+              ">   [03:13:54 INFO]: Set [com001proof] for #COM001_R1_C_BEFORE_END to 1"
+            ],
+            "after": [
+              "[command] > scoreboard players set #COM001_R1_C_AFTER_BEGIN com001proof 1",
+              "[command] > scoreboard players set #targethealth com001proof -1",
+              "[command] > execute store result score #targethealth com001proof run data get entity @e[tag=mindcraft_com001,limit=1] Health 10",
+              "[command] > execute store result score #bothealth com001proof run data get entity MindcraftBot Health 10",
+              "[command] > data get entity @e[tag=mindcraft_com001,limit=1] Pos",
+              "[command] > data get entity MindcraftBot Pos",
+              "[command] > scoreboard players get MindcraftBot com001damage",
+              "[command] > scoreboard players get MindcraftBot com001kills",
+              "[command] > execute if entity @e[tag=mindcraft_com001] run scoreboard players set #COM001_R1_C_AFTER_TARGET_PRESENT com001proof 1",
+              "[command] > execute unless entity @e[tag=mindcraft_com001] run scoreboard players set #COM001_R1_C_AFTER_TARGET_ABSENT com001proof 1",
+              "[command] > execute if block 1114 100 1057 minecraft:air run scoreboard players set #COM001_R1_C_AFTER_WALL_EXPECTED com001proof 1",
+              "[command] > execute if block 1114 100 1053 minecraft:air run scoreboard players set #COM001_R1_C_AFTER_GAP_1053 com001proof 1",
+              "[command] > execute if block 1114 100 1061 minecraft:air run scoreboard players set #COM001_R1_C_AFTER_GAP_1061 com001proof 1",
+              "[command] > scoreboard players get #targethealth com001proof",
+              "[command] > scoreboard players get #bothealth com001proof",
+              "[command] > scoreboard players set #COM001_R1_C_AFTER_END com001proof 1",
+              "> > > execute store result score #targethealth com001proof run data get entity @e[tag=mindcraft_com001,limit=1]> > data get entity @e[tag=mindcraft_com001,limit=1]> > > > execute if entity @e[tag=mindcraft_com001]> execute unless entity @e[tag=mindcraft_com001]> > > > > > >   [03:14:00 INFO]: Set [com001proof] for #COM001_R1_C_AFTER_BEGIN to 1",
+              ">   [03:14:00 INFO]: Set [com001proof] for #targethealth to -1",
+              ">   [03:14:00 INFO]: Health on Zombie after scale factor of 10.00 is 182",
+              ">   [03:14:00 INFO]: Health on MindcraftBot after scale factor of 10.00 is 77",
+              ">   [03:14:00 INFO]: Zombie has the following entity data: [\u001b[33m1117.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1057.5\u001b[91md\u001b[0m]",
+              ">   [03:14:00 INFO]: MindcraftBot has the following entity data: [\u001b[33m1111.2968057049243\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1058.06010494334\u001b[91md\u001b[0m]",
+              ">   [03:14:00 INFO]: MindcraftBot has 17 [com001damage]",
+              ">   [03:14:00 INFO]: MindcraftBot has 0 [com001kills]",
+              ">   [03:14:00 INFO]: Set [com001proof] for #COM001_R1_C_AFTER_TARGET_PRESENT to 1",
+              ">   [03:14:00 INFO]: Set [com001proof] for #COM001_R1_C_AFTER_WALL_EXPECTED to 1",
+              ">   [03:14:00 INFO]: Set [com001proof] for #COM001_R1_C_AFTER_GAP_1053 to 1",
+              ">   [03:14:00 INFO]: Set [com001proof] for #COM001_R1_C_AFTER_GAP_1061 to 1",
+              ">   [03:14:00 INFO]: #targethealth has 182 [com001proof]",
+              ">   [03:14:00 INFO]: #bothealth has 77 [com001proof]",
+              ">   [03:14:00 INFO]: Set [com001proof] for #COM001_R1_C_AFTER_END to 1"
+            ]
+          },
+          "outputs": [
+            {
+              "at": 1785572034930,
+              "output": "Phantom, 23 blocks away!"
+            },
+            {
+              "at": 1785572035393,
+              "output": "Phantom took a hit."
+            },
+            {
+              "at": 1785572035851,
+              "output": "That's the phantom down."
+            },
+            {
+              "at": 1785572036592,
+              "output": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks."
+            },
+            {
+              "at": 1785572037047,
+              "output": "Agent stopped. It will remain held until you give a new command or goal."
+            }
+          ],
+          "samples": [
+            {
+              "sampledAt": 1785572034034,
+              "position": {
+                "x": 1111.5,
+                "y": 100,
+                "z": 1057.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "stone_pickaxe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 10.1,
+                  "position": {
+                    "x": 1109.8,
+                    "y": 100,
+                    "z": 1067.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 9.7,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 107,
+                    "z": 1054.5
+                  },
+                  "visible": false,
+                  "inView": true,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-8-1785571523220",
+                "phase": "succeeded",
+                "code": "skill_consumed",
+                "label": "action:consume",
+                "detail": "Action output: Consumed cooked_beef.",
+                "target": {
+                  "name": "cooked_beef"
+                },
+                "durationMs": 1597,
+                "startedAt": 1785571523220,
+                "finishedAt": 1785571524817
+              }
+            },
+            {
+              "sampledAt": 1785572036592,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": false,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 5.8,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1064.3
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572036606,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 5.8,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1064.3
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572038871,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 2.6,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1060.9
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572039124,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 2.6,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1060.9
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572039375,
+              "position": {
+                "x": 1111.3,
+                "y": 100.14,
+                "z": 1058.06
+              },
+              "health": 5,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.6,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.2,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572039626,
+              "position": {
+                "x": 1111.3,
+                "y": 100,
+                "z": 1058.06
+              },
+              "health": 5,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.2,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            }
+          ],
+          "stableSamples": [
+            {
+              "sampledAt": 1785572036606,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 5.8,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1064.3
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572036606,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 3,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1061.4
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572036606,
+              "position": {
+                "x": 1111.48,
+                "y": 100,
+                "z": 1058.5
+              },
+              "health": 20,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4716,
+                  "distance": 2.6,
+                  "position": {
+                    "x": 1112.5,
+                    "y": 100,
+                    "z": 1060.9
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "critical",
+                  "motion": "stationary"
+                },
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.1,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            },
+            {
+              "sampledAt": 1785572039626,
+              "position": {
+                "x": 1111.3,
+                "y": 100,
+                "z": 1058.06
+              },
+              "health": 5,
+              "hunger": 20,
+              "held": true,
+              "idle": true,
+              "pathfinding": null,
+              "current": "Manual control",
+              "autonomy": "command",
+              "mainHand": "iron_axe",
+              "hostiles": [
+                {
+                  "name": "creeper",
+                  "entityId": 4708,
+                  "distance": 10.7,
+                  "position": {
+                    "x": 1119.2,
+                    "y": 107,
+                    "z": 1056.2
+                  },
+                  "visible": false,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "retreating"
+                },
+                {
+                  "name": "zombie",
+                  "entityId": 4743,
+                  "distance": 6.2,
+                  "position": {
+                    "x": 1117.5,
+                    "y": 100,
+                    "z": 1057.5
+                  },
+                  "visible": true,
+                  "inView": false,
+                  "hostile": true,
+                  "threatDisposition": "combat_safe",
+                  "threatPriority": "high",
+                  "motion": "stationary"
+                }
+              ],
+              "lastResult": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "label": "action:resolveTacticalCombat",
+                "detail": "Action output: Tactical choice: melee against zombie (close_safe_hostile). Tactical choice: retreat against creeper (explosive_without_ranged_option). Retreated from creeper; spacing increased from 7.9 to 10.7 blocks.",
+                "target": {
+                  "name": "creeper"
+                },
+                "durationMs": 2244,
+                "startedAt": 1785572034347,
+                "finishedAt": 1785572036591
+              }
+            }
+          ],
+          "traces": [
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3325-1785572032507-3325",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572032507,
+              "monotonicStartedMs": 1509859.397,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 614
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3325",
+                  "source": "environment_observer",
+                  "observedAt": 1785572032507,
+                  "ageMs": 0,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.043
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.099
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.008
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.28,
+                "cleanupMs": 0.016,
+                "totalMs": 1.296
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3326-1785572033107-3326",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572033107,
+              "monotonicStartedMs": 1510459.556,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 600
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3326",
+                  "source": "environment_observer",
+                  "observedAt": 1785572032507,
+                  "ageMs": 600,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.045
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.091
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.008
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.29,
+                "cleanupMs": 0.018,
+                "totalMs": 1.308
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3327-1785572033720-3327",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572033720,
+              "monotonicStartedMs": 1511072.471,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 613
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3327",
+                  "source": "environment_observer",
+                  "observedAt": 1785572033720,
+                  "ageMs": 0,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.046
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.108
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.011
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.334,
+                "cleanupMs": 0.027,
+                "totalMs": 1.361
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3328-1785572034324-3328",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572034324,
+              "monotonicStartedMs": 1511677.079,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 604
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": null,
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3328",
+                  "source": "environment_observer",
+                  "observedAt": 1785572033720,
+                  "ageMs": 604,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.038
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.061
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.005
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.25,
+                "cleanupMs": 0.012,
+                "totalMs": 1.262
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3329-1785572034925-3329",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572034925,
+              "monotonicStartedMs": 1512277.512,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 601
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3329",
+                  "source": "environment_observer",
+                  "observedAt": 1785572034925,
+                  "ageMs": 0,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.009
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.046
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.01
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.063
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.064
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.02
+                }
+              ],
+              "timing": {
+                "evaluationMs": 5.117,
+                "cleanupMs": 0.027,
+                "totalMs": 5.144
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3330-1785572035176-3330",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572035176,
+              "monotonicStartedMs": 1512528.537,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 251
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3330",
+                  "source": "environment_observer",
+                  "observedAt": 1785572034925,
+                  "ageMs": 251,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.01
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.029
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.011
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.06
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.056
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.065
+                }
+              ],
+              "timing": {
+                "evaluationMs": 5.718,
+                "cleanupMs": 0.076,
+                "totalMs": 5.794
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3331-1785572035425-3331",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572035425,
+              "monotonicStartedMs": 1512777.257,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 249
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3331",
+                  "source": "environment_observer",
+                  "observedAt": 1785572034925,
+                  "ageMs": 500,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.015
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.061
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.016
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.068
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.089
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.008
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.533,
+                "cleanupMs": 0.019,
+                "totalMs": 1.552
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3332-1785572035669-3332",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572035669,
+              "monotonicStartedMs": 1513021.785,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 244
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3332",
+                  "source": "environment_observer",
+                  "observedAt": 1785572034925,
+                  "ageMs": 744,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.011
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.051
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.011
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.064
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.064
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.018
+                }
+              ],
+              "timing": {
+                "evaluationMs": 4.16,
+                "cleanupMs": 0.025,
+                "totalMs": 4.185
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3333-1785572035914-3333",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572035914,
+              "monotonicStartedMs": 1513267.099,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 245
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3333",
+                  "source": "environment_observer",
+                  "observedAt": 1785572035915,
+                  "ageMs": 0,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.014
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.071
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.013
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.056
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.109
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.012
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.839,
+                "cleanupMs": 0.025,
+                "totalMs": 1.864
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3334-1785572036166-3334",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572036166,
+              "monotonicStartedMs": 1513518.424,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 252
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3334",
+                  "source": "environment_observer",
+                  "observedAt": 1785572035915,
+                  "ageMs": 251,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.015
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.079
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.017
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.067
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.094
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.007
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.628,
+                "cleanupMs": 0.017,
+                "totalMs": 1.645
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3335-1785572036417-3335",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572036417,
+              "monotonicStartedMs": 1513770.133,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 251
+              },
+              "activeAction": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "owner": "player",
+                "label": "action:resolveTacticalCombat",
+                "intent": "action:resolveTacticalCombat",
+                "startedAt": 1785572034347,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3335",
+                  "source": "environment_observer",
+                  "observedAt": 1785572035915,
+                  "ageMs": 502,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "ineligible",
+                  "reasonCode": "operator_not_held",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.014
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.072
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "ineligible",
+                  "reasonCode": "band_clear",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.017
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "eligible",
+                  "reasonCode": "action_active",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.069
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "active_action",
+                "reasonCode": "action_active",
+                "control": "retained",
+                "controlReason": "The existing serialized action retained ownership.",
+                "hardGate": null,
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.096
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.013
+                }
+              ],
+              "timing": {
+                "evaluationMs": 4.518,
+                "cleanupMs": 0.033,
+                "totalMs": 4.551
+              },
+              "correlation": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "outcomeLinked": true
+              },
+              "outcome": {
+                "actionId": "MindcraftBot-9-1785572034347",
+                "phase": "succeeded",
+                "code": "skill_retreated",
+                "finishedAt": 1785572036591,
+                "durationMs": 2244
+              }
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3336-1785572036670-3336",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572036670,
+              "monotonicStartedMs": 1514022.496,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 253
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3336",
+                  "source": "environment_observer",
+                  "observedAt": 1785572036670,
+                  "ageMs": 0,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.036
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.095
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.007
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.259,
+                "cleanupMs": 0.013,
+                "totalMs": 1.272
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3337-1785572037282-3337",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572037282,
+              "monotonicStartedMs": 1514634.577,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 612
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3337",
+                  "source": "environment_observer",
+                  "observedAt": 1785572036670,
+                  "ageMs": 612,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.04
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.085
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.006
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.176,
+                "cleanupMs": 0.012,
+                "totalMs": 1.188
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3338-1785572037893-3338",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572037893,
+              "monotonicStartedMs": 1515245.52,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 611
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3338",
+                  "source": "environment_observer",
+                  "observedAt": 1785572037893,
+                  "ageMs": 0,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.043
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.096
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.008
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.284,
+                "cleanupMs": 0.017,
+                "totalMs": 1.3
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            },
+            {
+              "schemaVersion": 1,
+              "decisionId": "MindcraftBot-3339-1785572038494-3339",
+              "agent": "MindcraftBot",
+              "wallClockTimestamp": 1785572038494,
+              "monotonicStartedMs": 1515846.882,
+              "trigger": {
+                "code": "scheduled_tick",
+                "deltaMs": 601
+              },
+              "activeAction": {
+                "actionId": null,
+                "owner": null,
+                "label": null,
+                "intent": null,
+                "startedAt": 0,
+                "commitment": {
+                  "resumeAction": null,
+                  "goalId": null,
+                  "goalPhase": null,
+                  "workOrderId": "builder-88e51f41-1f9c-4647-8d75-55473382f82b",
+                  "workOrderPhase": "assess"
+                }
+              },
+              "evidence": [
+                {
+                  "id": "perception-3339",
+                  "source": "environment_observer",
+                  "observedAt": 1785572037893,
+                  "ageMs": 601,
+                  "summary": "fresh"
+                }
+              ],
+              "lanes": [
+                {
+                  "order": 0,
+                  "lane": "operator_hold",
+                  "status": "eligible",
+                  "reasonCode": "operator_hold",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": 0.038
+                },
+                {
+                  "order": 1,
+                  "lane": "emergency_self_preservation",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 2,
+                  "lane": "attributed_protection",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 3,
+                  "lane": "active_action_retention",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 4,
+                  "lane": "bounded_recovery",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 5,
+                  "lane": "comportment_pause",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 6,
+                  "lane": "player_directive",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 7,
+                  "lane": "basic_survival",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 8,
+                  "lane": "survival_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 9,
+                  "lane": "player_goal",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 10,
+                  "lane": "player_job",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 11,
+                  "lane": "command_policy_guard",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 12,
+                  "lane": "factual_reaction",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 13,
+                  "lane": "role_work",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 14,
+                  "lane": "self_progression",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 15,
+                  "lane": "opportunity",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 16,
+                  "lane": "idle_embodiment",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 17,
+                  "lane": "self_prompt",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                },
+                {
+                  "order": 18,
+                  "lane": "idle",
+                  "status": "not_evaluated",
+                  "reasonCode": "short_circuit",
+                  "targetRef": null,
+                  "evidenceRefs": [],
+                  "durationMs": null
+                }
+              ],
+              "winner": {
+                "lane": "operator_hold",
+                "reasonCode": "operator_hold",
+                "control": "acquired",
+                "controlReason": "The selected lane suppressed lower-priority lanes.",
+                "hardGate": "operator_hold",
+                "preemption": {
+                  "involved": false,
+                  "fromOwner": null,
+                  "fromAction": null,
+                  "toLane": null
+                }
+              },
+              "stages": [
+                {
+                  "stage": "perception_refresh",
+                  "durationMs": 0.076
+                },
+                {
+                  "stage": "task_completion_check",
+                  "durationMs": 0.006
+                }
+              ],
+              "timing": {
+                "evaluationMs": 1.15,
+                "cleanupMs": 0.012,
+                "totalMs": 1.162
+              },
+              "correlation": {
+                "actionId": null,
+                "outcomeLinked": false
+              },
+              "outcome": null
+            }
+          ],
+          "linkedDecisionIds": [
+            "MindcraftBot-3335-1785572036417-3335"
+          ],
+          "passed": false
+        }
+      ],
+      "passed": false
+    }
+  ],
+  "passed": false,
+  "error": null,
+  "cleanup": {
+    "held": true,
+    "position": {
+      "x": 1071.5,
+      "y": 100,
+      "z": 1007.5
+    },
+    "autonomy": "command",
+    "taggedTargetsRemoved": true,
+    "temporaryWallRemoved": true
+  },
+  "finishedAt": 1785572041333,
+  "durationMs": 8531
+}
