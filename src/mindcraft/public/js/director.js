@@ -1,28 +1,8 @@
 import { api } from './api.js';
+import { applyStateUpdate } from './agent-state-protocol.js';
 import { actionTargetLabel, attentionStatusLabel, behaviorStatusLabel, button, clear, dialogueStatusLabel, gridField, input, node, operatorControlLabel, runtimeRecoveryMessage, telemetryFreshness } from './utils.js';
 
 const PLAYER_TARGET_MAX_LENGTH = 64;
-
-function applyStateUpdate(currentStates, payload) {
-  if (!payload || typeof payload !== 'object') return {};
-  if (payload.version !== 2 || !payload.type) return payload;
-  if (payload.type === 'snapshot') {
-    return payload.states && typeof payload.states === 'object' ? payload.states : {};
-  }
-  if (payload.type !== 'delta' || !payload.changes || typeof payload.changes !== 'object') {
-    return currentStates || {};
-  }
-  const nextStates = { ...(currentStates || {}) };
-  for (const [agentName, patch] of Object.entries(payload.changes)) {
-    const prior = nextStates[agentName] && typeof nextStates[agentName] === 'object'
-      ? nextStates[agentName]
-      : {};
-    const next = { ...prior, ...(patch?.set && typeof patch.set === 'object' ? patch.set : {}) };
-    for (const key of Array.isArray(patch?.unset) ? patch.unset : []) delete next[key];
-    nextStates[agentName] = next;
-  }
-  return nextStates;
-}
 
 function normalizePlayerTarget(value) {
   return String(value || '')
@@ -128,6 +108,7 @@ export class DirectorWorkspace {
     this.programs = [];
     this.events = [];
     this.states = {};
+    this.stateRevisions = {};
     this.playerTarget = '';
     this.pendingDeliveries = new Map();
 
@@ -136,7 +117,10 @@ export class DirectorWorkspace {
       this.renderTarget();
     });
     socket.on('state-update', (update) => {
-      this.states = applyStateUpdate(this.states, update);
+      const applied = applyStateUpdate(this.states, this.stateRevisions, update);
+      this.states = applied.states;
+      this.stateRevisions = applied.revisions;
+      if (applied.resyncRequired) socket.emit('request-agent-state-snapshot');
       this.renderTargetTelemetry();
       this.renderLists();
     });

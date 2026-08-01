@@ -48,6 +48,83 @@ function requestedTool(text) {
     return `${material}_${family}`;
 }
 
+function clampInt(value, min, max, fallback) {
+    const number = Number.parseInt(value, 10);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(min, Math.min(max, number));
+}
+
+function firstNumber(text, fallback) {
+    const match = text.match(/-?\d{1,5}/);
+    return match ? Number.parseInt(match[0], 10) : fallback;
+}
+
+function tunnelDirection(text) {
+    if (/\b(?:forward|ahead|straight)\b/.test(text)) return 'forward';
+    return ['north', 'south', 'east', 'west'].find(dir => new RegExp(`\\b${dir}\\b`).test(text)) || 'forward';
+}
+
+/**
+ * Canonicalize a spoken item name. When the connected registry is available the
+ * name must actually exist in it: emitting a command for an item the server has
+ * never heard of produces a confident-sounding failure, where returning null
+ * lets the message fall through to the model, which can ask what was meant.
+ */
+function canonicalItem(raw, bot) {
+    const name = String(raw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^(?:the|some|a|an|your|my|all|these|those|any)\s+/, '')
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '');
+    if (!name || name.length > 40) return null;
+    const registry = bot?.registry?.itemsByName;
+    if (!registry) return name;
+    if (registry[name]) return name;
+    const singular = name.replace(/s$/, '');
+    return singular && registry[singular] ? singular : null;
+}
+
+/** Pull the object of a verb: "smelt 5 raw iron" -> "raw iron". */
+function objectOf(text, verbs, stopWords = '') {
+    const tail = stopWords ? `(?=\\s+(?:${stopWords})\\b|$)` : '$';
+    const match = new RegExp(
+        `\\b(?:${verbs})\\s+(?:\\d{1,4}\\s+)?([a-z][a-z_ ]{1,38}?)\\s*${tail}`,
+    ).exec(text);
+    return match ? match[1].trim() : null;
+}
+
+/** Longest labels first so "stone bricks" is not read as "stone". */
+function structureMaterial(text) {
+    const materials = [
+        ['stone brick', 'stone_bricks'],
+        ['cobblestone', 'cobblestone'],
+        ['cobble', 'cobblestone'],
+        ['sandstone', 'sandstone'],
+        ['oak plank', 'oak_planks'],
+        ['plank', 'oak_planks'],
+        ['brick', 'bricks'],
+        ['wood', 'oak_planks'],
+        ['stone', 'stone'],
+        ['dirt', 'dirt'],
+    ];
+    return materials.find(([label]) => text.includes(label))?.[1] || 'cobblestone';
+}
+
+/** "12 blocks tall" / "9 wide" -> the number, when the player gave one. */
+function dimension(text, words) {
+    const match = new RegExp(`(\\d{1,2})\\s*(?:blocks?\\s+)?(?:${words})`).exec(text);
+    return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function parseCoordinates(text) {
+    const matches = text.match(/-?\d+(?:\.\d+)?/g);
+    if (!matches || matches.length < 3) return null;
+    const [x, y, z] = matches.slice(0, 3).map(Number);
+    if (![x, y, z].every(Number.isFinite) || y < -64 || y > 320) return null;
+    return { x: Math.round(x), y: Math.round(y), z: Math.round(z) };
+}
+
 export function resolvePlayerDirective(playerName, message, context = {}) {
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
@@ -85,7 +162,11 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/^(?:please\s+)?(?:stop|stop moving|cancel|hold on)\b/.test(text)) {
+    // A bare "stop"/"cancel" halts everything. "cancel the job", "stop the goal",
+    // and "cancel your plan" name a specific thing to cancel and are handled by
+    // the dedicated branches further down, so they must not be swallowed here.
+    if (/^(?:please\s+)?(?:stop|stop moving|cancel|hold on)\b/.test(text)
+        && !/\b(?:job|work order|goal|plan|agenda|queue|task list|todo)\b/.test(text)) {
         return {
             command: '!stop',
             response: 'Stopping now.',
@@ -101,6 +182,392 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
+    // --- Navigation, mining, and self-maintenance ----------------------------
+    // Common phrasings mapped straight onto existing skills so they never need a
+    // model round trip. These are discrete one-shot actions (not agenda kinds),
+    // so they run on the single-directive fast path.
+
+    if (/\b(?:move away|back off|back up|step back|give me (?:some )?(?:space|room)|get away from me|make some room)\b/.test(text)) {
+        const distance = clampInt(firstNumber(text, 5), 1, 64, 5);
+        return {
+            command: `!moveAway(${distance})`,
+            response: `Backing off about ${distance} block${distance === 1 ? '' : 's'}.`,
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:go to (?:bed|sleep)|get to bed|get some sleep|time for bed|lie down|sleep now)\b/.test(text)) {
+        return {
+            command: '!goToBed',
+            response: 'Finding the nearest bed to sleep.',
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:to the surface|above ground|back up top|up top)\b/.test(text)) {
+        return {
+            command: '!goToSurface',
+            response: 'Heading back up to the surface.',
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:dig|tunnel|mine)\s+(?:straight\s+)?down\b/.test(text)) {
+        const distance = clampInt(firstNumber(text, 10), 1, 384, 10);
+        return {
+            command: `!digDown(${distance})`,
+            response: `Digging straight down ${distance} block${distance === 1 ? '' : 's'}, stopping if I hit lava, water, or a drop.`,
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:dig|cut|carve|bore|strip.?mine)\b.{0,20}\btunnel\b/.test(text)
+        || /\btunnel\b.{0,16}\b(?:forward|ahead|straight|north|south|east|west)\b/.test(text)
+        || /\bdig\s+(?:a\s+)?(?:corridor\s+)?(?:forward|ahead|straight|north|south|east|west)\b/.test(text)) {
+        const direction = tunnelDirection(text);
+        const length = clampInt(firstNumber(text, 8), 1, 64, 8);
+        return {
+            command: `!digTunnel("${direction}", ${length})`,
+            response: `Cutting a ${length}-block tunnel ${direction === 'forward' ? 'straight ahead' : direction}, lighting it as I go and stopping at anything unsafe.`,
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:recover|retrieve|go get|grab|collect)\b.{0,24}\b(?:death (?:items|drops|stuff|point|pile)|dropped (?:items|stuff|inventory|things)|(?:my|your) (?:stuff|items|things|gear) back|lost items|your body)\b/.test(text)) {
+        return {
+            command: '!recoverDeathItems',
+            response: 'Heading back to where I died to recover my dropped items.',
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:go fishing|do some fishing|catch (?:some |a few )?fish|fish for (?:some )?(?:fish|food)|start fishing)\b/.test(text)) {
+        const count = clampInt(firstNumber(text, 8), 1, 64, 8);
+        return {
+            command: `!fish(${count})`,
+            response: `Fishing until I land ${count} catch${count === 1 ? '' : 'es'}.`,
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:go|walk|head|travel|run)\s+to\b/.test(text) || /\bcoord(?:inate)?s?\b/.test(text)) {
+        const coords = parseCoordinates(text);
+        if (coords) {
+            return {
+                command: `!goToCoordinates(${coords.x}, ${coords.y}, ${coords.z}, 2)`,
+                response: `On my way to ${coords.x}, ${coords.y}, ${coords.z}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
+    // --- Items, containers, and gear ----------------------------------------
+    // These verbs are unambiguous, so they resolve before the broader
+    // acquisition parsing further down ever sees the message.
+
+    if (/\bchest\b/.test(text)) {
+        if (/\b(?:what(?:'s| is) in|check|look in|peek in|show(?: me)?(?: the)? contents)\b/.test(text)) {
+            return {
+                command: '!viewChest',
+                response: 'Checking what is in the nearest chest.',
+                releasesHold: true,
+            };
+        }
+        const stored = objectOf(text, 'put|store|stash|deposit|place', 'in|into|inside');
+        if (stored && /\b(?:in|into|inside)\b/.test(text)) {
+            const item = canonicalItem(stored, context.bot);
+            if (item) {
+                const count = clampInt(firstNumber(text, 64), 1, 2304, 64);
+                return {
+                    command: `!putInChest("${item}", ${count})`,
+                    response: `Putting ${item.replaceAll('_', ' ')} into the nearest chest.`,
+                    releasesHold: true,
+                };
+            }
+        }
+        const taken = objectOf(text, 'take|get|grab|withdraw|fetch|pull', 'from|out|outta');
+        if (taken && /\b(?:from|out of)\b/.test(text)) {
+            const item = canonicalItem(taken, context.bot);
+            if (item) {
+                const count = clampInt(firstNumber(text, 64), 1, 2304, 64);
+                return {
+                    command: `!takeFromChest("${item}", ${count})`,
+                    response: `Taking ${item.replaceAll('_', ' ')} out of the nearest chest.`,
+                    releasesHold: true,
+                };
+            }
+        }
+    }
+
+    const smelted = objectOf(text, 'smelt|cook|melt|refine');
+    if (smelted) {
+        const item = canonicalItem(smelted, context.bot);
+        if (item) {
+            const count = clampInt(firstNumber(text, 8), 1, 2304, 8);
+            return {
+                command: `!smeltItem("${item}", ${count})`,
+                response: `Smelting ${count} ${item.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
+    const crafted = objectOf(text, 'craft');
+    if (crafted) {
+        const item = canonicalItem(crafted, context.bot);
+        if (item) {
+            const count = clampInt(firstNumber(text, 1), 1, 64, 1);
+            return {
+                command: `!craftRecipe("${item}", ${count})`,
+                response: `Crafting ${item.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
+    const equipped = objectOf(text, 'equip|wield|put on|wear|hold');
+    if (equipped) {
+        const item = canonicalItem(equipped, context.bot);
+        if (item) {
+            return {
+                command: `!equip("${item}")`,
+                response: `Equipping my ${item.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
+    const discarded = objectOf(text, 'drop|discard|throw away|get rid of|dump');
+    if (discarded) {
+        const item = canonicalItem(discarded, context.bot);
+        if (item) {
+            const count = clampInt(firstNumber(text, 64), 1, 2304, 64);
+            return {
+                command: `!discard("${item}", ${count})`,
+                response: `Dropping ${item.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
+    // --- Riding and depth ----------------------------------------------------
+
+    const rideable = ['horse', 'boat', 'minecart', 'pig', 'strider', 'camel', 'donkey', 'mule']
+        .find(name => new RegExp(`\\b${name}s?\\b`).test(text));
+    if (rideable && /\b(?:get on|ride|mount|hop on|climb on)\b/.test(text)) {
+        return {
+            command: `!mountEntity("${rideable}", 32)`,
+            response: `Looking for a ${rideable} to ride.`,
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:get off|dismount|hop off|climb off|get down from)\b/.test(text)) {
+        return {
+            command: '!dismount',
+            response: 'Dismounting.',
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:mining depth|diamond level|deepslate level|go down to y|dig down to y)\b/.test(text)) {
+        const depth = /\bdiamond level\b|\bdeepslate level\b/.test(text)
+            ? -54
+            : clampInt(firstNumber(text, -54), -60, 300, -54);
+        return {
+            command: `!goToMiningDepth(${depth}, 64)`,
+            response: `Working my way down to Y ${depth} on a safe route.`,
+            releasesHold: true,
+        };
+    }
+
+    // --- Named places --------------------------------------------------------
+
+    const savedAs = /\b(?:remember|save|mark|call)\b.{0,24}\b(?:spot|place|location|here)\b\s*(?:as|called|named)\s+([a-z][a-z0-9_ ]{0,30})/.exec(text)
+        || /\b(?:remember|save|mark)\s+(?:this\s+)?(?:as|called|named)\s+([a-z][a-z0-9_ ]{0,30})/.exec(text);
+    if (savedAs) {
+        const label = savedAs[1].trim().replace(/\s+/g, '_');
+        if (label && label !== 'home') {
+            return {
+                command: `!rememberHere("${label}")`,
+                response: `Saved this spot as ${label.replaceAll('_', ' ')}.`,
+                releasesHold: false,
+            };
+        }
+    }
+
+    const savedPlace = /\bgo\s+(?:back\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:saved\s+|remembered\s+)?(?:spot|place|location)\s+(?:called\s+|named\s+)?([a-z][a-z0-9_ ]{0,30})/.exec(text);
+    if (savedPlace) {
+        const label = savedPlace[1].trim().replace(/\s+/g, '_');
+        if (label) {
+            return {
+                command: `!goToRememberedPlace("${label}")`,
+                response: `Heading to ${label.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
+    // --- Plan (agenda) control ----------------------------------------------
+    // The queue is only as usable as the words that steer it, so plan control
+    // never depends on the model being reachable.
+
+    if (/\b(?:what(?:'s| is) (?:your |the )?plan|show (?:me )?(?:your |the )?(?:plan|agenda|queue|todo)|what are you (?:doing|working on) next|what(?:'s| is) (?:next|left)|list your (?:plan|tasks))\b/.test(text)) {
+        return {
+            command: '!showAgenda',
+            response: 'Here is what I have queued.',
+            releasesHold: false,
+        };
+    }
+
+    if (/\b(?:clear|cancel|scrap|forget|wipe|drop)\s+(?:your |the |my )?(?:whole |entire |rest of (?:your|the) )?(?:plan|agenda|queue|todo list|task list|everything)\b/.test(text)) {
+        return {
+            command: '!clearAgenda',
+            response: 'Clearing my whole plan.',
+            releasesHold: false,
+        };
+    }
+
+    if (/\b(?:skip|drop|forget|abandon|move past)\s+(?:that|this|the current|current|it)\b.{0,16}\b(?:step|task|one|job)?\b/.test(text)
+        && /\b(?:step|task|one|job|that|this)\b/.test(text)) {
+        return {
+            command: '!skipAgendaItem',
+            response: 'Skipping that step and moving to the next one.',
+            releasesHold: false,
+        };
+    }
+
+    if (/\b(?:cancel|stop|abandon|call off)\s+(?:the |your |that )?(?:current )?(?:job|work order|work|assignment)\b/.test(text)) {
+        return {
+            command: '!cancelJob',
+            response: 'Cancelling my active work order.',
+            releasesHold: false,
+        };
+    }
+
+    if (/\b(?:cancel|stop|abandon|call off)\s+(?:the |your |that )?(?:current )?goal\b/.test(text)) {
+        return {
+            command: '!cancelGoal',
+            response: 'Cancelling my active goal.',
+            releasesHold: false,
+        };
+    }
+
+    // --- Base, farm, and livestock ------------------------------------------
+
+    if (/\b(?:remember|save|mark|set)\b.{0,20}\b(?:this (?:spot|place|position|location) as )?(?:your |our |the )?home\b/.test(text)
+        || /\bthis is (?:your|our) home\b/.test(text)) {
+        return {
+            command: '!rememberHome',
+            response: 'Remembering this spot as my home.',
+            releasesHold: false,
+        };
+    }
+
+    if (/\b(?:repair|fix|patch|mend|rebuild)\b.{0,24}\b(?:the |your |our )?(?:home|house|base|building|structure|shelter)\b/.test(text)) {
+        return {
+            command: '!repairHome',
+            response: 'Checking the remembered structure and repairing anything missing.',
+            releasesHold: true,
+        };
+    }
+
+    const crop = ['wheat', 'carrots', 'potatoes', 'beetroots']
+        .find(name => new RegExp(`\\b${name.replace(/e?s$/, '')}`).test(text));
+    if (/\b(?:make|build|start|set up|establish|plant|create)\b.{0,24}\b(?:farm|crops?|field)\b/.test(text)) {
+        const size = clampInt(firstNumber(text, 3), 1, 4, 3);
+        return {
+            command: `!establishFarm("${crop || 'wheat'}", ${size}, ${size})`,
+            response: `I will till and plant a ${size}x${size} ${crop || 'wheat'} farm beside water.`,
+            releasesHold: true,
+        };
+    }
+
+    if (/\b(?:harvest|tend|maintain|work|check on|look after|replant)\b.{0,20}\b(?:the |your |our )?(?:farm|crops?|field)\b/.test(text)) {
+        return {
+            command: '!maintainFarm',
+            response: 'Harvesting what is ready, replanting, and verifying the farm.',
+            releasesHold: true,
+        };
+    }
+
+    const animal = ['cow', 'sheep', 'pig', 'chicken', 'rabbit']
+        .find(name => new RegExp(`\\b${name}s?\\b`).test(text));
+    if (animal && /\b(?:breed|bree?ding|mate|make more|raise)\b/.test(text)) {
+        const pairs = clampInt(firstNumber(text, 2), 1, 4, 2);
+        return {
+            command: `!breedAnimals("${animal}", ${pairs})`,
+            response: `I will breed ${pairs} pair${pairs === 1 ? '' : 's'} of ${animal}s and keep the breeding stock.`,
+            releasesHold: true,
+        };
+    }
+
+    // --- Designed structures from templates ----------------------------------
+    // These fill in a design template and skip the model entirely. The model
+    // still owns anything shaped unusually: it gets the same templates as a
+    // starting point and appends its own steps. Deliberately does not claim
+    // "shelter", "hut", or "house", which the survival shelter job already owns.
+
+    if (/\b(?:build|construct|make|put up|erect|raise)\b/.test(text)) {
+        const material = structureMaterial(text);
+        const tall = dimension(text, 'tall|high') ?? dimension(text, 'blocks?\\s+up');
+        const wide = dimension(text, 'wide|across');
+        const long = dimension(text, 'long|across|span');
+        const design = (name, spec, label) => ({
+            command: `!designStructure("${name}", "${material}", "${spec}")`,
+            response: `I will design and build ${label}, and I will check it can stand before I place anything.`,
+            releasesHold: true,
+        });
+
+        if (/\b(?:tower|watchtower|lookout)\b/.test(text)) {
+            return design('tower', `@tower ${clampInt(wide ?? 5, 3, 12, 5)} ${clampInt(tall ?? 10, 3, 24, 10)}`, 'a tower');
+        }
+        if (/\b(?:bridge|walkway|catwalk)\b/.test(text)) {
+            return design('bridge', `@bridge ${clampInt(long ?? 10, 3, 32, 10)}`, 'a railed bridge');
+        }
+        if (/\b(?:wall|barrier|rampart)\b/.test(text)) {
+            return design('wall', `@wall ${clampInt(long ?? 10, 2, 32, 10)} ${clampInt(tall ?? 3, 1, 12, 3)}`, 'a wall');
+        }
+        if (/\b(?:pen|paddock|corral|enclosure)\b/.test(text)) {
+            return design('pen', `@pen ${clampInt(wide ?? 7, 3, 16, 7)} ${clampInt(long ?? wide ?? 7, 3, 16, 7)}`, 'a fenced pen with a gate');
+        }
+        if (/\b(?:platform|deck|floor)\b/.test(text)) {
+            return design('platform', `@platform ${clampInt(wide ?? 5, 1, 24, 5)} ${clampInt(long ?? wide ?? 5, 1, 24, 5)}`, 'a platform');
+        }
+        if (/\b(?:pillar|column|post)\b/.test(text)) {
+            return design('pillar', `@pillar ${clampInt(tall ?? 6, 1, 24, 6)}`, 'a pillar');
+        }
+        if (/\b(?:stairs|staircase|steps)\b/.test(text)) {
+            return design('stairs', `@stairs ${clampInt(tall ?? 6, 1, 16, 6)}`, 'a staircase');
+        }
+        if (/\b(?:room|cabin|shack|lodge)\b/.test(text)) {
+            const w = clampInt(wide ?? 7, 3, 16, 7);
+            return design('room', `@room ${w} ${clampInt(long ?? w, 3, 16, w)} ${clampInt(tall ?? 4, 3, 8, 4)}`, 'a room with a door and a light');
+        }
+    }
+
+    // --- Search --------------------------------------------------------------
+
+    const searchTarget = /\b(?:find|locate|search for|look for|go to)\s+(?:the\s+)?(?:nearest|closest)\s+([a-z_ ]{3,32})/.exec(text);
+    if (searchTarget) {
+        const raw = searchTarget[1].trim().replace(/\s+/g, '_').replace(/s$/, '');
+        const entities = new Set(['cow', 'sheep', 'pig', 'chicken', 'villager', 'zombie', 'skeleton', 'creeper', 'horse', 'wolf', 'cat', 'rabbit', 'player']);
+        if (entities.has(raw)) {
+            return {
+                command: `!searchForEntity("${raw}", 64)`,
+                response: `Looking for the nearest ${raw.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+        if (/^[a-z_]{3,32}$/.test(raw)) {
+            return {
+                command: `!searchForBlock("${raw}", 64)`,
+                response: `Searching for the nearest ${raw.replaceAll('_', ' ')}.`,
+                releasesHold: true,
+            };
+        }
+    }
+
     if (/^(?:please\s+)?(?:attack|fight|engage|defend us from)\s+(?:the\s+)?(?:nearest\s+)?(?:enemy|enemies|hostile|hostiles|monster|monsters|mob|mobs|them|that)\b/.test(text)) {
         return {
             command: '!attackHostile',
@@ -109,10 +576,10 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/\b(?:where are you|what are you doing|your position|your coordinates|show status|status report)\b/.test(text)) {
+    if (/\b(?:where are you|what are you doing|your position|your coordinates|show status|status report|are you stuck|what is blocking you|what's blocking you|why aren't you doing anything|why are you not doing anything)\b/.test(text)) {
         return {
             command: '!stats',
-            response: 'Checking my position and status.',
+            response: 'Checking my live position, action, and blocker status.',
             releasesHold: false,
         };
     }

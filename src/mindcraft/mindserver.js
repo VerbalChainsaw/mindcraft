@@ -55,6 +55,10 @@ import {
 import { terminateOwnedProcessTree } from './process-tree.js';
 import { swarm, defaultBrainHook } from './swarm/swarm.js';
 import { director } from './director.js';
+import {
+  createStateDelta,
+  createStateSnapshot,
+} from './public/js/agent-state-protocol.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Mindserver is:
@@ -221,6 +225,7 @@ class AgentConnection {
         this.processToken = processToken;
         this.lastStatePushAt = 0;
         this.lastStateSequence = 0;
+        this.stateRevision = 0;
         this.statePushCount = 0;
     }
     setSettings(settings) {
@@ -368,6 +373,7 @@ export function unregisterAgent(agentName) {
     resetAgentStateCache(agent_connections[agentName]);
     delete agent_connections[agentName];
     delete lastAgentStates[agentName];
+    publishAgentStates(currentLiveAgentStates());
     agentsStatusUpdate();
 }
 
@@ -377,6 +383,7 @@ export function logoutAgent(agentName) {
         agent_connections[agentName].stage = 'stopped';
         resetAgentStateCache(agent_connections[agentName]);
         delete lastAgentStates[agentName];
+        publishAgentStates(currentLiveAgentStates());
     }
 }
 
@@ -2192,6 +2199,7 @@ async function createMindServerAtPort(port, dependencies = {}) {
                 agent_connections[agentName].stage = 'minecraft_login';
                 agent_connections[agentName].lastStatePushAt = 0;
                 agent_connections[agentName].lastStateSequence = 0;
+                agent_connections[agentName].stateRevision = 0;
                 agent_connections[agentName].statePushCount = 0;
                 mindcraft.getAgentProcess(agentName)?.markReadinessStage?.('minecraft_login');
                 curAgentName = agentName;
@@ -2232,8 +2240,10 @@ async function createMindServerAtPort(port, dependencies = {}) {
                 agent_connections[curAgentName].stage = 'disconnected';
                 agent_connections[curAgentName].lastStatePushAt = 0;
                 agent_connections[curAgentName].lastStateSequence = 0;
+                agent_connections[curAgentName].stateRevision = 0;
                 resetAgentStateCache(agent_connections[curAgentName]);
                 delete lastAgentStates[curAgentName];
+                publishAgentStates(currentLiveAgentStates());
                 agentsStatusUpdate();
             }
             if (agent_listeners.includes(socket)) {
@@ -2698,8 +2708,31 @@ async function createMindServerAtPort(port, dependencies = {}) {
             connection.lastStateSequence = sequence;
             connection.lastStatePushAt = Date.now();
             connection.statePushCount += 1;
+            const baseRevision = connection.stateRevision;
+            connection.stateRevision += 1;
             lastAgentStates[agentName] = state;
-            publishAgentStateDelta(agentName, set, unset);
+            // An upstream full snapshot is the authoritative recovery boundary:
+            // broadcast it as such so dashboards that missed a volatile patch do
+            // not merge a new agent session into an old state object.
+            if (kind === 'snapshot') {
+                publishAgentStates(currentLiveAgentStates());
+            } else {
+                publishAgentStateDelta(agentName, set, unset, baseRevision, connection.stateRevision);
+            }
+        });
+
+        socket.on('request-agent-state-snapshot', () => {
+            if (!requireDashboardSocket(socket)) return;
+            const now = Date.now();
+            const lastRequestAt = Number(socket.data?.lastAgentStateResyncAt) || 0;
+            // A gap can be reported by both dashboard workspaces. One bounded
+            // reliable snapshot is enough to restore each browser's base state.
+            if (now - lastRequestAt < 500) return;
+            socket.data.lastAgentStateResyncAt = now;
+            socket.emit('state-update', createStateSnapshot(
+                currentLiveAgentStates(),
+                currentLiveAgentStateRevisions(),
+            ));
         });
 
         socket.on('listen-to-agents', () => {
@@ -2828,40 +2861,45 @@ function currentLiveAgentStates(additional = {}) {
     return states;
 }
 
-function emitAgentStateUpdate(payload) {
+function currentLiveAgentStateRevisions(states = lastAgentStates) {
+    return Object.fromEntries(Object.keys(states || {}).map(agentName => [
+        agentName,
+        Number(agent_connections[agentName]?.stateRevision) || 0,
+    ]));
+}
+
+function emitAgentStateUpdate(payload, { volatile = true } = {}) {
     const room = io?.to?.(AGENT_TELEMETRY_ROOM);
-    if (room?.emit) {
-        room.emit('state-update', payload);
+    const roomPublisher = volatile && room?.volatile?.emit ? room.volatile : room;
+    if (roomPublisher?.emit) {
+        roomPublisher.emit('state-update', payload);
         return true;
     }
     for (const listener of agent_listeners) {
-        if (listener?.connected) {
-            try { listener.emit('state-update', payload); } catch { /* stale listener */ }
-        }
+        if (!listener?.connected) continue;
+        const listenerPublisher = volatile && listener.volatile?.emit ? listener.volatile : listener;
+        try { listenerPublisher?.emit?.('state-update', payload); } catch { /* stale listener */ }
     }
     return true;
 }
 
-function publishAgentStateDelta(agentName, set, unset = []) {
+function publishAgentStateDelta(agentName, set, unset = [], baseRevision = 0, revision = 0) {
     if (!agentName || !set || typeof set !== 'object') return false;
-    // A single canonical state is kept server-side. Dashboard clients merge the
-    // changed top-level fields into their own copy, avoiding a full map rebuild
-    // and stringify for every movement tick.
+    // These patches are deliberately best-effort. A non-writable dashboard
+    // drops obsolete movement instead of buffering it; its next version gap
+    // requests one reliable aggregate snapshot.
     lastStateFingerprint = '';
     lastStatePublishedAt = Date.now();
-    return emitAgentStateUpdate({
-        version: 2,
-        type: 'delta',
-        changes: {
-            [agentName]: {
-                set,
-                unset: Array.isArray(unset) ? unset : [],
-            },
-        },
-    });
+    return emitAgentStateUpdate(createStateDelta(
+        agentName,
+        set,
+        unset,
+        baseRevision,
+        revision,
+    ));
 }
 
-function publishAgentStates(states) {
+function publishAgentStates(states, { volatile = true } = {}) {
     const now = Date.now();
     lastAgentStates = states;
     const fingerprint = fingerprintAgentStates(states);
@@ -2871,7 +2909,10 @@ function publishAgentStates(states) {
     ) return false;
     lastStateFingerprint = fingerprint;
     lastStatePublishedAt = now;
-    return emitAgentStateUpdate({ version: 2, type: 'snapshot', states });
+    return emitAgentStateUpdate(
+        createStateSnapshot(states, currentLiveAgentStateRevisions(states)),
+        { volatile },
+    );
 }
 
 function startListenerPump() {
@@ -2904,11 +2945,10 @@ function addListener(listener_socket) {
     }
     if (Object.keys(lastAgentStates).length > 0) {
         try {
-            listener_socket.emit('state-update', {
-                version: 2,
-                type: 'snapshot',
-                states: lastAgentStates,
-            });
+            listener_socket.emit('state-update', createStateSnapshot(
+                lastAgentStates,
+                currentLiveAgentStateRevisions(),
+            ));
         } catch {
             // A just-disconnected dashboard will be removed by its socket event.
         }

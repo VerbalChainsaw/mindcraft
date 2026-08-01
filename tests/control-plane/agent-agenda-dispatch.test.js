@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { Agent } from '../../src/agent/agent.js';
+
+// Drive Agent.dispatchPlayerAgenda against a minimal fake `this`, so the
+// append / interrupt / takeover branching is verified without spinning a bot.
+// The real directive resolver runs; the messages used resolve without a bot
+// registry (mining, harvest, come-here).
+function makeFakeAgent({ remaining = 0 } = {}) {
+  const calls = {
+    added: [],
+    cleared: 0,
+    cancelResume: 0,
+    goalCancel: 0,
+    jobCancel: 0,
+    directiveCleared: 0,
+    selfPromptInterrupt: 0,
+    roleDefer: 0,
+    stop: 0,
+    operatorHoldReleased: 0,
+    responses: [],
+  };
+  const agent = {
+    name: 'TestBot',
+    runtime: { role: 'companion' },
+    bot: {},
+    agenda_director: {
+      add(entry) { calls.added.push(entry); return { accepted: true, description: `${entry.kind} ${entry.target || entry.recipient || ''}`.trim() }; },
+      clear() { calls.cleared += 1; return { cleared: remaining }; },
+      snapshot() { return { remaining }; },
+    },
+    history: { add() {}, save() {} },
+    actions: { cancelResume() { calls.cancelResume += 1; }, async stop() { calls.stop += 1; return { stopped: true }; } },
+    goal_director: { cancel() { calls.goalCancel += 1; } },
+    job_director: { cancel() { calls.jobCancel += 1; } },
+    companion_context: { setDirective() { calls.directiveCleared += 1; } },
+    self_prompter: { interruptForManualCommand() { calls.selfPromptInterrupt += 1; } },
+    role_director: { deferForManualCommand() { calls.roleDefer += 1; } },
+    releaseOperatorHold() { calls.operatorHoldReleased += 1; },
+    routeResponse(_source, message) { calls.responses.push(message); },
+  };
+  return { agent, calls };
+}
+
+test('dispatchPlayerAgenda queues a fresh multi-step plan and takes over the body', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 0 });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'mine 10 iron then come here');
+  assert.equal(handled, true);
+  assert.equal(calls.added.length, 2);
+  // Fresh plan => takeover frees the body for the agenda.
+  assert.equal(calls.cancelResume, 1);
+  assert.equal(calls.directiveCleared, 1);
+  assert.equal(calls.stop, 1);
+  assert.equal(calls.cleared, 0, 'append must not clear the queue');
+  assert.match(calls.responses[0], /Queued 2 steps/);
+});
+
+test('dispatchPlayerAgenda interrupt clears the queue and preempts', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 2 });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'stop, mine 10 iron then come here');
+  assert.equal(handled, true);
+  assert.equal(calls.cleared, 1, 'interrupt clears the existing queue');
+  assert.equal(calls.stop, 1, 'interrupt preempts the current action');
+  assert.equal(calls.added.length, 2);
+  assert.match(calls.responses[0], /new plan/i);
+});
+
+test('dispatchPlayerAgenda appends onto a running agenda without preempting it', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 1 });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'also mine 5 coal');
+  assert.equal(handled, true);
+  assert.equal(calls.added.length, 1);
+  // Running agenda => no takeover, no preemption, no clear.
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.cancelResume, 0);
+  assert.equal(calls.cleared, 0);
+});
+
+test('dispatchPlayerAgenda ignores a lone task so the fast path handles it', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 0 });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'mine 10 iron');
+  assert.equal(handled, false, 'a single task with no chain stays on the single-directive path');
+  assert.equal(calls.added.length, 0);
+  assert.equal(calls.stop, 0);
+});

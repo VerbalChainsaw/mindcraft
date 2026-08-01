@@ -1,6 +1,7 @@
 import { actionTargetLabel, attentionStatusLabel, behaviorStatusLabel, button, canStartAgent, clear, dialogueStatusLabel, errorText, gridField, input, isCredentialReason, localServiceUrl, node, normalizeState, operatorControlLabel, runtimeRecoveryMessage, select, stateLabels, telemetryFreshness } from './utils.js';
 import { api } from './api.js';
 import { renderBotBrain } from './bot-brain.js';
+import { applyStateUpdate } from './agent-state-protocol.js';
 
 const AGENT_REQUEST_TIMEOUT_MS = 15_000;
 const AGENT_START_TIMEOUT_MS = 60_000;
@@ -19,27 +20,6 @@ const SQUAD_HUES = {
   aqua: 187, dark_aqua: 178, blue: 210, dark_blue: 224, red: 4, dark_red: 350,
   light_purple: 306, dark_purple: 278,
 };
-
-function applyStateUpdate(currentStates, payload) {
-  if (!payload || typeof payload !== 'object') return {};
-  if (payload.version !== 2 || !payload.type) return payload;
-  if (payload.type === 'snapshot') {
-    return payload.states && typeof payload.states === 'object' ? payload.states : {};
-  }
-  if (payload.type !== 'delta' || !payload.changes || typeof payload.changes !== 'object') {
-    return currentStates || {};
-  }
-  const nextStates = { ...(currentStates || {}) };
-  for (const [agentName, patch] of Object.entries(payload.changes)) {
-    const prior = nextStates[agentName] && typeof nextStates[agentName] === 'object'
-      ? nextStates[agentName]
-      : {};
-    const next = { ...prior, ...(patch?.set && typeof patch.set === 'object' ? patch.set : {}) };
-    for (const key of Array.isArray(patch?.unset) ? patch.unset : []) delete next[key];
-    nextStates[agentName] = next;
-  }
-  return nextStates;
-}
 
 function socketRequest(socket, event, args = [], timeoutMs = AGENT_REQUEST_TIMEOUT_MS) {
   if (!socket?.connected) return Promise.resolve({ success: false, error: 'Mindcraft is reconnecting.' });
@@ -137,7 +117,7 @@ function squadDisplayName(squad) {
 export class AgentsWorkspace {
   constructor(root, modalRoot, socket, activity, announce, settingsSpec = {}) {
     this.root=root;this.modalRoot=modalRoot;this.socket=socket;this.activity=activity;this.announce=announce;this.settingsSpec=settingsSpec;
-    this.agents=[];this.settings={};this.messages={};this.states={};this.selected=null;this.tab='chat';this.onAgentsChanged=null;this.onStatesChanged=null;this.onSquadsChanged=null;this.pending=new Map();this.actionOutcomeKeys=new Map();
+    this.agents=[];this.settings={};this.messages={};this.states={};this.stateRevisions={};this.selected=null;this.tab='chat';this.onAgentsChanged=null;this.onStatesChanged=null;this.onSquadsChanged=null;this.pending=new Map();this.actionOutcomeKeys=new Map();
      this.squads=[];this.squadPersistence=null;this.scenarios=[];this.squadBusy='';this.squadDraft={templateName:'',prefix:'Squad_',size:3,staggerMs:750,displayName:'',badge:'',color:'aqua',motto:'',memberNames:'',nameStyle:'numbered'};this.squadRadioDraft={message:'',kind:'order'};
     this.scenarioDraft={templateName:'',leader:'Director',staggerMs:750};
      this.customScenarioDraft={label:'',description:'',size:3,prefix:'Crew',behavior:'follow',formation:'balanced',personas:'',botTypes:'',badge:'',color:'aqua',motto:'',memberNames:'',nameStyle:'themed'};
@@ -150,7 +130,7 @@ export class AgentsWorkspace {
       this.renderFocused();
       this.activity?.add('AGENT',`${name}: ${message}`);
     });
-    socket.on('state-update',(update)=>{this.states=applyStateUpdate(this.states,update);this.captureActionOutcomes(this.states);this.renderFocused();this.onStatesChanged?.(this.states);});
+    socket.on('state-update',(update)=>{const applied=applyStateUpdate(this.states,this.stateRevisions,update);this.states=applied.states;this.stateRevisions=applied.revisions;if(applied.resyncRequired)this.socket.emit('request-agent-state-snapshot');this.captureActionOutcomes(this.states);this.renderFocused();this.onStatesChanged?.(this.states);});
      socket.on('squad-update',(squad)=>{if(squad?.persistence)this.squadPersistence=squad.persistence;this.upsertSquad(squad);this.render();});
      socket.on('squad-radio-event',(event)=>{if(!event?.message)return;this.activity?.add('RADIO',`${event.from||'Director'} → squad: ${event.message}`, 'ok');if(event.from==='Director')this.announce?.(`Squad radio delivered to ${event.delivered||0} bot(s).`);});
     socket.on('connect',()=>{this.listenToAgentStates();void this.refreshSquads();});

@@ -20,6 +20,7 @@ import { log, validateNameFormat, handleDisconnection } from './connection_handl
 import { resolveBlockedActions } from './command-policy.js';
 import { addressesAgent } from './chat-address.js';
 import { resolvePlayerDirective } from './player-directives.js';
+import { parsePlayerAgenda } from './player-agenda.js';
 import { normalizeRuntimeBehavior } from './runtime/behavior-config.js';
 import { JobDirector } from './runtime/job-director.js';
 import { GoalDirector } from './runtime/goal-director.js';
@@ -356,7 +357,9 @@ export class Agent {
             try {
                 clearTimeout(this._spawnTimeoutTimer);
                 this._spawnTimeoutTimer = null;
-                addBrowserViewer(this.bot, count_id);
+                // Prismarine Viewer is optional diagnostics, never a startup
+                // dependency. Keep it outside the world-ready path.
+                void addBrowserViewer(this.bot, count_id);
                 console.log('Initializing vision intepreter...');
                 this.vision_interpreter = new VisionInterpreter(this, settings.allow_vision);
 
@@ -659,6 +662,77 @@ export class Agent {
         return this.persona || '';
     }
 
+    /**
+     * Route a plain-English multi-step plan into the existing Agenda queue
+     * without a model round trip. Returns true when it fully handled the line,
+     * so the caller can stop before the single-directive / LLM path.
+     *
+     * A lone task with no chain and no explicit interrupt is deliberately NOT
+     * intercepted here: it keeps flowing through the fast single-directive path
+     * below, preserving today's behavior exactly.
+     */
+    async dispatchPlayerAgenda(source, canonicalPlayer, message) {
+        const director = this.agenda_director;
+        if (!director?.add) return false;
+        const plan = parsePlayerAgenda(canonicalPlayer || source, message, {
+            role: this.runtime?.role,
+            bot: this.bot,
+        });
+        if (!plan) return false;
+        const agendaBusy = (director.snapshot?.().remaining || 0) > 0;
+        // Only intercept a real chain, an explicit interrupt, or an append onto
+        // work already queued. Anything else stays on the single-command path.
+        if (!plan.multiStep && plan.disposition !== 'interrupt' && !agendaBusy) return false;
+
+        await this.history.add(source, message);
+
+        // A fresh plan (or an explicit interrupt) must free the body from any
+        // standing directive or in-flight solo work so the agenda can claim the
+        // next behavior tick. An append onto a running agenda leaves the current
+        // step alone and simply extends the queue.
+        const takeover = plan.disposition === 'interrupt' || !agendaBusy;
+        if (takeover) {
+            this.releaseOperatorHold('player agenda');
+            this.actions.cancelResume();
+            this.goal_director?.cancel?.('Superseded by a player plan.');
+            this.job_director?.cancel?.('Superseded by a player plan.');
+            this.companion_context?.setDirective?.(null);
+            this.self_prompter.interruptForManualCommand();
+            this.role_director.deferForManualCommand('Player plan owns action control.');
+        }
+        if (plan.disposition === 'interrupt') {
+            director.clear('Superseded by a new player plan.');
+        }
+        if (takeover) {
+            // Yield whatever action currently holds the body; stop() is a no-op
+            // when nothing is executing.
+            try { await this.actions.stop(); } catch { /* best effort */ }
+        }
+
+        const queued = [];
+        const rejected = [];
+        for (const step of plan.steps) {
+            const result = director.add(step.entry);
+            if (result?.accepted) queued.push(result.description || step.segment);
+            else rejected.push(`${step.segment} (${result?.detail || result?.code || 'rejected'})`);
+        }
+
+        let response;
+        if (queued.length === 0) {
+            response = `I couldn't queue that plan: ${rejected.join('; ') || 'no runnable steps'}.`;
+        } else {
+            response = plan.disposition === 'interrupt'
+                ? `Okay, new plan — ${queued.join(', then ')}.`
+                : `Queued ${queued.length} step${queued.length === 1 ? '' : 's'}: ${queued.join(', then ')}.`;
+            const skipped = [...rejected, ...plan.unresolved.map(item => item.segment)];
+            if (skipped.length) response += ` (Not queued: ${skipped.join('; ')}.)`;
+        }
+        await this.history.add(this.name, response);
+        this.history.save();
+        this.routeResponse(source, response);
+        return true;
+    }
+
     async handleMessage(source, message, max_responses=null) {
         await this.checkTaskDone();
         if (!source || !message) {
@@ -737,6 +811,14 @@ export class Agent {
                     );
                 },
             });
+            // A multi-step plan ("get 5 logs then build a shelter") is routed
+            // deterministically into the Agenda queue before the single-directive
+            // path, so serial plans never need a model round trip. A lone task
+            // returns false here and continues below unchanged.
+            if (await this.dispatchPlayerAgenda(source, canonicalPlayer, message)) {
+                return true;
+            }
+
             // Keep `source` for history, replies, and player-order audit; canonical
             // identity resolution is scoped to deterministic command generation.
             const directive = resolvePlayerDirective(canonicalPlayer || source, message, {
@@ -1165,15 +1247,10 @@ export class Agent {
         this.bot.on('messagestr', async (message, _, jsonMsg) => {
             if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
                 console.log('Agent died: ', message);
-                const death = this.memory_bank.recallDeath();
-                const death_pos = death?.position;
-                let death_pos_text = null;
-                if (death_pos) {
-                    death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
-                }
-                const dimension = death?.dimension || this.bot.game.dimension;
-                const recoverable = Object.values(death?.inventory || {}).reduce((total, count) => total + count, 0);
-                this.handleMessage('system', `You died at position ${death_pos_text || "unknown"} in the ${dimension} dimension with ${recoverable} recorded recoverable items and the final message: '${message}'. Use !recoverDeathItems() after respawn to return physically and verify pickup. Previous actions were stopped.`);
+                // The death event above already records memory, cleans up the
+                // active action, and publishes self.died into the one behavior
+                // loop. Starting a second unrestricted model turn here caused
+                // competing post-death plans and blocked respawn decisions.
             }
         });
         this.bot.on('idle', () => {

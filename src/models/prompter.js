@@ -11,7 +11,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createModel, resolveConfiguredModel } from './_model_map.js';
-import { createRoutedModel } from './fallback-router.js';
+import { createRoutedModel, FallbackRouter } from './fallback-router.js';
 import { buildMemoryRecall } from '../agent/runtime/memory-recall.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,6 +25,14 @@ const GAMEPLAY_OPERATING_RULES = [
     'For complex work, compose available primitives: observe, preflight tools/materials/reachability/hazards, act once, verify the result, then adapt.',
     'Use canonical Minecraft names from inspection. Never invent an item, tool requirement, recipe, location, action result, or completed step.',
 ].join('\n');
+const MAX_GENERATION_LOG_CHARS = 2_000;
+
+function boundedGenerationLog(value) {
+    const text = String(value ?? '');
+    return text.length <= MAX_GENERATION_LOG_CHARS
+        ? text
+        : `${text.slice(0, MAX_GENERATION_LOG_CHARS)}… [generation log capped]`;
+}
 
 function ensurePromptContext(template, placeholders) {
     let result = String(template || '')
@@ -94,7 +102,10 @@ export class Prompter {
         this.cooldown = this.profile.cooldown ? this.profile.cooldown : 0;
         this.last_prompt_time = 0;
         this.awaiting_coding = false;
-        this.command_docs_cache = { key: null, compact: '' };
+        // Keyed by purpose and blocked-action set. A single slot would thrash,
+        // because conversation and autonomy turns interleave and each would
+        // evict the other's copy.
+        this.command_docs_cache = new Map();
         this.performance = { conversation: null };
 
         // for backwards compatibility, move max_tokens to params
@@ -141,9 +152,36 @@ export class Prompter {
         // reasoning that actually benefits from an expensive model. Each falls
         // back to `model`, so a profile that names none behaves exactly as it
         // did before.
-        this.reasoning_model = this.profile.reasoning_model ? buildModel('reasoning_model') : this.chat_model;
-        this.memory_model = this.profile.memory_model ? buildModel('memory_model') : this.chat_model;
-        this.triage_model = this.profile.triage_model ? buildModel('triage_model') : this.chat_model;
+        // A specialist named alone had no fallback at all: `reasoning_model` was
+        // built from a single entry, so `createRoutedModel` returned a bare model
+        // and one provider hiccup took reasoning (goal selection, self-prompting)
+        // down completely while chat stayed healthy. Chain each specialist to the
+        // chat model so it degrades to a working model instead of dying. The chat
+        // model is usually a different model with its own capacity, so this helps
+        // even when every tier lives behind one provider.
+        const withChatBackstop = (key) => {
+            if (!this.profile[key]) return this.chat_model;
+            const primary = buildModel(key);
+            if (!this.chat_model || primary === this.chat_model) return primary;
+            return new FallbackRouter(
+                [
+                    { model: primary, label: key },
+                    { model: this.chat_model, label: `${key}->model` },
+                ],
+                { log: console },
+            );
+        };
+
+        this.reasoning_model = withChatBackstop('reasoning_model');
+        this.memory_model = withChatBackstop('memory_model');
+        this.triage_model = withChatBackstop('triage_model');
+        // Choosing the next physical action is not the same job as choosing a
+        // goal, and it happens orders of magnitude more often. Routing both
+        // through `reasoning_model` meant a profile that named a deep reasoner
+        // paid that latency before every single step of autonomous play, which
+        // is felt as the bot being slow rather than the bot being thoughtful.
+        // Defaults to the chat model; a profile may name something faster still.
+        this.autonomy_model = withChatBackstop('autonomy_model');
 
         
         let embedding_model_profile = null;
@@ -283,13 +321,7 @@ export class Prompter {
         }
         if (prompt.includes('$COMMAND_DOCS')) {
             const key = [...(this.agent.blocked_actions || [])].sort().join('\u0000');
-            if (this.command_docs_cache.key !== key) {
-                this.command_docs_cache = {
-                    key,
-                    compact: getCommandDocs(this.agent, { compact: true }),
-                };
-            }
-            prompt = prompt.replaceAll('$COMMAND_DOCS', this.command_docs_cache.compact);
+            prompt = prompt.replaceAll('$COMMAND_DOCS', this.commandDocsFor('all', key));
         }
         if (prompt.includes('$CODE_DOCS')) {
             const code_task_content = messages.slice().reverse().find(msg =>
@@ -403,10 +435,10 @@ export class Prompter {
                     outcome: 'generated',
                 };
                 if (typeof generation !== 'string') {
-                    console.error('Error: Generated response is not a string', generation);
+                    console.error('Error: Generated response is not a string', boundedGenerationLog(generation));
                     throw new Error('Generated response is not a string');
                 }
-                console.log("Generated response:", generation);
+                console.log('Generated response:', boundedGenerationLog(generation));
                 await this._saveLog(prompt, messages, generation, 'conversation');
 
             } catch (error) {
@@ -472,11 +504,32 @@ export class Prompter {
         return resp;
     }
 
+    /**
+     * Compact command documentation, built once per (purpose, blocked-actions)
+     * pair. Autonomy rebuilt this string from scratch before every action --
+     * 130 command entries and ~16KB of text per step of play -- because it did
+     * its own substitution and never reached the cache below.
+     */
+    commandDocsFor(purpose = 'all', blockedKey = null) {
+        const key = `${purpose}\u0000${blockedKey ?? [...(this.agent.blocked_actions || [])].sort().join('\u0000')}`;
+        let docs = this.command_docs_cache.get(key);
+        if (docs === undefined) {
+            docs = getCommandDocs(this.agent, { compact: true, purpose });
+            // Blocked actions change rarely, so this map stays tiny; the bound
+            // only guards against an unexpected churn source.
+            if (this.command_docs_cache.size >= 8) this.command_docs_cache.clear();
+            this.command_docs_cache.set(key, docs);
+        }
+        return docs;
+    }
+
     async promptAutonomy(messages) {
         // Drives continuous self-play. A profile may ship its own
         // 'autonomy' prompt; otherwise we derive one from the standard
         // 'conversing' prompt so behaviour stays consistent.
-        await this.checkCooldown();
+        // `_generateAutonomy` owns the per-generation cooldown. Applying it
+        // here as well made every autonomous turn wait twice before its first
+        // model request.
         const base = (this.profile.autonomy && this.profile.autonomy.trim())
             ? this.profile.autonomy
             : this.profile.conversing;
@@ -489,7 +542,7 @@ export class Prompter {
             '$COMMAND_DOCS',
             '$CONVO',
         ]);
-        template = template.replaceAll('$COMMAND_DOCS', getCommandDocs(this.agent, { compact: true }));
+        template = template.replaceAll('$COMMAND_DOCS', this.commandDocsFor('autonomy'));
         let prompt = await this.replaceStrings(template, messages, this.convo_examples);
         return await this._generateAutonomy(prompt);
     }
@@ -500,12 +553,12 @@ export class Prompter {
         const maxTurns = this.agent.runtime?.limits?.maxPromptTurns ?? 3;
         for (let i = 0; i < maxTurns; i++) {
             await this.checkCooldown();
-            let generation = await (this.reasoning_model || this.chat_model).sendRequest([], prompt + actionCorrection);
+            let generation = await (this.autonomy_model || this.chat_model).sendRequest([], prompt + actionCorrection);
             if (typeof generation !== 'string') {
-                console.error('Error: Autonomy generation is not a string', generation);
+                console.error('Error: Autonomy generation is not a string', boundedGenerationLog(generation));
                 return '';
             }
-            console.log(`${this.agent.name} autonomy response:`, generation);
+            console.log(`${this.agent.name} autonomy response:`, boundedGenerationLog(generation));
             if (generation?.includes('</think>')) {
                 const [_, afterThink] = generation.split('</think>');
                 generation = afterThink;

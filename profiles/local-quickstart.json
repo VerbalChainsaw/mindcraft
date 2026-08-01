@@ -1,13 +1,29 @@
 {
   "name": "MindcraftBot",
-  "model": {
-    "api": "codex",
-    "model": "gpt-5.6-luna",
-    "params": { "timeout": 90 }
+  "model": [
+    { "api": "openai", "model": "gpt-4.1", "params": { "timeout": 12 } },
+    { "api": "openai", "model": "gpt-4.1-mini", "params": { "timeout": 10 } }
+  ],
+  "reasoning_model": {
+    "api": "openai",
+    "model": "gpt-5",
+    "params": { "timeout": 25 }
   },
+  "autonomy_model": [
+    { "api": "openai", "model": "gpt-4.1", "params": { "timeout": 12 } },
+    { "api": "openai", "model": "gpt-4.1-mini", "params": { "timeout": 10 } }
+  ],
+  "memory_model": {
+    "api": "openai",
+    "model": "gpt-4.1-mini",
+    "params": { "timeout": 15 }
+  },
+  "cooldown": 350,
   "runtime": {
     "role": "companion",
-    "autonomy": "balanced",
+    "autonomy": "autonomous",
+    "traversal": "full",
+    "limits": { "maxPromptTurns": 2 },
     "reflexes": { "combat": "defend" },
     "survival": {
       "mode": "full",

@@ -15,6 +15,10 @@ import {
     describeStructureCatalog,
     STRUCTURE_NAMES,
 } from '../runtime/jobs/structure-catalog.js';
+import {
+    createDesignedStructureOrder,
+    designLanguageHelp,
+} from '../runtime/jobs/structure-design.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
 import {
@@ -387,13 +391,35 @@ export const actionsList = [
     },
     {
         name: '!goToMiningDepth',
-        description: 'Use existing safe cave and stair routes to reach a productive mining depth without breaking unrelated route blocks.',
+        description: 'Reach a productive mining depth through an existing safe route or carve a bounded supported natural-stone staircase.',
         params: {
             'target_y': { type: 'int', description: 'Productive target Y level.', domain: [-60, 300] },
             'search_range': { type: 'int', description: 'Maximum loaded cave search radius.', domain: [16, 128] },
         },
         perform: runAsAction(async (agent, target_y, search_range) => {
             return await skills.goToMiningDepth(agent.bot, target_y, search_range);
+        }, false, 10)
+    },
+    {
+        name: '!digTunnel',
+        description: 'Dig a straight person-speed corridor by breaking the two blocks directly ahead and stepping in, no per-block pathfinding. Use this to strip-mine or cut a path fast. Stops safely at liquid, a drop, or anything a player built, and lights the corridor as it goes.',
+        params: {
+            'direction': { type: 'string', description: 'north, south, east, west, or forward (the way the bot faces).' },
+            'length': { type: 'int', description: 'How many blocks to dig forward.', domain: [1, 64] },
+        },
+        perform: runAsAction(async (agent, direction, length) => {
+            return await skills.digTunnel(agent.bot, direction, length);
+        }, false, 10)
+    },
+    {
+        name: '!mineSearchTunnel',
+        description: 'Advance a bounded supported two-block mining route toward known ore or along the current search heading, breaking only safe natural fill.',
+        params: {
+            'resource_name': { type: 'BlockName', description: 'The ore or block being searched for.' },
+            'length': { type: 'int', description: 'Maximum tunnel advance for this search leg.', domain: [4, 32] },
+        },
+        perform: runAsAction(async (agent, resource_name, length) => {
+            return await skills.mineSearchTunnel(agent.bot, resource_name, length);
         }, false, 10)
     },
     {
@@ -612,7 +638,7 @@ export const actionsList = [
     },
     {
         name: '!collectBlocks',
-        description: 'Collect the nearest blocks of a given type.',
+        description: 'Collect blocks of a given type, safely relocating and rescanning when the current area has no reachable source.',
         params: {
             'type': { type: 'BlockName', description: 'The block type to collect.' },
             'num': { type: 'int', description: 'The number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] }
@@ -623,6 +649,8 @@ export const actionsList = [
                 type,
                 num,
                 agent.goal_director?.collectionExclusions?.() || null,
+                64,
+                { relocate: true },
             );
         }, false, 10) // 10 minute timeout
     },
@@ -651,6 +679,7 @@ export const actionsList = [
                 num,
                 agent.goal_director?.collectionExclusions?.() || null,
                 range,
+                { relocate: false },
             );
         }, false, 10)
     },
@@ -699,7 +728,7 @@ export const actionsList = [
     },
     {
         name: '!collectWood',
-        description: 'Find nearby trees of any wood type and collect their logs.',
+        description: 'Find trees of any wood type, safely relocating and rescanning when the current area has no reachable trunk.',
         params: {
             'num': { type: 'int', description: 'The number of logs to collect.', domain: [1, 64, '[]'] }
         },
@@ -709,6 +738,7 @@ export const actionsList = [
                 num,
                 64,
                 agent.goal_director?.collectionExclusions?.() || null,
+                { relocate: true },
             );
         }, false, 10)
     },
@@ -725,6 +755,7 @@ export const actionsList = [
                 num,
                 range,
                 agent.goal_director?.collectionExclusions?.() || null,
+                { relocate: false },
             );
         }, false, 10)
     },
@@ -983,6 +1014,43 @@ export const actionsList = [
         }),
     },
     {
+        name: '!designStructure',
+        description: `Design and build a structure that is NOT in the known list - a spiral tower, a bridge with railings, a walled compound, anything a player describes. Write the shape yourself as a design, and the bot proves it can stand before placing a block. ${designLanguageHelp()}`,
+        params: {
+            'name': { type: 'string', description: 'Short name for the building, such as watchtower or barn.' },
+            'material': { type: 'BlockName', description: 'Canonical full support block for the structure. Fixtures like doors, glass, and chests are chosen automatically.' },
+            'design': { type: 'string', description: 'The design steps, separated by semicolons. No commas or quotes inside.' },
+        },
+        perform: persistentJobCommand(function (agent, name, material, design) {
+            try {
+                const canonicalMaterial = String(material || '').trim().toLowerCase();
+                const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
+                const item = agent.bot?.registry?.itemsByName?.[canonicalMaterial];
+                if (!block || !item || block.boundingBox !== 'block') {
+                    return `Design was not accepted: ${canonicalMaterial || 'the requested material'} is not a placeable full support block in the connected registry.`;
+                }
+                const position = agent.bot?.entity?.position;
+                if (!position) return 'Design was not accepted: Minecraft spawn state is unavailable.';
+                const order = createDesignedStructureOrder({
+                    design,
+                    name,
+                    // Offset so the bot is never standing inside its own worksite.
+                    x: Math.floor(position.x) + 2,
+                    y: Math.floor(position.y),
+                    z: Math.floor(position.z) + 2,
+                    material: canonicalMaterial,
+                    requester: 'player',
+                });
+                return submitRememberedStructure(agent, order);
+            } catch (error) {
+                // The design language reports the exact step or the exact block
+                // that cannot stand, which is what lets a rejected design be
+                // corrected instead of guessed at again.
+                return `Design was not accepted: ${String(error?.message || error).slice(0, 220)}`;
+            }
+        }),
+    },
+    {
         name: '!rememberHome',
         description: 'Remember the bot’s current verified position and dimension as its durable home across restarts.',
         params: {},
@@ -1215,9 +1283,9 @@ export const actionsList = [
     },
     {
         name: '!addToAgenda',
-        description: 'Queue ONE step of a multi-part plan. When a player asks for several things in one sentence, call this once per step, in the order they said them, and the bot will work through the whole plan on its own. Kinds: acquire, deliver, mine, harvest, stockpile, shelter, goto.',
+        description: 'Queue ONE step of a multi-part plan. When a player asks for several things in one sentence, call this once per step, in the order they said them, and the bot will work through the whole plan on its own. Kinds: acquire, deliver, mine, harvest, stockpile, shelter, goto, craft, smelt.',
         params: {
-            'kind': { type: 'string', description: 'One of: acquire, deliver, mine, harvest, stockpile, shelter, goto.' },
+            'kind': { type: 'string', description: 'One of: acquire, deliver, mine, harvest, stockpile, shelter, goto, craft, smelt.' },
             'target': { type: 'string', description: 'Canonical item, block, or material name. Use "none" for shelter and goto.' },
             'quantity': { type: 'int', description: 'How many. Use 1 for shelter and goto.', domain: [1, 2304, '[]'] },
             'player_name': { type: 'string', description: 'The player this step is for: the recipient for deliver, the destination for goto, otherwise the requester.' },
@@ -1659,13 +1727,20 @@ export const actionsList = [
     },
     {
         name: '!collect',
-        description: 'Collect a bounded quantity of a common block using the normal deterministic collection skill.',
+        description: 'Collect a bounded quantity of a common block, safely relocating and rescanning when the current area has no reachable source.',
         params: {
             'block_type': { type: 'BlockName', description: 'Canonical block name, such as oak_log.' },
             'quantity': { type: 'int', description: 'Number to collect.', domain: [1, 65] },
         },
         perform: runAsAction(async (agent, block_type, quantity) => {
-            return await skills.collectBlock(agent.bot, block_type, quantity);
+            return await skills.collectBlock(
+                agent.bot,
+                block_type,
+                quantity,
+                null,
+                64,
+                { relocate: true },
+            );
         })
     },
     {
