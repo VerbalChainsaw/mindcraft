@@ -23,6 +23,7 @@ const MIN_RELOCATION_DISTANCE = 24;
 const CONTINUOUS_MOVEMENT_BEHAVIORS = new Set(['follow', 'guard']);
 const RESOURCE_ROLES = new Set(['builder', 'lumberjack', 'miner']);
 const RESOURCE_RELOCATION_CODES = new Set([
+  'skill_resource_not_found',
   'skill_not_collected',
   'skill_unreachable',
   'skill_not_broken',

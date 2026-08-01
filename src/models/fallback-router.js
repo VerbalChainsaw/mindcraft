@@ -22,6 +22,18 @@ export function isTransportFailure(error) {
   return TRANSPORT_FAILURE.test(text);
 }
 
+// Providers swallow their own transport errors and RETURN a sentinel string
+// instead of throwing, so the router's catch never fires and it hands the
+// failure straight back. Detect that sentinel (and an empty answer, which is
+// only ever a failed generation for chat) so the next provider still gets a
+// turn -- this is what makes a flaky primary self-heal instead of surfacing
+// "my brain disconnected" to the player.
+export function isFailedResponse(response) {
+  if (typeof response !== 'string') return false;
+  const trimmed = response.trim();
+  return trimmed === '' || /brain disconnected/i.test(trimmed);
+}
+
 function labelFor(profile, index) {
   if (typeof profile === 'string') return profile;
   return String(profile?.model || profile?.api || `model-${index + 1}`);
@@ -65,6 +77,14 @@ export class FallbackRouter {
     for (const entry of candidates) {
       try {
         const response = await entry.model.sendRequest(...args);
+        if (isFailedResponse(response)) {
+          // The provider failed quietly and returned a sentinel. Move on to the
+          // next one rather than returning a dead answer.
+          lastError = new Error(`${entry.label} returned a failure sentinel`);
+          this.penalize(entry);
+          this.log?.warn?.(`[model-route] ${entry.label} returned a failure response; trying the next provider.`);
+          continue;
+        }
         entry.successes += 1;
         entry.failures = 0;
         entry.downUntil = 0;

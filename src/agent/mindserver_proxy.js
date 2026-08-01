@@ -4,12 +4,48 @@ import { setSettings } from './settings.js';
 import { getFullState } from './library/full_state.js';
 
 const STATE_PUSH_DEBOUNCE_MS = 80;
-const STATE_PUSH_HEARTBEAT_MS = 1_000;
+const STATE_PUSH_MIN_INTERVAL_MS = 250;
+const STATE_PUSH_HEARTBEAT_MS = 2_500;
+const STATE_CACHE_MAX_AGE_MS = 250;
+const TRANSIENT_STATE_KEYS = new Set([
+    'ageMs',
+    'deliveryMs',
+    'observedAt',
+    'receivedAt',
+    'sampledAt',
+    'sentAt',
+    'sequence',
+    'timeOfDay',
+    'updatedAt',
+]);
 
-function stateFingerprint(state) {
-    return JSON.stringify(state, (key, value) => (
-        ['timeOfDay', 'sampledAt'].includes(key) ? undefined : value
+function fingerprintStatePart(value) {
+    return JSON.stringify(value, (key, nestedValue) => (
+        TRANSIENT_STATE_KEYS.has(key) ? undefined : nestedValue
     ));
+}
+
+function createStatePatch(previousParts, state) {
+    const nextParts = {};
+    const set = {};
+    const unset = [];
+    for (const [key, value] of Object.entries(state)) {
+        const fingerprint = fingerprintStatePart(value);
+        nextParts[key] = fingerprint;
+        if (!previousParts || previousParts[key] !== fingerprint) set[key] = value;
+    }
+    if (previousParts) {
+        for (const key of Object.keys(previousParts)) {
+            if (!Object.hasOwn(state, key)) unset.push(key);
+        }
+    }
+    return {
+        initial: !previousParts,
+        changed: Object.keys(set).length > 0 || unset.length > 0,
+        nextParts,
+        set,
+        unset,
+    };
 }
 
 // agent's individual connection to the mindserver
@@ -31,7 +67,9 @@ class MindServerProxy {
         this.stateHeartbeatTimer = null;
         this.stateListeners = [];
         this.stateSequence = 0;
-        this.lastStateFingerprint = '';
+        this.lastStateParts = null;
+        this.cachedState = null;
+        this.cachedStateAt = 0;
         this.lastCheapState = '';
         this.forceNextStatePush = false;
         MindServerProxy.instance = this;
@@ -141,7 +179,7 @@ class MindServerProxy {
                     callback({ error: 'agent runtime not ready' });
                     return;
                 }
-                callback(getFullState(this.agent));
+                callback(this.collectCanonicalState({ allowCached: true }));
             } catch (error) {
                 console.error('Error getting full state:', error);
                 callback({ error: String(error?.message || error || 'state collection failed').slice(0, 240) });
@@ -150,12 +188,28 @@ class MindServerProxy {
 
         socket.on('state-stream-demand', (enabled) => {
             if (this.socket !== socket) return;
+            const wasDemanded = this.stateStreamDemanded;
             this.stateStreamDemanded = enabled === true;
-            if (this.stateStreamDemanded) this.requestStatePush({ force: true, immediate: true });
-            else if (this.statePushTimer) {
-                clearTimeout(this.statePushTimer);
-                this.statePushTimer = null;
+            if (this.stateStreamDemanded) {
+                // MindServer drops its state cache when the last dashboard
+                // leaves. A new listener therefore needs an authoritative
+                // snapshot before any deltas can safely resume.
+                if (!wasDemanded) this.resetStateSnapshot();
+                this.requestStatePush({ force: true, immediate: true });
             }
+            else {
+                if (this.statePushTimer) {
+                    clearTimeout(this.statePushTimer);
+                    this.statePushTimer = null;
+                }
+                this.resetStateSnapshot();
+            }
+        });
+
+        socket.on('state-stream-resync', () => {
+            if (this.socket !== socket || !this.stateStreamDemanded) return;
+            this.resetStateSnapshot();
+            this.requestStatePush({ force: true, immediate: true });
         });
 
         try {
@@ -293,6 +347,25 @@ class MindServerProxy {
         return true;
     }
 
+    resetStateSnapshot() {
+        this.lastStateParts = null;
+        this.cachedState = null;
+        this.cachedStateAt = 0;
+    }
+
+    collectCanonicalState({ allowCached = false } = {}) {
+        const now = Date.now();
+        if (
+            allowCached
+            && this.cachedState
+            && now - this.cachedStateAt <= STATE_CACHE_MAX_AGE_MS
+        ) return this.cachedState;
+        const state = getFullState(this.agent);
+        this.cachedState = state;
+        this.cachedStateAt = now;
+        return state;
+    }
+
     startStateStream() {
         this.stopStateStream();
         const bot = this.agent?.bot;
@@ -326,6 +399,8 @@ class MindServerProxy {
             'playerCollect',
             'entitySpawn',
             'entityGone',
+            'entityMoved',
+            'blockUpdate',
             'death',
             'respawn',
         ]) bind(event, markChanged);
@@ -348,32 +423,50 @@ class MindServerProxy {
         }
         this.stateListeners = [];
         this.lastCheapState = '';
+        this.resetStateSnapshot();
     }
 
     requestStatePush({ force = false, immediate = false } = {}) {
         if (!this.stateStreamDemanded || !this.agent || !this.socket?.connected) return false;
         this.forceNextStatePush ||= force;
         if (this.statePushTimer) return true;
+        const elapsedSinceState = Date.now() - this.cachedStateAt;
+        const delayMs = immediate
+            ? 0
+            : Math.max(STATE_PUSH_DEBOUNCE_MS, STATE_PUSH_MIN_INTERVAL_MS - elapsedSinceState);
         this.statePushTimer = setTimeout(() => {
             this.statePushTimer = null;
             if (!this.stateStreamDemanded || !this.agent || !this.socket?.connected) return;
             try {
-                const state = getFullState(this.agent);
-                const fingerprint = stateFingerprint(state);
-                const mustSend = this.forceNextStatePush || fingerprint !== this.lastStateFingerprint;
+                const state = this.collectCanonicalState();
+                const patch = createStatePatch(this.lastStateParts, state);
+                const mustSend = this.forceNextStatePush || patch.changed;
                 this.forceNextStatePush = false;
                 if (!mustSend) return;
-                this.lastStateFingerprint = fingerprint;
+                this.lastStateParts = patch.nextParts;
                 this.stateSequence += 1;
-                this.socket.volatile.emit('agent-state', {
+                const envelope = {
                     sequence: this.stateSequence,
                     sentAt: Date.now(),
-                    state,
-                });
+                };
+                if (!patch.changed) {
+                    envelope.kind = 'heartbeat';
+                } else if (patch.initial) {
+                    envelope.kind = 'snapshot';
+                    envelope.state = state;
+                } else {
+                    envelope.kind = 'delta';
+                    envelope.set = patch.set;
+                    envelope.unset = patch.unset;
+                }
+                // Deltas must arrive in order. They are rate-limited to 4 Hz
+                // and tiny compared with the old full snapshots, so reliable
+                // Socket.IO delivery is the correct trade-off here.
+                this.socket.emit('agent-state', envelope);
             } catch (error) {
                 console.warn('[agent-state] Push failed:', error?.message || error);
             }
-        }, immediate ? 0 : STATE_PUSH_DEBOUNCE_MS);
+        }, delayMs);
         if (typeof this.statePushTimer.unref === 'function') this.statePushTimer.unref();
         return true;
     }

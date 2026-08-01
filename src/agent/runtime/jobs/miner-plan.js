@@ -166,9 +166,9 @@ export function nextMinerStep(order, snapshot = {}) {
       };
     }
     return {
-      command: '!moveAway(32)',
+      command: `!mineSearchTunnel(${JSON.stringify(naturalTarget)}, 12)`,
       nextPhase: 'assess',
-      code: 'mining_search_relocation',
+      code: 'mining_search_tunnel',
     };
   }
   if (snapshot.escapeRoute === false) return { blocked: true, code: 'no_escape_route', retryable: true };
@@ -247,9 +247,9 @@ export function nextMinerStep(order, snapshot = {}) {
     }
     if (snapshot.resourceFound === false) {
       return {
-        command: '!moveAway(32)',
+        command: `!mineSearchTunnel(${JSON.stringify(naturalTarget)}, 12)`,
         nextPhase: 'assess',
-        code: 'seeking_resource_zone',
+        code: 'seeking_resource_tunnel',
         target: { name: naturalTarget },
       };
     }

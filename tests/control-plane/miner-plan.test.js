@@ -113,7 +113,7 @@ test('Miner manufactures light supplies before an ore job instead of waiting ind
   assert.equal(step.nextPhase, 'assess');
 });
 
-test('Miner retry recovery relocates through ordinary no-dig movement before rescanning', () => {
+test('Miner retry recovery advances a bounded natural-fill search tunnel before rescanning', () => {
   const base = createWorkOrder({
     id: 'mine-recover',
     role: 'miner',
@@ -122,6 +122,6 @@ test('Miner retry recovery relocates through ordinary no-dig movement before res
     quota: 6,
   });
   const step = nextMinerStep({ ...base, phase: 'recover' }, {});
-  assert.equal(step.command, '!moveAway(32)');
+  assert.equal(step.command, '!mineSearchTunnel("stone", 12)');
   assert.equal(step.nextPhase, 'assess');
 });

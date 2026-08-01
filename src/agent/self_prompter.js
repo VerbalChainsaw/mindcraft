@@ -18,7 +18,7 @@ const DEFAULT_MAX_NO_PROGRESS = 3
 const DEFAULT_MAX_FAILURES = 5
 // Cooldown (ms) between self-prompt turns. The agent may also raise this
 // via runtime limits, but we keep a sane floor here.
-const DEFAULT_COOLDOWN = 2000
+const DEFAULT_COOLDOWN = 350
 // When an in-flight server action is awaiting Minecraft verification, pause the
 // loop for this long before re-checking, rather than ending the goal.
 const REQUEST_PAUSE_MS = 4000

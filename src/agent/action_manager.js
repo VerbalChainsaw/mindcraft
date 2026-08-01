@@ -28,6 +28,42 @@ const ACTION_OWNER_PRIORITY = Object.freeze({
     reflex: 50,
 });
 
+// A rapid retry is not enough evidence that the bot is looping: Mineflayer can
+// legitimately hand control between short actions in the same tick.  Instead,
+// only arrest repeated non-player work that keeps re-claiming the same patch of
+// ground over a meaningful gameplay window.
+const ACTION_PATTERN_WINDOW_MS = 15_000;
+const ACTION_PATTERN_MAX_REPEATS = 4;
+const ACTION_PATTERN_RADIUS_SQUARED = 2.5 ** 2;
+const CRITICAL_REFLEX_ACTIONS = new Set([
+    'mode:self_preservation',
+    'mode:self_defense',
+    'mode:cowardice',
+]);
+const PLAYER_PREEMPTIBLE_REFLEX_ACTIONS = new Set([
+    'mode:unstuck',
+    'mode:item_collecting',
+    'mode:torch_placing',
+    'mode:hunting',
+    'mode:elbow_room',
+    'mode:idle_staring',
+]);
+const MAX_ACTION_ERROR_CHARS = 4_096;
+
+function actionPosition(agent) {
+    const position = agent?.bot?.entity?.position;
+    if (![position?.x, position?.y, position?.z].every(Number.isFinite)) return null;
+    return { x: position.x, y: position.y, z: position.z };
+}
+
+function isSameActionArea(first, second) {
+    if (!first || !second) return true;
+    const dx = first.x - second.x;
+    const dy = first.y - second.y;
+    const dz = first.z - second.z;
+    return dx * dx + dy * dy + dz * dz <= ACTION_PATTERN_RADIUS_SQUARED;
+}
+
 function normalizeActionOwner(owner) {
     const normalized = String(owner || '').trim().toLowerCase();
     return Object.hasOwn(ACTION_OWNER_PRIORITY, normalized) ? normalized : 'player';
@@ -45,7 +81,8 @@ export class ActionManager {
         this.resume_name = '';
         this.resume_owner = '';
         this.last_action_time = 0;
-        this.recent_action_counter = 0;
+        this.currentActionStartedAt = 0;
+        this.recentActionAttempts = [];
         this.lastResult = null;
         this.nextActionId = 0;
         this.stopRequestedAt = null;
@@ -62,10 +99,77 @@ export class ActionManager {
         return ACTION_OWNER_PRIORITY[normalizeActionOwner(owner)];
     }
 
+    currentSurvivalActionIsCritical() {
+        const bot = this.agent?.bot;
+        const health = Number(bot?.health);
+        const hunger = Number(bot?.food);
+        const criticalFood = Number(this.agent?.runtime?.survival?.criticalFood ?? 6);
+        return Boolean(
+            (Number.isFinite(health) && health <= 8)
+            || (Number.isFinite(hunger) && hunger <= criticalFood)
+        );
+    }
+
+    isCriticalReflexAction(owner = this.currentActionOwner, label = this.currentActionLabel) {
+        return normalizeActionOwner(owner) === 'reflex'
+            && CRITICAL_REFLEX_ACTIONS.has(String(label || ''));
+    }
+
+    recordActionAttempt(actionLabel, actionOwner) {
+        const now = Date.now();
+        this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
+            now - attempt.startedAt <= ACTION_PATTERN_WINDOW_MS
+        ));
+
+        // A fresh player command is authoritative and starts a new local
+        // intent. It must never be rejected because the bot was previously
+        // struggling with an automatic task at the same location.
+        if (actionOwner === 'player') {
+            this.recentActionAttempts = [];
+            return null;
+        }
+        if (this.isCriticalReflexAction(actionOwner, actionLabel)) return null;
+
+        const position = actionPosition(this.agent);
+        const repeats = this.recentActionAttempts.filter(attempt => (
+            attempt.owner === actionOwner
+            && attempt.label === actionLabel
+            && isSameActionArea(attempt.position, position)
+        ));
+        if (repeats.length >= ACTION_PATTERN_MAX_REPEATS) {
+            return { repeats: repeats.length + 1, position };
+        }
+
+        this.recentActionAttempts.push({
+            label: actionLabel,
+            owner: actionOwner,
+            position,
+            startedAt: now,
+        });
+        return null;
+    }
+
     isOwnerBlocked(owner) {
+        const requestedOwner = normalizeActionOwner(owner);
+        const activeOwner = normalizeActionOwner(this.currentActionOwner);
+        if (
+            this.executing
+            && requestedOwner === 'player'
+            && activeOwner === 'survival'
+            && !this.currentSurvivalActionIsCritical()
+        ) return false;
+        // Recovery and ambient reflexes should never hold the steering wheel
+        // against a new dashboard/player command. True safety reflexes retain
+        // their higher priority.
+        if (
+            this.executing
+            && requestedOwner === 'player'
+            && activeOwner === 'reflex'
+            && PLAYER_PREEMPTIBLE_REFLEX_ACTIONS.has(this.currentActionLabel)
+        ) return false;
         return Boolean(
             this.executing
-            && this.ownerPriority(owner) < this.ownerPriority(this.currentActionOwner),
+            && this.ownerPriority(requestedOwner) < this.ownerPriority(activeOwner),
         );
     }
 
@@ -234,35 +338,28 @@ export class ActionManager {
                 return { success: false, message: result.detail, interrupted: false, timedout: true, result };
             }
 
-            if (this.last_action_time > 0) {
-                let time_diff = Date.now() - this.last_action_time;
-                if (time_diff < 20) {
-                    this.recent_action_counter++;
-                }
-                else {
-                    this.recent_action_counter = 0;
-                }
-                if (this.recent_action_counter > 3) {
-                    console.warn('Fast action loop detected, cancelling resume.');
-                    this.cancelResume(); // likely cause of repetition
-                }
-                if (this.recent_action_counter > 5) {
-                    console.error('Infinite action loop detected; holding the bot and cancelling resume.');
-                    this.cancelResume();
-                    this.agent.holdPosition?.('fast action loop safety');
-                    const result = createActionResult({
-                        actionId,
-                        label: actionLabel,
-                        phase: 'blocked',
-                        code: 'action_loop_detected',
-                        detail: 'Rapid repeated actions were detected. The bot is held to prevent a runaway loop; give it an explicit new command after reviewing the last result.',
-                        retryable: false,
-                        startedAt,
-                    });
-                    this.lastResult = result;
-                    this.agent.recordActionResult?.(result);
-                    return { success: false, message: result.detail, interrupted: false, timedout: false, result };
-                }
+            const repeatedPattern = this.recordActionAttempt(actionLabel, actionOwner);
+            if (repeatedPattern) {
+                console.warn(`Repeated action pattern detected for '${actionLabel}' (${repeatedPattern.repeats} starts within ${ACTION_PATTERN_WINDOW_MS}ms).`);
+                this.cancelResume();
+                this.agent.holdPosition?.('repeated action pattern safety');
+                const result = createActionResult({
+                    actionId,
+                    label: actionLabel,
+                    phase: 'blocked',
+                    code: 'action_pattern_detected',
+                    detail: 'The same automatic action kept restarting in the same area, so the bot stopped to avoid looping. Give it a fresh player command after checking the obstruction.',
+                    evidence: {
+                        repeats: repeatedPattern.repeats,
+                        windowMs: ACTION_PATTERN_WINDOW_MS,
+                        position: repeatedPattern.position,
+                    },
+                    retryable: false,
+                    startedAt,
+                });
+                this.lastResult = result;
+                this.agent.recordActionResult?.(result);
+                return { success: false, message: result.detail, interrupted: false, timedout: false, result };
             }
             this.last_action_time = Date.now();
             console.log('executing code...\n');
@@ -275,6 +372,7 @@ export class ActionManager {
             this.currentActionLabel = actionLabel;
             this.currentActionOwner = actionOwner;
             this.currentActionFn = actionFn;
+            this.currentActionStartedAt = this.last_action_time;
             this.timedout = false;
 
             // timeout in minutes
@@ -294,6 +392,7 @@ export class ActionManager {
             this.currentActionLabel = '';
             this.currentActionOwner = '';
             this.currentActionFn = null;
+            this.currentActionStartedAt = 0;
             this.stopRequestedAt = null;
             this.stopTimedOutAt = null;
             clearTimeout(TIMEOUT);
@@ -348,20 +447,20 @@ export class ActionManager {
             this.currentActionLabel = '';
             this.currentActionOwner = '';
             this.currentActionFn = null;
+            this.currentActionStartedAt = 0;
             this.stopRequestedAt = null;
             this.stopTimedOutAt = null;
             clearTimeout(TIMEOUT);
             this.cancelResume();
-            console.error("Code execution triggered catch:", err);
-            // Log the full stack trace
-            console.error(err.stack);
+            const errorDetail = String(err?.stack || err?.message || err).slice(0, MAX_ACTION_ERROR_CHARS);
+            console.error('Code execution triggered catch:', errorDetail);
             await this.stop();
-            const errorMessage = err.toString();
+            const errorMessage = String(err?.message || err).slice(0, MAX_ACTION_ERROR_CHARS);
 
             let message = this.getBotOutputSummary() +
                 '!!Code threw exception!!\n' +
                 'Error: ' + errorMessage + '\n' +
-                'Stack trace:\n' + err.stack+'\n';
+                'Stack trace:\n' + errorDetail+'\n';
 
             let interrupted = this.agent.bot.interrupt_code;
             this.agent.clearBotLogs();

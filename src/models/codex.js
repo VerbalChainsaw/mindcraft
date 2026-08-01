@@ -35,6 +35,15 @@ function boundedTimeoutSeconds(value) {
     return Math.min(MAX_TIMEOUT_SECONDS, Math.max(MIN_TIMEOUT_SECONDS, numeric));
 }
 
+function normalizedReasoningEffort(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const effort = String(value).trim().toLowerCase();
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(effort)) {
+        throw new CodexProviderError('Codex reasoning effort must be a short named effort such as "low" or "medium".', 'INVALID_CONFIG');
+    }
+    return effort;
+}
+
 function sanitizedChildEnv(source = process.env) {
     const env = { ...source };
     for (const name of SECRET_ENV_NAMES) delete env[name];
@@ -152,6 +161,9 @@ export class Codex {
         }
         this.model_name = selectedModel;
         this.timeoutMs = boundedTimeoutSeconds(params?.timeout ?? params?.timeout_seconds) * 1000;
+        this.reasoningEffort = normalizedReasoningEffort(
+            params?.reasoning_effort ?? params?.reasoningEffort ?? params?.effort,
+        );
         this._spawn = dependencies.spawn || spawnChild;
         this._terminate = dependencies.terminateProcessTree || terminateOwnedProcessTree;
         this._platform = dependencies.platform || process.platform;
@@ -583,6 +595,7 @@ export class Codex {
                 threadId,
                 input: [{ type: 'text', text: makeConversationPrompt(turns, '') }],
                 model: this.model_name,
+                ...(this.reasoningEffort ? { effort: this.reasoningEffort } : {}),
                 approvalPolicy: 'never',
                 environments: [],
                 runtimeWorkspaceRoots: [],
@@ -661,6 +674,9 @@ export class Codex {
                     '--sandbox', 'read-only',
                     '-C', cwd,
                     '-m', this.model_name,
+                    ...(this.reasoningEffort
+                        ? ['-c', `model_reasoning_effort="${this.reasoningEffort}"`]
+                        : []),
                     '--skip-git-repo-check',
                     '--ignore-user-config',
                     '--ignore-rules',

@@ -23,10 +23,10 @@
     "render_bot_view": false
   },
   "telemetry": {
-    "intervalMs": 1000,
+    "intervalMs": 2500,
     "requestTimeoutMs": 1200,
     "maxConcurrent": 6,
-    "heartbeatMs": 3000,
+    "heartbeatMs": 2500,
     "failureBackoffMs": 1500,
     "maxFailureBackoffMs": 15000
   }

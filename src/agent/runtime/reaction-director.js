@@ -79,7 +79,10 @@ export function validateReactionText(text, event) {
 export class ReactionDirector {
   constructor(agent, {
     deliverText = text => agent.openChat(text),
-    phraseReaction = reaction => agent.prompter?.phraseReaction?.(reaction),
+    // Cosmetic speech must never occupy the primary gameplay model. A caller
+    // may inject a dedicated lightweight phrasing service; normal gameplay
+    // uses the deterministic factual renderer below.
+    phraseReaction = null,
     executeGesture = executeAgentCommand,
     getContext = defaultContext,
     now = Date.now,
@@ -187,7 +190,7 @@ export class ReactionDirector {
 
   async perform(reaction) {
     const fallback = renderDeterministicReaction(reaction);
-    const useModel = (
+    const useModel = typeof this.phraseReaction === 'function' && (
       reaction.event.salience >= 4
       || MODEL_WORTHY_EVENTS.has(reaction.event.type)
     );

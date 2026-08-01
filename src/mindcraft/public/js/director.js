@@ -3,6 +3,27 @@ import { actionTargetLabel, attentionStatusLabel, behaviorStatusLabel, button, c
 
 const PLAYER_TARGET_MAX_LENGTH = 64;
 
+function applyStateUpdate(currentStates, payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  if (payload.version !== 2 || !payload.type) return payload;
+  if (payload.type === 'snapshot') {
+    return payload.states && typeof payload.states === 'object' ? payload.states : {};
+  }
+  if (payload.type !== 'delta' || !payload.changes || typeof payload.changes !== 'object') {
+    return currentStates || {};
+  }
+  const nextStates = { ...(currentStates || {}) };
+  for (const [agentName, patch] of Object.entries(payload.changes)) {
+    const prior = nextStates[agentName] && typeof nextStates[agentName] === 'object'
+      ? nextStates[agentName]
+      : {};
+    const next = { ...prior, ...(patch?.set && typeof patch.set === 'object' ? patch.set : {}) };
+    for (const key of Array.isArray(patch?.unset) ? patch.unset : []) delete next[key];
+    nextStates[agentName] = next;
+  }
+  return nextStates;
+}
+
 function normalizePlayerTarget(value) {
   return String(value || '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
@@ -114,8 +135,8 @@ export class DirectorWorkspace {
       this.agents = list || [];
       this.renderTarget();
     });
-    socket.on('state-update', (states) => {
-      this.states = states && typeof states === 'object' ? states : {};
+    socket.on('state-update', (update) => {
+      this.states = applyStateUpdate(this.states, update);
       this.renderTargetTelemetry();
       this.renderLists();
     });

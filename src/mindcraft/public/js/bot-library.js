@@ -119,6 +119,7 @@ export class BotLibraryPanel {
       connection: { host: '127.0.0.1', port: 25565 },
     };
     this.editingId = '';
+    this.formStatus = '';
   }
 
   mount() {
@@ -170,7 +171,7 @@ export class BotLibraryPanel {
     clear(this.list);
     const header = node('div', 'bot-library-list-heading');
     header.append(node('strong', '', `${this.profiles.length} saved character${this.profiles.length === 1 ? '' : 's'}`));
-    header.append(button('New Bot Type', () => { this.editingId = ''; this.renderForm(); }, 'primary compact'));
+    header.append(button('New Bot Type', () => { this.editingId = ''; this.formStatus = ''; this.renderForm(); }, 'primary compact'));
     this.list.append(header);
     if (!this.storage.writable) this.list.append(node('div', 'warning-copy small', this.storage.error || 'Saved bot library is read-only until its file is repaired.'));
     if (!this.profiles.length) {
@@ -195,24 +196,46 @@ export class BotLibraryPanel {
       const status = node('div', 'bot-library-status muted small', 'Provider not tested');
       card.append(status);
       const actions = node('div', 'actions');
-      actions.append(
-        button('Edit', () => { this.editingId = profile.id; this.render(); }, 'compact'),
-        button('Check AI', async () => {
+      const checkButton = button('Check AI', async () => {
+          if (checkButton.disabled) return;
+          checkButton.disabled = true;
+          checkButton.textContent = 'Checking…';
           status.textContent = 'Checking…';
-          const result = await api(`/bot-library/${encodeURIComponent(profile.id)}/test`);
-          status.textContent = result.success && result.readiness?.ready
-            ? result.readiness?.verified === false ? 'Ready to start; endpoint validates on launch' : 'Ready to start'
-            : result.readiness?.reason || result.error || 'Provider is not ready';
-          status.className = `bot-library-status ${result.success && result.readiness?.ready ? 'success-copy' : 'warning-copy'} small`;
-        }, 'compact'),
-        button('Deploy Bot', async () => {
+          try {
+            const result = await api(`/bot-library/${encodeURIComponent(profile.id)}/test`);
+            status.textContent = result.success && result.readiness?.ready
+              ? result.readiness?.verified === false ? 'Ready to start; endpoint validates on launch' : 'Ready to start'
+              : result.readiness?.reason || result.error || 'Provider is not ready';
+            status.className = `bot-library-status ${result.success && result.readiness?.ready ? 'success-copy' : 'warning-copy'} small`;
+          } finally {
+            if (checkButton.isConnected) {
+              checkButton.disabled = false;
+              checkButton.textContent = 'Check AI';
+            }
+          }
+        }, 'compact');
+      const deployButton = button('Deploy Bot', async () => {
+          if (deployButton.disabled) return;
+          deployButton.disabled = true;
+          deployButton.textContent = 'Deploying…';
           status.textContent = 'Requesting deployment…';
-          const result = await api(`/bot-library/${encodeURIComponent(profile.id)}/spawn`, { agentName: profile.agentName });
-          status.textContent = result.success ? 'Deployment accepted · watch Bots for connection status' : result.error || 'Deployment failed';
-          status.className = `bot-library-status ${result.success ? 'success-copy' : 'warning-copy'} small`;
-          this.announce?.(result.success ? `${profile.name} is starting.` : result.error || 'Bot spawn failed.');
-          this.activity?.add('AGENT', result.success ? `${profile.name}: library spawn accepted` : `${profile.name}: ${result.error || 'spawn failed'}`, result.success ? 'ok' : 'err');
-        }, 'success compact'),
+          try {
+            const result = await api(`/bot-library/${encodeURIComponent(profile.id)}/spawn`, { agentName: profile.agentName });
+            status.textContent = result.success ? 'Deployment accepted · watch Bots for connection status' : result.error || 'Deployment failed';
+            status.className = `bot-library-status ${result.success ? 'success-copy' : 'warning-copy'} small`;
+            this.announce?.(result.success ? `${profile.name} is starting.` : result.error || 'Bot spawn failed.');
+            this.activity?.add('AGENT', result.success ? `${profile.name}: library spawn accepted` : `${profile.name}: ${result.error || 'spawn failed'}`, result.success ? 'ok' : 'err');
+          } finally {
+            if (deployButton.isConnected) {
+              deployButton.disabled = false;
+              deployButton.textContent = 'Deploy Bot';
+            }
+          }
+        }, 'success compact');
+      actions.append(
+        button('Edit', () => { this.editingId = profile.id; this.formStatus = ''; this.render(); }, 'compact'),
+        checkButton,
+        deployButton,
         button('Delete', async () => {
           if (!window.confirm(`Delete the saved bot type '${profile.name}'? Existing agents are not removed.`)) return;
           const result = await api('/bot-library/delete', { id: profile.id });
@@ -510,7 +533,7 @@ export class BotLibraryPanel {
     );
     connectionSection.append(connectionGrid);
     this.form.append(characterSection, behaviorSection, providerSection, connectionSection);
-    const result = node('div', 'status-text muted');
+    const result = node('div', 'status-text muted', this.formStatus);
     const actions = node('div', 'actions');
     const buildPayload = () => {
       const depositCoordinates = [controls.depositX.value, controls.depositY.value, controls.depositZ.value];
@@ -595,35 +618,54 @@ export class BotLibraryPanel {
        },
       };
     };
+    let savePending = false;
+    let saveDeployButton;
+    let saveOnlyButton;
+    let resetButton;
+    const setSavePending = (pending, deploy) => {
+      savePending = pending;
+      saveDeployButton.disabled = pending;
+      saveOnlyButton.disabled = pending;
+      resetButton.disabled = pending;
+      saveDeployButton.textContent = pending && deploy ? 'Saving & deploying…' : 'Save & Deploy Bot';
+      saveOnlyButton.textContent = pending && !deploy ? 'Saving…' : 'Save Only';
+    };
     const saveProfile = async ({ deploy = false } = {}) => {
+      if (savePending) return;
       if (!this.storage.writable) { result.textContent = this.storage.error || 'Saved bot library must be repaired before changes can be made.'; return; }
       const payload = buildPayload();
       if (!payload.name || !payload.agentName || !payload.provider.chatModel) { result.textContent = 'Name, Minecraft agent name, and chat model are required.'; return; }
+      this.formStatus = '';
       result.textContent = deploy ? 'Saving character…' : 'Saving…';
-      const response = await api('/bot-library', payload);
-      if (!response.success) { result.textContent = response.error || 'Save failed.'; return; }
-      const index = this.profiles.findIndex((entry) => entry.id === response.profile.id);
-      if (index === -1) this.profiles.push(response.profile); else this.profiles[index] = response.profile;
-      this.editingId = response.profile.id;
-      this.activity?.add('CONFIG', `${response.profile.name}: bot type saved.`, 'ok');
-      if (deploy) {
-        result.textContent = 'Saved. Checking AI and requesting deployment…';
-        const deployment = await api(`/bot-library/${encodeURIComponent(response.profile.id)}/spawn`, { agentName: response.profile.agentName });
-        result.textContent = deployment.success
-          ? 'Deployment accepted. Open Bots to watch it connect and begin its role.'
-          : deployment.error || 'Saved, but deployment failed.';
-        this.activity?.add('AGENT', deployment.success ? `${response.profile.name}: deployment accepted` : `${response.profile.name}: ${deployment.error || 'deployment failed'}`, deployment.success ? 'ok' : 'err');
-        this.announce?.(deployment.success ? `${response.profile.name} is starting.` : result.textContent);
-      } else {
-        result.textContent = 'Saved. You can deploy this character from its card or the Dashboard.';
+      setSavePending(true, deploy);
+      try {
+        const response = await api('/bot-library', payload);
+        if (!response.success) { result.textContent = response.error || 'Save failed.'; return; }
+        const index = this.profiles.findIndex((entry) => entry.id === response.profile.id);
+        if (index === -1) this.profiles.push(response.profile); else this.profiles[index] = response.profile;
+        this.editingId = response.profile.id;
+        this.activity?.add('CONFIG', `${response.profile.name}: bot type saved.`, 'ok');
+        if (deploy) {
+          result.textContent = 'Saved. Checking AI and requesting deployment…';
+          const deployment = await api(`/bot-library/${encodeURIComponent(response.profile.id)}/spawn`, { agentName: response.profile.agentName });
+          result.textContent = deployment.success
+            ? 'Deployment accepted. Open Bots to watch it connect and begin its role.'
+            : deployment.error || 'Saved, but deployment failed.';
+          this.activity?.add('AGENT', deployment.success ? `${response.profile.name}: deployment accepted` : `${response.profile.name}: ${deployment.error || 'deployment failed'}`, deployment.success ? 'ok' : 'err');
+          this.announce?.(deployment.success ? `${response.profile.name} is starting.` : result.textContent);
+        } else {
+          result.textContent = 'Saved. You can deploy this character from its card or the Dashboard.';
+        }
+        this.formStatus = result.textContent;
+        this.render();
+      } finally {
+        setSavePending(false, deploy);
       }
-      this.render();
     };
-    actions.append(
-      button('Save & Deploy Bot', () => saveProfile({ deploy: true }), 'success'),
-      button('Save Only', () => saveProfile(), 'primary'),
-      button('Reset Form', () => { this.editingId = ''; this.renderForm(); }, 'compact'),
-    );
+    saveDeployButton = button('Save & Deploy Bot', () => saveProfile({ deploy: true }), 'success');
+    saveOnlyButton = button('Save Only', () => saveProfile(), 'primary');
+    resetButton = button('Reset Form', () => { this.editingId = ''; this.formStatus = ''; this.renderForm(); }, 'compact');
+    actions.append(saveDeployButton, saveOnlyButton, resetButton);
     this.form.append(actions, result);
   }
 

@@ -2,6 +2,7 @@ import Vec3 from 'vec3';
 
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
+import { isPreemption } from './action-result.js';
 import { RoleDirector } from './role-director.js';
 import { JobStateStore } from './job-state-store.js';
 import {
@@ -24,13 +25,19 @@ import { isClearableWorksiteBlock } from '../library/skills.js';
 
 const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
-const JOB_RETRY_MS = 5_000;
-const JOB_SUCCESS_MS = 1_000;
+const JOB_RETRY_MS = 1_000;
+const JOB_SUCCESS_MS = 100;
+const JOB_PREEMPTION_MS = 0;
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
 const WORKSITE_RETURN_DISTANCE = 16;
-const MANUAL_COMMAND_GRACE_MS = 120_000;
+// After a manual command, hold off resuming autonomous job work briefly so the
+// two do not fight over the body. Two minutes was long enough that a paused
+// miner looked broken -- the player gave one order and the bot then stood inert
+// for the rest of the window. A short grace still separates the two without
+// making the bot look dead.
+const MANUAL_COMMAND_GRACE_MS = 15_000;
 const TOOL_TIER = Object.freeze({
   wooden: 1,
   golden: 2,
@@ -893,6 +900,7 @@ export class JobDirector extends RoleDirector {
               retryable: true,
             };
           }
+          const preempted = isPreemption(result);
           const verifiedOrder = result.phase === 'succeeded' && step.checkpointOnSuccess
             ? {
               ...orderAtDispatch,
@@ -934,7 +942,13 @@ export class JobDirector extends RoleDirector {
             result?.detail || (succeeded ? 'Verified job phase completed.' : 'Job phase did not verify.'),
             advanced.phase === 'recover',
           );
-          this.nextAttemptAt = this.now() + (succeeded ? JOB_SUCCESS_MS : JOB_RETRY_MS);
+          this.nextAttemptAt = this.now() + (
+            preempted
+              ? JOB_PREEMPTION_MS
+              : succeeded
+                ? JOB_SUCCESS_MS
+                : JOB_RETRY_MS
+          );
         })
         .catch(error => {
           const failed = advanceWorkOrder(orderAtDispatch, {

@@ -69,12 +69,12 @@ export class VisionInterpreter {
         return `Structured sensing remains available. ${this.getCenterBlockInfo()}`;
     }
 
-    _record({ success, code, message, target = null, retryable = false }) {
+    _record({ success, code, message, target = null, retryable = false, kind = 'vision' }) {
         const recordedAt = Date.now();
-        this.lastOutcome = { success, code, message, target, retryable, recordedAt };
+        this.lastOutcome = { success, code, message, target, retryable, recordedAt, kind };
         if (this.agent.bot) {
             this.agent.bot.lastActionEvidence = {
-                kind: 'vision',
+                kind,
                 outcome: code,
                 target,
                 retryable,
@@ -157,6 +157,29 @@ export class VisionInterpreter {
         }
     }
 
+    async _runLook({ target, lookingMessage, aim }) {
+        try {
+            await aim();
+            return this._record({
+                success: true,
+                code: 'looked',
+                kind: 'look',
+                target,
+                retryable: false,
+                message: `${lookingMessage} ${this.getCenterBlockInfo()}`,
+            });
+        } catch (error) {
+            return this._record({
+                success: false,
+                code: 'look_failed',
+                kind: 'look',
+                target,
+                retryable: true,
+                message: `Could not turn toward the requested target: ${String(error?.message || error).slice(0, 240)}.`,
+            });
+        }
+    }
+
     lookAtPlayer(player_name, direction) {
         const bot = this.agent.bot;
         const resolution = resolvePlayerTarget(bot, player_name, {
@@ -164,12 +187,19 @@ export class VisionInterpreter {
         });
         const player = resolution.entity;
         if (!player) {
-            return this._unavailable('lost_target', `Could not find player ${player_name}.`, {
-                name: player_name,
-                requestedName: resolution.requested,
-                canonicalName: null,
-                aliasesTried: resolution.aliasesTried,
-            }, false);
+            return this._record({
+                success: false,
+                code: 'lost_target',
+                kind: 'look',
+                message: `Could not find player ${player_name}.`,
+                target: {
+                    name: player_name,
+                    requestedName: resolution.requested,
+                    canonicalName: null,
+                    aliasesTried: resolution.aliasesTried,
+                },
+                retryable: false,
+            });
         }
         const target = {
             name: player_name,
@@ -177,7 +207,7 @@ export class VisionInterpreter {
             canonicalName: resolution.canonical,
             id: player.id,
         };
-        return this._runVision({
+        return this._runLook({
             target,
             lookingMessage: direction === 'with'
                 ? `Looking in the same direction as ${player_name}.`
@@ -194,11 +224,17 @@ export class VisionInterpreter {
 
     lookAtPosition(x, y, z) {
         if (![x, y, z].every(Number.isFinite)) {
-            return this._unavailable('invalid_target', 'Vision needs valid coordinates.', null, false);
+            return this._record({
+                success: false,
+                code: 'invalid_target',
+                kind: 'look',
+                message: 'Looking requires valid coordinates.',
+                retryable: false,
+            });
         }
         const bot = this.agent.bot;
         const target = { x, y, z };
-        return this._runVision({
+        return this._runLook({
             target,
             lookingMessage: `Looking at coordinate ${x}, ${y}, ${z}.`,
             aim: () => bot.lookAt(new Vec3(x, y + 2, z)),

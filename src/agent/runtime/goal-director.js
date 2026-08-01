@@ -16,8 +16,9 @@ import { isSafeProcedureCommand, ProcedureStore } from './procedure-store.js';
 const STORE_VERSION = 1;
 const MAX_STORE_BYTES = 512 * 1024;
 const SAFE_AGENT_NAME = /^[A-Za-z0-9_]{3,16}$/;
-const SUCCESS_DELAY_MS = 500;
-const RETRY_DELAY_MS = 2_500;
+const SUCCESS_DELAY_MS = 100;
+const RETRY_DELAY_MS = 750;
+const PREEMPTION_RESUME_MS = 0;
 const PLAYER_WAIT_MS = 5_000;
 const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
@@ -171,6 +172,10 @@ function recoveryCommand(goal) {
 
 function plannedDisengagementCommand(goal) {
   const code = String(goal.evidence?.code || '');
+  if (
+    goal.subgoals.at(-1)?.kind === 'plan'
+    && /(?:resource_not_found|search_exhausted)/.test(code)
+  ) return '!moveAway(32)';
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken)/.test(code)
@@ -689,6 +694,26 @@ export class GoalDirector {
     // fights on the way to the iron drained the same budget a genuinely
     // unreachable target does, and the goal gave up on work that was fine.
     const attempts = preemptionRecovery ? goal.attempts : goal.attempts + 1;
+    if (
+      preemptionRecovery
+      && goal.subgoals.length < goal.maxSubgoals
+    ) {
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        phase: 'assess',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus(
+        'waiting',
+        'preemption_cleared',
+        'The higher-priority action released control; reassessing the same goal immediately.',
+        true,
+      );
+      return;
+    }
     const deliveryRecovery = kind === 'deliver'
       && /(?:lost_target|not_received|delivery_unverified)/.test(String(effectiveResult.code || ''));
     if (
@@ -854,7 +879,7 @@ export class GoalDirector {
             return;
           }
           this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
-          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+          this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
           this.setStatus(
             'waiting',
             'causal_replan',

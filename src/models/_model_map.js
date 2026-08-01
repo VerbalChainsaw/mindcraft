@@ -125,7 +125,12 @@ export function resolveConfiguredModel(profile, modelKey = 'model') {
     if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
         throw new TypeError('Model profile must be an object.');
     }
-    const source = profile[modelKey];
+    // A model key may hold a router array (preference order). The prompter walks
+    // the whole list; this single-provider resolver is used by readiness and
+    // credential checks, which care about the primary that normally serves, so
+    // unwrap to the first defined entry rather than failing on the array.
+    const rawSource = profile[modelKey];
+    const source = Array.isArray(rawSource) ? rawSource.find(Boolean) : rawSource;
     const candidate = source && typeof source === 'object' && !Array.isArray(source)
         ? cloneModelConfiguration(source)
         : { model: source };

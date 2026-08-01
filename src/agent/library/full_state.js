@@ -32,6 +32,9 @@ const FOOD_PATTERN = /(?:apple|bread|carrot|potato|beetroot|berries|melon|beef|p
 const PERCEPTION_CACHE_REFRESH_MS = 5_000;
 const PERCEPTION_CACHE_MAX_AGE_MS = 15_000;
 const PERCEPTION_RETRY_MS = 5_000;
+const PERCEPTION_MOVEMENT_REFRESH_DISTANCE = 4;
+const HAZARD_PERCEPTION_DISTANCE = 10;
+const USEFUL_BLOCK_PERCEPTION_DISTANCE = 16;
 const perceptionSnapshots = new WeakMap();
 
 function round(value, places = 1) {
@@ -284,7 +287,7 @@ function buildBlockPerception(bot) {
     const hazards = getNearestBlocksWhere(
         bot,
         block => HAZARD_BLOCKS.has(block?.name),
-        10,
+        HAZARD_PERCEPTION_DISTANCE,
         12,
     ).filter(Boolean).map(block => ({
         name: block.name,
@@ -301,7 +304,7 @@ function buildBlockPerception(bot) {
     const usefulBlocks = getNearestBlocksWhere(
         bot,
         block => USEFUL_BLOCK_PATTERN.test(block?.name || ''),
-        16,
+        USEFUL_BLOCK_PERCEPTION_DISTANCE,
         24,
     ).filter(Boolean).map(block => ({
         name: block.name,
@@ -318,6 +321,47 @@ function buildBlockPerception(bot) {
     return {
         hazards,
         usefulBlocks,
+    };
+}
+
+function perceptionOrigin(bot) {
+    const position = bot.entity?.position;
+    if (!position) return null;
+    return { x: position.x, y: position.y, z: position.z };
+}
+
+function distanceBetweenPositions(left, right) {
+    if (
+        !left
+        || !right
+        || ![left.x, left.y, left.z, right.x, right.y, right.z].every(Number.isFinite)
+    ) return Infinity;
+    return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
+}
+
+function reprojectBlockEntries(bot, entries, maxDistance, count) {
+    const origin = bot.entity?.position;
+    if (!origin) return [];
+    return (Array.isArray(entries) ? entries : [])
+        .filter(entry => (
+            entry?.position
+            && [entry.position.x, entry.position.y, entry.position.z].every(Number.isFinite)
+        ))
+        .map(entry => ({
+            ...entry,
+            distance: round(distanceBetweenPositions(origin, entry.position)),
+            direction: relativeDirection(bot, entry.position),
+            inView: viewAlignment(bot, entry.position) >= 0.55,
+        }))
+        .filter(entry => entry.distance <= maxDistance)
+        .sort((left, right) => left.distance - right.distance)
+        .slice(0, count);
+}
+
+function reprojectBlockPerception(bot, snapshot) {
+    return {
+        hazards: reprojectBlockEntries(bot, snapshot?.hazards, HAZARD_PERCEPTION_DISTANCE, 12),
+        usefulBlocks: reprojectBlockEntries(bot, snapshot?.usefulBlocks, USEFUL_BLOCK_PERCEPTION_DISTANCE, 24),
     };
 }
 
@@ -685,13 +729,23 @@ function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now =
         console.warn(`[awareness] Entity detection failed for ${agent.name || 'bot'}: ${error?.message || error}`);
         liveEntities = emptyEntityPerception();
     }
-    const refreshDue = deep || !cached || now >= (cached.nextRefreshAt || 0);
+    const currentOrigin = perceptionOrigin(bot);
+    const movedSinceRefresh = cached
+        ? distanceBetweenPositions(cached.origin, currentOrigin)
+        : Infinity;
+    const refreshDue = (
+        deep
+        || !cached
+        || now >= (cached.nextRefreshAt || 0)
+        || movedSinceRefresh >= PERCEPTION_MOVEMENT_REFRESH_DISTANCE
+    );
     if (refreshDue) {
         try {
             const snapshot = buildBlockPerception(bot);
             perceptionSnapshots.set(agent, {
                 sampledAt: now,
                 snapshot,
+                origin: currentOrigin,
                 nextRefreshAt: now + PERCEPTION_CACHE_REFRESH_MS,
                 lastRefreshFailed: false,
                 unavailable: false,
@@ -703,11 +757,12 @@ function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now =
             if (cached && !cached.unavailable) {
                 perceptionSnapshots.set(agent, {
                     ...cached,
+                    origin: currentOrigin,
                     nextRefreshAt: now + PERCEPTION_RETRY_MS,
                     lastRefreshFailed: true,
                 });
                 return withPerceptionMeta(
-                    mergePerception(liveEntities, cached.snapshot),
+                    mergePerception(liveEntities, reprojectBlockPerception(bot, cached.snapshot)),
                     'stale',
                     cached.sampledAt,
                     now,
@@ -716,6 +771,7 @@ function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now =
             perceptionSnapshots.set(agent, {
                 sampledAt: null,
                 snapshot: emptyBlockPerception(),
+                origin: currentOrigin,
                 nextRefreshAt: now + PERCEPTION_RETRY_MS,
                 lastRefreshFailed: true,
                 unavailable: true,
@@ -733,7 +789,7 @@ function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now =
     if (cached.unavailable) return withPerceptionMeta(mergePerception(liveEntities, emptyBlockPerception()), 'unavailable', null, now);
     const ageMs = Math.max(0, now - cached.sampledAt);
     return withPerceptionMeta(
-        mergePerception(liveEntities, cached.snapshot),
+        mergePerception(liveEntities, reprojectBlockPerception(bot, cached.snapshot)),
         cached.lastRefreshFailed || ageMs > PERCEPTION_CACHE_MAX_AGE_MS ? 'stale' : 'cached',
         cached.sampledAt,
         now,

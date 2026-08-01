@@ -25,9 +25,8 @@ const MAX_BLUEPRINT_CELLS = 4096;
 // creeper arrived: nothing about the order became wrong, and the same step is
 // still the right next step. Folding one in as a retryable failure burned an
 // attempt, so three interruptions killed a job permanently, and it routed the
-// order through `recover` -- which for the miner and lumberjack means
-// `!moveAway(32)`, walking the bot away from the very trees or ore it was
-// working. Preemption still needs a ceiling: a bot pinned by something it
+  // order through `recover`, walking the bot away from the very worksite it
+  // was using. Preemption still needs a ceiling: a bot pinned by something it
 // cannot escape would otherwise re-derive the same step forever with no
 // failure to report.
 const MAX_PREEMPTIONS = 24;

@@ -345,9 +345,11 @@ export class BehaviorArbiter {
       if (selected) return selected;
       selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
       if (selected) return selected;
-      selected = await this.evaluateModeBand('bounded_recovery', RECOVERY_MODES, perception);
-      if (selected) return selected;
 
+      // Player and job actions already own a serialized ActionManager turn.
+      // Classify that ownership before asking recovery modes to inspect the
+      // world; otherwise unstuck can see the first motionless frames of a new
+      // command and preempt it before the pathfinder has had a chance to move.
       const activeBeforeSelection = this.actionState();
       if (['player', 'job'].includes(activeBeforeSelection.owner)) {
         try {
@@ -361,6 +363,12 @@ export class BehaviorArbiter {
       }
       selected = this.classifyActiveAction(perception);
       this.observeActionRelease(Boolean(selected));
+      if (selected) return selected;
+
+      // Recovery remains above survival and all autonomous work, but only when
+      // no live player/job action owns the body. `unstuck` itself measures an
+      // objective movement failure window before it takes control.
+      selected = await this.evaluateModeBand('bounded_recovery', RECOVERY_MODES, perception);
       if (selected) return selected;
 
       if (this.urgency === 'critical') {
@@ -484,7 +492,10 @@ export class BehaviorArbiter {
         } catch (error) {
           return this.select('factual_reaction', 'reaction_update_failed', `Reaction policy failed safely: ${boundedText(error?.message || error)}`, true, perception);
         }
-        if (reaction.processing || this.agent.actions?.executing) {
+        // Reaction speech is advisory and may be delivered asynchronously. It
+        // does not own movement or decision scheduling; only a gesture that
+        // actually acquired ActionManager may retain this lane.
+        if (this.agent.actions?.executing) {
           return this.select('factual_reaction', reaction.status?.code || 'reaction_selected', 'A bounded factual reaction selected the tick.', true, perception);
         }
       }

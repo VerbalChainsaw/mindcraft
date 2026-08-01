@@ -20,6 +20,27 @@ const SQUAD_HUES = {
   light_purple: 306, dark_purple: 278,
 };
 
+function applyStateUpdate(currentStates, payload) {
+  if (!payload || typeof payload !== 'object') return {};
+  if (payload.version !== 2 || !payload.type) return payload;
+  if (payload.type === 'snapshot') {
+    return payload.states && typeof payload.states === 'object' ? payload.states : {};
+  }
+  if (payload.type !== 'delta' || !payload.changes || typeof payload.changes !== 'object') {
+    return currentStates || {};
+  }
+  const nextStates = { ...(currentStates || {}) };
+  for (const [agentName, patch] of Object.entries(payload.changes)) {
+    const prior = nextStates[agentName] && typeof nextStates[agentName] === 'object'
+      ? nextStates[agentName]
+      : {};
+    const next = { ...prior, ...(patch?.set && typeof patch.set === 'object' ? patch.set : {}) };
+    for (const key of Array.isArray(patch?.unset) ? patch.unset : []) delete next[key];
+    nextStates[agentName] = next;
+  }
+  return nextStates;
+}
+
 function socketRequest(socket, event, args = [], timeoutMs = AGENT_REQUEST_TIMEOUT_MS) {
   if (!socket?.connected) return Promise.resolve({ success: false, error: 'Mindcraft is reconnecting.' });
   return new Promise((resolve) => {
@@ -129,7 +150,7 @@ export class AgentsWorkspace {
       this.renderFocused();
       this.activity?.add('AGENT',`${name}: ${message}`);
     });
-    socket.on('state-update',(states)=>{this.states=states||{};this.captureActionOutcomes(this.states);this.renderFocused();this.onStatesChanged?.(this.states);});
+    socket.on('state-update',(update)=>{this.states=applyStateUpdate(this.states,update);this.captureActionOutcomes(this.states);this.renderFocused();this.onStatesChanged?.(this.states);});
      socket.on('squad-update',(squad)=>{if(squad?.persistence)this.squadPersistence=squad.persistence;this.upsertSquad(squad);this.render();});
      socket.on('squad-radio-event',(event)=>{if(!event?.message)return;this.activity?.add('RADIO',`${event.from||'Director'} → squad: ${event.message}`, 'ok');if(event.from==='Director')this.announce?.(`Squad radio delivered to ${event.delivered||0} bot(s).`);});
     socket.on('connect',()=>{this.listenToAgentStates();void this.refreshSquads();});

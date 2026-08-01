@@ -36,6 +36,14 @@ test('confirmed unreachable collection targets lose to reachable alternatives', 
     assert.equal(ranked[1].reachable, false);
 });
 
+test('unproven and timed-out route probes are not promoted into movement attempts', () => {
+    for (const routeStatus of ['timeout', 'probe_error', 'unknown']) {
+        const [ranked] = rankCollectionCandidates([candidate({ routeStatus })]);
+        assert.equal(ranked.reachable, false, routeStatus);
+        assert.equal(ranked.score, Number.POSITIVE_INFINITY, routeStatus);
+    }
+});
+
 test('local hazards outweigh a modest distance advantage', () => {
     const ranked = rankCollectionCandidates([
         candidate({
@@ -66,4 +74,3 @@ test('coordinate tie-breaks keep equivalent rankings deterministic', () => {
         [[3, 3], [4, 2]],
     );
 });
-

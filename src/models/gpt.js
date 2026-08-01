@@ -2,12 +2,26 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+// The o-series reasoning models (o1, o3, o4...) are the only ones that need the
+// Responses API. Everything else -- gpt-4o, gpt-4.1, gpt-5* -- is faster and
+// more reliable on chat.completions.
+function usesResponsesApi(model) {
+    return /^o[0-9]/i.test(String(model || ''));
+}
+
 export class GPT {
     static prefix = 'openai';
     constructor(model_name, url, params) {
         this.model_name = model_name;
-        this.params = params;
         this.url = url; // store so that we know whether a custom URL has been set
+
+        // A request `timeout` is a client option, not an API body field. It was
+        // being spread into the completion body, where OpenAI rejects it -- which
+        // is one way a call fails and the bot reports "my brain disconnected".
+        // Lift it onto the client and keep only real generation params for the body.
+        const { timeout, timeout_seconds, ...bodyParams } = params || {};
+        this.params = bodyParams;
+        const timeoutSeconds = Number(timeout ?? timeout_seconds);
 
         let config = {};
         if (url)
@@ -17,6 +31,9 @@ export class GPT {
             config.organization = getKey('OPENAI_ORG_ID');
 
         config.apiKey = getKey('OPENAI_API_KEY');
+
+        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0)
+            config.timeout = Math.round(timeoutSeconds * 1000);
 
         this.openai = new OpenAIApi(config);
     }
@@ -33,9 +50,12 @@ export class GPT {
 
         try {
             console.log('Awaiting openai api response from model', model);
-            // if a custom URL is set, use chat.completions
-            // because custom "OpenAI-compatible" endpoints likely do not have responses endpoint
-            if (this.url) {
+            // Use chat.completions for a custom endpoint and for every standard
+            // chat model. The Responses API is only needed by the o-series
+            // reasoning models; for gpt-4o and friends it was both slower and
+            // intermittently returned no text, which reached players as "my
+            // brain disconnected". Chat completions is the fast, reliable path.
+            if (this.url || !usesResponsesApi(model)) {
                 let messages = [{'role': 'system', 'content': systemMessage}].concat(turns);
                 messages = strictFormat(messages);
                 const pack = {

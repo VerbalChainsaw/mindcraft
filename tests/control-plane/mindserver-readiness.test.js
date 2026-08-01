@@ -7,6 +7,7 @@ import * as Mindcraft from '../../src/mindcraft/mindcraft.js';
 import {
   createMindServer,
   getServer,
+  MindServerAlreadyRunningError,
   waitForMindServerListening,
 } from '../../src/mindcraft/mindserver.js';
 import { swarm } from '../../src/mindcraft/swarm/swarm.js';
@@ -100,6 +101,39 @@ test('Given a collision at the configured start port, when MindServer starts wit
     await closeListeningServer(startedServer);
     swarm.stop();
     await closeListeningServer(occupiedServer);
+  }
+});
+
+test('Given an occupied port belongs to Mindcraft, when another launcher starts, then it refuses to create a competing control plane', async () => {
+  // Given
+  const occupiedServer = http.createServer((request, response) => {
+    if (request.url !== '/api/identity') {
+      response.writeHead(404).end();
+      return;
+    }
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({
+      success: true,
+      service: 'mindcraft-control-center',
+      protocolVersion: 1,
+    }));
+  });
+  await waitForMindServerListening(occupiedServer, 0);
+  const occupiedPort = occupiedServer.address().port;
+
+  try {
+    // When / Then
+    await assert.rejects(
+      () => createMindServer(false, occupiedPort, 10),
+      (error) => (
+        error instanceof MindServerAlreadyRunningError
+        && error.code === 'EMINDSERVERALREADYRUNNING'
+        && error.port === occupiedPort
+      ),
+    );
+  } finally {
+    await closeListeningServer(occupiedServer);
+    swarm.stop();
   }
 });
 

@@ -9,10 +9,10 @@ const COLD_START_REQUEST_TIMEOUT_MS = 3_500;
 const LEARNED_LATENCY_MULTIPLIER = 1.75;
 
 export const DEFAULT_AGENT_TELEMETRY_CONFIG = Object.freeze({
-  intervalMs: 1_000,
+  intervalMs: 2_500,
   requestTimeoutMs: 1_200,
   maxConcurrent: 6,
-  heartbeatMs: 3_000,
+  heartbeatMs: 2_500,
   failureBackoffMs: 1_500,
   maxFailureBackoffMs: 15_000,
 });

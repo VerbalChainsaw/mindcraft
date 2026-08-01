@@ -196,7 +196,9 @@ function resolveLauncherEntry() {
 function profileProvider(profile, model) {
   if (typeof profile?.provider === 'string' && profile.provider.trim()) return profile.provider.trim();
   if (typeof profile?.api === 'string' && profile.api.trim()) return profile.api.trim();
-  const modelText = String(model || '').toLowerCase();
+  if (typeof model?.provider === 'string' && model.provider.trim()) return model.provider.trim();
+  if (typeof model?.api === 'string' && model.api.trim()) return model.api.trim();
+  const modelText = String(model?.model || model || '').toLowerCase();
   const prefix = modelText.split('/')[0];
   if (modelText.includes('claude')) return 'anthropic';
   if (modelText.includes('gemini')) return 'google';
@@ -408,6 +410,73 @@ export function waitForMindServerListening(server, port) {
     });
 }
 
+const MIND_SERVER_IDENTITY_PROBE_TIMEOUT_MS = 350;
+const LEGACY_MIND_SERVER_PROBE_TIMEOUT_MS = 1_500;
+
+export class MindServerAlreadyRunningError extends Error {
+    constructor(port) {
+        super(`Mindcraft is already running at http://localhost:${port}. Use the existing dashboard instead of starting a second launcher.`);
+        this.name = 'MindServerAlreadyRunningError';
+        this.code = 'EMINDSERVERALREADYRUNNING';
+        this.port = port;
+    }
+}
+
+function isMindServerHealth(payload) {
+    const checks = payload?.checks;
+    return payload?.success === true
+      && Array.isArray(payload.problems)
+      && checks
+      && typeof checks === 'object'
+      && Number.isInteger(checks.agentsRegistered)
+      && typeof checks.minecraftTarget === 'string'
+      && Array.isArray(checks.selectedProfiles);
+}
+
+function isMindServerIdentity(payload) {
+    return payload?.success === true
+      && payload.service === 'mindcraft-control-center'
+      && payload.protocolVersion === 1;
+}
+
+async function fetchMindServerJson(fetchImpl, url, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+    try {
+        const response = await fetchImpl(url, {
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+            signal: controller.signal,
+        });
+        if (!response.ok) return { status: response.status, payload: null };
+        return { status: response.status, payload: await response.json() };
+    } catch {
+        return { status: 0, payload: null };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function probeMindServer(port, fetchImpl = globalThis.fetch) {
+    if (typeof fetchImpl !== 'function') return false;
+    const baseUrl = `http://localhost:${port}`;
+    const identity = await fetchMindServerJson(
+      fetchImpl,
+      `${baseUrl}/api/identity`,
+      MIND_SERVER_IDENTITY_PROBE_TIMEOUT_MS,
+    );
+    if (isMindServerIdentity(identity.payload)) return true;
+    if (identity.status !== 404) return false;
+
+    const legacyHealth = await fetchMindServerJson(
+      fetchImpl,
+      `${baseUrl}/api/health`,
+      LEGACY_MIND_SERVER_PROBE_TIMEOUT_MS,
+    );
+    return isMindServerHealth(legacyHealth.payload);
+}
+
 // Initialize the server
 export function createMindServer(host_public = false, port = 8080, portScanMax = 1, dependencies = {}) {
     assertMindServerLoopbackOnly(host_public);
@@ -416,14 +485,23 @@ export function createMindServer(host_public = false, port = 8080, portScanMax =
 
 async function createMindServerWithRetries(port, portScanMax, dependencies) {
     const scanAttempts = Math.max(1, Math.trunc(Number(portScanMax) || 1));
+    const probeExistingMindServer = dependencies.probeMindServer || probeMindServer;
 
     for (let attempt = 0; attempt < scanAttempts; attempt += 1) {
+        const candidatePort = port + attempt;
         try {
-            return await createMindServerAtPort(port + attempt, dependencies);
+            return await createMindServerAtPort(candidatePort, dependencies);
         } catch (error) {
-            if (error?.code !== 'EADDRINUSE' || attempt === scanAttempts - 1) {
-                throw error;
+            if (error?.code !== 'EADDRINUSE') throw error;
+            let existingMindServer = false;
+            try {
+                existingMindServer = await probeExistingMindServer(candidatePort);
+            } catch {
+                // A failed identity probe means only that this occupied port is
+                // not proven to be another Mindcraft launcher.
             }
+            if (existingMindServer) throw new MindServerAlreadyRunningError(candidatePort);
+            if (attempt === scanAttempts - 1) throw error;
         }
     }
 }
@@ -1058,6 +1136,19 @@ async function createMindServerAtPort(port, dependencies = {}) {
         const persisted = safeMergeLauncherConfig(requested);
         const managedTarget = await getActiveManagedTarget();
         const updated = applyMinecraftTarget(persisted, managedTarget);
+        if (requested.telemetry && typeof requested.telemetry === 'object') {
+          // The dashboard owns this pacing control. Rebuild only the fallback
+          // sampler so an operator does not have to restart Paper or a live
+          // bot just to reduce telemetry work.
+          const previousPump = listenerPump;
+          agentTelemetryConfig = normalizeAgentTelemetryConfig(updated.telemetry);
+          if (previousPump) {
+            previousPump.stop();
+            if (listenerPump === previousPump) listenerPump = null;
+            await previousPump.waitForIdle();
+            startListenerPump();
+          }
+        }
         res.json({
           success: true,
           config: {
@@ -1409,6 +1500,14 @@ async function createMindServerAtPort(port, dependencies = {}) {
       } catch (error) {
         res.status(500).json({ success: false, error: String(error.message || error) });
       }
+    });
+
+    app.get('/api/identity', (_req, res) => {
+      res.json({
+        success: true,
+        service: 'mindcraft-control-center',
+        protocolVersion: 1,
+      });
     });
 
     // Health: single endpoint the dashboard polls to explain "why isn't my bot working".
@@ -2549,24 +2648,58 @@ async function createMindServerAtPort(port, dependencies = {}) {
         socket.on('agent-state', (payload) => {
             const agentName = socket.data?.agentName;
             const connection = agent_connections[agentName];
-            const state = payload?.state;
             const sequence = Number(payload?.sequence);
             if (
                 !ownsAgentIdentity(socket, agentName)
                 || connection?.socket !== socket
                 || connection.in_game !== true
-                || !state
+                || !Number.isSafeInteger(sequence)
+                || sequence <= connection.lastStateSequence
+            ) return;
+
+            const kind = payload?.kind || 'snapshot';
+            if (kind === 'heartbeat') {
+                connection.lastStateSequence = sequence;
+                connection.lastStatePushAt = Date.now();
+                connection.statePushCount += 1;
+                return;
+            }
+
+            let state = null;
+            let set = null;
+            let unset = [];
+            if (kind === 'delta') {
+                set = payload?.set;
+                unset = Array.isArray(payload?.unset) ? payload.unset.filter(key => typeof key === 'string') : [];
+                const previous = lastAgentStates[agentName];
+                if (!previous || typeof previous !== 'object' || Array.isArray(previous)) {
+                    socket.emit('state-stream-resync');
+                    return;
+                }
+                if (!set || typeof set !== 'object' || Array.isArray(set)) return;
+                state = { ...previous, ...set };
+                for (const key of unset) delete state[key];
+            } else if (kind === 'snapshot') {
+                state = payload?.state;
+                set = state;
+                const previous = lastAgentStates[agentName];
+                if (previous && typeof previous === 'object' && !Array.isArray(previous)) {
+                    unset = Object.keys(previous).filter(key => !Object.hasOwn(state || {}, key));
+                }
+            } else {
+                return;
+            }
+            if (
+                !state
                 || typeof state !== 'object'
                 || Array.isArray(state)
                 || state.name !== agentName
-                || !Number.isSafeInteger(sequence)
-                || sequence <= connection.lastStateSequence
             ) return;
             connection.lastStateSequence = sequence;
             connection.lastStatePushAt = Date.now();
             connection.statePushCount += 1;
             lastAgentStates[agentName] = state;
-            publishAgentStates(currentLiveAgentStates());
+            publishAgentStateDelta(agentName, set, unset);
         });
 
         socket.on('listen-to-agents', () => {
@@ -2695,6 +2828,39 @@ function currentLiveAgentStates(additional = {}) {
     return states;
 }
 
+function emitAgentStateUpdate(payload) {
+    const room = io?.to?.(AGENT_TELEMETRY_ROOM);
+    if (room?.emit) {
+        room.emit('state-update', payload);
+        return true;
+    }
+    for (const listener of agent_listeners) {
+        if (listener?.connected) {
+            try { listener.emit('state-update', payload); } catch { /* stale listener */ }
+        }
+    }
+    return true;
+}
+
+function publishAgentStateDelta(agentName, set, unset = []) {
+    if (!agentName || !set || typeof set !== 'object') return false;
+    // A single canonical state is kept server-side. Dashboard clients merge the
+    // changed top-level fields into their own copy, avoiding a full map rebuild
+    // and stringify for every movement tick.
+    lastStateFingerprint = '';
+    lastStatePublishedAt = Date.now();
+    return emitAgentStateUpdate({
+        version: 2,
+        type: 'delta',
+        changes: {
+            [agentName]: {
+                set,
+                unset: Array.isArray(unset) ? unset : [],
+            },
+        },
+    });
+}
+
 function publishAgentStates(states) {
     const now = Date.now();
     lastAgentStates = states;
@@ -2705,16 +2871,26 @@ function publishAgentStates(states) {
     ) return false;
     lastStateFingerprint = fingerprint;
     lastStatePublishedAt = now;
-    const room = io?.to?.(AGENT_TELEMETRY_ROOM);
-    if (room?.volatile?.emit) {
-        room.volatile.emit('state-update', states);
-        return true;
-    }
-    for (const listener of agent_listeners) {
-        if (listener?.connected) {
-            try { listener.emit('state-update', states); } catch { /* stale listener */ }
-        }
-    }
+    return emitAgentStateUpdate({ version: 2, type: 'snapshot', states });
+}
+
+function startListenerPump() {
+    if (listenerPump || agent_listeners.length === 0) return false;
+    listenerPump = createAgentStatePump({
+        collect: () => collectAgentStates(selectAgentConnectionsForPolling(agent_connections, {
+            staleAfterMs: Math.max(
+                agentTelemetryConfig.heartbeatMs * 2,
+                agentTelemetryConfig.intervalMs * 3,
+            ),
+        }), agentTelemetryConfig),
+        publish: (states) => publishAgentStates(currentLiveAgentStates(states)),
+        onError: (error) => {
+            console.warn('[agents] State sampling failed:', error?.message || error);
+        },
+        shouldContinue: () => agent_listeners.length > 0,
+        intervalMs: agentTelemetryConfig.intervalMs,
+    });
+    listenerPump.start();
     return true;
 }
 
@@ -2728,7 +2904,11 @@ function addListener(listener_socket) {
     }
     if (Object.keys(lastAgentStates).length > 0) {
         try {
-            listener_socket.emit('state-update', lastAgentStates);
+            listener_socket.emit('state-update', {
+                version: 2,
+                type: 'snapshot',
+                states: lastAgentStates,
+            });
         } catch {
             // A just-disconnected dashboard will be removed by its socket event.
         }
@@ -2736,26 +2916,12 @@ function addListener(listener_socket) {
     if (agent_listeners.length === 1) {
         lastStateFingerprint = '';
         lastStatePublishedAt = 0;
-        listenerPump ??= createAgentStatePump({
-            collect: () => collectAgentStates(selectAgentConnectionsForPolling(agent_connections, {
-                staleAfterMs: Math.max(
-                    agentTelemetryConfig.heartbeatMs * 2,
-                    agentTelemetryConfig.intervalMs * 3,
-                ),
-            }), agentTelemetryConfig),
-            publish: (states) => publishAgentStates(currentLiveAgentStates(states)),
-            onError: (error) => {
-                console.warn('[agents] State sampling failed:', error?.message || error);
-            },
-            shouldContinue: () => agent_listeners.length > 0,
-            intervalMs: agentTelemetryConfig.intervalMs,
-        });
         for (const connection of Object.values(agent_connections)) {
             if (connection?.in_game && connection.socket?.connected !== false) {
                 connection.socket.emit('state-stream-demand', true);
             }
         }
-        listenerPump.start();
+        startListenerPump();
     }
 }
 
@@ -2770,7 +2936,9 @@ function removeListener(listener_socket) {
         // Socket.IO also removes disconnected sockets from rooms automatically.
     }
     if (agent_listeners.length === 0) {
-        listenerPump?.stop();
+        const stoppedPump = listenerPump;
+        listenerPump = null;
+        stoppedPump?.stop();
         for (const connection of Object.values(agent_connections)) {
             if (connection?.socket?.connected !== false) {
                 connection.socket?.emit?.('state-stream-demand', false);

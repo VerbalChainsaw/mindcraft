@@ -4,11 +4,30 @@ import * as mc from '../utils/mcdata.js';
 import settings from './settings.js';
 import convoManager from './conversation.js';
 
+const MAX_BEHAVIOR_LOG_CHARS = 1_024;
+const FRESH_PLAYER_ACTION_GRACE_MS = 3_000;
+const PLAYER_ACTION_GUARD_MODES = new Set([
+    'unstuck',
+    'item_collecting',
+    'torch_placing',
+    'hunting',
+    'elbow_room',
+    'idle_staring',
+]);
+
+function appendBehaviorLog(agent, message) {
+    const current = String(agent?.bot?.modes?.behavior_log || '');
+    const next = `${current}${String(message || '')}\n`;
+    agent.bot.modes.behavior_log = next.length <= MAX_BEHAVIOR_LOG_CHARS
+        ? next
+        : `[behavior log capped]\n${next.slice(-(MAX_BEHAVIOR_LOG_CHARS - 24))}`;
+}
+
 function say(agent, message) {
     // The log always records it. Whether the bot says it out loud in chat is a
     // per-bot dial, so quieting one chatty bot no longer silences every bot in
     // the world and no longer needs a restart.
-    agent.bot.modes.behavior_log += message + '\n';
+    appendBehaviorLog(agent, message);
     const narration = agent.runtime?.narration
         || (settings.narrate_behavior === true ? 'chatty' : 'quiet');
     if (agent.shut_up || narration === 'quiet') return;
@@ -62,10 +81,23 @@ function getAttributedProtectionThreat(agent) {
     return agent?.companion_context?.protectionThreat?.() || null;
 }
 
+function hasFreshPlayerAction(agent) {
+    const actions = agent?.actions;
+    if (actions?.executing !== true || actions.currentActionOwner !== 'player') return false;
+    const startedAt = Number(actions.currentActionStartedAt || actions.last_action_time);
+    return Number.isFinite(startedAt)
+        && startedAt > 0
+        && Date.now() - startedAt < FRESH_PLAYER_ACTION_GRACE_MS;
+}
+
 function getModeSuppressionReason(agent, mode) {
     if (!agent || !mode) return null;
     if (agent.isOperatorHeld?.() && mode.name !== 'self_preservation') {
         return 'operator_hold';
+    }
+
+    if (PLAYER_ACTION_GUARD_MODES.has(mode.name) && hasFreshPlayerAction(agent)) {
+        return 'fresh_player_action';
     }
 
     const explicitlyGuarding = isExplicitGuardOrder(agent);
@@ -271,7 +303,7 @@ const modes_list = [
         distance: 2,
         stuck_time: 0,
         last_time: Date.now(),
-        max_stuck_time: 20,
+        max_stuck_time: 8,
         prev_dig_block: null,
         prev_action_label: null,
         prev_action_started_at: null,
@@ -285,7 +317,29 @@ const modes_list = [
             }
             const bot = agent.bot;
             const actionLabel = agent.actions?.currentActionLabel || '';
-            const actionStartedAt = agent.actions?.last_action_time || null;
+            const actionStartedAt = agent.actions?.currentActionStartedAt
+                || agent.actions?.last_action_time
+                || null;
+            if ((Number(bot.mindcraftManagedNavigationDepth) || 0) > 0) {
+                this.prev_location = null;
+                this.stuck_time = 0;
+                this.prev_dig_block = null;
+                this.last_time = Date.now();
+                return;
+            }
+            const vehicleControlActive = Boolean(
+                bot.vehicle
+                && ['forward', 'back', 'left', 'right', 'jump']
+                    .some(control => bot.getControlState?.(control) === true)
+            );
+            const movementExpected = Boolean(bot.pathfinder?.goal || vehicleControlActive);
+            if (!movementExpected) {
+                this.prev_location = null;
+                this.stuck_time = 0;
+                this.prev_dig_block = null;
+                this.last_time = Date.now();
+                return;
+            }
             if (
                 this.prev_action_label !== actionLabel
                 || this.prev_action_started_at !== actionStartedAt
@@ -493,8 +547,16 @@ const modes_list = [
         staring: false,
         last_entity: null,
         next_change: 0,
+        was_idle: false,
+        last_look_at: 0,
         update: function (agent) {
-            if (!agent.isIdle()) return false;
+            if (!agent.isIdle()) {
+                this.was_idle = false;
+                return false;
+            }
+            const now = Date.now();
+            const becameIdle = !this.was_idle;
+            this.was_idle = true;
             let changedAttention = false;
             const canSee = entity => {
                 try {
@@ -519,29 +581,51 @@ const modes_list = [
             );
             const entity = companionEntity || nearbyHuman || agent.bot.nearestEntity(entity => canSee(entity));
             let entity_in_view = entity && entity.position.distanceTo(agent.bot.entity.position) < 10 && entity.name !== 'enderman';
-            if (entity_in_view && entity !== this.last_entity) {
+            if (entity_in_view && (becameIdle || entity !== this.last_entity)) {
                 this.staring = true;
                 this.last_entity = entity;
-                this.next_change = Date.now() + Math.random() * 1000 + 4000;
+                this.next_change = now + Math.random() * 1000 + 4000;
                 changedAttention = true;
             }
-            if (entity_in_view && this.staring) {
-                let isbaby = entity.type !== 'player' && entity.metadata?.[16];
-                let height = isbaby ? entity.height/2 : entity.height;
-                agent.bot.lookAt(entity.position.offset(0, height, 0));
+            if (entity_in_view && this.staring && now - this.last_look_at >= 250) {
+                const isBaby = entity.type !== 'player' && entity.metadata?.[16];
+                const fullHeight = Number.isFinite(entity.height) ? entity.height : 1.6;
+                const eyeHeight = isBaby
+                    ? Math.max(0.35, fullHeight * 0.65)
+                    : Math.max(0.75, fullHeight * 0.85);
+                this.last_look_at = now;
+                void Promise.resolve()
+                    .then(() => agent.bot.lookAt(entity.position.offset(0, eyeHeight, 0), true))
+                    .catch(error => console.warn(`[mode:idle_staring] Could not track visible entity: ${String(error?.message || error).slice(0, 240)}`));
             }
-            if (!entity_in_view)
+            if (!entity_in_view) {
                 this.last_entity = null;
-            if (Date.now() > this.next_change) {
-                // look in random direction
-                this.staring = Math.random() < 0.3;
-                if (!this.staring) {
-                    const yaw = Math.random() * Math.PI * 2;
-                    const pitch = (Math.random() * Math.PI/2) - Math.PI/4;
-                    agent.bot.look(yaw, pitch, false);
-                    changedAttention = true;
+                this.staring = false;
+            }
+            const currentPitch = Number(agent.bot.entity?.pitch);
+            const offHorizon = !entity_in_view
+                && Number.isFinite(currentPitch)
+                && Math.abs(currentPitch) > 0.18;
+            if ((!entity_in_view && becameIdle) || offHorizon || now > this.next_change) {
+                if (entity_in_view) {
+                    this.staring = true;
+                    this.next_change = now + Math.random() * 2000 + 4000;
+                    return changedAttention;
                 }
-                this.next_change = Date.now() + Math.random() * 10000 + 2000;
+                // Physical actions often finish while looking at a mined block.
+                // Return to a shallow horizon scan immediately so an idle bot
+                // looks situationally aware instead of staring at its feet.
+                const yaw = becameIdle
+                    ? Number(agent.bot.entity?.yaw) || 0
+                    : Math.random() * Math.PI * 2;
+                const pitch = (Math.random() - 0.5) * 0.18;
+                this.staring = false;
+                this.last_look_at = now;
+                void Promise.resolve()
+                    .then(() => agent.bot.look(yaw, pitch, true))
+                    .catch(error => console.warn(`[mode:idle_staring] Could not scan horizon: ${String(error?.message || error).slice(0, 240)}`));
+                changedAttention = true;
+                this.next_change = now + Math.random() * 6000 + 4000;
             }
             return changedAttention;
         }
@@ -581,18 +665,13 @@ async function execute(mode, agent, func, timeout=-1) {
     }
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return?.message || ''}`);
 
-    let should_reprompt = 
-        interrupted_action && // it interrupted a previous action
-        !agent.actions.resume_func && // there is no resume function
-        !agent.self_prompter.isActive() && // self prompting is not on
-        !code_return?.interrupted; // this mode action was not interrupted by something else
-
-    if (should_reprompt) {
-        // auto prompt to respond to the interruption
-        let role = convoManager.inConversation() ? agent.last_sender : 'system';
-        let logs = agent.bot.modes.flushBehaviorLog();
-        agent.handleMessage(role, `(AUTO MESSAGE)Your previous action '${interrupted_action}' was interrupted by ${mode.name}.
-        Your behavior log: ${logs}\nRespond accordingly.`);
+    if (interrupted_action && !code_return?.interrupted) {
+        // A reflex preemption is a control-loop event, not a new conversation.
+        // GoalDirector, JobDirector, and resumable companion directives already
+        // retain the exact deterministic work to continue. Asking the model what
+        // to do here added a full inference delay and commonly produced status or
+        // awareness commands while the original action still owned control.
+        agent.behavior_arbiter?.requestDirectiveResume?.();
     }
     return code_return;
 }
@@ -790,6 +869,7 @@ class ModeController {
                 suppressedByAutonomy: suppressionReason === 'command_autonomy',
                 suppressedByHold: suppressionReason === 'operator_hold',
                 suppressedByRole: suppressionReason === 'combat_priority',
+                suppressedByPlayerAction: suppressionReason === 'fresh_player_action',
                 suppressionReason,
             };
         });

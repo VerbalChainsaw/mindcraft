@@ -18,6 +18,15 @@ import { api } from './api.js';
 const PLAYER_NAME_PATTERN = /^[A-Za-z0-9_]{3,16}$/;
 const SQUAD_PREFIX_PATTERN = /^[A-Za-z][A-Za-z0-9_]{1,11}$/;
 const ACTIVE_SQUAD_STATES = new Set(['launching', 'starting', 'running', 'partial', 'stopping']);
+const PROVIDER_LABELS = {
+  codex: 'Codex',
+  openai: 'OpenAI',
+  'openai-compatible': 'OpenAI-compatible',
+  openai_compatible: 'OpenAI-compatible',
+  lmstudio: 'LM Studio',
+  vllm: 'vLLM',
+  xai: 'xAI',
+};
 
 function phaseLabel(phase) {
   return ({
@@ -37,6 +46,130 @@ function stateTone(state, healthy = []) {
   if (healthy.includes(state)) return 'good';
   if (['failed', 'blocked', 'crashed', 'offline'].includes(state)) return 'bad';
   return 'warn';
+}
+
+function providerLabel(value) {
+  const provider = String(value || '').trim();
+  if (!provider) return '';
+  const key = provider.toLowerCase();
+  return PROVIDER_LABELS[key] || provider.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function providerTruth(current, agents, quickstart, recommendation) {
+  const checks = current.health?.checks || {};
+  const selectedProfiles = current.health?.success === true && Array.isArray(checks.selectedProfiles)
+    ? checks.selectedProfiles.filter((profile) => profile && typeof profile === 'object')
+    : [];
+  const agentProviders = [...new Set(
+    agents.map((agent) => String(agent.provider || '').trim()).filter(Boolean),
+  )];
+
+  if (selectedProfiles.length) {
+    const providers = [...new Set(selectedProfiles.flatMap((profile) => (
+      Array.isArray(profile.providerRoles)
+        ? profile.providerRoles.map((role) => String(role?.provider || '').trim()).filter(Boolean)
+        : []
+    )))];
+    const blocked = selectedProfiles.filter((profile) => profile.state !== 'ready');
+    const ready = typeof checks.selectedProfilesReady === 'boolean'
+      ? checks.selectedProfilesReady
+      : blocked.length === 0;
+    const profileWord = selectedProfiles.length === 1 ? 'profile' : 'profiles';
+    const blockedProfile = blocked[0];
+    const profileNames = selectedProfiles.slice(0, 3).map((profile) => String(profile.name || 'Unnamed bot')).join(', ');
+    const providerNames = providers.map(providerLabel).filter(Boolean).join(' · ');
+    const detail = !ready && blockedProfile?.reason
+      ? `${String(blockedProfile.name || 'Selected profile')}: ${String(blockedProfile.reason).slice(0, 180)}`
+      : [profileNames, providerNames || 'Provider verified'].filter(Boolean).join(' · ');
+    return {
+      ready,
+      value: ready
+        ? `${selectedProfiles.length} ${profileWord} ready`
+        : `${blocked.length || selectedProfiles.length} ${blocked.length === 1 ? 'profile' : 'profiles'} blocked`,
+      detail,
+      providers,
+    };
+  }
+
+  const localModel = quickstart.chatModel || recommendation.chatModel || '';
+  const localReady = Boolean(current.localProviderAvailable && localModel);
+  const providers = agentProviders;
+  return {
+    ready: providers.length > 0 || localReady,
+    value: providers.length
+      ? `${providers.length} configured`
+      : localReady ? 'Local provider ready' : 'Needs setup',
+    detail: providers.length
+      ? providers.map(providerLabel).join(' · ')
+      : localModel || 'Not configured',
+    providers,
+  };
+}
+
+function fleetTruth(agents) {
+  const total = agents.length;
+  if (!total) {
+    return {
+      value: 'Not configured',
+      detail: 'Open bot setup',
+      runtimeLabel: 'Setup needed',
+      toneState: 'offline',
+    };
+  }
+
+  const inGame = agents.filter((agent) => agent.in_game).length;
+  const states = agents.map((agent) => agent.in_game ? 'running' : normalizeState(agent));
+  const attention = states.filter((state) => ['failed', 'blocked'].includes(state)).length;
+  const transitioning = agents.filter((agent, index) => (
+    !agent.in_game
+    && (agent.socket_connected || ['starting', 'restarting', 'stopping', 'running'].includes(states[index]))
+  ));
+  const detail = `${total} registered`;
+
+  if (inGame) {
+    return {
+      value: `${inGame} in game`,
+      detail,
+      runtimeLabel: 'Active',
+      toneState: 'running',
+    };
+  }
+  if (attention) {
+    return {
+      value: `${attention} need${attention === 1 ? 's' : ''} attention`,
+      detail,
+      runtimeLabel: 'Needs attention',
+      toneState: 'failed',
+    };
+  }
+  if (transitioning.length) {
+    const phase = states.includes('stopping')
+      ? 'stopping'
+      : states.includes('restarting') ? 'restarting' : 'starting';
+    return {
+      value: stateLabels[phase].replace('…', ''),
+      detail: `${detail} · no bot in game yet`,
+      runtimeLabel: stateLabels[phase].replace('…', ''),
+      toneState: phase,
+    };
+  }
+
+  const stopped = states.filter((state) => state === 'stopped').length;
+  const ready = states.filter((state) => state === 'ready').length;
+  if (stopped === total) {
+    return {
+      value: `${stopped} stopped`,
+      detail,
+      runtimeLabel: 'Stopped',
+      toneState: 'stopped',
+    };
+  }
+  return {
+    value: stopped ? `${ready} ready · ${stopped} stopped` : `${ready || total} ready`,
+    detail,
+    runtimeLabel: 'Standing by',
+    toneState: 'ready',
+  };
 }
 
 function memberTone(member) {
@@ -254,7 +387,6 @@ export class DashboardWorkspace {
     const squads = Array.isArray(current.squads) ? current.squads : [];
     const scenarios = Array.isArray(current.scenarios) ? current.scenarios : [];
     const templates = Array.isArray(current.templates) ? current.templates : [];
-    const providers = [...new Set(agents.map((agent) => String(agent.provider || '').trim()).filter(Boolean))];
     const primaryBot = agents.find((agent) => agent.name === quickstart.botName) || agents[0] || null;
     const botState = primaryBot ? normalizeState(primaryBot) : (quickstart.configured ? 'ready' : 'unconfigured');
     const server = current.managedServer || null;
@@ -272,12 +404,10 @@ export class DashboardWorkspace {
       && current.bedrockClient?.installed
       && !current.bedrockClient.loopbackEnabled
     );
-    const providerReady = Boolean(
-      current.localProviderAvailable
-      && (quickstart.chatModel || recommendation.chatModel)
-    ) || providers.length > 0;
-    const providerSummary = providers.length ? providers.join(' · ') : (quickstart.chatModel || recommendation.chatModel || 'Not configured');
     const inGameAgents = agents.filter((agent) => agent.in_game);
+    const botFleet = fleetTruth(agents);
+    const provider = providerTruth(current, agents, quickstart, recommendation);
+    const activeSquads = squads.filter((squad) => ACTIVE_SQUAD_STATES.has(String(squad?.state || '')));
     if (!squads.some((squad) => squad.id === this.selectedSquadId)) {
       this.selectedSquadId = squads[0]?.id || '';
     }
@@ -305,9 +435,12 @@ export class DashboardWorkspace {
       crossplayReady,
       bedrockJoinVerified,
       samePcBedrockNeedsSetup,
-      providerReady,
-      providers,
-      providerSummary,
+      providerReady:provider.ready,
+      providers:provider.providers,
+      providerSummary:provider.detail,
+      provider,
+      botFleet,
+      activeSquads,
       inGameAgents,
       selectedSquad:squads.find((squad) => squad.id === this.selectedSquadId) || null,
     };
@@ -376,16 +509,16 @@ export class DashboardWorkspace {
       },
       {
         label:'Bot engine',
-        value:state.inGameAgents.length ? `${state.inGameAgents.length} in game` : (state.agents.length ? 'Ready' : 'Not configured'),
-        detail:state.agents.length ? `${state.agents.length} registered` : 'Open bot setup',
-        tone:stateTone(state.inGameAgents.length ? 'running' : state.agents.length ? 'ready' : 'offline', ['running', 'ready']),
+        value:state.botFleet.value,
+        detail:state.botFleet.detail,
+        tone:stateTone(state.botFleet.toneState, ['running', 'ready']),
         action:() => this.navigate(state.agents.length ? 'agents' : 'profiles'),
         actionLabel:state.agents.length ? 'Manage bots' : 'Create bot',
       },
       {
         label:'AI provider',
-       value:state.providers.length ? `${state.providers.length} configured` : state.providerReady ? 'Local provider ready' : 'Needs setup',
-       detail:state.providerSummary,
+        value:state.provider.value,
+        detail:state.provider.detail,
         tone:stateTone(state.providerReady ? 'running' : 'offline', ['running']),
         action:() => this.navigate('profiles'),
         actionLabel:'Configure AI',
@@ -474,22 +607,35 @@ export class DashboardWorkspace {
       actions:[bridgeAction],
     }));
 
+    const canStartPrimary = state.primaryBot
+      ? canStartAgent(state.primaryBot) && typeof this.startAgent === 'function'
+      : Boolean(state.quickstart.configured && typeof this.startBot === 'function');
+    const startPrimary = state.primaryBot
+      ? () => this.startAgent(state.primaryBot)
+      : this.startBot;
     const botAction = state.inGameAgents.length
       ? this.actionButton('Stop All Bots', 'bots-stop', this.stopAllBots, 'compact danger', '', 'Stopping Bots')
-      : this.actionButton('Start Primary Bot', 'bot-start', this.startBot, 'compact success', '', 'Starting Bot');
-    botAction.disabled = botAction.disabled || (!state.inGameAgents.length && !state.quickstart.configured);
+      : this.actionButton(
+        state.primaryBot ? `Start ${state.primaryBot.name}` : 'Start Primary Bot',
+        'bot-start',
+        startPrimary,
+        'compact success',
+        '',
+        'Starting Bot',
+      );
+    botAction.disabled = botAction.disabled || (!state.inGameAgents.length && !canStartPrimary);
     panel.append(this.runtimeRow({
       title:'Bot Engine',
       subtitle:state.agents.length ? `${state.agents.length} configured · ${state.inGameAgents.length} active` : 'No bot profile configured',
-      state:state.inGameAgents.length ? 'Active' : (state.agents.length ? 'Standing by' : 'Setup needed'),
-      tone:stateTone(state.inGameAgents.length ? 'running' : state.agents.length ? 'ready' : 'offline', ['running', 'ready']),
+      state:state.botFleet.runtimeLabel,
+      tone:stateTone(state.botFleet.toneState, ['running', 'ready']),
       actions:[botAction, button('Manage Bots', () => this.navigate('agents'), 'compact')],
     }));
 
     panel.append(this.runtimeRow({
       title:'AI Providers',
-       subtitle:state.providerSummary,
-       state:state.providerReady ? 'Ready' : 'Setup needed',
+      subtitle:state.provider.detail,
+      state:state.providerReady ? 'Ready' : 'Setup needed',
       tone:stateTone(state.providerReady ? 'running' : 'offline', ['running']),
       actions:[button('Configure Providers', () => this.navigate('profiles'), 'compact')],
     }));
@@ -706,7 +852,7 @@ export class DashboardWorkspace {
       'span',
       'section-count',
       state.squads.length
-        ? `${state.squads.length} active team${state.squads.length === 1 ? '' : 's'}`
+        ? `${state.activeSquads.length} active · ${state.squads.length} saved`
         : `${state.scenarios.length} saved formations`,
     );
     heading.append(count);
