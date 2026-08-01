@@ -387,6 +387,26 @@ export function getNearbyBlockTypes(bot, distance=16) {
     return found;
 }
 
+// Constructing Movements walks the whole block registry to build its ID sets.
+// isClearPath is called from the cowardice, hunting, and item_collecting mode
+// updates, so that construction ran up to three times per behavior tick to
+// produce an identical configuration every time. The instance is safe to reuse:
+// its configuration here is constant, it never escapes this function, and the
+// pathfinder rebuilds the only per-search state on it (the entity collision
+// index) at the start of each search.
+const clearPathMovements = new WeakMap();
+
+function clearPathMovementsFor(bot) {
+    const cached = clearPathMovements.get(bot);
+    if (cached) return cached;
+    const movements = new pf.Movements(bot);
+    movements.canDig = false;
+    movements.canPlaceOn = false;
+    movements.canOpenDoors = false;
+    clearPathMovements.set(bot, movements);
+    return movements;
+}
+
 export async function isClearPath(bot, target) {
     /**
      * Check if there is a path to the target that requires no digging or placing blocks.
@@ -394,10 +414,7 @@ export async function isClearPath(bot, target) {
      * @param {Entity} target - The target to path to.
      * @returns {boolean} - True if there is a clear path, false otherwise.
      */
-    let movements = new pf.Movements(bot)
-    movements.canDig = false;
-    movements.canPlaceOn = false;
-    movements.canOpenDoors = false;
+    let movements = clearPathMovementsFor(bot);
     let goal = new pf.goals.GoalNear(target.position.x, target.position.y, target.position.z, 1);
     let path = await bot.pathfinder.getPathTo(movements, goal, 100);
     return path.status === 'success';
