@@ -34,6 +34,7 @@ import {
   createAgentStatePump,
   fingerprintAgentStates,
   normalizeAgentTelemetryConfig,
+  requiresReliableAgentStateDelivery,
   resetAgentStateCache,
   selectAgentConnectionsForPolling,
 } from './agent-state-pump.js';
@@ -2678,23 +2679,22 @@ async function createMindServerAtPort(port, dependencies = {}) {
             let state = null;
             let set = null;
             let unset = [];
+            const previousState = lastAgentStates[agentName];
             if (kind === 'delta') {
                 set = payload?.set;
                 unset = Array.isArray(payload?.unset) ? payload.unset.filter(key => typeof key === 'string') : [];
-                const previous = lastAgentStates[agentName];
-                if (!previous || typeof previous !== 'object' || Array.isArray(previous)) {
+                if (!previousState || typeof previousState !== 'object' || Array.isArray(previousState)) {
                     socket.emit('state-stream-resync');
                     return;
                 }
                 if (!set || typeof set !== 'object' || Array.isArray(set)) return;
-                state = { ...previous, ...set };
+                state = { ...previousState, ...set };
                 for (const key of unset) delete state[key];
             } else if (kind === 'snapshot') {
                 state = payload?.state;
                 set = state;
-                const previous = lastAgentStates[agentName];
-                if (previous && typeof previous === 'object' && !Array.isArray(previous)) {
-                    unset = Object.keys(previous).filter(key => !Object.hasOwn(state || {}, key));
+                if (previousState && typeof previousState === 'object' && !Array.isArray(previousState)) {
+                    unset = Object.keys(previousState).filter(key => !Object.hasOwn(state || {}, key));
                 }
             } else {
                 return;
@@ -2715,7 +2715,14 @@ async function createMindServerAtPort(port, dependencies = {}) {
             // broadcast it as such so dashboards that missed a volatile patch do
             // not merge a new agent session into an old state object.
             if (kind === 'snapshot') {
-                publishAgentStates(currentLiveAgentStates());
+                // An agent snapshot is an explicit authoritative edge (startup,
+                // resync, terminal result, or stop), so never make it volatile.
+                publishAgentStates(currentLiveAgentStates(), { volatile: false });
+            } else if (requiresReliableAgentStateDelivery(previousState, state)) {
+                // A lifecycle edge must cross any revision gap left by an
+                // intentionally dropped movement patch. A reliable snapshot
+                // is the bounded authoritative recovery boundary.
+                publishAgentStates(currentLiveAgentStates(), { volatile: false });
             } else {
                 publishAgentStateDelta(agentName, set, unset, baseRevision, connection.stateRevision);
             }
@@ -2885,9 +2892,8 @@ function emitAgentStateUpdate(payload, { volatile = true, event = 'state-update'
 
 function publishAgentStateDelta(agentName, set, unset = [], baseRevision = 0, revision = 0) {
     if (!agentName || !set || typeof set !== 'object') return false;
-    // These patches are deliberately best-effort. A non-writable dashboard
-    // drops obsolete movement instead of buffering it; its next version gap
-    // requests one reliable aggregate snapshot.
+    // Ordinary movement is best-effort so a slow dashboard never queues
+    // obsolete positions. Lifecycle edges use an authoritative snapshot above.
     lastStateFingerprint = '';
     lastStatePublishedAt = Date.now();
     return emitAgentStateUpdate(createStateDelta(

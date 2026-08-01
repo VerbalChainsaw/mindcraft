@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "runId": "overnight-2026-08-01",
+  "branch": "phase0-follow-baseline",
+  "baselineCommit": "b3a8bbee459c8bbfe11f0bf0884c9428b12ee204",
+  "playableDeclared": false,
+  "newTestCount": 3,
+  "fullSuiteRun": false,
+  "iterations": [
+    {
+      "id": "MIN-001-prechange-1",
+      "scenario": "typed-visible-resource-collection",
+      "command": "!collectBlocksInRange(\"cobblestone\", 3, 64)",
+      "observation": "skill_unreachable after 3625 ms with 12 candidates; a near rerun broke stone without pickup and background retries later fell from Y=99 to Y=52 and drowned",
+      "classification": "decision_or_planning",
+      "explanation": "Route eligibility did not prove a stable execution stance or post-break support, and the raw nearest pool could hide supported targets.",
+      "changedFiles": [],
+      "tests": [],
+      "liveReruns": 1,
+      "result": "failed",
+      "evidence": "scratchpad.md",
+      "commit": null
+    },
+    {
+      "id": "MIN-001-repair-1",
+      "scenario": "typed-visible-resource-collection",
+      "observation": "Successively exposed candidate masking, a positionless Mineflayer predicate, marker chat contamination, an old trunk, and a target-matching floor; each preserved artifact improved causal evidence or physical progress.",
+      "classification": "decision_or_planning_and_fixture",
+      "explanation": "Safe mining required post-hydration filtering plus an independently controlled, nonmatching support lane.",
+      "changedFiles": [
+        "src/agent/library/skills.js",
+        "src/agent/runtime/collection-candidate-selector.js",
+        "tests/collection-candidate-selector.test.js",
+        "tests/collection-target-safety.test.js",
+        "tools/verify-collection-field.mjs"
+      ],
+      "tests": [
+        "natural mining requires recoverable drop support and a stance not supported by the target",
+        "nearer unsupported blocks cannot hide a supported mining target from the bounded candidate pool"
+      ],
+      "liveReruns": 6,
+      "result": "improved_not_yet_frozen",
+      "evidence": [
+        "min-001-live-pre-pool-fix.json",
+        "min-001-live-pre-hydrated-scan-fix.json",
+        "min-001-live-contaminated-paper-marker.json",
+        "min-001-live-pre-clear-lane.json",
+        "min-001-live-floor-match.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "STATE-001-repair-1",
+      "scenario": "terminal-result-and-stop-observability",
+      "observation": "Collection physically succeeded but lastResult was overwritten by a job placement; stop held/idle delivery then waited for a heartbeat despite subsecond physical completion.",
+      "classification": "verification",
+      "explanation": "A short-lived terminal edge lacked unique identity in telemetry and could be hidden by volatile revision gaps or collapse into a heartbeat after local fingerprint advancement.",
+      "changedFiles": [
+        "src/agent/agent.js",
+        "src/agent/commands/actions.js",
+        "src/agent/mindserver_proxy.js",
+        "src/agent/runtime/action-result.js",
+        "src/mindcraft/agent-state-pump.js",
+        "src/mindcraft/mindserver.js",
+        "tests/control-plane/agent-state-pump.test.js",
+        "tests/critical-runtime-output.test.js",
+        "tools/verify-collection-field.mjs"
+      ],
+      "tests": [
+        "critical action results preserve phase, sanitize output, and expose bounded telemetry",
+        "Given streamed bot state, only action lifecycle edges require reliable dashboard delivery"
+      ],
+      "liveReruns": 4,
+      "result": "repaired",
+      "evidence": [
+        "min-001-live-missed-correlated-result.json",
+        "min-001-live-pre-reliable-control-edge.json",
+        "min-001-live-pre-lifecycle-snapshot.json"
+      ],
+      "commit": null
+    },
+    {
+      "id": "MIN-001-final-3x",
+      "scenario": "typed-visible-resource-collection",
+      "command": "!collectBlocksInRange(\"cobblestone\", 3, 64)",
+      "reset": {
+        "botStart": { "x": 1028.5, "y": 100, "z": 1008.5 },
+        "cobblestoneBefore": 0,
+        "operatorHeld": true,
+        "targets": [
+          { "x": 1032, "y": 100, "z": 1013 },
+          { "x": 1035, "y": 100, "z": 1013 },
+          { "x": 1038, "y": 100, "z": 1013 }
+        ]
+      },
+      "observation": {
+        "attempts": 3,
+        "durationsMs": [6925, 7135, 7031],
+        "stopQuiescenceMs": [2, 71, 13],
+        "minimumY": [100, 100, 100],
+        "inventoryDelta": ["0->3", "0->3", "0->3"],
+        "paperBlockTransitions": [true, true, true],
+        "linkedDecisionIds": [
+          "MindcraftBot-571-1785569721751-571",
+          "MindcraftBot-619-1785569741013-619",
+          "MindcraftBot-667-1785569760344-667"
+        ],
+        "stableForTenSeconds": [true, true, true]
+      },
+      "classification": "verified_repair",
+      "changedFiles": [
+        "src/agent/library/skills.js",
+        "src/agent/runtime/collection-candidate-selector.js",
+        "src/agent/agent.js",
+        "src/agent/commands/actions.js",
+        "src/agent/mindserver_proxy.js",
+        "src/agent/runtime/action-result.js",
+        "src/mindcraft/agent-state-pump.js",
+        "src/mindcraft/mindserver.js"
+      ],
+      "tests": ["22 focused and adjacent checks passed"],
+      "liveReruns": 3,
+      "result": "passed_3_consecutive",
+      "evidence": "min-001-live.json",
+      "commit": "MIN-001 coherent repair (this commit)"
+    }
+  ]
+}

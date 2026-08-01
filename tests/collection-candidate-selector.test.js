@@ -36,8 +36,15 @@ test('confirmed unreachable collection targets lose to reachable alternatives', 
     assert.equal(ranked[1].reachable, false);
 });
 
-test('unproven and timed-out route probes are not promoted into movement attempts', () => {
-    for (const routeStatus of ['timeout', 'probe_error', 'unknown']) {
+test('unproven, unsafe, and timed-out route probes are not promoted into movement attempts', () => {
+    for (const routeStatus of [
+        'timeout',
+        'probe_error',
+        'unknown',
+        'unsafe_drop_support',
+        'no_safe_stance',
+        'target_unloaded',
+    ]) {
         const [ranked] = rankCollectionCandidates([candidate({ routeStatus })]);
         assert.equal(ranked.reachable, false, routeStatus);
         assert.equal(ranked.score, Number.POSITIVE_INFINITY, routeStatus);

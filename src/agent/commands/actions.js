@@ -1,7 +1,7 @@
 import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
-import { requestBotSpawn, sendSquadRadio } from '../mindserver_proxy.js';
+import { requestBotSpawn, sendSquadRadio, serverProxy } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
 import { createWorkOrder } from '../runtime/work-order.js';
 import {
@@ -215,6 +215,7 @@ export const actionsList = [
             if (stopOutcome.superseded) return null;
             agent.clearBotLogs();
             agent.actions.cancelResume();
+            serverProxy.requestStatePush({ force: true, immediate: true, authoritative: true });
             if (!stopOutcome.stopped) {
                 return 'The bot is held, but its current action did not yield to Stop yet. It will not start another action; use an explicit restart only if it remains unresponsive.';
             }

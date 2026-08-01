@@ -713,7 +713,7 @@ export class BehaviorArbiter {
       urgency: this.urgency,
       nextTickDelayMs: this.nextTickDelayMs,
       comportment: this.comportment().preset,
-      decisionTrace: this.traceRecorder.snapshot(),
+      decisionTrace: this.traceRecorder.snapshot(16),
     };
   }
 }

@@ -426,10 +426,18 @@ class MindServerProxy {
         this.resetStateSnapshot();
     }
 
-    requestStatePush({ force = false, immediate = false } = {}) {
+    requestStatePush({ force = false, immediate = false, authoritative = false } = {}) {
         if (!this.stateStreamDemanded || !this.agent || !this.socket?.connected) return false;
         this.forceNextStatePush ||= force;
-        if (this.statePushTimer) return true;
+        // Critical lifecycle edges must not collapse into a heartbeat merely
+        // because an earlier volatile delta updated our local fingerprint.
+        // Clearing the baseline makes the next envelope a full snapshot.
+        if (authoritative) this.lastStateParts = null;
+        if (this.statePushTimer) {
+            if (!immediate) return true;
+            clearTimeout(this.statePushTimer);
+            this.statePushTimer = null;
+        }
         const elapsedSinceState = Date.now() - this.cachedStateAt;
         const delayMs = immediate
             ? 0

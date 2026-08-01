@@ -13,6 +13,9 @@ const UNREACHABLE_ROUTE_STATUSES = new Set([
     'timeout',
     'probe_error',
     'unknown',
+    'unsafe_drop_support',
+    'no_safe_stance',
+    'target_unloaded',
 ]);
 
 function finiteOr(value, fallback=0) {

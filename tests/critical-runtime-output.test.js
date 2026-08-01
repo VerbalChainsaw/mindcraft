@@ -53,6 +53,7 @@ test('critical action results preserve phase, sanitize output, and expose bounde
   });
   assert.equal(actionResultToMessage(result), 'Blocked (protected_block): Refused protected chest');
   assert.deepEqual(actionResultToTelemetry(result), {
+    actionId: 'action-1',
     phase: 'blocked',
     code: 'protected_block',
     label: 'break protected block',
@@ -60,6 +61,7 @@ test('critical action results preserve phase, sanitize output, and expose bounde
     target: { name: 'chest', x: 4, y: 70, z: -2 },
     retryable: false,
     durationMs: 10,
+    startedAt: 10,
     finishedAt: 20,
   });
 

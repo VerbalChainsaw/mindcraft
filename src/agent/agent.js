@@ -589,7 +589,10 @@ export class Agent {
     recordActionResult(result) {
         this.last_action_result = result || null;
         this.behavior_arbiter?.recordOutcome?.(result);
-        serverProxy.requestStatePush?.({ force: true });
+        // A terminal result is an edge, not durable state: the next automatic
+        // action can replace it before a debounced/heartbeat sample is sent.
+        // Flush it immediately so observers can correlate the exact action ID.
+        serverProxy.requestStatePush?.({ force: true, immediate: true, authoritative: true });
         if (!result) return;
         this.publishBehaviorEvent({
             id: result.actionId,

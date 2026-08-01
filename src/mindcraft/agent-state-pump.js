@@ -306,6 +306,20 @@ export function fingerprintAgentStates(states) {
   ));
 }
 
+export function requiresReliableAgentStateDelivery(previousState, nextState) {
+  if (!previousState || !nextState) return true;
+  const previous = previousState.action || {};
+  const next = nextState.action || {};
+  const previousResult = previous.lastResult || {};
+  const nextResult = next.lastResult || {};
+  return previous.held !== next.held
+    || previous.isIdle !== next.isIdle
+    || previous.stopRequestedAt !== next.stopRequestedAt
+    || previous.stopTimedOutAt !== next.stopTimedOutAt
+    || previousResult.actionId !== nextResult.actionId
+    || previousResult.finishedAt !== nextResult.finishedAt;
+}
+
 export function createAgentStatePump({
   collect,
   publish,

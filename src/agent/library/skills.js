@@ -95,6 +95,9 @@ const RIDE_MAX_DURATION_MS = 120_000;
 const RIDE_PROGRESS_DISTANCE = 0.35;
 const MAX_COLLECTION_CANDIDATES = 12;
 const MAX_COLLECTION_SCAN_CANDIDATES = 48;
+const MAX_COLLECTION_SAFE_SCAN_CANDIDATES = 768;
+const MAX_COLLECTION_STANCES = 24;
+const MAX_COLLECTION_DROP_DEPTH = 2;
 const COLLECTION_ROUTE_PROBE_TIMEOUT_MS = 75;
 const COLLECTION_ROUTE_PROBE_TICK_MS = 15;
 const MAX_COLLECTION_ROUTE_SLICES = 8;
@@ -804,6 +807,137 @@ function collectionSafetyMovements(bot) {
     return movements;
 }
 
+function isCollectionStandingCellClear(block) {
+    return Boolean(
+        block
+        && block.boundingBox === 'empty'
+        && !isLiquidGameplayBlock(block)
+        && !isHazardousGameplayBlock(block)
+    );
+}
+
+function collectionDropSupport(bot, targetPosition) {
+    for (let depth = 1; depth <= MAX_COLLECTION_DROP_DEPTH + 1; depth += 1) {
+        const position = targetPosition.offset(0, -depth, 0);
+        const block = bot.blockAt(position);
+        if (!block) return { safe: false, code: 'target_unloaded', dropDepth: null };
+        if (isLiquidGameplayBlock(block) || isHazardousGameplayBlock(block)) {
+            return { safe: false, code: 'unsafe_drop_support', dropDepth: null };
+        }
+        if (block.boundingBox === 'empty') continue;
+        return isSafeGameplaySupport(block)
+            ? { safe: true, code: 'stable_drop_support', dropDepth: depth - 1 }
+            : { safe: false, code: 'unsafe_drop_support', dropDepth: null };
+    }
+    return { safe: false, code: 'unsafe_drop_support', dropDepth: null };
+}
+
+function collectionStandingPositions(bot, targetBlock) {
+    const target = targetBlock.position;
+    const lookGoal = new pf.goals.GoalLookAtBlock(target, bot.world, {
+        reach: 4.5,
+        entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+    });
+    const positions = [];
+    for (let y = target.y - 2; y <= target.y + 3; y += 1) {
+        for (let x = target.x - 4; x <= target.x + 4; x += 1) {
+            for (let z = target.z - 4; z <= target.z + 4; z += 1) {
+                const feet = new Vec3(x, y, z);
+                const supportPosition = feet.offset(0, -1, 0);
+                if (
+                    supportPosition.x === target.x
+                    && supportPosition.y === target.y
+                    && supportPosition.z === target.z
+                ) continue;
+                if (!isCollectionStandingCellClear(bot.blockAt(feet))) continue;
+                if (!isCollectionStandingCellClear(bot.blockAt(feet.offset(0, 1, 0)))) continue;
+                if (!isSafeGameplaySupport(bot.blockAt(supportPosition))) continue;
+                if (!lookGoal.isEnd(feet)) continue;
+                positions.push(feet);
+            }
+        }
+    }
+    const origin = bot.entity?.position;
+    positions.sort((left, right) => (
+        (origin?.distanceTo(left) ?? Number.POSITIVE_INFINITY)
+            - (origin?.distanceTo(right) ?? Number.POSITIVE_INFINITY)
+        || left.y - right.y
+        || left.x - right.x
+        || left.z - right.z
+    ));
+    return positions.slice(0, MAX_COLLECTION_STANCES);
+}
+
+export function assessStableMiningCollectionTarget(bot, block) {
+    const target = block?.position;
+    if (!target?.offset) {
+        return { safe: false, code: 'target_unloaded', dropDepth: null, stances: [] };
+    }
+    const dropSupport = collectionDropSupport(bot, target);
+    if (!dropSupport.safe) return { ...dropSupport, stances: [] };
+    const stances = collectionStandingPositions(bot, block);
+    if (stances.length === 0) {
+        return {
+            safe: false,
+            code: 'no_safe_stance',
+            dropDepth: dropSupport.dropDepth,
+            stances: [],
+        };
+    }
+    return {
+        safe: true,
+        code: 'safe_stance_available',
+        dropDepth: dropSupport.dropDepth,
+        stances,
+    };
+}
+
+export function findStableMiningCollectionCandidates(bot, predicate, range, count = MAX_COLLECTION_CANDIDATES) {
+    let scanCount = Math.max(count, MAX_COLLECTION_SCAN_CANDIDATES);
+    let fallback = [];
+    while (true) {
+        const scanned = world.getNearestBlocksWhere(bot, predicate, range, scanCount)
+            .filter(block => block?.position);
+        if (fallback.length === 0) fallback = scanned.slice(0, count);
+        const supported = scanned
+            .filter(block => collectionDropSupport(bot, block.position).safe)
+            .slice(0, count);
+        if (supported.length > 0) return supported;
+        if (scanned.length < scanCount || scanCount >= MAX_COLLECTION_SAFE_SCAN_CANDIDATES) break;
+        scanCount = Math.min(MAX_COLLECTION_SAFE_SCAN_CANDIDATES, scanCount * 4);
+    }
+
+    // Preserve truthful failure evidence when every bounded, hydrated target
+    // is unsafe. Candidate assessment will attach the exact rejection code.
+    return fallback;
+}
+
+function collectionApproachGoal(stances) {
+    if (!Array.isArray(stances) || stances.length === 0) return null;
+    return new pf.goals.GoalCompositeAny(
+        stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+    );
+}
+
+function isAtCollectionStance(bot, stances) {
+    const feet = bot.entity?.position?.floored?.();
+    return Boolean(feet && stances?.some(position => (
+        position.x === feet.x
+        && position.y === feet.y
+        && position.z === feet.z
+    )));
+}
+
+function collectionApproachMovements(bot, targetBlock) {
+    const movements = miningMovements(bot);
+    const safeToBreak = movements.safeToBreak;
+    movements.safeToBreak = candidate => (
+        !sameBlockPosition(candidate, targetBlock)
+        && safeToBreak(candidate)
+    );
+    return movements;
+}
+
 function targetScopedCollectionMovements(bot, targetBlock, {
     allowPillars = false,
     allowNaturalRouteDigging = false,
@@ -892,11 +1026,12 @@ function collectionBreakTime(bot, block) {
     }
 }
 
-function probeCollectionRoute(bot, block, movements) {
+function probeCollectionRoute(bot, block, movements, targetAssessment = null) {
     const distance = bot.entity.position.distanceTo(block.position);
     if (
         distance <= 4.5
         && bot.canSeeBlock?.(block)
+        && (!targetAssessment || isAtCollectionStance(bot, targetAssessment.stances))
     ) {
         return {
             routeStatus: 'direct',
@@ -907,14 +1042,22 @@ function probeCollectionRoute(bot, block, movements) {
     }
 
     try {
-        const goal = new pf.goals.GoalLookAtBlock(
-            block.position,
-            bot.world,
-            {
-                reach: 4.5,
-                entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
-            },
-        );
+        const goal = targetAssessment
+            ? collectionApproachGoal(targetAssessment.stances)
+            : new pf.goals.GoalLookAtBlock(
+                block.position,
+                bot.world,
+                {
+                    reach: 4.5,
+                    entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+                },
+            );
+        if (!goal) return {
+            routeStatus: targetAssessment?.code || 'no_safe_stance',
+            routeCost: 0,
+            routeLength: 0,
+            routeTimeMs: 0,
+        };
         const generator = bot.pathfinder.getPathFromTo(
             movements,
             bot.entity.position,
@@ -936,6 +1079,13 @@ function probeCollectionRoute(bot, block, movements) {
             routeCost: Number.isFinite(result?.cost) ? result.cost : 0,
             routeLength: Array.isArray(result?.path) ? result.path.length : 0,
             routeTimeMs: Number.isFinite(result?.time) ? result.time : 0,
+            approachPosition: Array.isArray(result?.path) && result.path.length > 0
+                ? {
+                    x: result.path.at(-1).x,
+                    y: result.path.at(-1).y,
+                    z: result.path.at(-1).z,
+                }
+                : null,
         };
     } catch (error) {
         return {
@@ -948,9 +1098,31 @@ function probeCollectionRoute(bot, block, movements) {
     }
 }
 
-function collectionCandidateObservations(bot, blocks, movements, descentFallback = false) {
+function collectionCandidateObservations(
+    bot,
+    blocks,
+    movements,
+    descentFallback = false,
+    { stableMiningStance = false } = {},
+) {
     return blocks.map(block => {
         const hazard = collectionHazardObservation(bot, block);
+        const targetAssessment = stableMiningStance
+            ? assessStableMiningCollectionTarget(bot, block)
+            : null;
+        const route = targetAssessment && !targetAssessment.safe
+            ? {
+                routeStatus: targetAssessment.code,
+                routeCost: 0,
+                routeLength: 0,
+                routeTimeMs: 0,
+            }
+            : probeCollectionRoute(
+                bot,
+                block,
+                targetAssessment ? collectionApproachMovements(bot, block) : movements,
+                targetAssessment,
+            );
         return {
             block,
             position: block.position,
@@ -960,13 +1132,26 @@ function collectionCandidateObservations(bot, blocks, movements, descentFallback
             hazards: hazard.blocks,
             breakTimeMs: collectionBreakTime(bot, block),
             descentFallback,
-            ...probeCollectionRoute(bot, block, movements),
+            dropDepth: targetAssessment?.dropDepth ?? null,
+            safeStances: targetAssessment?.stances || null,
+            ...route,
         };
     });
 }
 
-function selectCollectionCandidate(bot, blocks, routeMovements = safeMovements(bot)) {
-    const observations = collectionCandidateObservations(bot, blocks, routeMovements);
+function selectCollectionCandidate(
+    bot,
+    blocks,
+    routeMovements = safeMovements(bot),
+    options = {},
+) {
+    const observations = collectionCandidateObservations(
+        bot,
+        blocks,
+        routeMovements,
+        false,
+        options,
+    );
     const ranked = rankCollectionCandidates(observations);
     const selected = ranked.find(candidate => candidate.reachable) || null;
     if (selected) return { selected, ranked, descentFallback: null };
@@ -984,7 +1169,13 @@ function selectCollectionCandidate(bot, blocks, routeMovements = safeMovements(b
     // Do not use a damaging fall as a shortcut. It becomes eligible only
     // after every ordinary candidate route has been rejected.
     const descentRanked = rankCollectionCandidates(
-        collectionCandidateObservations(bot, blocks, safeDescentMovements(bot), true),
+        collectionCandidateObservations(
+            bot,
+            blocks,
+            safeDescentMovements(bot),
+            true,
+            options,
+        ),
     );
     const descentSelected = descentRanked.find(candidate => candidate.reachable) || null;
     return {
@@ -996,9 +1187,15 @@ function selectCollectionCandidate(bot, blocks, routeMovements = safeMovements(b
 
 function collectionDecisionEvidence(selection) {
     const selected = selection?.selected;
+    const routeStatuses = {};
+    for (const candidate of selection?.ranked || []) {
+        const status = String(candidate?.routeStatus || 'unknown').slice(0, 48);
+        routeStatuses[status] = (routeStatuses[status] || 0) + 1;
+    }
     return {
         considered: selection?.ranked?.length || 0,
         unreachable: selection?.ranked?.filter(candidate => !candidate.reachable).length || 0,
+        routeStatuses,
         routeStatus: selected?.routeStatus || null,
         routeCost: Number.isFinite(selected?.routeCost)
             ? Math.round(selected.routeCost * 100) / 100
@@ -1009,11 +1206,22 @@ function collectionDecisionEvidence(selection) {
         verticalDelta: Number.isFinite(selected?.verticalDelta)
             ? Math.round(selected.verticalDelta * 100) / 100
             : null,
+        dropDepth: Number.isFinite(selected?.dropDepth) ? selected.dropDepth : null,
+        stanceCount: Array.isArray(selected?.safeStances) ? selected.safeStances.length : null,
+        approachPosition: selected?.approachPosition || null,
         hazards: selected?.hazards || [],
         score: Number.isFinite(selected?.score) ? selected.score : null,
         scoreBreakdown: selected?.scoreBreakdown || null,
         descentFallback: selection?.descentFallback || null,
     };
+}
+
+function collectionRejectionSummary(selection) {
+    const statuses = collectionDecisionEvidence(selection).routeStatuses;
+    return Object.entries(statuses)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([status, count]) => `${status}:${count}`)
+        .join(', ');
 }
 
 function createCollectionSearch(bot, scanRange, options = {}) {
@@ -1071,12 +1279,16 @@ async function recoverCollectionAccess(bot, resourceName, selection, search) {
     const attemptedTargets = new Set(search.accessRecoveryTargets || []);
 
     while (search.accessRecoveryAttempts < MAX_COLLECTION_ACCESS_RECOVERIES) {
-        const candidate = selection?.ranked
-            ?.map(entry => entry?.block)
-            .find(block => {
+        const candidateEntry = selection?.ranked
+            ?.find(entry => {
+                if (['unsafe_drop_support', 'no_safe_stance', 'target_unloaded'].includes(entry?.routeStatus)) {
+                    return false;
+                }
+                const block = entry?.block;
                 const position = block?.position;
                 return position && !attemptedTargets.has(`${position.x}:${position.y}:${position.z}`);
             });
+        const candidate = candidateEntry?.block;
         if (!candidate) return false;
 
         const targetKey = `${candidate.position.x}:${candidate.position.y}:${candidate.position.z}`;
@@ -1093,10 +1305,11 @@ async function recoverCollectionAccess(bot, resourceName, selection, search) {
             Number(local.movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
             DEFAULT_MAX_DROP_DOWN,
         );
-        const goal = new pf.goals.GoalLookAtBlock(candidate.position, bot.world, {
-            reach: 4.5,
-            entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
-        });
+        const goal = collectionApproachGoal(candidateEntry.safeStances)
+            || new pf.goals.GoalLookAtBlock(candidate.position, bot.world, {
+                reach: 4.5,
+                entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+            });
         let outcome;
         try {
             outcome = await runNavigationAttempt(
@@ -3536,12 +3749,14 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         const preferredBlock = preferredPosition ? bot.blockAt(preferredPosition) : null;
         const blocks = preferredPosition
             ? targetMatches(preferredBlock) ? [preferredBlock] : []
-            : world.getNearestBlocksWhere(
-                bot,
-                targetMatches,
-                searchRange,
-                MAX_COLLECTION_CANDIDATES,
-            );
+            : allowNaturalRouteDigging
+                ? findStableMiningCollectionCandidates(bot, targetMatches, searchRange)
+                : world.getNearestBlocksWhere(
+                    bot,
+                    targetMatches,
+                    searchRange,
+                    MAX_COLLECTION_CANDIDATES,
+                );
 
         if (blocks.length === 0) {
             if (await relocateCollectionSearch(bot, blockType, search)) {
@@ -3574,13 +3789,25 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     bot,
                     blocks,
                     collectionSafetyMovements(bot),
-                ).map(candidate => ({ ...candidate, routeStatus: 'explicit_target' })));
-                return { selected: ranked[0] || null, ranked, descentFallback: null };
+                    false,
+                    { stableMiningStance: allowNaturalRouteDigging },
+                ).map(candidate => ({
+                    ...candidate,
+                    routeStatus: candidate.safeStances?.length > 0
+                        ? 'explicit_target'
+                        : candidate.routeStatus,
+                })));
+                return {
+                    selected: ranked.find(candidate => candidate.reachable) || null,
+                    ranked,
+                    descentFallback: null,
+                };
             })()
             : selectCollectionCandidate(
                 bot,
                 blocks,
                 allowNaturalRouteDigging ? miningMovements(bot) : safeMovements(bot),
+                { stableMiningStance: allowNaturalRouteDigging },
             );
         if (!selection.selected) {
             if (await recoverCollectionAccess(bot, blockType, selection, search)) {
@@ -3596,7 +3823,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 },
                 retryable: true,
             });
-            log(bot, `Found ${blocks.length} ${blockType} candidate${blocks.length === 1 ? '' : 's'}, but none has a safe reachable route.`);
+            const rejectionSummary = collectionRejectionSummary(selection);
+            log(
+                bot,
+                `Found ${blocks.length} ${blockType} candidate${blocks.length === 1 ? '' : 's'}, but none has a safe reachable route`
+                + `${rejectionSummary ? ` (${rejectionSummary})` : ''}.`,
+            );
             break;
         }
         const block = selection.selected.block;
@@ -3712,9 +3944,72 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 bot.modes.pause('elbow_room');
                 try {
                     let liveTarget = bot.blockAt(block.position);
+                    let miningAssessment = allowNaturalRouteDigging
+                        ? assessStableMiningCollectionTarget(bot, liveTarget)
+                        : null;
                     let directReach = liveTarget?.type === block.type
                         && bot.entity.position.distanceTo(block.position) <= 4.5
-                        && bot.canSeeBlock?.(liveTarget);
+                        && bot.canSeeBlock?.(liveTarget)
+                        && (!miningAssessment || (
+                            miningAssessment.safe
+                            && isAtCollectionStance(bot, miningAssessment.stances)
+                        ));
+                    if (!directReach && allowNaturalRouteDigging) {
+                        if (!miningAssessment?.safe) {
+                            setActionEvidence(bot, {
+                                kind: 'collect',
+                                outcome: miningAssessment?.code || 'no_safe_stance',
+                                target,
+                                retryable: true,
+                            });
+                            log(bot, `Cannot safely collect ${block.name}: ${miningAssessment?.code || 'no safe stance'}.`);
+                            return false;
+                        }
+                        const approachGoal = collectionApproachGoal(miningAssessment.stances);
+                        let reached = false;
+                        let approachNavigation = null;
+                        try {
+                            reached = await goToGoal(bot, approachGoal, {
+                                movements: () => collectionApproachMovements(bot, liveTarget),
+                                stallTimeoutMs: 12_000,
+                                allowHealthBoundedDescent: false,
+                                allowLocalRecovery: false,
+                            });
+                        } finally {
+                            bot.pathfinder.setMovements(safeMovements(bot));
+                        }
+                        approachNavigation = bot.lastActionEvidence?.kind === 'movement'
+                            ? bot.lastActionEvidence
+                            : null;
+                        liveTarget = bot.blockAt(block.position);
+                        miningAssessment = liveTarget?.type === block.type
+                            ? assessStableMiningCollectionTarget(bot, liveTarget)
+                            : null;
+                        directReach = reached
+                            && liveTarget?.type === block.type
+                            && miningAssessment?.safe
+                            && isAtCollectionStance(bot, miningAssessment.stances)
+                            && bot.entity.position.distanceTo(block.position) <= 4.5
+                            && bot.canSeeBlock?.(liveTarget);
+                        if (!directReach) {
+                            const outcome = bot.interrupt_code
+                                ? 'interrupted'
+                                : approachNavigation?.outcome
+                                    || (!miningAssessment?.safe ? miningAssessment?.code : null)
+                                    || 'unreachable';
+                            setActionEvidence(bot, {
+                                kind: 'collect',
+                                outcome,
+                                target,
+                                ...(approachNavigation?.progress ? { progress: approachNavigation.progress } : {}),
+                                retryable: outcome !== 'interrupted',
+                            });
+                            log(bot, bot.interrupt_code
+                                ? `Stopped before collecting ${block.name}.`
+                                : `No verified stable stance reached ${block.name}.`);
+                            return false;
+                        }
+                    }
                     if (
                         !directReach
                         && searchOptions?.allowPillars !== true

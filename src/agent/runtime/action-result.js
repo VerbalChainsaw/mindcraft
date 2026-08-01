@@ -138,6 +138,7 @@ export function actionResultToTelemetry(result) {
     ? result.phase
     : 'failed';
   return {
+    actionId: typeof result.actionId === 'string' ? result.actionId.slice(0, 80) : null,
     phase,
     code: text(result.code, 'unknown').slice(0, 80),
     label: text(result.label).slice(0, 120),
@@ -147,6 +148,7 @@ export function actionResultToTelemetry(result) {
     durationMs: Number.isFinite(result.startedAt) && Number.isFinite(result.finishedAt)
       ? Math.max(0, result.finishedAt - result.startedAt)
       : null,
+    startedAt: Number.isFinite(result.startedAt) ? result.startedAt : null,
     finishedAt: Number.isFinite(result.finishedAt) ? result.finishedAt : null,
   };
 }

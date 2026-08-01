@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   collectAgentStates,
   createAgentStatePump,
+  requiresReliableAgentStateDelivery,
   selectAgentConnectionsForPolling,
 } from '../../src/mindcraft/agent-state-pump.js';
 import {
@@ -104,6 +105,31 @@ test('Given fresh pushed state, fallback polling selects only legacy or stale ag
     )).sort(),
     ['legacy', 'stale'],
   );
+});
+
+test('Given streamed bot state, only action lifecycle edges require reliable dashboard delivery', () => {
+  const active = {
+    gameplay: { position: { x: 1, y: 64, z: 1 } },
+    action: {
+      held: false,
+      isIdle: false,
+      stopRequestedAt: null,
+      stopTimedOutAt: null,
+      lastResult: { actionId: 'action-1', finishedAt: 100 },
+    },
+  };
+  const movement = structuredClone(active);
+  movement.gameplay.position.x = 2;
+  assert.equal(requiresReliableAgentStateDelivery(active, movement), false);
+
+  const terminal = structuredClone(movement);
+  terminal.action.isIdle = true;
+  terminal.action.lastResult = { actionId: 'action-2', finishedAt: 200 };
+  assert.equal(requiresReliableAgentStateDelivery(movement, terminal), true);
+
+  const held = structuredClone(terminal);
+  held.action.held = true;
+  assert.equal(requiresReliableAgentStateDelivery(terminal, held), true);
 });
 
 test('Given a contiguous state delta, dashboard state advances without a resync', () => {
