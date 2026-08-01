@@ -733,6 +733,9 @@ export class Agent {
         if (queued.length === 0) {
             response = `I couldn't queue that plan: ${rejected.join('; ') || 'no runnable steps'}.`;
         } else {
+            // Claim the next behavior tick immediately rather than waiting out
+            // whatever cadence the previously selected lane had scheduled.
+            this.behavior_arbiter?.wake?.('player_plan_queued');
             response = plan.disposition === 'interrupt'
                 ? `Okay, new plan — ${queued.join(', then ')}.`
                 : `Queued ${queued.length} step${queued.length === 1 ? '' : 's'}: ${queued.join(', then ')}.`;
@@ -1147,6 +1150,10 @@ export class Agent {
             if (this.bot.health < prev_health) {
                 this.bot.lastDamageTime = Date.now();
                 this.bot.lastDamageTaken = prev_health - this.bot.health;
+                // Damage is the edge that raises urgency, and urgency is what
+                // caps the cadence. Re-evaluate now instead of finishing a wait
+                // that was scheduled while the bot was still calm.
+                this.behavior_arbiter?.wake?.('self_damaged');
                 this.publishBehaviorEvent({
                     type: 'self.damaged',
                     target: { name: 'health' },
@@ -1228,6 +1235,9 @@ export class Agent {
             if (!mc.isHostile(entity) || !entity?.position || !this.bot.entity?.position) return;
             const distance = this.bot.entity.position.distanceTo(entity.position);
             if (distance > 24) return;
+            // Close enough that the protection lanes may need the body now
+            // rather than whenever the current cadence next comes around.
+            if (distance <= 16) this.behavior_arbiter?.wake?.('threat_detected');
             this.publishBehaviorEvent({
                 id: Number.isFinite(entity.id) ? `threat-${entity.id}` : undefined,
                 type: 'threat.detected',
@@ -1277,6 +1287,10 @@ export class Agent {
             this.bot.pathfinder.stop(); // clear any lingering pathfinder
             clearTimeout(this._idleResumeTimer);
             this._idleResumeTimer = null;
+            // The body just came free. Claiming the next step now is the
+            // difference between continuing a plan and visibly pausing between
+            // every step of it.
+            this.behavior_arbiter?.wake?.('action_finished');
         });
 
         // Init NPC controller
@@ -1312,7 +1326,12 @@ export class Agent {
                     : INTERVAL;
                 let remaining = period - (Date.now() - start);
                 if (remaining > 0) {
-                    await new Promise((resolve) => setTimeout(resolve, remaining));
+                    // Interruptible. A salient world edge cuts the wait short so
+                    // the bot does not stay blind for the whole selected period;
+                    // an idle lane selects half a second, which is long enough
+                    // for a hostile to close the distance unobserved.
+                    await (this.behavior_arbiter?.sleep?.(remaining)
+                        ?? new Promise((resolve) => setTimeout(resolve, remaining)));
                 }
                 last = start;
             }

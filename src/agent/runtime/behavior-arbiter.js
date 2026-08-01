@@ -51,6 +51,10 @@ const LANE_TICK_MS = Object.freeze({
 const DEFAULT_TICK_MS = 300;
 const MIN_TICK_MS = 60;
 const MAX_TICK_MS = 1_000;
+// A burst of world events must not turn the loop into a spin. Early wake-ups
+// coalesce onto this floor, so a mob swarm produces one prompt evaluation
+// rather than one evaluation per packet.
+const WAKE_FLOOR_MS = 50;
 // Urgency is authoritative over comportment: a bot never dawdles while it is
 // drowning, starving, or being hit, no matter how casual its persona is.
 const URGENCY_TICK_CAP = Object.freeze({
@@ -107,6 +111,14 @@ export class BehaviorArbiter {
     this.nextTickDelayMs = DEFAULT_TICK_MS;
     this.urgency = 'calm';
     this.traceEvaluationLane = null;
+    // Wake channel. Perception was previously sampled purely on a schedule, so
+    // a hostile that loaded right after a tick went unnoticed for the whole
+    // selected period, and an idle lane had selected a period of half a second.
+    this.wakeResolve = null;
+    this.wakeTimer = null;
+    this.wakeDeadline = 0;
+    this.pendingWake = null;
+    this.lastTickStartedAt = 0;
     const traceConfig = trace && typeof trace === 'object'
       ? trace
       : settings.decision_trace && typeof settings.decision_trace === 'object'
@@ -145,6 +157,9 @@ export class BehaviorArbiter {
     this.directiveResumeRequested = false;
     this.comportmentPauseUntil = 0;
     this.wasActing = false;
+    this.pendingWake = null;
+    // Release a parked loop immediately so teardown never waits out a sleep.
+    if (this.wakeResolve) this.wakeResolve('stopped');
     this.select('stopped', 'arbiter_stopped', 'Behavior arbitration stopped during teardown.', true);
     return true;
   }
@@ -152,6 +167,67 @@ export class BehaviorArbiter {
   requestDirectiveResume() {
     if (this.stopped) return false;
     this.directiveResumeRequested = true;
+    this.wake('directive_resume');
+    return true;
+  }
+
+  /**
+   * Wait for the next evaluation. Resolves on the scheduled deadline, or early
+   * when `wake` reports a world edge that could change which lane should own
+   * the body. The returned reason is informational.
+   */
+  sleep(delayMs) {
+    if (this.stopped) return Promise.resolve('stopped');
+    const bounded = Math.max(0, Math.min(MAX_TICK_MS, Number(delayMs) || 0));
+    const now = this.now();
+    const floorRemaining = Math.max(0, this.lastTickStartedAt + WAKE_FLOOR_MS - now);
+    let wait = bounded;
+    let latched = null;
+    if (this.pendingWake) {
+      latched = this.pendingWake;
+      this.pendingWake = null;
+      // The floor applies to an edge latched during evaluation too. Events
+      // arrive while update() is awaiting, so without this a steady stream of
+      // them would drive the loop back to back with no delay whatsoever.
+      wait = Math.min(bounded, floorRemaining);
+    }
+    if (wait <= 0) return Promise.resolve(latched || 'immediate');
+    return new Promise(resolve => {
+      const settle = reason => {
+        if (this.wakeTimer) clearTimeout(this.wakeTimer);
+        this.wakeTimer = null;
+        this.wakeResolve = null;
+        this.wakeDeadline = 0;
+        resolve(reason);
+      };
+      this.wakeResolve = settle;
+      this.wakeDeadline = now + wait;
+      this.wakeTimer = setTimeout(() => settle(latched || 'scheduled'), wait);
+    });
+  }
+
+  /**
+   * Ask for an evaluation sooner than the scheduled one. Safe to call from any
+   * event handler and at any rate: while the loop is already evaluating the
+   * request is latched rather than lost, and bursts coalesce onto WAKE_FLOOR_MS
+   * so this can never schedule work faster than the loop can retire it.
+   */
+  wake(reason = 'world_event') {
+    if (this.stopped) return false;
+    const label = boundedText(reason, 'world_event');
+    if (!this.wakeResolve) {
+      // Mid-evaluation: remember the edge so the next sleep is skipped instead
+      // of the loop settling back down as though nothing had happened.
+      this.pendingWake = label;
+      return true;
+    }
+    const now = this.now();
+    const target = Math.max(now, this.lastTickStartedAt + WAKE_FLOOR_MS);
+    if (target >= this.wakeDeadline) return false;
+    const settle = this.wakeResolve;
+    if (this.wakeTimer) clearTimeout(this.wakeTimer);
+    this.wakeDeadline = target;
+    this.wakeTimer = setTimeout(() => settle(label), Math.max(0, target - now));
     return true;
   }
 
@@ -393,6 +469,7 @@ export class BehaviorArbiter {
     if (this.stopped) return this.snapshot();
     if (this.updating) return this.snapshot();
     this.updating = true;
+    this.lastTickStartedAt = this.now();
     this.tick += 1;
     const modes = this.agent.bot?.modes;
     this.urgency = this.urgencyOf();
