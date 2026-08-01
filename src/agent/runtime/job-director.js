@@ -436,12 +436,23 @@ export function summarizeJobSituation(agent, order) {
     y: Number(bot.entity?.position?.y),
     z: Number(bot.entity?.position?.z),
   };
-  const resourceFound = selectedResourcePresence(bot, order);
-  if (resourceFound !== undefined) snapshot.resourceFound = resourceFound;
-  if (order?.role === 'miner') snapshot.miningKnowledge = miningKnowledge(order.target?.name);
-  const resourceSafety = selectedResourceSafety(bot, order);
-  if (order?.role === 'miner' && resourceSafety !== undefined) snapshot.safeSelectedBlocks = resourceSafety;
-  if (order?.role === 'lumberjack' && resourceSafety !== undefined) snapshot.safeTrunks = resourceSafety;
+  // Both helpers sweep a radius-64 volume, and the safety sample adds up to
+  // twelve eight-way blockAt probes on top. Only miner-plan reads
+  // `resourceFound`, and only miner/lumberjack read the safety sample, so every
+  // other role was paying for two full scans and discarding both results.
+  const role = order?.role;
+  if (role === 'miner') {
+    const resourceFound = selectedResourcePresence(bot, order);
+    if (resourceFound !== undefined) snapshot.resourceFound = resourceFound;
+    snapshot.miningKnowledge = miningKnowledge(order.target?.name);
+  }
+  if (role === 'miner' || role === 'lumberjack') {
+    const resourceSafety = selectedResourceSafety(bot, order);
+    if (resourceSafety !== undefined) {
+      if (role === 'miner') snapshot.safeSelectedBlocks = resourceSafety;
+      else snapshot.safeTrunks = resourceSafety;
+    }
+  }
   const replant = replantSituation(agent, order, inventory);
   if (replant) snapshot.replant = replant;
   if (order?.role === 'builder') {
