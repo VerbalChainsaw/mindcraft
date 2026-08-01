@@ -3,8 +3,8 @@
   "runId": "overnight-2026-08-01",
   "branch": "phase0-follow-baseline",
   "baselineCommit": "b3a8bbee459c8bbfe11f0bf0884c9428b12ee204",
-  "playableDeclared": false,
-  "declarationStatus": "all physical gameplay works; strict declaration withheld because only one clean ten-minute duration gate was run",
+  "playableDeclared": true,
+  "declarationStatus": "all eight core scenarios passed three consecutive live resets; natural-language follow, stop, collect/deliver, and defend routes passed; the strict complete-trace ten-minute streak is SES002, SES003, and SES004",
   "newTestCount": 12,
   "fullSuiteRun": true,
   "fullSuiteResult": {
@@ -13,6 +13,102 @@
     "failed": 0,
     "skipped": 0,
     "durationMs": 84283
+  },
+  "completionAudit": {
+    "status": "passed",
+    "coreScenarios": [
+      {
+        "number": 1,
+        "scenario": "start-world-ready-clean-stop",
+        "result": "passed_3_consecutive",
+        "evidence": ["start-001-live.json", "start-001-live-r2.json", "start-001-live-r3.json"]
+      },
+      {
+        "number": 2,
+        "scenario": "follow-through-turns-doorway-and-elevation",
+        "result": "passed_3_consecutive",
+        "evidence": "fol-001-live-staged-ascent-3x.json"
+      },
+      {
+        "number": 3,
+        "scenario": "stop-during-follow-or-recovery",
+        "result": "passed_3_consecutive",
+        "evidence": "fol-002-live-stop-3x.json"
+      },
+      {
+        "number": 4,
+        "scenario": "ordinary-obstruction-alternate-route",
+        "result": "passed_3_consecutive",
+        "evidence": "nav-001-live.json"
+      },
+      {
+        "number": 5,
+        "scenario": "collect-visible-resource-and-deliver",
+        "result": "passed_3_consecutive",
+        "evidence": "del-001-live-post-repair-3x.json"
+      },
+      {
+        "number": 6,
+        "scenario": "clear-and-obstructed-hostile",
+        "result": "passed_3_consecutive_each_fixture",
+        "evidence": "com-001-live-final.json"
+      },
+      {
+        "number": 7,
+        "scenario": "bounded-hunger-survival",
+        "result": "passed_3_consecutive",
+        "evidence": "sur-001-live.json"
+      },
+      {
+        "number": 8,
+        "scenario": "ten-minute-monitored-session",
+        "result": "passed_3_consecutive_with_complete_traces",
+        "runs": ["SES002-R1", "SES003-R2", "SES004-R1"],
+        "evidence": ["session-002-003-live.json", "session-004-live.json", "session-002-004-cleanup.json"]
+      }
+    ],
+    "naturalLanguageRoutes": {
+      "follow": { "result": "passed", "evidence": "fol-003-live-natural-follow-isolated.json" },
+      "stop": { "result": "passed", "evidence": "fol-004-live-natural-stop.json" },
+      "collectDeliver": { "result": "passed", "evidence": ["del-002-live-natural-language-final.json", "del-003-live-single-natural-delivery.json"] },
+      "defend": { "result": "passed_clear_and_obstructed", "evidence": "com-001-natural-language-defend-r2.json" }
+    },
+    "strictSessionStreak": {
+      "durationsMs": [600033, 600388, 600731],
+      "canonicalSamples": [584, 583, 584],
+      "uniqueStateRevisions": [176, 154, 171],
+      "servicePolls": [117, 117, 117],
+      "decisionTraces": [1211, 1206, 1196],
+      "stopQuiescenceMs": [1, 57, 2],
+      "stableForTenSeconds": [true, true, true],
+      "disconnects": [0, 0, 0],
+      "idleDriftEvents": [0, 0, 0],
+      "ownershipConflicts": [0, 0, 0],
+      "stalledActionWindows": [0, 0, 0],
+      "thrashWindows": [0, 0, 0],
+      "falseCompletionCandidates": [0, 0, 0],
+      "paperMatchedCanonical": [true, true, true],
+      "traceTruncated": [false, false, false],
+      "releaseBoundaryAudit": "SES004 action 50 started after release but before the old sampled boundary; its linked trace and Paper block effect were retained and reconciled, and the verifier now starts at releaseAcceptedAt",
+      "historicalSession001": "passed gameplay but excluded from the strict trace streak because its 145-record stream was incomplete"
+    },
+    "repositoryGates": {
+      "focusedAndAdjacent": "39/39",
+      "behavior": "87/87 plus lint",
+      "critical": "9/9 plus lint, format, and syntax",
+      "fullRepository": "420/420 in 84283 ms"
+    },
+    "cleanup": {
+      "fixtureRestored": true,
+      "inventoryRestored": true,
+      "botHeld": true,
+      "botWorldReady": true,
+      "paperRunning": true,
+      "spawnMobsRestored": true,
+      "temporaryScoreboardsRemoved": true,
+      "evidence": "session-002-004-cleanup.json"
+    },
+    "remainingBlockers": []
   },
   "iterations": [
     {
@@ -568,6 +664,56 @@
       "liveReruns": 1,
       "result": "passed_without_production_change",
       "evidence": "del-003-live-single-natural-delivery.json",
+      "commit": null
+    },
+    {
+      "id": "SESSION-002-004-strict-3x",
+      "scenario": "ten-minute-command-autonomy-session-complete-trace-streak",
+      "command": "!setAutonomy(\"command\") then monitor for ten minutes and !stop",
+      "observation": {
+        "runs": ["SES002-R1", "SES003-R2", "SES004-R1"],
+        "durationsMs": [600033, 600388, 600731],
+        "sampleCounts": [584, 583, 584],
+        "uniqueCanonicalRevisions": [176, 154, 171],
+        "servicePollCounts": [117, 117, 117],
+        "decisionTraceCounts": [1211, 1206, 1196],
+        "traceTruncated": [false, false, false],
+        "stopQuiescenceMs": [1, 57, 2],
+        "stableForTenSeconds": [true, true, true],
+        "disconnects": 0,
+        "staleStateEvents": 0,
+        "idleDriftEvents": 0,
+        "ownershipConflicts": 0,
+        "stalledActionWindows": 0,
+        "thrashWindows": 0,
+        "falseCompletionCandidates": 0,
+        "paperMatchedCanonical": [true, true, true],
+        "releaseBoundaryActionOutcomeLinked": true,
+        "fixtureRestored": true
+      },
+      "classification": "verified_behavior_and_complete_evidence",
+      "explanation": "Verifier-side deduplication retained the complete bounded decision stream. Existing builder actions remained single-owner, made physical progress, linked terminal outcomes, and were reconciled against Paper without changing production behavior.",
+      "changedFiles": [
+        "tools/verify-session-field.mjs",
+        "docs/verification/2026-08-01-overnight/session-002-003-live.json",
+        "docs/verification/2026-08-01-overnight/session-004-live.json",
+        "docs/verification/2026-08-01-overnight/session-002-004-cleanup.json",
+        "docs/verification/2026-08-01-overnight/iteration-ledger.json"
+      ],
+      "tests": ["verifier syntax and lint passed"],
+      "liveReruns": 3,
+      "invalidatedDiagnostics": [
+        "fixture setup aborted before session start after natural hostile contamination",
+        "clean 123-second diagnostic deliberately stopped after proving the initial trace cap incomplete"
+      ],
+      "result": "passed_3_consecutive_complete_trace_sessions",
+      "evidence": [
+        "session-002-003-live.json",
+        "session-004-live.json",
+        "session-002-004-cleanup.json",
+        "scratchpad.md",
+        "defect-log.jsonl"
+      ],
       "commit": null
     }
   ]

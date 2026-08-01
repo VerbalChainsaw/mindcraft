@@ -17,3 +17,19 @@
 - [x] Run the remaining natural-language follow, stop, and collect/deliver checks after their deterministic scenarios pass.
 - [x] Run broad behavior/critical gates at a coherent checkpoint and the full suite once at final handoff.
 - [x] Prove a single natural `bring me one cobblestone` request acquires and delivers without an intervening model-created job.
+
+## Final complete-trace session tranche
+
+### Tranche checklist
+
+- [x] Reinspect the attachment contract and current branch.
+- [x] Confirm Paper, dashboard, and MindcraftBot are world-ready.
+- [x] Capture three complete ten-minute sessions with bounded decision-trace deduplication.
+- [x] Verify REST health and agent readiness throughout each session.
+- [x] Verify Paper and canonical position/vitals agree.
+- [x] Verify no disconnect, stale state, drift, ownership conflict, stall, thrash, or false completion.
+- [x] Verify `!stop` reaches quiescence within two seconds and remains stable for ten seconds.
+- [x] Reconcile incidental builder mutations and restore fixture inventory/blocks.
+- [x] Restore `spawn_mobs`, remove temporary scoreboards, and leave the bot held.
+- [x] Update the iteration ledger and strict playability declaration.
+- [x] Commit and push the completed evidence tranche.

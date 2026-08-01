@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "scenario": "ten-minute-session-fixture-reconciliation",
+  "bot": "MindcraftBot",
+  "fixture": {
+    "position": { "x": 1071.5, "y": 100, "z": 1007.5 },
+    "baselineInventory": {
+      "cobblestone": 0,
+      "oak_planks": 1,
+      "provenance": "DEL-003 cleanup cleared cobblestone; the session fixture retained one builder oak plank"
+    }
+  },
+  "reconciliations": [
+    {
+      "runId": "SES002-R1",
+      "source": "session-002-003-live.json",
+      "observedMutations": {
+        "brokenCobblestone": [
+          { "x": 1072, "y": 100, "z": 1006 },
+          { "x": 1072, "y": 100, "z": 1007 },
+          { "x": 1072, "y": 100, "z": 1008 },
+          { "x": 1070, "y": 101, "z": 1006 },
+          { "x": 1070, "y": 101, "z": 1007 },
+          { "x": 1070, "y": 101, "z": 1008 },
+          { "x": 1071, "y": 101, "z": 1008 }
+        ],
+        "temporaryPlacementCycle": [
+          "placed dirt at 1070,100,1006",
+          "broke dirt at 1070,100,1006",
+          "placed oak_planks at 1070,100,1006"
+        ]
+      },
+      "paperBeforeCleanup": {
+        "cobblestoneInventory": 5,
+        "dirtInventory": 0,
+        "oakPlanksInventory": 0,
+        "nearbyItemEntities": 0
+      },
+      "restoration": {
+        "sevenClaimedCobblestoneCellsChangedBackToCobblestone": true,
+        "placementCellChangedBackToAir": true,
+        "gainedCobblestoneRemoved": 5,
+        "consumedOakPlanksReturned": 1,
+        "nearbyItemEntitiesRemoved": 0
+      },
+      "paperAfterCleanup": {
+        "blockMarkers": ["#B1", "#B2", "#B3", "#B4", "#B5", "#B6", "#B7", "#AIR"],
+        "allBlockMarkersObserved": true,
+        "cobblestoneInventory": 0,
+        "oakPlanksInventory": 1
+      },
+      "passed": true
+    },
+    {
+      "runId": "SES004-R1",
+      "source": "session-004-live.json",
+      "observedMutations": {
+        "brokenCobblestone": [
+          { "x": 1072, "y": 100, "z": 1006 },
+          { "x": 1072, "y": 100, "z": 1007 },
+          { "x": 1072, "y": 100, "z": 1008 },
+          { "x": 1070, "y": 101, "z": 1006 },
+          { "x": 1070, "y": 101, "z": 1007 },
+          { "x": 1070, "y": 101, "z": 1008 },
+          { "x": 1071, "y": 101, "z": 1008 }
+        ],
+        "placement": "placed oak_planks at 1070,100,1006"
+      },
+      "releaseBoundaryAudit": {
+        "releaseAcceptedAt": 1785614004505,
+        "savedSessionStartedAt": 1785614007255,
+        "gapMs": 2750,
+        "releaseToFinishDurationMs": 603481,
+        "earlyAction": {
+          "actionId": "MindcraftBot-50-1785614006113",
+          "owner": "job",
+          "label": "action:breakBlock",
+          "startedAt": 1785614006114,
+          "finishedAt": 1785614007617,
+          "phase": "succeeded",
+          "code": "skill_broken",
+          "outcomeLinked": true,
+          "inferredTarget": { "name": "cobblestone", "x": 1072, "y": 100, "z": 1006 },
+          "targetEvidence": "The declared first builder cell was the only failed final block marker; restoring it changed the Paper block and #F1REPAIR then read 1."
+        },
+        "verifierCorrection": "Future sessions define sessionStartedAt as releaseAcceptedAt before waiting for the released state."
+      },
+      "paperBeforeCleanup": {
+        "cobblestoneInventory": 5,
+        "oakPlanksInventory": 0
+      },
+      "restoration": {
+        "sevenClaimedCobblestoneCellsChangedBackToCobblestone": true,
+        "placementCellChangedBackToAir": true,
+        "gainedCobblestoneRemoved": 5,
+        "consumedOakPlanksReturned": 1,
+        "nearbyItemEntityRemoved": "Oak Planks"
+      },
+      "paperAfterCleanup": {
+        "blockMarkers": ["#C1", "#C2", "#C3", "#C4", "#C5", "#C6", "#AIR", "#F1REPAIR"],
+        "allBlockMarkersObserved": true,
+        "cobblestoneInventory": 0,
+        "oakPlanksInventory": 1
+      },
+      "passed": true
+    }
+  ],
+  "finalState": {
+    "botHeld": true,
+    "botIdle": true,
+    "pathfinding": null,
+    "activeOwner": null,
+    "dimension": "minecraft:overworld",
+    "position": { "x": 1071.5, "y": 100, "z": 1007.5 },
+    "health": 20,
+    "hunger": 20,
+    "spawn_mobs": true,
+    "temporaryScoreboardsRemoved": true
+  },
+  "passed": true
+}

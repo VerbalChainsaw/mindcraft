@@ -28,3 +28,34 @@
 - Final checks: focused/directly adjacent 39/39; behavior 87/87 plus lint; critical 9/9 plus lint/format/syntax; full repository 420/420 in 84.3 seconds. The live bot remains world-ready and held, Paper remains running on port 25579, the controlled target is disconnected, and no fixture mutation remains.
 - Every functional reset scenario has its required repeated proof and the monitored ten-minute session is clean. A literal interpretation that repeats the ten-minute duration gate three times would still require two additional no-change observation sessions; no known gameplay defect remains, and the local gameplay rules prohibit automatically expanding this into more soak work.
 - Stronger one-turn acceptance passed without production changes: one `bring me one cobblestone` chat line created one typed deliver goal, then `action:collectBlocksInRange` succeeded in 2349 ms and `action:givePlayer` succeeded in 4634 ms. Both traces remained player-owned; no unrelated autonomy output appeared between phases; Paper confirmed `0/0 -> 1/0 -> 0/1`; stop quiescence was 6 ms and stable for ten seconds; fixture, inventories, target, and `spawn_mobs` were restored. See `del-003-live-single-natural-delivery.json`.
+
+## Final complete-trace session tranche
+
+### Tranche notes
+
+## Acceptance target
+
+Close the literal three-run ten-minute stability gate without changing production behavior or granting the arbiter new authority.
+
+## Observations
+
+- The older `session-001-live.json` passed gameplay but retained only 145 decisions. The corrected harness demonstrated roughly 1,200 arbiter decisions per ten minutes, so `session-001` is retained as historical evidence but excluded from the strict complete-trace streak.
+- Two diagnostic runs were invalidated before acceptance: one never reached session start because a natural zombie killed the operator-held bot during reset; one was deliberately stopped at 123 seconds when a 512-record verifier cap proved insufficient. Neither was a gameplay failure or a completed duration attempt.
+- Fixture isolation now records/restores `spawn_mobs`, clears bounded hostiles, and keeps the bot held and healthy during setup.
+- `SES002-R1`, `SES003-R2`, and `SES004-R1` each ran for at least 600,000 ms with complete verifier-side trace deduplication and independent Paper before/final observations.
+- Existing builder work ran briefly in `SES002-R1` and `SES004-R1`. Every terminal result was outcome-linked, no action thrashed or stalled, and Paper corroborated the physical changes through inventory deltas and changed-block restoration. `session-002-004-cleanup.json` records exact reconciliation.
+- The final block audit exposed one `SES004-R1` action that began 1609 ms after release but 1141 ms before the old sampled-session boundary. Decision traces retained action 50 and its linked `skill_broken` outcome; Paper independently showed the first declared builder cell needed restoration. The fixture was repaired, and the verifier now starts measurement at release acceptance before waiting for the first released-state sample.
+
+## Final strict streak
+
+| Run | Duration | Samples / unique state revisions | Service polls | Decision traces | Stop | Stable 10 s |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| SES002-R1 | 600,033 ms | 584 / 176 | 117 | 1,211 | 1 ms | yes |
+| SES003-R2 | 600,388 ms | 583 / 154 | 117 | 1,206 | 57 ms | yes |
+| SES004-R1 | 600,731 ms | 584 / 171 | 117 | 1,196 | 2 ms | yes |
+
+All three recorded zero disconnects, stale-state events, idle drift, ownership conflicts, stalled-action windows, thrash windows, and false-completion candidates. Paper and canonical final position/vitals agreed in every run.
+
+## Current live state
+
+MindcraftBot is world-ready, held, idle, and healthy at `(1071.5, 100, 1007.5)` in `minecraft:overworld`. Paper is running, `spawn_mobs` is restored to `true`, the declared fixture baseline is restored, and temporary scoreboard objectives are removed.
