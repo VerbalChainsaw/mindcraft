@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Agent } from '../../src/agent/agent.js';
+import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 
 // Drive Agent.dispatchPlayerAgenda against a minimal fake `this`, so the
 // append / interrupt / takeover branching is verified without spinning a bot.
@@ -83,4 +84,46 @@ test('dispatchPlayerAgenda ignores a lone task so the fast path handles it', asy
   assert.equal(handled, false, 'a single task with no chain stays on the single-directive path');
   assert.equal(calls.added.length, 0);
   assert.equal(calls.stop, 0);
+});
+
+test('agenda acquire snapshots current family inventory for each dispatched step', () => {
+  let submittedGoal = null;
+  const target = Object.freeze({
+    requestedName: 'logs',
+    canonicalName: 'oak_log',
+    inventoryName: 'oak_log',
+    acquisitionName: 'oak_log',
+    family: 'logs',
+    acquisitionKind: 'collect_family',
+  });
+  const agent = {
+    name: 'TestBot',
+    bot: {
+      inventory: {
+        slots: [
+          { name: 'oak_log', count: 2 },
+          { name: 'spruce_log', count: 3 },
+          { name: 'cobblestone', count: 12 },
+        ],
+      },
+    },
+    goal_director: {
+      submit(goal) {
+        submittedGoal = goal;
+        return { accepted: true };
+      },
+    },
+  };
+  const store = {
+    lastError: null,
+    load: () => [],
+    save() {},
+  };
+  const director = new AgendaDirector(agent, { store, resolveTarget: () => target });
+  const added = director.add({ kind: 'acquire', requester: 'Gabriel', target: 'logs', quantity: 2 });
+
+  assert.equal(added.accepted, true);
+  assert.deepEqual(director.dispatch(director.pending()[0]), { accepted: true });
+  assert.equal(submittedGoal.checkpoint.baselineInventory, 5);
+  assert.equal(submittedGoal.checkpoint.targetInventory, 7);
 });
