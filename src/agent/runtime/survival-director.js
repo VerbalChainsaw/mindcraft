@@ -5,7 +5,7 @@ import {
   EMERGENCY_SHELTER_BLUEPRINT,
   validateEmergencyShelterBlueprint,
 } from './emergency-shelter.js';
-import { chooseSurvivalIntent } from './survival-policy.js';
+import { chooseSurvivalIntent, isNightTime } from './survival-policy.js';
 
 const SUCCESS_COOLDOWN_MS = 2_000;
 const FAILURE_COOLDOWN_MS = 10_000;
@@ -162,12 +162,20 @@ function solidCover(block) {
   );
 }
 
+// Two blockAt probes. Cheap enough to run on every survival sample, and it is
+// the only part of the shelter read that the policy consults unconditionally.
+function isSheltered(bot) {
+  if (!bot.entity?.position || typeof bot.blockAt !== 'function') return false;
+  const origin = bot.entity.position;
+  return [2, 3].some(height => solidCover(bot.blockAt(offset(origin, 0, height, 0))));
+}
+
 function shelterSituation(bot) {
   if (!bot.entity?.position || typeof bot.blockAt !== 'function') {
     return { sheltered: false, shelters: [] };
   }
   const origin = bot.entity.position;
-  const sheltered = [2, 3].some(height => solidCover(bot.blockAt(offset(origin, 0, height, 0))));
+  const sheltered = isSheltered(bot);
   if (sheltered || typeof bot.findBlocks !== 'function') return { sheltered, shelters: [] };
   let roofs = [];
   try {
@@ -241,7 +249,9 @@ function bedCandidates(bot) {
     .filter(Boolean);
 }
 
-function environmentalSituation(bot, now) {
+function environmentalSituation(bot, now, needs = {}) {
+  const wantBeds = needs.beds === true;
+  const wantShelters = needs.shelters === true;
   const position = bot.entity?.position;
   const dimension = dimensionName(bot.game?.dimension);
   const cached = survivalEnvironmentCache.get(bot);
@@ -257,13 +267,19 @@ function environmentalSituation(bot, now) {
     && !moved
     && cached.dimension === dimension
     && now < cached.nextRefreshAt
+    // A cheap sample must never satisfy a later read that needs the sweep.
+    && (!wantBeds || cached.scannedBeds)
+    && (!wantShelters || cached.scannedShelters)
   ) {
     return cached.value;
   }
+  const shelter = wantShelters
+    ? shelterSituation(bot)
+    : { sheltered: isSheltered(bot), shelters: [] };
   const value = {
-    beds: bedCandidates(bot),
+    beds: wantBeds ? bedCandidates(bot) : [],
     usefulDrops: usefulDropCandidates(bot),
-    ...shelterSituation(bot),
+    ...shelter,
   };
   survivalEnvironmentCache.set(bot, {
     x: Number(position?.x) || 0,
@@ -271,6 +287,8 @@ function environmentalSituation(bot, now) {
     z: Number(position?.z) || 0,
     dimension,
     nextRefreshAt: now + SURVIVAL_ENVIRONMENT_TTL_MS,
+    scannedBeds: wantBeds,
+    scannedShelters: wantShelters,
     value,
   });
   return value;
@@ -287,19 +305,44 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
     mode.active === true
     && ['self_preservation', 'cowardice', 'self_defense'].includes(mode.name)
   ));
+  const held = agent.isOperatorHeld?.() === true;
+  const idle = agent.isIdle?.() === true;
+  const health = Number(bot.health);
+  const recentDamage = Date.now() - Number(bot.lastDamageTime || 0) < 4_000;
+  const timeOfDay = Number(bot.time?.timeOfDay || 0);
+  const dimension = dimensionName(bot.game?.dimension);
+  const weather = bot.thunderState > 0 ? 'Thunderstorm' : bot.rainState > 0 ? 'Rain' : 'Clear';
+
+  // chooseSurvivalIntent reaches bed and shelter candidates through a fixed
+  // waterfall, so the conditions below are exactly the ones that can read them:
+  // survival mode 'full', not held, no urgent danger, and idle. Beds then need
+  // a safe-sleep night in the overworld; shelters need either injury recovery
+  // or an unsheltered night/storm. Outside those windows the sweeps produced
+  // candidates that nothing could ever consult.
+  const policy = agent.runtime?.survival || {};
+  const night = isNightTime(timeOfDay);
+  const eligible = policy.mode === 'full' && !held && !urgentDanger && idle;
+  const needs = {
+    beds: eligible && policy.sleep === 'safe' && night && dimension === 'overworld',
+    shelters: eligible && (
+      (Number.isFinite(health) && health <= 14 && recentDamage)
+      || (policy.shelter !== 'off' && (night || weather === 'Thunderstorm'))
+    ),
+  };
+
   return {
-    held: agent.isOperatorHeld?.() === true,
-    idle: agent.isIdle?.() === true,
-    health: Number(bot.health),
+    held,
+    idle,
+    health,
     hunger: Number(bot.food),
-    recentDamage: Date.now() - Number(bot.lastDamageTime || 0) < 4_000,
+    recentDamage,
     urgentDanger,
     food: foodInventory(bot),
-    timeOfDay: Number(bot.time?.timeOfDay || 0),
-    dimension: dimensionName(bot.game?.dimension),
-    weather: bot.thunderState > 0 ? 'Thunderstorm' : bot.rainState > 0 ? 'Rain' : 'Clear',
+    timeOfDay,
+    dimension,
+    weather,
     armor: armorInventory(bot),
-    ...environmentalSituation(bot, now),
+    ...environmentalSituation(bot, now, needs),
   };
 }
 

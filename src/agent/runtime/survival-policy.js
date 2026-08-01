@@ -17,6 +17,16 @@ function numeric(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+/**
+ * Shared so a caller deciding whether a night-only scan is worth running uses
+ * the same window this policy reads it back with. Two copies of the boundary
+ * would drift apart silently.
+ */
+export function isNightTime(timeOfDay) {
+  const time = numeric(Number(timeOfDay), 0);
+  return time >= 12542 && time < 23460;
+}
+
 export function rankFoodCandidates(items = [], situation = {}, policy = {}) {
   const critical = numeric(situation.hunger, 20) <= numeric(policy.criticalFood, 6)
     || numeric(situation.health, 20) <= 8;
@@ -166,7 +176,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
     }
   }
   const timeOfDay = numeric(situation.timeOfDay, 0);
-  const night = timeOfDay >= 12542 && timeOfDay < 23460;
+  const night = isNightTime(timeOfDay);
   if (
     policy.mode === 'full'
     && policy.sleep === 'safe'

@@ -34,7 +34,17 @@ function parseArgs(argv) {
   return options;
 }
 
-function createSurvivalFixture() {
+// A survival policy that can actually reach bed and shelter candidates. The
+// scans are gated on the policy being able to read them, so a fixture without
+// one measures the gate rather than the cache.
+const FULL_SURVIVAL_POLICY = Object.freeze({
+  mode: 'full',
+  sleep: 'safe',
+  shelter: 'emergency',
+  usefulDrops: 'collect',
+});
+
+function createSurvivalFixture({ night = false, policy = null } = {}) {
   let findBlocksCalls = 0;
   const origin = {
     x: 0,
@@ -72,7 +82,7 @@ function createSurvivalFixture() {
     },
     registry: { foodsByName: {} },
     modes: { getStatus: () => [] },
-    time: { timeOfDay: 6000 },
+    time: { timeOfDay: night ? 18000 : 6000 },
     game: { dimension: 'minecraft:overworld' },
     rainState: 0,
     thunderState: 0,
@@ -95,14 +105,15 @@ function createSurvivalFixture() {
       bot,
       isOperatorHeld: () => false,
       isIdle: () => true,
+      ...(policy ? { runtime: { survival: policy } } : {}),
     },
     bot,
     calls: () => findBlocksCalls,
   };
 }
 
-function runSurvivalBenchmark({ iterations = 120, cached }) {
-  const fixture = createSurvivalFixture();
+function runSurvivalBenchmark({ iterations = 120, cached, scenario = {} }) {
+  const fixture = createSurvivalFixture(scenario);
   const durations = [];
   for (let index = 0; index < iterations; index += 1) {
     if (!cached) clearSurvivalSituationCache(fixture.bot);
@@ -217,9 +228,20 @@ async function main() {
   const autonomyDocs = getCommandDocs(fakeAgent, { compact: true, purpose: 'autonomy' });
   const promptReduction = 1 - (compactDocs.length / fullDocs.length);
   const autonomyReduction = 1 - (autonomyDocs.length / compactDocs.length);
-  const uncached = runSurvivalBenchmark({ cached: false });
-  const cached = runSurvivalBenchmark({ cached: true });
-  const scanReduction = 1 - (cached.findBlocksCalls / uncached.findBlocksCalls);
+  // Night with a full policy is the case where the policy can actually consult
+  // beds and shelters, so it is the case where the cache is what saves work.
+  const scanScenario = { night: true, policy: FULL_SURVIVAL_POLICY };
+  const uncached = runSurvivalBenchmark({ cached: false, scenario: scanScenario });
+  const cached = runSurvivalBenchmark({ cached: true, scenario: scanScenario });
+  const scanReduction = uncached.findBlocksCalls > 0
+    ? 1 - (cached.findBlocksCalls / uncached.findBlocksCalls)
+    : 0;
+  // Daylight, full health, clear weather: nothing downstream can read a bed or
+  // shelter candidate, so the sweeps should not run at all.
+  const gated = runSurvivalBenchmark({
+    cached: false,
+    scenario: { night: false, policy: FULL_SURVIVAL_POLICY },
+  });
   const live = await runLiveBenchmark(options);
 
   const report = {
@@ -237,6 +259,7 @@ async function main() {
       uncached,
       cached,
       scanReductionPercent: round(scanReduction * 100),
+      gatedOutOfSeason: gated,
     },
     live,
   };
@@ -245,7 +268,11 @@ async function main() {
 
   if (options.assert) {
     if (promptReduction < 0.3) throw new Error('Compact command prompt reduction fell below 30%.');
+    // Guarded so a zero-scan fixture reports a failure instead of dividing by
+    // zero and sliding past the threshold as NaN.
+    if (uncached.findBlocksCalls === 0) throw new Error('Survival scan benchmark performed no scans; the fixture no longer reaches the scanned path.');
     if (scanReduction < 0.6) throw new Error('Survival environment scan reduction fell below 60%.');
+    if (gated.findBlocksCalls !== 0) throw new Error(`Survival scans ran ${gated.findBlocksCalls} times with no policy able to read the result.`);
   }
 }
 
