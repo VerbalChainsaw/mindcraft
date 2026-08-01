@@ -55,6 +55,10 @@ const HOLD_SAFE_COMMANDS = new Set([
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
 const MAX_INGAME_CHAT_CHARS = 240;
 const MIN_INGAME_CHAT_INTERVAL_MS = 450;
+// One bounded entity read at roughly 7Hz. Cheap enough to run continuously and
+// the only way an already-loaded hostile closing the distance becomes an edge.
+const THREAT_SENSOR_INTERVAL_MS = 150;
+const THREAT_SENSOR_DISTANCE = 12;
 const STARTUP_MILESTONES = new Set([
     'settings_profile_ready',
     'mineflayer_created',
@@ -1111,6 +1115,39 @@ export class Agent {
         };
         refreshAliveInventorySnapshot();
         this.bot.on('physicsTick', refreshAliveInventorySnapshot);
+
+        // entitySpawn only fires when a hostile loads. A mob that was already
+        // loaded and simply walks closer raises no event at all, so without a
+        // cheap sampler that approach is noticed only on the next scheduled
+        // evaluation, and an idle lane schedules half a second out.
+        //
+        // This deliberately does not decide anything. It samples one bounded
+        // predicate and asks the arbiter to evaluate; all priority and control
+        // arbitration stays in the one loop that owns it.
+        this._lastThreatSampleAt = 0;
+        this._threatWasNear = false;
+        const sampleApproachingThreat = () => {
+            const now = Date.now();
+            if (now - this._lastThreatSampleAt < THREAT_SENSOR_INTERVAL_MS) return;
+            this._lastThreatSampleAt = now;
+            const origin = this.bot.entity?.position;
+            if (!origin) return;
+            let near = false;
+            try {
+                near = Boolean(this.bot.nearestEntity(entity => (
+                    mc.isHostile(entity)
+                    && entity?.position
+                    && entity.position.distanceTo(origin) <= THREAT_SENSOR_DISTANCE
+                )));
+            } catch {
+                return; // A transient entity-list read must never break the tick.
+            }
+            // Edge triggered. A hostile that merely loiters in range must not
+            // keep requesting evaluations.
+            if (near && !this._threatWasNear) this.behavior_arbiter?.wake?.('threat_approached');
+            this._threatWasNear = near;
+        };
+        this.bot.on('physicsTick', sampleApproachingThreat);
         // Custom events
         this.bot.on('time', () => {
             if (this.bot.time.timeOfDay == 0) {
