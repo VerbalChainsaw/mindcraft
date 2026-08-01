@@ -2868,17 +2868,17 @@ function currentLiveAgentStateRevisions(states = lastAgentStates) {
     ]));
 }
 
-function emitAgentStateUpdate(payload, { volatile = true } = {}) {
+function emitAgentStateUpdate(payload, { volatile = true, event = 'state-update' } = {}) {
     const room = io?.to?.(AGENT_TELEMETRY_ROOM);
     const roomPublisher = volatile && room?.volatile?.emit ? room.volatile : room;
     if (roomPublisher?.emit) {
-        roomPublisher.emit('state-update', payload);
+        roomPublisher.emit(event, payload);
         return true;
     }
     for (const listener of agent_listeners) {
         if (!listener?.connected) continue;
         const listenerPublisher = volatile && listener.volatile?.emit ? listener.volatile : listener;
-        try { listenerPublisher?.emit?.('state-update', payload); } catch { /* stale listener */ }
+        try { listenerPublisher?.emit?.(event, payload); } catch { /* stale listener */ }
     }
     return true;
 }
@@ -2896,7 +2896,7 @@ function publishAgentStateDelta(agentName, set, unset = [], baseRevision = 0, re
         unset,
         baseRevision,
         revision,
-    ));
+    ), { event: 'state-delta' });
 }
 
 function publishAgentStates(states, { volatile = true } = {}) {

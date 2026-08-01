@@ -6,6 +6,11 @@ import {
   createAgentStatePump,
   selectAgentConnectionsForPolling,
 } from '../../src/mindcraft/agent-state-pump.js';
+import {
+  applyStateUpdate,
+  createStateDelta,
+  createStateSnapshot,
+} from '../../src/mindcraft/public/js/agent-state-protocol.js';
 
 test('Given multiple live bots, when state is sampled, then requests run concurrently and remain keyed by bot name', async () => {
   let active = 0;
@@ -99,4 +104,48 @@ test('Given fresh pushed state, fallback polling selects only legacy or stale ag
     )).sort(),
     ['legacy', 'stale'],
   );
+});
+
+test('Given a contiguous state delta, dashboard state advances without a resync', () => {
+  let applied = applyStateUpdate({}, {}, createStateSnapshot({
+    Scout: { name: 'Scout', health: 20, stale: true },
+  }, { Scout: 4 }));
+  applied = applyStateUpdate(
+    applied.states,
+    applied.revisions,
+    createStateDelta('Scout', { health: 18 }, ['stale'], 4, 5),
+  );
+
+  assert.deepEqual(applied.states, { Scout: { name: 'Scout', health: 18 } });
+  assert.deepEqual(applied.revisions, { Scout: 5 });
+  assert.equal(applied.resyncRequired, false);
+});
+
+test('Given a dropped state delta, dashboard state refuses a mixed merge and converges on a snapshot', () => {
+  const initial = applyStateUpdate({}, {}, createStateSnapshot({
+    Scout: { name: 'Scout', position: { x: 1 } },
+  }, { Scout: 1 }));
+  const gap = applyStateUpdate(
+    initial.states,
+    initial.revisions,
+    createStateDelta('Scout', { position: { x: 3 }, health: 14 }, [], 2, 3),
+  );
+
+  assert.equal(gap.resyncRequired, true);
+  assert.deepEqual(gap.states, initial.states, 'a delta with a missing base must not mutate state');
+  const recovered = applyStateUpdate(gap.states, gap.revisions, createStateSnapshot({
+    Scout: { name: 'Scout', position: { x: 3 }, health: 14 },
+  }, { Scout: 3 }));
+  assert.equal(recovered.resyncRequired, false);
+  assert.deepEqual(recovered.states.Scout, { name: 'Scout', position: { x: 3 }, health: 14 });
+});
+
+test('Given a pre-revision version-two delta, dashboard compatibility is preserved', () => {
+  const applied = applyStateUpdate(
+    { Scout: { name: 'Scout', health: 20 } },
+    {},
+    { version: 2, type: 'delta', changes: { Scout: { set: { health: 19 }, unset: [] } } },
+  );
+  assert.equal(applied.resyncRequired, false);
+  assert.equal(applied.states.Scout.health, 19);
 });

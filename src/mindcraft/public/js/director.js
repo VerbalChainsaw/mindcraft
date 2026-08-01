@@ -116,14 +116,16 @@ export class DirectorWorkspace {
       this.agents = list || [];
       this.renderTarget();
     });
-    socket.on('state-update', (update) => {
+    const receiveStateUpdate = (update) => {
       const applied = applyStateUpdate(this.states, this.stateRevisions, update);
       this.states = applied.states;
       this.stateRevisions = applied.revisions;
       if (applied.resyncRequired) socket.emit('request-agent-state-snapshot');
       this.renderTargetTelemetry();
       this.renderLists();
-    });
+    };
+    socket.on('state-update', receiveStateUpdate);
+    socket.on('state-delta', receiveStateUpdate);
     socket.on('director-event', (event) => {
       const message = this.describeEvent(event);
       this.events.unshift({

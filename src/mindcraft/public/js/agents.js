@@ -130,7 +130,9 @@ export class AgentsWorkspace {
       this.renderFocused();
       this.activity?.add('AGENT',`${name}: ${message}`);
     });
-    socket.on('state-update',(update)=>{const applied=applyStateUpdate(this.states,this.stateRevisions,update);this.states=applied.states;this.stateRevisions=applied.revisions;if(applied.resyncRequired)this.socket.emit('request-agent-state-snapshot');this.captureActionOutcomes(this.states);this.renderFocused();this.onStatesChanged?.(this.states);});
+    const receiveStateUpdate=(update)=>{const applied=applyStateUpdate(this.states,this.stateRevisions,update);this.states=applied.states;this.stateRevisions=applied.revisions;if(applied.resyncRequired)this.socket.emit('request-agent-state-snapshot');this.captureActionOutcomes(this.states);this.renderFocused();this.onStatesChanged?.(this.states);};
+    socket.on('state-update',receiveStateUpdate);
+    socket.on('state-delta',receiveStateUpdate);
      socket.on('squad-update',(squad)=>{if(squad?.persistence)this.squadPersistence=squad.persistence;this.upsertSquad(squad);this.render();});
      socket.on('squad-radio-event',(event)=>{if(!event?.message)return;this.activity?.add('RADIO',`${event.from||'Director'} → squad: ${event.message}`, 'ok');if(event.from==='Director')this.announce?.(`Squad radio delivered to ${event.delivered||0} bot(s).`);});
     socket.on('connect',()=>{this.listenToAgentStates();void this.refreshSquads();});
