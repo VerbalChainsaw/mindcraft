@@ -38,6 +38,7 @@ import { ProgressionDirector } from './runtime/progression-director.js';
 import { AgendaDirector } from './runtime/agenda-director.js';
 import { RuleEngine } from './runtime/rule-engine.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
+import { signalInterrupt } from './runtime/interruptible-delay.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
     '!stop',
@@ -511,6 +512,10 @@ export class Agent {
 
     requestInterrupt() {
         this.bot.interrupt_code = true;
+        // Release any skill parked on an interruptible wait immediately, so the
+        // handoff is bounded by this call rather than by that skill's own poll
+        // period.
+        signalInterrupt(this.bot);
         try { this.bot.stopDigging(); } catch { /* no active dig */ }
         try {
             const cancellation = this.bot.collectBlock?.cancelTask?.();

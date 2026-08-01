@@ -17,6 +17,7 @@ import { rankCollectionCandidates } from '../runtime/collection-candidate-select
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
+import { interruptibleDelay } from '../runtime/interruptible-delay.js';
 import {
     isWaterPotion,
     potionFingerprint,
@@ -359,7 +360,7 @@ async function waitForInventoryCount(bot, itemName, expectedCount, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (inventoryCount(bot, itemName) < expectedCount && Date.now() < deadline) {
         if (bot.interrupt_code) break;
-        await new Promise(resolve => setTimeout(resolve, INVENTORY_POLL_MS));
+        await interruptibleDelay(bot, INVENTORY_POLL_MS);
     }
     return inventoryCount(bot, itemName) >= expectedCount;
 }
@@ -368,7 +369,7 @@ async function waitForWorldCondition(bot, predicate, timeoutMs, pollMs=50) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline && !bot.interrupt_code) {
         if (predicate()) return true;
-        await new Promise(resolve => setTimeout(resolve, pollMs));
+        await interruptibleDelay(bot, pollMs);
     }
     return !bot.interrupt_code && Boolean(predicate());
 }
@@ -554,7 +555,7 @@ async function recoverLocalCraftingTable(bot, temporaryTable) {
     while (!droppedTable && Date.now() < dropDeadline && !bot.interrupt_code) {
         droppedTable = findDroppedItemNear(bot, 'crafting_table', position);
         if (!droppedTable) {
-            await new Promise(resolve => setTimeout(resolve, INVENTORY_POLL_MS));
+            await interruptibleDelay(bot, INVENTORY_POLL_MS);
         }
     }
     if (!droppedTable) {
@@ -616,7 +617,7 @@ async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=
             await approachDroppedItem(bot, expectedDrop, 1, remaining);
             if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
         }
-        await new Promise(resolve => setTimeout(resolve, INVENTORY_POLL_MS));
+        await interruptibleDelay(bot, INVENTORY_POLL_MS);
     }
     return inventoryCountByTypes(bot, itemTypes) > beforeCount;
 }
@@ -2402,7 +2403,7 @@ export async function wait(bot, milliseconds) {
         if (bot.interrupt_code) return false;
         
         let waitTime = Math.min(2000, timeLeft);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        await interruptibleDelay(bot, waitTime);
         
         let elapsed = Date.now() - startTime;
         timeLeft = milliseconds - elapsed;
@@ -3762,7 +3763,7 @@ export async function attackEntity(bot, entity, kill=true) {
         try {
             bot.pvp.attack(entity);
             while (!targetDied && Date.now() - startedAt < MAX_PVP_ENGAGEMENT_MS) {
-                await new Promise(resolve => setTimeout(resolve, 1_000));
+                await interruptibleDelay(bot, 1_000);
                 if (bot.interrupt_code) {
                     setActionEvidence(bot, { kind: 'combat', outcome: 'interrupted', target, retryable: false });
                     return false;
@@ -3910,7 +3911,7 @@ export async function defendSelf(bot, range=9, attributedEntityId=null) {
                 }
             }
 
-            await new Promise(resolve => setTimeout(resolve, DEFENSE_SWING_INTERVAL_MS));
+            await interruptibleDelay(bot, DEFENSE_SWING_INTERVAL_MS);
         }
 
         if (bot.interrupt_code) {
@@ -9962,7 +9963,8 @@ export async function followPlayer(bot, username, distance=4) {
         log(bot, `You are now actively following player ${username}.`);
 
         while (!bot.interrupt_code) {
-        await new Promise(resolve => setTimeout(resolve, FOLLOW_SAMPLE_MS));
+        await interruptibleDelay(bot, FOLLOW_SAMPLE_MS);
+        if (bot.interrupt_code) break;
         resolution = resolvePhysicalPlayer(bot, username);
         target = playerTargetEvidence(resolution);
         const visiblePlayer = resolution.entity;
@@ -11889,7 +11891,7 @@ async function waitForInteractionChange(bot, toolName, target, before) {
         if (changes.length > 0) return { interrupted: false, after, changes };
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
-        await new Promise(resolve => setTimeout(resolve, Math.min(INTERACTION_CONFIRM_POLL_MS, remaining)));
+        await interruptibleDelay(bot, Math.min(INTERACTION_CONFIRM_POLL_MS, remaining));
     }
     return { interrupted: false, after, changes: [] };
 }
