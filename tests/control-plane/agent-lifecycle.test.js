@@ -65,11 +65,12 @@ class FakeRegisteredAgentProcess {
   }
 }
 
-test('Given an unstuck movement that never settles, when its deadline expires, then movement is interrupted without killing the bot process', async () => {
+test('Given bounded unstuck movement, when its deadline expires, then cancellation settles before controls can mutate again', async () => {
   const calls = {
     clearControlStates: 0,
     cleanKill: 0,
     requestInterrupt: 0,
+    delayedControlMutation: 0,
   };
   const agent = {
     bot: {
@@ -86,14 +87,26 @@ test('Given an unstuck movement that never settles, when its deadline expires, t
   };
 
   const result = await runBoundedUnstuckRecovery(agent, {
-    moveAway: () => new Promise(() => {}),
+    moveAway: (_bot, _distance, { signal }) => new Promise(resolve => {
+      const delayedMutation = setTimeout(() => {
+        calls.delayedControlMutation += 1;
+        resolve(true);
+      }, 25);
+      signal.addEventListener('abort', () => {
+        clearTimeout(delayedMutation);
+        resolve(false);
+      }, { once: true });
+    }),
     timeoutMs: 5,
   });
+
+  await new Promise(resolve => setTimeout(resolve, 30));
 
   assert.deepEqual(result, { success: false, reason: 'timed-out' });
   assert.equal(calls.requestInterrupt, 1);
   assert.equal(calls.clearControlStates, 1);
   assert.equal(calls.cleanKill, 0);
+  assert.equal(calls.delayedControlMutation, 0);
 });
 
 test('Given a fire-and-forget mode action rejects, when it settles, then the rejection is contained and active state is cleared', async () => {

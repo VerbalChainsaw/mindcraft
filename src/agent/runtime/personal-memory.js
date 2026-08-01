@@ -172,10 +172,13 @@ export class PersonalMemory {
 
   rememberOutcome(method, {
     success = false,
+    classification = success === true ? 'success' : 'method_failure',
     durationMs = 0,
     yieldCount = 0,
     code = '',
   } = {}) {
+    if (classification === 'censored') return false;
+    if (!['success', 'method_failure'].includes(classification)) return false;
     const methodKey = outcomeKey(method);
     if (!methodKey) return false;
     const previous = this.state.outcomes[methodKey] || {
@@ -192,7 +195,7 @@ export class PersonalMemory {
         .sort((left, right) => left[1].updatedAt - right[1].updatedAt)[0]?.[0];
       if (oldest) delete this.state.outcomes[oldest];
     }
-    const verifiedSuccess = success === true;
+    const verifiedSuccess = classification === 'success';
     this.state.outcomes[methodKey] = {
       attempts: Math.min(1_000_000, previous.attempts + 1),
       successes: Math.min(1_000_000, previous.successes + (verifiedSuccess ? 1 : 0)),

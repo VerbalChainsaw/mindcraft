@@ -15,6 +15,7 @@ import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-tar
 import { companionContextFor, normalizePlayerDistance } from '../runtime/companion-context.js';
 import { rankCollectionCandidates } from '../runtime/collection-candidate-selector.js';
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
+import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import {
     isWaterPotion,
@@ -2687,13 +2688,41 @@ function combatEquipmentSnapshot(bot) {
 function tacticalCombatSnapshot(bot, range, attributedEntityId=null) {
     const hostiles = world.getNearbyEntities(bot, range)
         .filter(entity => entity?.position && mc.isHostile(entity))
-        .map(entity => ({
-            id: entity.id,
-            name: entity.name,
-            distance: bot.entity.position.distanceTo(entity.position),
-            disposition: mc.getThreatDisposition(entity),
-            attributed: Number.isFinite(attributedEntityId) && entity.id === attributedEntityId,
-        }));
+        .map(entity => {
+            const dx = entity.position.x - bot.entity.position.x;
+            const dy = entity.position.y - bot.entity.position.y;
+            const dz = entity.position.z - bot.entity.position.z;
+            const distance = Math.hypot(dx, dy, dz);
+            const relativeVelocity = {
+                x: (Number(entity.velocity?.x) || 0) - (Number(bot.entity.velocity?.x) || 0),
+                y: (Number(entity.velocity?.y) || 0) - (Number(bot.entity.velocity?.y) || 0),
+                z: (Number(entity.velocity?.z) || 0) - (Number(bot.entity.velocity?.z) || 0),
+            };
+            const radialVelocity = distance > 0.001
+                ? ((relativeVelocity.x * dx) + (relativeVelocity.y * dy) + (relativeVelocity.z * dz)) / distance
+                : 0;
+            const closingSpeed = Number((-radialVelocity).toFixed(3));
+            const feet = bot.blockAt?.(entity.position.floored?.() || entity.position);
+            const headPosition = entity.position.offset?.(0, 1, 0);
+            const head = headPosition ? bot.blockAt?.(headPosition) : null;
+            return {
+                id: entity.id,
+                name: entity.name,
+                distance,
+                disposition: mc.getThreatDisposition(entity),
+                attributed: Number.isFinite(attributedEntityId) && entity.id === attributedEntityId,
+                motion: {
+                    state: closingSpeed > 0.04 ? 'approaching' : closingSpeed < -0.04 ? 'retreating' : 'stationary',
+                    closingSpeed,
+                },
+                lineOfSight: world.hasLineOfSightToEntity(bot, entity),
+                localGeometry: {
+                    feet: String(feet?.name || 'unknown').slice(0, 64),
+                    head: String(head?.name || 'unknown').slice(0, 64),
+                    onGround: entity.onGround === true,
+                },
+            };
+        });
     return {
         health: bot.health,
         hunger: bot.food,
@@ -2776,6 +2805,7 @@ function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_
         let released = false;
         let timeout = null;
         let interruptPoll = null;
+        let lastUncreditedDamage = null;
         const targetId = entity?.id;
         const cleanup = () => {
             if (timeout) clearTimeout(timeout);
@@ -2792,18 +2822,35 @@ function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_
             cleanup();
             resolve(result);
         };
-        const onEntityHurt = hurtEntity => {
-            if (hurtEntity?.id === targetId) finish({ confirmed: true, outcome: 'ranged_hit_observed' });
+        const onEntityHurt = (hurtEntity, source) => {
+            const observation = observeCombatDamage(bot, targetId, hurtEntity, source);
+            if (!observation.matchesTarget) return;
+            if (observation.confirmsBotHit) {
+                finish({ confirmed: true, outcome: 'ranged_hit_attributed', attribution: observation });
+                return;
+            }
+            lastUncreditedDamage = observation;
         };
         const onEntityDead = deadEntity => {
-            if (deadEntity?.id === targetId) finish({ confirmed: true, outcome: 'target_died_after_ranged_attack' });
+            if (deadEntity?.id === targetId) {
+                finish({
+                    confirmed: false,
+                    outcome: lastUncreditedDamage?.attribution === 'foreign'
+                        ? 'target_died_after_foreign_damage'
+                        : 'target_died_unattributed',
+                    attribution: lastUncreditedDamage,
+                });
+            }
         };
 
         bot.on('entityHurt', onEntityHurt);
         bot.on('entityDead', onEntityDead);
         timeout = setTimeout(() => finish({
             confirmed: false,
-            outcome: bot.interrupt_code ? 'interrupted' : 'ranged_damage_unconfirmed',
+            outcome: bot.interrupt_code
+                ? 'interrupted'
+                : lastUncreditedDamage?.code || 'ranged_damage_unconfirmed',
+            attribution: lastUncreditedDamage,
         }), timeoutMs + TACTICAL_BOW_CHARGE_MS);
         interruptPoll = setInterval(() => {
             if (bot.interrupt_code) finish({ confirmed: false, outcome: 'interrupted' });
@@ -3008,6 +3055,7 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
         let settled = false;
         let timeout = null;
         let interruptPoll = null;
+        let lastUncreditedDamage = null;
         const targetId = entity?.id;
 
         const cleanup = () => {
@@ -3022,18 +3070,24 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
             cleanup();
             resolve(result);
         };
-        const onEntityHurt = hurtEntity => {
-            if (hurtEntity?.id !== targetId) return;
-            // Mineflayer's entityHurt event identifies the hurt entity but does
-            // not expose a damage source. Because this listener is installed
-            // immediately before the single bot.attack call and is bounded by
-            // ATTACK_CONFIRM_TIMEOUT_MS, an event for this exact target is the
-            // strongest confirmation the client API can provide.
-            finish({ confirmed: true, outcome: 'hit_observed' });
+        const onEntityHurt = (hurtEntity, source) => {
+            const observation = observeCombatDamage(bot, targetId, hurtEntity, source);
+            if (!observation.matchesTarget) return;
+            if (observation.confirmsBotHit) {
+                finish({ confirmed: true, outcome: 'hit_attributed', attribution: observation });
+                return;
+            }
+            lastUncreditedDamage = observation;
         };
         const onEntityDead = deadEntity => {
             if (deadEntity?.id === targetId) {
-                finish({ confirmed: true, outcome: 'target_died_after_attack' });
+                finish({
+                    confirmed: false,
+                    outcome: lastUncreditedDamage?.attribution === 'foreign'
+                        ? 'target_died_after_foreign_damage'
+                        : 'target_died_unattributed',
+                    attribution: lastUncreditedDamage,
+                });
             }
         };
 
@@ -3044,7 +3098,8 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
                 confirmed: false,
                 outcome: bot.interrupt_code
                     ? 'interrupted'
-                    : 'damage_unconfirmed',
+                    : lastUncreditedDamage?.code || 'damage_unconfirmed',
+                attribution: lastUncreditedDamage,
             });
         }, timeoutMs);
         interruptPoll = setInterval(() => {
@@ -3202,10 +3257,17 @@ export async function attackEntity(bot, entity, kill=true) {
     }
     else {
         let targetDied = false;
-        let observedHits = 0;
-        const onEntityHurt = hurtEntity => {
-            if (hurtEntity?.id !== entity.id) return;
-            observedHits += 1;
+        let botAttributedHits = 0;
+        let foreignAttributedHits = 0;
+        let unknownAttributedHits = 0;
+        let lastDamageAttribution = 'unknown';
+        const onEntityHurt = (hurtEntity, source) => {
+            const observation = observeCombatDamage(bot, entity.id, hurtEntity, source);
+            if (!observation.matchesTarget) return;
+            lastDamageAttribution = observation.attribution;
+            if (observation.attribution === 'bot') botAttributedHits += 1;
+            else if (observation.attribution === 'foreign') foreignAttributedHits += 1;
+            else unknownAttributedHits += 1;
         };
         const onEntityDead = deadEntity => {
             if (deadEntity?.id !== entity.id) return;
@@ -3241,16 +3303,21 @@ export async function attackEntity(bot, entity, kill=true) {
                 return false;
             }
 
-            if (observedHits < 1) {
+            if (botAttributedHits < 1 || lastDamageAttribution !== 'bot') {
                 setActionEvidence(bot, {
                     kind: 'combat',
-                    outcome: 'target_died_without_observed_hit',
+                    outcome: lastDamageAttribution === 'foreign'
+                        ? 'target_died_after_foreign_damage'
+                        : 'target_died_unattributed',
                     target,
-                    observedHits,
+                    botAttributedHits,
+                    foreignAttributedHits,
+                    unknownAttributedHits,
+                    lastDamageAttribution,
                     elapsedMs: Date.now() - startedAt,
                     retryable: false,
                 });
-                log(bot, `${target.name} died, but Minecraft did not report a hit during this bot's attack.`);
+                log(bot, `${target.name} died, but Minecraft did not attribute the final damage to this bot.`);
                 return false;
             }
 
@@ -3264,7 +3331,11 @@ export async function attackEntity(bot, entity, kill=true) {
                 kind: 'combat',
                 outcome: 'killed',
                 target,
-                observedHits,
+                observedHits: botAttributedHits,
+                botAttributedHits,
+                foreignAttributedHits,
+                unknownAttributedHits,
+                lastDamageAttribution,
                 elapsedMs: Date.now() - startedAt,
                 retryable: false,
             });
@@ -7637,6 +7708,14 @@ export async function goToGoal(bot, goal, options = {}) {
      * @param {pf.goals.Goal} goal, the goal to navigate to.
      * @param {object} options, optional movement policy factory and recovery controls.
      **/
+    const signal = options?.signal;
+    const aborted = () => signal?.aborted === true;
+    const stopForAbort = () => {
+        stopNavigationGoal(bot);
+        try { bot.clearControlStates?.(); } catch { /* best-effort abort cleanup */ }
+    };
+    if (aborted()) return false;
+    signal?.addEventListener?.('abort', stopForAbort, { once: true });
     const movementFactory = typeof options?.movements === 'function'
         ? options.movements
         : options?.movements
@@ -7661,20 +7740,24 @@ export async function goToGoal(bot, goal, options = {}) {
         let shallowWaterAttempted = false;
         if (
             !bot.interrupt_code
+            && !aborted()
             && (bot.entity?.isInWater || isLiquidGameplayBlock(currentFeet))
             && (!initialTarget || !Number.isFinite(initialY) || initialTarget.y >= Math.floor(initialY))
         ) {
             shallowWaterAttempted = true;
             recovery = await attemptShallowWaterExit(bot);
+            if (aborted()) return false;
             if (recovery.success) {
                 log(bot, 'Navigation stepped out of shallow water before routing to the requested goal.');
             }
         }
         const directApproach = !bot.interrupt_code
+            && !aborted()
             && !bot.entity?.isInWater
             && !isLiquidGameplayBlock(currentFeet)
             ? await attemptDirectNavigationApproach(bot, goal)
             : null;
+        if (aborted()) return false;
         if (directApproach?.steps > 0) {
             recovery = recovery
                 ? { ...directApproach, previous: recovery }
@@ -7686,6 +7769,7 @@ export async function goToGoal(bot, goal, options = {}) {
         let outcome = goal?.isEnd?.(bot.entity.position.floored())
             ? { state: 'resolved' }
             : await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
+        if (aborted()) return false;
         currentFeet = bot.entity?.position
             ? bot.blockAt(bot.entity.position.floored())
             : null;
@@ -7695,9 +7779,11 @@ export async function goToGoal(bot, goal, options = {}) {
             && (bot.entity?.isInWater || isLiquidGameplayBlock(currentFeet))
         ) {
             recovery = await attemptShallowWaterExit(bot);
+            if (aborted()) return false;
             if (recovery.success) {
                 log(bot, 'Navigation stepped out of shallow water and is retrying the requested route.');
                 outcome = await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
+                if (aborted()) return false;
             }
         }
         if (
@@ -7711,6 +7797,7 @@ export async function goToGoal(bot, goal, options = {}) {
                 safeDescentMovements(bot),
                 navigationStallTimeoutMs,
             );
+            if (aborted()) return false;
             const descentRecovery = {
                 success: outcome.state === 'resolved' && !bot.interrupt_code,
                 strategy: 'health_bounded_descent',
@@ -7732,6 +7819,7 @@ export async function goToGoal(bot, goal, options = {}) {
             && shouldTryNavigationRecovery(bot, outcome)
         ) {
             const localRecovery = await attemptLocalNavigationEscape(bot, goal);
+            if (aborted()) return false;
             recovery = recovery
                 ? { ...localRecovery, previous: recovery }
                 : localRecovery;
@@ -7747,6 +7835,7 @@ export async function goToGoal(bot, goal, options = {}) {
                         : 'a safe local step';
             log(bot, `Navigation made ${recoveryAction} ${recoveryAttempts}/${MAX_NAVIGATION_RECOVERY_ATTEMPTS} and is retrying the route.`);
             outcome = await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
+            if (aborted()) return false;
         }
         if (outcome.state === 'stalled') {
             const target = navigationTarget(goal);
@@ -7775,7 +7864,7 @@ export async function goToGoal(bot, goal, options = {}) {
                 : `Navigation stopped (${failure.replace(/_/g, ' ')}): ${outcome.error?.message || outcome.error}.`);
             return false;
         }
-        if (bot.interrupt_code) {
+        if (bot.interrupt_code || aborted()) {
             setActionEvidence(bot, {
                 kind: 'movement',
                 outcome: 'interrupted',
@@ -7803,7 +7892,7 @@ export async function goToGoal(bot, goal, options = {}) {
         });
         return true;
     } catch (err) {
-        const outcome = pathfinderErrorOutcome(err, Boolean(bot.interrupt_code));
+        const outcome = pathfinderErrorOutcome(err, Boolean(bot.interrupt_code || aborted()));
         setActionEvidence(bot, {
             kind: 'movement',
             outcome,
@@ -7815,6 +7904,7 @@ export async function goToGoal(bot, goal, options = {}) {
             : `Navigation stopped (${outcome.replace(/_/g, ' ')}): ${err?.message || err}.`);
         return false;
     } finally {
+        signal?.removeEventListener?.('abort', stopForAbort);
         clearDoorInterval(bot, doorCheckInterval);
         // mineflayer-pathfinder retains failed static goals. Leaving one behind
         // made the generic unstuck mode think later crafting or inventory work
@@ -9324,7 +9414,7 @@ export async function followPlayer(bot, username, distance=4) {
 }
 
 
-export async function moveAway(bot, distance) {
+export async function moveAway(bot, distance, options = {}) {
     /**
      * Move away from current position in any direction.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -9334,6 +9424,8 @@ export async function moveAway(bot, distance) {
      * await skills.moveAway(bot, 8);
      **/
     const pos = bot.entity.position.clone();
+    const signal = options?.signal;
+    if (signal?.aborted) return false;
     const requestedDistance = Math.max(0, Number(distance) || 0);
     const target = { x: pos.x, y: pos.y, z: pos.z };
     let goal = new pf.goals.GoalNear(pos.x, pos.y, pos.z, requestedDistance);
@@ -9344,6 +9436,7 @@ export async function moveAway(bot, distance) {
         let path;
         try {
             path = await bot.pathfinder.getPathTo(safeMovements(bot), inverted_goal, 10000);
+            if (signal?.aborted) return false;
         } catch (err) {
             setActionEvidence(bot, { kind: 'movement', outcome: 'probe_error', target, error: err.message, retryable: true });
             log(bot, `Could not find a retreat path: ${err.message}.`);
@@ -9366,7 +9459,7 @@ export async function moveAway(bot, distance) {
 
     let routed;
     try {
-        routed = await goToGoal(bot, inverted_goal);
+        routed = await goToGoal(bot, inverted_goal, options);
     } catch (err) {
         setActionEvidence(bot, {
             kind: 'movement',
@@ -9383,6 +9476,7 @@ export async function moveAway(bot, distance) {
         setActionEvidence(bot, { kind: 'movement', outcome, target, retryable: true });
         return false;
     }
+    if (signal?.aborted) return false;
     let new_pos = bot.entity.position;
     const moved = new_pos.distanceTo(pos);
     if (requestedDistance > 0 && moved + 0.5 < requestedDistance) {

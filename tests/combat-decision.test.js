@@ -80,3 +80,36 @@ test('an avoid-only hostile is never selected for autonomous attack', () => {
   assert.equal(decision.response, 'retreat');
   assert.equal(decision.reason, 'avoid_only_threat');
 });
+
+test('an obscured nearest hostile does not suppress a more urgent loaded threat', () => {
+  const decision = chooseTacticalCombatDecision({
+    health: 20,
+    equipment: ready,
+    hostiles: [
+      {
+        id: 8,
+        name: 'zombie',
+        distance: 2,
+        disposition: 'combat_safe',
+        lineOfSight: false,
+        localGeometry: { feet: 'stone', head: 'stone', onGround: true },
+        motion: { state: 'stationary', closingSpeed: 0 },
+      },
+      {
+        id: 9,
+        name: 'creeper',
+        distance: 6,
+        disposition: 'combat_safe',
+        lineOfSight: true,
+        localGeometry: { feet: 'air', head: 'air', onGround: true },
+        motion: { state: 'approaching', closingSpeed: 0.12 },
+      },
+    ],
+  });
+
+  assert.equal(decision.considered, 2);
+  assert.equal(decision.selected.id, 9);
+  assert.equal(decision.selected.classification, 'explosive');
+  assert.equal(decision.selected.lineOfSight, true);
+  assert.deepEqual(decision.ranked[1].localGeometry, { feet: 'stone', head: 'stone', onGround: true });
+});

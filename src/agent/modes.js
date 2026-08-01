@@ -155,9 +155,10 @@ export async function runBoundedUnstuckRecovery(agent, {
     const boundedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
         ? timeoutMs
         : DEFAULT_UNSTUCK_TIMEOUT_MS;
+    const movementController = new AbortController();
     let timeoutId;
     const movement = Promise.resolve()
-        .then(() => moveAway(agent.bot, 5))
+        .then(() => moveAway(agent.bot, 5, { signal: movementController.signal }))
         .then(
             moved => moved === false
                 ? { state: 'unmoved', reason: agent.bot.lastActionEvidence?.outcome || 'no safe retreat path' }
@@ -172,7 +173,12 @@ export async function runBoundedUnstuckRecovery(agent, {
     clearTimeout(timeoutId);
 
     if (outcome.state === 'timed-out') {
+        movementController.abort('unstuck_timeout');
         stopUnstuckMotion(agent);
+        // The timeout owns cancellation and does not release the lane until the
+        // movement promise acknowledges it. No stale navigation continuation
+        // can mutate controls after the recovery result is returned.
+        await movement;
         return { success: false, reason: 'timed-out' };
     }
     if (outcome.state === 'failed') {
@@ -414,7 +420,7 @@ const modes_list = [
         interrupts: ['all'],
         on: true,
         active: false,
-        update: async function (agent) {
+        update: function (agent) {
             const protectionThreat = getAttributedProtectionThreat(agent);
             const enemy = protectionThreat || (agent.runtime?.autonomy === 'command'
                 ? getRecentDamageCombatThreat(agent)
@@ -424,22 +430,23 @@ const modes_list = [
                     SELF_DEFENSE_RANGE,
                 ));
             if (!enemy) return;
-            if (await world.isClearPath(agent.bot, enemy)) {
-                say(agent, protectionThreat
-                    ? `Protecting ${agent.companion_context?.canonicalUsername || 'the guarded player'} from ${enemy.name}!`
-                    : `Fighting ${enemy.name}!`);
-                void execute(this, agent, async () => {
-                    try {
-                        return await skills.resolveTacticalCombat(
-                            agent.bot,
-                            SELF_DEFENSE_RANGE,
-                            protectionThreat?.id ?? null,
-                        );
-                    } finally {
-                        if (protectionThreat) agent.companion_context?.clearProtection?.('engagement_finished');
-                    }
-                });
-            }
+            // Threat relevance is independent from whether pathfinder can walk
+            // beside the nearest hostile. The tactical selector evaluates all
+            // loaded threats and chooses melee, range, or retreat itself.
+            say(agent, protectionThreat
+                ? `Protecting ${agent.companion_context?.canonicalUsername || 'the guarded player'} from ${enemy.name}!`
+                : `Fighting ${enemy.name}!`);
+            void execute(this, agent, async () => {
+                try {
+                    return await skills.resolveTacticalCombat(
+                        agent.bot,
+                        SELF_DEFENSE_RANGE,
+                        protectionThreat?.id ?? null,
+                    );
+                } finally {
+                    if (protectionThreat) agent.companion_context?.clearProtection?.('engagement_finished');
+                }
+            });
         }
     },
     {

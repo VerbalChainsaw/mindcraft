@@ -13,6 +13,7 @@ import {
   normalizeGoalContract,
 } from '../src/agent/runtime/goal-contract.js';
 import { PersonalMemory } from '../src/agent/runtime/personal-memory.js';
+import { classifyMethodOutcome } from '../src/agent/runtime/action-result.js';
 import { buildPrerequisitePlan } from '../src/agent/runtime/prerequisite-planner.js';
 import { ProcedureStore } from '../src/agent/runtime/procedure-store.js';
 
@@ -96,6 +97,29 @@ test('Verified outcome history persists and remains a bounded ranking hint', asy
     assert.ok(restored.outcomePreference('collect:beta_ore->test_gem') > 0);
     assert.ok(restored.outcomePreference('collect:alpha_ore->test_gem') < 0);
     assert.equal(restored.getOutcomeSummary(1).length, 1);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('ownership preemption is censored and does not poison method learning', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'mindcraft-censored-learning-'));
+  try {
+    const memory = new PersonalMemory('TestBot', { rootDir });
+    memory.load();
+    const interrupted = { phase: 'interrupted', code: 'interrupted' };
+    const classification = classifyMethodOutcome(interrupted);
+
+    assert.equal(classification, 'censored');
+    assert.equal(memory.rememberOutcome('collect:stone->cobblestone', {
+      classification,
+      success: false,
+      durationMs: 500,
+      code: interrupted.code,
+    }), false);
+    assert.deepEqual(memory.getOutcomeSummary(6), []);
+    assert.equal(classifyMethodOutcome({ phase: 'failed', code: 'path_stalled' }), 'method_failure');
+    assert.equal(classifyMethodOutcome({ phase: 'succeeded', code: 'collected' }), 'success');
   } finally {
     await rm(rootDir, { recursive: true, force: true });
   }

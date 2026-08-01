@@ -1,4 +1,6 @@
 import { comportmentPauseMs, normalizeComportment } from './comportment.js';
+import settings from '../settings.js';
+import { DecisionTraceRecorder } from './decision-trace.js';
 
 // Fallback for bots whose runtime config predates comportment. Neutral is the
 // exact pre-comportment pacing, so an unconfigured bot behaves as it always did.
@@ -81,14 +83,19 @@ export function tickDelayForStatus(status, {
 
 function boundedText(value, fallback = '') {
   return String(value || fallback)
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ') // eslint-disable-line no-control-regex
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_STATUS_TEXT);
 }
 
 export class BehaviorArbiter {
-  constructor(agent, { now = Date.now, random = Math.random } = {}) {
+  constructor(agent, {
+    now = Date.now,
+    random = Math.random,
+    monotonicNow = () => performance.now(),
+    trace = null,
+  } = {}) {
     this.agent = agent;
     this.now = now;
     this.random = typeof random === 'function' ? random : Math.random;
@@ -99,6 +106,19 @@ export class BehaviorArbiter {
     this.lastObservedAt = null;
     this.nextTickDelayMs = DEFAULT_TICK_MS;
     this.urgency = 'calm';
+    this.traceEvaluationLane = null;
+    const traceConfig = trace && typeof trace === 'object'
+      ? trace
+      : settings.decision_trace && typeof settings.decision_trace === 'object'
+        ? settings.decision_trace
+        : {};
+    this.traceRecorder = new DecisionTraceRecorder({
+      enabled: traceConfig.enabled !== false,
+      retention: traceConfig.retention,
+      now,
+      monotonicNow,
+      agent: agent?.name || 'bot',
+    });
     // Comportment pacing state: `wasActing` remembers whether the previous tick
     // owned an action so the hesitation can be armed exactly once on release.
     this.wasActing = false;
@@ -142,8 +162,23 @@ export class BehaviorArbiter {
     // action looked idle and a lower lane could claim ownership underneath it.
     const active = Boolean(actions?.executing) || Boolean(actions?.currentActionLabel);
     return {
+      actionId: active ? boundedText(actions.currentActionId) || null : null,
       owner: active ? boundedText(actions.currentActionOwner, 'unknown') : null,
       label: active ? boundedText(actions.currentActionLabel, 'unknown') : null,
+      intent: active ? boundedText(actions.currentActionLabel, 'unknown') : null,
+      startedAt: active && Number.isFinite(actions.currentActionStartedAt)
+        ? actions.currentActionStartedAt
+        : null,
+      commitment: {
+        resumeAction: boundedText(actions?.resume_name) || null,
+        goalId: boundedText(this.agent?.goal_director?.activeGoal?.id) || null,
+        goalPhase: boundedText(this.agent?.goal_director?.activeGoal?.phase) || null,
+        workOrderId: boundedText(
+          this.agent?.job_director?.activeOrder?.id
+          || this.agent?.job_director?.activeOrder?.orderId,
+        ) || null,
+        workOrderPhase: boundedText(this.agent?.job_director?.activeOrder?.phase) || null,
+      },
     };
   }
 
@@ -170,7 +205,30 @@ export class BehaviorArbiter {
       cadenceScale: this.comportment().cadenceScale,
       pauseRemainingMs: this.comportmentPauseUntil - now,
     });
+    this.traceRecorder.select({
+      lane: selectedLane,
+      evaluatedLane: this.traceEvaluationLane || selectedLane,
+      reasonCode: code,
+      lowerLanesSuppressed,
+    });
     return this.snapshot();
+  }
+
+  selectFrom(traceLane, ...selection) {
+    this.traceEvaluationLane = traceLane;
+    try {
+      return this.select(...selection);
+    } finally {
+      this.traceEvaluationLane = null;
+    }
+  }
+
+  recordActionStart(action) {
+    return this.traceRecorder.linkAction(action);
+  }
+
+  recordOutcome(result) {
+    return this.traceRecorder.linkOutcome(result);
   }
 
   comportment() {
@@ -258,9 +316,16 @@ export class BehaviorArbiter {
   }
 
   async evaluateModeBand(lane, names, perception) {
+    this.traceRecorder.startLane(lane);
     try {
       const result = await this.agent.bot?.modes?.updateBand?.(names);
       if (result?.active || result?.scheduled) {
+        this.traceRecorder.finishLane(lane, {
+          status: 'eligible',
+          reasonCode: result.code || 'mode_scheduled',
+          targetRef: result.mode ? `mode:${result.mode}` : null,
+          evidenceRefs: [`perception-${this.tick}`],
+        });
         return this.select(
           lane,
           result.code || 'mode_scheduled',
@@ -269,6 +334,10 @@ export class BehaviorArbiter {
           perception,
         );
       }
+      this.traceRecorder.finishLane(lane, {
+        status: 'ineligible',
+        reasonCode: result?.code || 'mode_band_inactive',
+      });
       return null;
     } catch (error) {
       return this.select(
@@ -327,7 +396,23 @@ export class BehaviorArbiter {
     this.tick += 1;
     const modes = this.agent.bot?.modes;
     this.urgency = this.urgencyOf();
+    this.traceRecorder.begin({
+      tick: this.tick,
+      trigger: {
+        code: this.directiveResumeRequested ? 'directive_resume' : 'scheduled_tick',
+        deltaMs: Number.isFinite(Number(delta)) ? Number(delta) : null,
+      },
+      activeAction: this.actionState(),
+    });
+    this.traceRecorder.startStage('perception_refresh');
     const perception = await this.refreshPerception();
+    this.traceRecorder.finishStage('perception_refresh');
+    this.traceRecorder.addEvidence({
+      id: `perception-${this.tick}`,
+      source: 'environment_observer',
+      observedAt: perception.observedAt,
+      summary: perception.error || perception.freshness,
+    });
     let modeCycleStarted = false;
     try {
       try {
@@ -336,10 +421,12 @@ export class BehaviorArbiter {
       } catch (error) {
         return this.select('degraded', 'mode_cycle_failed', `Mode cycle failed safely: ${boundedText(error?.message || error)}`, true, perception);
       }
+      this.traceRecorder.startLane('operator_hold');
       if (this.agent.isOperatorHeld?.()) {
         this.directiveResumeRequested = false;
         return this.select('operator_hold', 'operator_hold', this.agent.operator_hold_reason || 'Operator Stop is authoritative.', true, perception);
       }
+      this.traceRecorder.finishLane('operator_hold', { status: 'ineligible', reasonCode: 'operator_not_held' });
 
       let selected = await this.evaluateModeBand('emergency_self_preservation', EMERGENCY_MODES, perception);
       if (selected) return selected;
@@ -361,9 +448,16 @@ export class BehaviorArbiter {
           console.warn(`[behavior-arbiter] Concurrent factual reaction failed safely: ${boundedText(error?.message || error)}`);
         }
       }
-      selected = this.classifyActiveAction(perception);
+      this.traceRecorder.startLane('active_action_retention');
+      this.traceEvaluationLane = 'active_action_retention';
+      try {
+        selected = this.classifyActiveAction(perception);
+      } finally {
+        this.traceEvaluationLane = null;
+      }
       this.observeActionRelease(Boolean(selected));
       if (selected) return selected;
+      this.traceRecorder.finishLane('active_action_retention', { status: 'ineligible', reasonCode: 'no_active_action' });
 
       // Recovery remains above survival and all autonomous work, but only when
       // no live player/job action owns the body. `unstuck` itself measures an
@@ -373,7 +467,10 @@ export class BehaviorArbiter {
 
       if (this.urgency === 'critical') {
         this.comportmentPauseUntil = 0;
+        this.traceRecorder.startLane('comportment_pause');
+        this.traceRecorder.finishLane('comportment_pause', { status: 'ineligible', reasonCode: 'critical_urgency_override' });
       } else if (this.comportmentPauseUntil > this.now()) {
+        this.traceRecorder.startLane('comportment_pause');
         return this.select(
           'comportment_pause',
           'comportment_pause',
@@ -381,10 +478,14 @@ export class BehaviorArbiter {
           true,
           perception,
         );
+      } else {
+        this.traceRecorder.startLane('comportment_pause');
+        this.traceRecorder.finishLane('comportment_pause', { status: 'ineligible', reasonCode: 'no_comportment_pause' });
       }
 
       const companion = this.agent.companion_context?.snapshot?.();
       if (!companion?.directive) this.directiveResumeRequested = false;
+      this.traceRecorder.startLane('player_directive');
       if (
         companion?.directive
         && companion.presence === 'present'
@@ -408,8 +509,10 @@ export class BehaviorArbiter {
           perception,
         );
       }
+      this.traceRecorder.finishLane('player_directive', { status: 'ineligible', reasonCode: 'directive_not_resumable' });
 
       const survival = this.agent.survival_director;
+      this.traceRecorder.startLane('basic_survival');
       if (survival?.update) {
         try {
           survival.update();
@@ -420,16 +523,19 @@ export class BehaviorArbiter {
           return this.select('basic_survival', survival.status?.code || 'survival_selected', 'Basic survival maintenance selected the tick.', true, perception);
         }
       }
+      this.traceRecorder.finishLane('basic_survival', { status: 'ineligible', reasonCode: 'survival_not_selected' });
 
       const job = this.agent.job_director;
+      this.traceRecorder.startLane('survival_job');
       if (job?.activeOrder?.source === 'survival') {
         try {
           job.update();
         } catch (error) {
           return this.select('basic_survival', 'survival_job_update_failed', `Survival recovery work failed safely: ${boundedText(error?.message || error)}`, true, perception);
         }
-        return this.select('basic_survival', job.status?.code || 'survival_job_selected', 'A survival recovery work order selected the tick.', true, perception);
+        return this.selectFrom('survival_job', 'basic_survival', job.status?.code || 'survival_job_selected', 'A survival recovery work order selected the tick.', true, perception);
       }
+      this.traceRecorder.finishLane('survival_job', { status: 'ineligible', reasonCode: 'no_survival_job' });
       // The agenda decides what comes next and hands it to an executor; it
       // never acts itself. Running it before the goal and job lanes means a
       // step it dispatches is picked up by those lanes on this same tick.
@@ -437,23 +543,30 @@ export class BehaviorArbiter {
       // them. They only ever queue agenda steps, never act directly.
       const rules = this.agent.rule_engine;
       if (rules?.update) {
+        this.traceRecorder.startStage('standing_orders');
         try {
           rules.update();
         } catch (error) {
           console.warn(`[behavior-arbiter] Standing orders failed safely: ${boundedText(error?.message || error)}`);
+        } finally {
+          this.traceRecorder.finishStage('standing_orders');
         }
       }
 
       const agenda = this.agent.agenda_director;
       if (agenda?.update) {
+        this.traceRecorder.startStage('agenda_dispatch');
         try {
           agenda.update();
         } catch (error) {
           return this.select('player_goal', 'agenda_update_failed', `Agenda dispatch failed safely: ${boundedText(error?.message || error)}`, true, perception);
+        } finally {
+          this.traceRecorder.finishStage('agenda_dispatch');
         }
       }
 
       const goal = this.agent.goal_director;
+      this.traceRecorder.startLane('player_goal');
       if (goal?.activeGoal) {
         try {
           goal.update();
@@ -464,6 +577,8 @@ export class BehaviorArbiter {
           return this.select('player_goal', goal.status?.code || 'player_goal_selected', 'A typed player goal selected the tick.', true, perception);
         }
       }
+      this.traceRecorder.finishLane('player_goal', { status: 'ineligible', reasonCode: 'no_player_goal' });
+      this.traceRecorder.startLane('player_job');
       if (job?.activeOrder && PLAYER_JOB_SOURCES.has(job.activeOrder.source)) {
         try {
           job.update();
@@ -474,6 +589,8 @@ export class BehaviorArbiter {
           return this.select('player_job', job.status?.code || 'player_job_selected', 'Explicit resumable player work selected the tick.', true, perception);
         }
       }
+      this.traceRecorder.finishLane('player_job', { status: 'ineligible', reasonCode: 'no_player_job' });
+      this.traceRecorder.startLane('command_policy_guard');
       if (this.agent.runtime?.autonomy === 'command' && job?.update) {
         try {
           job.update();
@@ -481,11 +598,13 @@ export class BehaviorArbiter {
           return this.select('degraded', 'command_policy_update_failed', `Command-autonomy policy failed safely: ${boundedText(error?.message || error)}`, true, perception);
         }
         if (this.agent.actions?.executing) {
-          return this.select('degraded', 'unauthorized_role_action', 'Command autonomy blocked lower lanes after unexpected role action ownership.', true, perception);
+          return this.selectFrom('command_policy_guard', 'degraded', 'unauthorized_role_action', 'Command autonomy blocked lower lanes after unexpected role action ownership.', true, perception);
         }
       }
+      this.traceRecorder.finishLane('command_policy_guard', { status: 'ineligible', reasonCode: 'command_policy_clear' });
 
       const reaction = this.agent.reaction_director;
+      this.traceRecorder.startLane('factual_reaction');
       if (reaction?.update) {
         try {
           reaction.update();
@@ -499,6 +618,7 @@ export class BehaviorArbiter {
           return this.select('factual_reaction', reaction.status?.code || 'reaction_selected', 'A bounded factual reaction selected the tick.', true, perception);
         }
       }
+      this.traceRecorder.finishLane('factual_reaction', { status: 'ineligible', reasonCode: 'reaction_not_selected' });
 
       // Authorized work outranks cosmetic embodiment. Idle staring used to be
       // evaluated first and could consume the tick that role work needed.
@@ -507,6 +627,7 @@ export class BehaviorArbiter {
         && job?.update
         && (!job.activeOrder || ROLE_JOB_SOURCES.has(job.activeOrder.source))
       ) {
+        this.traceRecorder.startLane('role_work');
         try {
           job.update();
         } catch (error) {
@@ -515,11 +636,15 @@ export class BehaviorArbiter {
         if (job.inFlight || this.agent.actions?.executing || job.activeOrder) {
           return this.select('role_work', job.status?.code || 'role_work_selected', 'Existing role policy selected authorized work.', true, perception);
         }
+      } else {
+        this.traceRecorder.startLane('role_work');
       }
+      this.traceRecorder.finishLane('role_work', { status: 'ineligible', reasonCode: 'role_work_not_selected' });
 
       // With no player work and no role order outstanding, an autonomous bot
       // pursues its own survival ladder instead of standing still.
       const progression = this.agent.progression_director;
+      this.traceRecorder.startLane('self_progression');
       if (progression?.update && progression.permitted?.()) {
         try {
           progression.update();
@@ -530,6 +655,7 @@ export class BehaviorArbiter {
           return this.select('self_progression', progression.status?.code || 'progression_selected', 'Self-directed survival progression selected the tick.', true, perception);
         }
       }
+      this.traceRecorder.finishLane('self_progression', { status: 'ineligible', reasonCode: 'progression_not_selected' });
 
       // Noticing things outranks standing around, and sits below every form of
       // assigned work so it can never steal a job.
@@ -539,8 +665,12 @@ export class BehaviorArbiter {
       if (this.comportment().idleEmbodiment) {
         selected = await this.evaluateModeBand('idle_embodiment', IDLE_EMBODIMENT_MODES, perception);
         if (selected) return selected;
+      } else {
+        this.traceRecorder.startLane('idle_embodiment');
+        this.traceRecorder.finishLane('idle_embodiment', { status: 'ineligible', reasonCode: 'idle_embodiment_disabled' });
       }
 
+      this.traceRecorder.startLane('self_prompt');
       if (this.selfPromptPermitted()) {
         try {
           this.agent.self_prompter?.update?.(delta);
@@ -550,21 +680,30 @@ export class BehaviorArbiter {
         if (this.agent.self_prompter?.isActive?.()) {
           return this.select('self_prompt', 'self_prompt_active', 'No higher authorized lane owns work; self-prompt policy may proceed.', false, perception);
         }
+      } else {
+        this.traceRecorder.finishLane('self_prompt', { status: 'ineligible', reasonCode: 'self_prompt_not_permitted' });
       }
+      this.traceRecorder.finishLane('self_prompt', { status: 'ineligible', reasonCode: 'self_prompt_inactive' });
 
+      this.traceRecorder.startLane('idle');
       return this.select('idle', 'no_authorized_work', 'Fresh perception found no authorized behavior requiring ownership.', false, perception);
     } catch (error) {
       return this.select('degraded', 'arbiter_tick_failed', `Behavior tick degraded safely: ${boundedText(error?.message || error)}`, true, perception);
     } finally {
+      const evaluationFinishedMs = this.traceRecorder.monotonicNow();
       if (modeCycleStarted) {
         try { modes?.endUpdateCycle?.(); } catch { /* cycle cleanup is best effort */ }
       }
       try {
+        this.traceRecorder.startStage('task_completion_check');
         await this.agent.checkTaskDone?.();
       } catch (error) {
         console.error(`[behavior-arbiter] Task completion check failed: ${boundedText(error?.message || error)}`);
+      } finally {
+        this.traceRecorder.finishStage('task_completion_check');
       }
       this.updating = false;
+      this.traceRecorder.finalize({ evaluationFinishedMs });
     }
   }
 
@@ -574,6 +713,7 @@ export class BehaviorArbiter {
       urgency: this.urgency,
       nextTickDelayMs: this.nextTickDelayMs,
       comportment: this.comportment().preset,
+      decisionTrace: this.traceRecorder.snapshot(),
     };
   }
 }

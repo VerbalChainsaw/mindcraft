@@ -80,8 +80,40 @@ export function actionResultFromError(error, context = {}) {
 // re-derived in each director.
 const PREEMPTION_CODE = /^(?:action_)?interrupted$/;
 
+const CENSORED_OUTCOME_CODES = new Set([
+  'action_cancelled',
+  'action_owner_replaced',
+  'cancelled',
+  'goal_cancelled',
+  'higher_priority_action_active',
+  'interrupted',
+  'operator_hold',
+  'owner_replaced',
+  'previous_action_unresponsive',
+  'stop_requested',
+]);
+
 export function isPreemption(result) {
   return result?.phase === 'interrupted' || PREEMPTION_CODE.test(text(result?.code));
+}
+
+/**
+ * Classify whether a completed action is evidence about the attempted method.
+ * Ownership changes and cancellation censor the sample: they are neither a
+ * success nor a method failure and must not update learned preferences.
+ */
+export function classifyMethodOutcome(result) {
+  if (result?.phase === 'succeeded') return 'success';
+  const phase = text(result?.phase);
+  const code = text(result?.code).toLowerCase();
+  if (
+    phase === 'requested'
+    || phase === 'interrupted'
+    || phase === 'cancelled'
+    || isPreemption(result)
+    || CENSORED_OUTCOME_CODES.has(code)
+  ) return 'censored';
+  return 'method_failure';
 }
 
 export function actionResultToMessage(result) {

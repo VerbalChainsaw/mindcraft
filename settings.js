@@ -53,6 +53,10 @@ const settings = {
     "show_command_syntax": "full", // "full", "shortened", or "none"
     "narrate_behavior": false, // keep routine action chatter in the dashboard/log unless a bot is set to chatty
     "chat_bot_messages": true, // publicly chat messages to other bots
+    "decision_trace": {
+        "enabled": true,
+        "retention": 128, // bounded in-memory arbiter decisions; only the newest four are projected in live state
+    },
 
     "spawn_timeout": 30, // num seconds allowed for the bot to spawn before throwing error. Increase when spawning takes a while.
     "block_place_delay": 0, // delay between placing blocks (ms) if using newAction. helps avoid bot being kicked by anti-cheat mechanisms on servers.

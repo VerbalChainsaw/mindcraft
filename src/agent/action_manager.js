@@ -90,6 +90,7 @@ export class ActionManager {
         this.executing = false;
         this.currentActionLabel = '';
         this.currentActionOwner = '';
+        this.currentActionId = '';
         this.currentActionFn = null;
         this.timedout = false;
         this.resume_func = null;
@@ -402,10 +403,17 @@ export class ActionManager {
             this.agent.bot.lastActionEvidence = null;
 
             this.executing = true;
+            this.currentActionId = actionId;
             this.currentActionLabel = actionLabel;
             this.currentActionOwner = actionOwner;
             this.currentActionFn = actionFn;
             this.currentActionStartedAt = this.last_action_time;
+            this.agent.behavior_arbiter?.recordActionStart?.({
+                actionId,
+                owner: actionOwner,
+                label: actionLabel,
+                startedAt: this.currentActionStartedAt,
+            });
             this.timedout = false;
 
             // timeout in minutes
@@ -422,6 +430,7 @@ export class ActionManager {
 
             // mark action as finished + cleanup
             this.executing = false;
+            this.currentActionId = '';
             this.currentActionLabel = '';
             this.currentActionOwner = '';
             this.currentActionFn = null;
@@ -478,6 +487,7 @@ export class ActionManager {
             return { success: result.phase === 'succeeded', message: output, interrupted, timedout, result };
         } catch (err) {
             this.executing = false;
+            this.currentActionId = '';
             this.currentActionLabel = '';
             this.currentActionOwner = '';
             this.currentActionFn = null;

@@ -588,6 +588,7 @@ export class Agent {
 
     recordActionResult(result) {
         this.last_action_result = result || null;
+        this.behavior_arbiter?.recordOutcome?.(result);
         serverProxy.requestStatePush?.({ force: true });
         if (!result) return;
         this.publishBehaviorEvent({

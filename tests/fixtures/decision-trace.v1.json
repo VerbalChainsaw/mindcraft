@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "decisionId": "TraceBot-41-1785520800000-1",
+  "agent": "TraceBot",
+  "wallClockTimestamp": 1785520800000,
+  "monotonicStartedMs": 4100.125,
+  "trigger": { "code": "scheduled_tick", "deltaMs": 25 },
+  "activeAction": {
+    "actionId": "TraceBot-41-1785520800000",
+    "owner": "player",
+    "label": "!collect",
+    "intent": "collect oak_log",
+    "startedAt": 1785520799000,
+    "commitment": {
+      "resumeAction": null,
+      "goalId": "goal-17",
+      "goalPhase": "acquire",
+      "workOrderId": null,
+      "workOrderPhase": null
+    }
+  },
+  "evidence": [
+    {
+      "id": "perception-41",
+      "source": "environment_observer",
+      "observedAt": 1785520799975,
+      "ageMs": 25,
+      "summary": "fresh"
+    }
+  ],
+  "lanes": [
+    { "order": 0, "lane": "operator_hold", "status": "ineligible", "reasonCode": "operator_not_held", "targetRef": null, "evidenceRefs": [], "durationMs": 0.02 },
+    { "order": 1, "lane": "emergency_self_preservation", "status": "ineligible", "reasonCode": "inactive", "targetRef": null, "evidenceRefs": ["perception-41"], "durationMs": 0.11 },
+    { "order": 2, "lane": "attributed_protection", "status": "eligible", "reasonCode": "damage_attributed", "targetRef": "entity:88", "evidenceRefs": ["perception-41"], "durationMs": 0.18 },
+    { "order": 3, "lane": "active_action_retention", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 4, "lane": "bounded_recovery", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 5, "lane": "comportment_pause", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 6, "lane": "player_directive", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 7, "lane": "basic_survival", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 8, "lane": "survival_job", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 9, "lane": "player_goal", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 10, "lane": "player_job", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 11, "lane": "command_policy_guard", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 12, "lane": "factual_reaction", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 13, "lane": "role_work", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 14, "lane": "self_progression", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 15, "lane": "opportunity", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 16, "lane": "idle_embodiment", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 17, "lane": "self_prompt", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
+    { "order": 18, "lane": "idle", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null }
+  ],
+  "winner": {
+    "lane": "attributed_protection",
+    "reasonCode": "damage_attributed",
+    "control": "acquired",
+    "controlReason": "The selected lane suppressed lower-priority lanes.",
+    "hardGate": null,
+    "preemption": {
+      "involved": true,
+      "fromOwner": "player",
+      "fromAction": "!collect",
+      "toLane": "attributed_protection"
+    }
+  },
+  "stages": [
+    { "stage": "perception_refresh", "durationMs": 0.32 },
+    { "stage": "task_completion_check", "durationMs": 0.05 }
+  ],
+  "timing": { "evaluationMs": 0.82, "cleanupMs": 0.08, "totalMs": 0.9 },
+  "correlation": { "actionId": "TraceBot-41-1785520800000", "outcomeLinked": true },
+  "outcome": {
+    "actionId": "TraceBot-41-1785520800000",
+    "phase": "interrupted",
+    "code": "interrupted",
+    "finishedAt": 1785520800125,
+    "durationMs": 1125
+  }
+}

@@ -115,6 +115,14 @@ export function chooseTacticalCombatDecision(state = {}) {
         name: normalizedName(threat.name) || 'hostile',
         distance: finiteDistance(threat.distance),
         classification,
+        motion: threat.motion && typeof threat.motion === 'object'
+          ? { state: normalizedName(threat.motion.state) || 'unknown', closingSpeed: Number(threat.motion.closingSpeed) || 0 }
+          : { state: 'unknown', closingSpeed: 0 },
+        lineOfSight: typeof threat.lineOfSight === 'boolean' ? threat.lineOfSight : null,
+        localGeometry: threat.localGeometry && typeof threat.localGeometry === 'object'
+          ? { ...threat.localGeometry }
+          : null,
+        attributed: threat.attributed === true,
         score: priorityScore(threat, state),
         ...tactic,
       };

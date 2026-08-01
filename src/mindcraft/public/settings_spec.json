@@ -112,6 +112,14 @@
         "description": "Whether to publicly chat messages to and from other bots",
         "default": true
     },
+    "decision_trace": {
+        "type": "object",
+        "description": "Bounded in-memory BehaviorArbiter decision trace configuration",
+        "default": {
+            "enabled": true,
+            "retention": 128
+        }
+    },
     "render_bot_view": {
         "type": "boolean",
         "description": "Whether to render bot view for user observation. Does not give bot vision.",

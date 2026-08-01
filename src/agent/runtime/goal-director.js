@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getCommand, executeCommand as executeAgentCommand } from '../commands/index.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
-import { isPreemption } from './action-result.js';
+import { classifyMethodOutcome, isPreemption } from './action-result.js';
 import {
   goalContractDescription,
   inventoryCountForGoalTarget,
@@ -518,8 +518,10 @@ export class GoalDirector {
     });
     if (current.learningKey) {
       try {
+        const classification = classifyMethodOutcome(result);
         this.agent.memory_bank?.rememberOutcome?.(current.learningKey, {
           success: result.phase === 'succeeded',
+          classification,
           durationMs: Number(result.durationMs) || (
             Number.isFinite(current.startedAt)
               ? Math.max(0, finishedAt - current.startedAt)
