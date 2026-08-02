@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 
@@ -15,6 +16,8 @@ const COMMAND = '!collectBlocksInRange("cobblestone", 3, 64)';
 const POLL_MS = 200;
 const PAPER_OBJECTIVE = 'min001evidence';
 const SUPPORT_BLOCK = 'polished_andesite';
+const TOOL = 'iron_pickaxe';
+const TERMINAL_JOB_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 function parseArgs(argv) {
   const options = {
@@ -129,11 +132,17 @@ function compactState(state) {
     health: state?.gameplay?.health ?? null,
     hunger: state?.gameplay?.hunger ?? null,
     velocity: state?.body?.velocity || null,
+    onGround: state?.body?.onGround === true,
     held: state?.action?.held === true,
     idle: state?.action?.isIdle === true,
     pathfinding: state?.action?.pathfinding || null,
     current: state?.action?.current || null,
+    autonomy: state?.identity?.runtime?.autonomy || state?.identity?.autonomy || null,
+    timeOfDay: Number(state?.gameplay?.timeOfDay),
+    weather: state?.gameplay?.weather || null,
+    jobDirector: state?.action?.jobDirector || null,
     cobblestone: Number(state?.inventory?.counts?.cobblestone) || 0,
+    ironPickaxe: Number(state?.inventory?.counts?.[TOOL]) || 0,
     lastResult: result ? {
       actionId: result.actionId || null,
       phase: result.phase,
@@ -190,6 +199,22 @@ async function run() {
   let states = {};
   let revisions = {};
   let activeAttempt = null;
+  let originalState = null;
+  let fixtureStarted = false;
+  const jobStatePath = resolve('bots', options.bot, 'job-state.json');
+  let originalJobBytes = null;
+  let originalJobExists = false;
+  let jobStateCaptured = false;
+
+  const readOptional = async path => {
+    try {
+      return await readFile(path);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+  const hashBytes = bytes => bytes ? createHash('sha256').update(bytes).digest('hex') : null;
 
   const paperCommand = async (command) => {
     await fetchJson(options.url, '/api/minecraft-server/command', {
@@ -241,10 +266,15 @@ async function run() {
 
   const waitForHeld = (sampledAfter = 0, timeoutMs = 30_000) => waitFor(
     () => states[options.bot] || null,
-    state => Number(state?._meta?.sampledAt) >= sampledAfter
-      && state?.action?.held === true
-      && state?.action?.isIdle === true
-      && !state?.action?.pathfinding,
+    state => {
+      const compact = compactState(state);
+      return compact.sampledAt >= sampledAfter
+        && compact.held
+        && compact.idle
+        && !compact.pathfinding
+        && compact.onGround
+        && Math.hypot(Number(compact.velocity?.x), Number(compact.velocity?.z)) <= 0.02;
+    },
     `${options.bot} held actuator quiescence`,
     timeoutMs,
   );
@@ -276,6 +306,8 @@ async function run() {
     }
     await paperCommand('kill @e[type=item,x=1026,y=99,z=1006,dx=14,dy=6,dz=10]');
     await paperCommand(`clear ${options.bot} minecraft:cobblestone`);
+    await paperCommand(`clear ${options.bot} minecraft:${TOOL}`);
+    await paperCommand(`give ${options.bot} minecraft:${TOOL} 1`);
     await paperCommand(`effect give ${options.bot} minecraft:instant_health 1 4 true`);
     await paperCommand(`effect give ${options.bot} minecraft:saturation 180 1 true`);
     await waitFor(
@@ -290,7 +322,8 @@ async function run() {
           && Math.abs(Number(position?.z) - 1008.5) < 0.2
           && Number(state?.gameplay?.health) >= 19
           && Number(state?.gameplay?.hunger) >= 19
-          && (Number(state?.inventory?.counts?.cobblestone) || 0) === 0;
+          && (Number(state?.inventory?.counts?.cobblestone) || 0) === 0
+          && (Number(state?.inventory?.counts?.[TOOL]) || 0) === 1;
       },
       'verified reset state',
       20_000,
@@ -352,7 +385,48 @@ async function run() {
     });
     socket.emit('listen-to-agents');
     socket.emit('request-agent-state-snapshot');
-    await waitForHeld();
+    originalState = compactState(await waitForHeld());
+    if (originalState.autonomy !== 'command') {
+      throw new Error(`Collection field verification requires command autonomy; observed ${originalState.autonomy || 'unknown'}.`);
+    }
+    const publicOrder = originalState.jobDirector?.workOrder;
+    if (publicOrder && !TERMINAL_JOB_PHASES.has(publicOrder.phase)) {
+      throw new Error(`Collection field verification requires no active public work order; observed ${publicOrder.id}.`);
+    }
+    originalJobBytes = await readOptional(jobStatePath);
+    originalJobExists = originalJobBytes !== null;
+    jobStateCaptured = true;
+    evidence.isolation = {
+      protectedJob: {
+        file: jobStatePath,
+        existed: originalJobExists,
+        sha256: hashBytes(originalJobBytes),
+        publicSnapshot: originalState.jobDirector,
+        restored: false,
+      },
+      originalWorld: {
+        timeOfDay: originalState.timeOfDay,
+        weather: originalState.weather,
+      },
+    };
+    evidence.originalInventory = {
+      cobblestone: originalState.cobblestone,
+      [TOOL]: originalState.ironPickaxe,
+    };
+    if (originalState.cobblestone !== 0 || originalState.ironPickaxe !== 0) {
+      throw new Error(`Collection fixture requires empty cobblestone/tool slots: ${JSON.stringify(evidence.originalInventory)}`);
+    }
+    await paperCommand('time set 1000');
+    await paperCommand('weather clear');
+    await waitFor(
+      () => compactState(states[options.bot]),
+      state => Number(state.timeOfDay) >= 0
+        && Number(state.timeOfDay) < 12_000
+        && state.weather === 'Clear',
+      'canonical safe daytime collection fixture',
+      10_000,
+    );
+    fixtureStarted = true;
     await paperCommand(`scoreboard objectives remove ${PAPER_OBJECTIVE}`);
     await paperCommand(`scoreboard objectives add ${PAPER_OBJECTIVE} dummy`);
 
@@ -420,6 +494,8 @@ async function run() {
         sample.held
         && sample.idle
         && !sample.pathfinding
+        && sample.onGround
+        && Math.hypot(Number(sample.velocity?.x), Number(sample.velocity?.z)) <= 0.02
         && Math.abs(Number(sample.position?.x) - Number(stableSamples[0].position?.x)) < 0.05
         && Math.abs(Number(sample.position?.y) - Number(stableSamples[0].position?.y)) < 0.05
         && Math.abs(Number(sample.position?.z) - Number(stableSamples[0].position?.z)) < 0.05
@@ -437,6 +513,7 @@ async function run() {
       const passed = terminal.phase === 'succeeded'
         && terminal.code === 'skill_collected'
         && beforeState.cobblestone === 0
+        && beforeState.ironPickaxe === 1
         && afterState.cobblestone === 3
         && paperBeforeCount === 0
         && paperAfterCount === 3
@@ -495,13 +572,82 @@ async function run() {
           cleanupStopAcceptedAt = Number(cleanupStop?.acceptedAt) || Date.now();
         }
         await waitForHeld(cleanupStopAcceptedAt, 10_000);
-        await resetFixture();
+        if (fixtureStarted) {
+          await paperCommand('kill @e[type=item,x=1026,y=99,z=1006,dx=14,dy=6,dz=10]');
+          await paperCommand('fill 1026 100 1006 1040 103 1016 air');
+          await paperCommand(`clear ${options.bot} minecraft:cobblestone`);
+          await paperCommand(`clear ${options.bot} minecraft:${TOOL}`);
+          await paperCommand(`effect clear ${options.bot} minecraft:saturation`);
+          if (originalState?.position) {
+            await paperCommand(`tp ${options.bot} ${originalState.position.x} ${originalState.position.y} ${originalState.position.z}`);
+          }
+          if (Number.isFinite(originalState?.timeOfDay)) {
+            await paperCommand(`time set ${Math.floor(originalState.timeOfDay)}`);
+          }
+          const weatherCommand = originalState?.weather === 'Thunderstorm'
+            ? 'weather thunder'
+            : originalState?.weather === 'Rain' ? 'weather rain' : 'weather clear';
+          await paperCommand(weatherCommand);
+        }
         await paperCommand(`scoreboard objectives remove ${PAPER_OBJECTIVE}`);
+        evidence.cleanup = {
+          temporaryTargetsRemoved: fixtureStarted,
+          temporaryDropsRemoved: fixtureStarted,
+          temporaryToolRemoved: fixtureStarted,
+          originalPositionRestored: Boolean(fixtureStarted && originalState?.position),
+          originalWorldRestored: fixtureStarted,
+        };
       } catch (cleanupError) {
         evidence.cleanupError = String(cleanupError?.stack || cleanupError?.message || cleanupError).slice(0, 2_000);
       }
-      socket.close();
     }
+    if (jobStateCaptured) {
+      try {
+        const currentOrder = compactState(states[options.bot]).jobDirector?.workOrder;
+        if (currentOrder && !TERMINAL_JOB_PHASES.has(currentOrder.phase)) {
+          const target = currentOrder.target;
+          const belongsToFixture = currentOrder.source === 'survival'
+            && currentOrder.kind === 'emergency_shelter'
+            && currentOrder.requester === options.bot
+            && Number(target?.x) >= 1026 && Number(target?.x) <= 1040
+            && Number(target?.y) >= 99 && Number(target?.y) <= 103
+            && Number(target?.z) >= 1006 && Number(target?.z) <= 1016;
+          if (!belongsToFixture) {
+            await Promise.reject(new Error(`Refusing to cancel unrelated work order ${currentOrder.id}.`));
+          }
+          const cancellation = await emitAcknowledged(socket, 'send-message', [options.bot, { message: '!cancelJob' }]);
+          evidence.isolation.controlledJobCancellation = { id: currentOrder.id, cancellation };
+          await waitFor(
+            async () => {
+              const bytes = await readOptional(jobStatePath);
+              return bytes ? JSON.parse(bytes.toString('utf8')) : null;
+            },
+            document => document?.activeOrder == null,
+            `controlled collection work order ${currentOrder.id} cancellation`,
+            10_000,
+          );
+        }
+        if (originalJobExists) await writeFile(jobStatePath, originalJobBytes);
+        else {
+          await unlink(jobStatePath).catch(error => (
+            error?.code === 'ENOENT' ? undefined : Promise.reject(error)
+          ));
+        }
+        const restored = await readOptional(jobStatePath);
+        const restoredHash = hashBytes(restored);
+        if (restoredHash !== hashBytes(originalJobBytes)) {
+          await Promise.reject(new Error('Protected job-state bytes were not restored exactly.'));
+        }
+        evidence.isolation.protectedJob.restored = true;
+        evidence.isolation.protectedJob.restoredSha256 = restoredHash;
+      } catch (restoreError) {
+        evidence.cleanupError = [evidence.cleanupError, `job restore: ${String(restoreError?.message || restoreError)}`]
+          .filter(Boolean)
+          .join('; ')
+          .slice(0, 2_000);
+      }
+    }
+    socket?.close();
     evidence.finishedAt = Date.now();
     evidence.durationMs = evidence.finishedAt - evidence.startedAt;
     await mkdir(dirname(options.evidence), { recursive: true });

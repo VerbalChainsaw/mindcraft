@@ -1,0 +1,183 @@
+{
+  "mode": "live",
+  "baseUrl": "http://localhost:8080",
+  "bot": "MindcraftBot",
+  "startedAt": "2026-08-02T09:27:01.262Z",
+  "selectedCases": [
+    "bot-lifecycle"
+  ],
+  "results": [
+    {
+      "id": "bot-lifecycle",
+      "passed": true,
+      "observed": {
+        "initial": {
+          "name": "MindcraftBot",
+          "in_game": false,
+          "retryable": true,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": false,
+          "connection_stage": "stopped",
+          "readiness_stage": "stopped",
+          "provider": null,
+          "model": [
+            {
+              "api": "openai",
+              "model": "gpt-4.1",
+              "params": {
+                "timeout": 12
+              }
+            },
+            {
+              "api": "openai",
+              "model": "gpt-4.1-mini",
+              "params": {
+                "timeout": 10
+              }
+            }
+          ],
+          "state": "stopped",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "worldOccupancy": {
+          "provedEmpty": false,
+          "authorizedOverride": true,
+          "playerCount": null,
+          "players": []
+        },
+        "startRequestedAt": 1785662821309,
+        "startAcknowledgedAt": 1785662827362,
+        "startAcknowledgement": {
+          "success": true,
+          "error": null
+        },
+        "worldReadyObservedAt": 1785662827365,
+        "worldReadyMs": 6056,
+        "ready": {
+          "name": "MindcraftBot",
+          "in_game": true,
+          "retryable": false,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": true,
+          "connection_stage": "world_ready",
+          "readiness_stage": "world_ready",
+          "provider": null,
+          "model": [
+            {
+              "api": "openai",
+              "model": "gpt-4.1",
+              "params": {
+                "timeout": 12
+              }
+            },
+            {
+              "api": "openai",
+              "model": "gpt-4.1-mini",
+              "params": {
+                "timeout": 10
+              }
+            }
+          ],
+          "state": "running",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "isolationCommand": {
+          "success": true,
+          "agentName": "MindcraftBot",
+          "acceptedAt": 1785662827366
+        },
+        "isolationObservedAt": 1785662827870,
+        "commandIssuedAt": 1785662827870,
+        "command": {
+          "success": true,
+          "agentName": "MindcraftBot",
+          "acceptedAt": 1785662827872
+        },
+        "actionResultObservedAt": 1785662829384,
+        "actionResultLatencyMs": 1514,
+        "actionResult": {
+          "actionId": "MindcraftBot-1-1785662827873",
+          "phase": "succeeded",
+          "code": "completed",
+          "label": "action:stay",
+          "detail": "Action output: Stayed for 1.018 seconds.",
+          "target": null,
+          "retryable": false,
+          "durationMs": 1020,
+          "startedAt": 1785662827873,
+          "finishedAt": 1785662828893
+        },
+        "sampledAt": 1785662828901,
+        "outputs": [
+          "Autonomy is now command.",
+          "Order received from ADMIN.",
+          "Action output: Stayed for 1.018 seconds.",
+          "hello world — I am MindcraftBot."
+        ],
+        "cleanupAttempts": [
+          {
+            "startedAt": 1785662829385,
+            "finishedAt": 1785662829423,
+            "durationMs": 38,
+            "required": true,
+            "attempted": true,
+            "success": true,
+            "acknowledgement": {
+              "success": true,
+              "error": null,
+              "agents": [
+                {
+                  "name": "MindcraftBot",
+                  "stopped": true,
+                  "forced": false,
+                  "error": null
+                }
+              ]
+            },
+            "stopped": {
+              "name": "MindcraftBot",
+              "in_game": false,
+              "retryable": true,
+              "viewerEnabled": false,
+              "viewerAvailable": false,
+              "viewerPort": null,
+              "socket_connected": false,
+              "connection_stage": "stopped",
+              "readiness_stage": "stopped",
+              "provider": null,
+              "model": [
+                {
+                  "api": "openai",
+                  "model": "gpt-4.1",
+                  "params": {
+                    "timeout": 12
+                  }
+                },
+                {
+                  "api": "openai",
+                  "model": "gpt-4.1-mini",
+                  "params": {
+                    "timeout": 10
+                  }
+                }
+              ],
+              "state": "stopped",
+              "lastError": null,
+              "diagnostics": []
+            },
+            "error": null
+          }
+        ],
+        "elapsedMs": 8159
+      }
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-08-02T09:27:09.424Z"
+}

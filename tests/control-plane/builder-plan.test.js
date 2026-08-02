@@ -219,3 +219,44 @@ test('Given verified cells and inventory, Builder places only the next missing c
   assert.equal(complete.code, 'blueprint_complete');
   assert.deepEqual(complete.checkpoint, { verifiedCount: 2, nextCell: 2 });
 });
+
+test('A verified emergency shelter completes only after the bot occupies its protected interior', () => {
+  const order = createWorkOrder({
+    id: 'survival-shelter',
+    role: 'builder',
+    kind: 'emergency_shelter',
+    source: 'survival',
+    requester: 'MindcraftBot',
+    target: { name: 'worksite', x: 10, y: 64, z: 10 },
+    blueprint: {
+      id: 'shelter',
+      width: 3,
+      depth: 3,
+      height: 3,
+      cells: [{ x: 0, y: 2, z: 0, material: 'cobblestone' }],
+    },
+  });
+  const audit = { valid: true, missing: [], incorrect: [], correct: 23 };
+
+  const enter = nextBuilderStep({ ...order, phase: 'verify' }, {
+    x: 10.5,
+    y: 64,
+    z: 7.5,
+    inventory: {},
+    blueprintAudit: audit,
+  });
+  assert.equal(enter.command, '!goToCoordinates(10.5, 64, 10.5, 0.5)');
+  assert.equal(enter.nextPhase, 'deliver');
+  assert.equal(enter.code, 'shelter_occupancy_required');
+  assert.deepEqual(enter.checkpoint, { verifiedCount: 23, nextCell: 23 });
+
+  const complete = nextBuilderStep({ ...order, phase: 'deliver' }, {
+    x: 10.5,
+    y: 64,
+    z: 10.5,
+    inventory: {},
+    blueprintAudit: audit,
+  });
+  assert.equal(complete.complete, true);
+  assert.equal(complete.code, 'blueprint_complete');
+});

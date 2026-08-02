@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "scenario": "clear-and-obstructed-hostile-tactical-combat",
+  "command": "!resolveTacticalCombat(8)",
+  "expectedActionLabel": "action:resolveTacticalCombat",
+  "bot": "MindcraftBot",
+  "fixture": {
+    "arena": {
+      "x1": 1109,
+      "x2": 1118,
+      "y1": 100,
+      "y2": 105,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "botStart": {
+      "x": 1111.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "targetStart": {
+      "x": 1117.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "wall": {
+      "x": 1114,
+      "y1": 100,
+      "y2": 102,
+      "z1": 1054,
+      "z2": 1060
+    },
+    "roof": {
+      "x1": 1109,
+      "x2": 1118,
+      "y": 102,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "alternateRoutes": [
+      {
+        "z": 1053
+      },
+      {
+        "z": 1061
+      }
+    ],
+    "repairedFloor": {
+      "x1": 1109,
+      "x2": 1118,
+      "y": 99,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "target": {
+      "type": "zombie",
+      "tag": "mindcraft_com001",
+      "activeAI": false
+    }
+  },
+  "independentAttribution": {
+    "damageCriterion": "minecraft.custom:minecraft.damage_dealt",
+    "killCriterion": "minecraft.killed:minecraft.zombie"
+  },
+  "startedAt": 1785657544528,
+  "attempts": [],
+  "passed": false,
+  "error": "Error: Persisted/public work-order mismatch: {\"diskOrder\":{\"id\":\"builder-4bacba59-d66e-4180-a07a-026434732d15\",\"role\":\"builder\",\"kind\":\"emergency_shelter\",\"source\":\"survival\",\"requester\":\"MindcraftBot\",\"target\":{\"name\":\"worksite\",\"x\":1071,\"y\":100,\"z\":1007},\"constraints\":{\"maxDistance\":64,\"minHunger\":16,\"minFoodPoints\":12,\"reserveSlots\":1,\"requireLight\":true,\"replant\":true},\"quota\":23,\"blueprint\":{\"id\":\"emergency_3x3\",\"width\":3,\"depth\":3,\"height\":3,\"cells\":[{\"x\":-1,\"y\":0,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":0,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":0,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":0,\"y\":0,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":0,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":0,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":0,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":1,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":1,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":1,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":0,\"y\":1,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":1,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":1,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":1,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":2,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":2,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":-1,\"y\":2,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":0,\"y\":2,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":0,\"y\":2,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":0,\"y\":2,\"z\":1,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":2,\"z\":-1,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":2,\"z\":0,\"material\":\"survival_building_block\"},{\"x\":1,\"y\":2,\"z\":1,\"material\":\"survival_building_block\"}]},\"phase\":\"acquire\",\"resumePhase\":null,\"attempts\":0,\"maxAttempts\":3,\"preemptions\":1,\"anchor\":{\"x\":1071,\"y\":100,\"z\":1007},\"checkpoint\":{},\"evidence\":{\"code\":\"preempted\",\"detail\":\"Action was interrupted.\",\"actionId\":\"MindcraftBot-1-1785656951641\"},\"createdAt\":1785651368000,\"updatedAt\":1785656955620},\"publicOrder\":null}\n    at detachProtectedJob (file:///C:/Users/zerop/Development/minecraft-companion/tools/verify-combat-field.mjs:414:13)\n    at async run (file:///C:/Users/zerop/Development/minecraft-companion/tools/verify-combat-field.mjs:639:5)",
+  "isolation": {
+    "protectedJob": {
+      "file": "C:\\Users\\zerop\\Development\\minecraft-companion\\bots\\MindcraftBot\\job-state.json",
+      "existed": true,
+      "sha256": "fa1708b8aac1ae3b2f1da04267abe4e21e9ba9e410deb8205642c83682ef5ecf",
+      "diskOrder": {
+        "id": "builder-4bacba59-d66e-4180-a07a-026434732d15",
+        "kind": "emergency_shelter",
+        "source": "survival",
+        "requester": "MindcraftBot",
+        "phase": "acquire",
+        "target": {
+          "name": "worksite",
+          "x": 1071,
+          "y": 100,
+          "z": 1007
+        }
+      },
+      "publicOrder": null,
+      "publicSnapshot": {
+        "phase": "suppressed",
+        "code": "command_autonomy",
+        "retryable": false,
+        "nextAttemptAt": 1785657310243,
+        "workOrder": {
+          "id": "builder-c8412a53-8eee-4186-bf5a-e73afc6370f7",
+          "role": "builder",
+          "kind": "emergency_shelter",
+          "source": "survival",
+          "requester": "MindcraftBot",
+          "phase": "failed",
+          "target": {
+            "name": "worksite",
+            "x": 1115,
+            "y": 100,
+            "z": 1057
+          },
+          "attempts": 3,
+          "maxAttempts": 3,
+          "checkpoint": {},
+          "evidence": {
+            "code": "skill_preparation_failed",
+            "detail": "Action output: No safely collectible trees found within 64 blocks. Wood collection finished with 0 logs.",
+            "actionId": "MindcraftBot-12-1785657308482"
+          }
+        }
+      },
+      "alreadyDetached": false,
+      "detached": false,
+      "restored": true,
+      "restoredSha256": "fa1708b8aac1ae3b2f1da04267abe4e21e9ba9e410deb8205642c83682ef5ecf"
+    }
+  },
+  "cleanup": {
+    "held": true,
+    "position": {
+      "x": 1071.5,
+      "y": 100,
+      "z": 1007.5
+    },
+    "autonomy": "command",
+    "taggedTargetsRemoved": true,
+    "temporaryWallRemoved": true,
+    "temporaryRoofRemoved": true
+  },
+  "finishedAt": 1785657545875,
+  "durationMs": 1347
+}

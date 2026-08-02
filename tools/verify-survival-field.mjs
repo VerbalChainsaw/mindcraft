@@ -214,7 +214,9 @@ function distance(left, right) {
 function speed(sample) {
   const velocity = sample?.velocity;
   if (!velocity) return Number.POSITIVE_INFINITY;
-  return Math.hypot(Number(velocity.x), Number(velocity.y), Number(velocity.z));
+  return sample?.onGround
+    ? Math.hypot(Number(velocity.x), Number(velocity.z))
+    : Math.hypot(Number(velocity.x), Number(velocity.y), Number(velocity.z));
 }
 
 function marker(runId, phase, fact) {
@@ -383,9 +385,6 @@ async function run() {
       `data get entity ${options.bot} foodLevel`,
       ...(sleep ? [
         `data get entity ${options.bot} SleepTimer`,
-        `data get entity ${options.bot} SleepingX`,
-        `data get entity ${options.bot} SleepingY`,
-        `data get entity ${options.bot} SleepingZ`,
       ] : []),
       'time query daytime',
       ...(item ? [`clear ${options.bot} minecraft:${item} 0`] : []),
@@ -397,9 +396,6 @@ async function run() {
       health: scalars[0] ?? null,
       hunger: scalars[1] ?? null,
       sleepTimer: sleep ? scalars[2] ?? null : null,
-      sleepingPosition: sleep && scalars.length >= 6
-        ? { x: scalars[3], y: scalars[4], z: scalars[5] }
-        : null,
       timeOfDay: paperTime(lines),
       item: item ? { name: item, count: paperInventoryCount(lines) } : null,
       lines,
@@ -636,6 +632,14 @@ async function run() {
       25_000,
     );
     const terminal = terminalState.lastResult;
+    const terminalPostconditionState = await waitFor(
+      () => compactState(states[options.bot]),
+      state => state.lastResult?.actionId === terminal.actionId
+        && state.inventory[FOOD] === FOOD_COUNT - 1
+        && Number(state.hunger) > Number(beforeState.hunger),
+      `${runId} consume postconditions with terminal result retained`,
+      10_000,
+    );
     const hold = await observeHeldWindow(attempt);
     const afterState = compactState(states[options.bot]);
     const paperAfter = await paperEntitySnapshot(runId, 'AFTER', { item: FOOD });
@@ -648,13 +652,13 @@ async function run() {
       && terminal.label === 'action:consume'
       && terminal.target?.name === FOOD
       && beforeState.inventory[FOOD] === FOOD_COUNT
-      && terminalState.inventory[FOOD] === FOOD_COUNT - 1
+      && terminalPostconditionState.inventory[FOOD] === FOOD_COUNT - 1
       && afterState.inventory[FOOD] === FOOD_COUNT - 1
       && paperBefore.item?.count === FOOD_COUNT
       && paperAfter.item?.count === FOOD_COUNT - 1
       && Number(beforeState.hunger) >= 7
       && Number(beforeState.hunger) <= 14
-      && Number(terminalState.hunger) > Number(beforeState.hunger)
+      && Number(terminalPostconditionState.hunger) > Number(beforeState.hunger)
       && Number(paperAfter.hunger) > Number(paperBefore.hunger)
       && Number(paperBefore.health) >= 19
       && Number(paperAfter.health) >= 19
@@ -675,6 +679,7 @@ async function run() {
       releaseAck,
       beforeState,
       terminalState,
+      terminalPostconditionState,
       afterState,
       terminal,
       paper: { before: paperBefore, after: paperAfter },
@@ -700,7 +705,12 @@ async function run() {
     await healthyHeldFixture(FIXTURES.sleep);
     await paperCommand('weather clear');
     await paperCommand('time set 13000');
-    const beforeState = compactState(states[options.bot]);
+    const beforeState = await waitFor(
+      () => compactState(states[options.bot]),
+      state => isNight(state.timeOfDay) && state.weather === 'Clear',
+      `${runId} canonical safe-night fixture`,
+      10_000,
+    );
     const paperBefore = await paperEntitySnapshot(runId, 'BEFORE', { sleep: true });
     const bedBefore = await bedProof(runId, 'BEFORE');
     const attempt = beginAttempt('sleep', attemptNumber);
@@ -734,7 +744,11 @@ async function run() {
       && bedBefore.parts === 2
       && sleepEntryState.sleeping
       && paperDuring.sleepTimer > 0
-      && paperDuring.sleepingPosition !== null
+      && distance(paperDuring.position, {
+        x: BED.head.x + 0.5,
+        y: BED.head.y + 0.6875,
+        z: BED.head.z + 0.5,
+      }) <= 0.25
       && terminal.phase === 'succeeded'
       && terminal.code === 'skill_slept'
       && terminal.label === 'action:goToBed'
@@ -800,7 +814,20 @@ async function run() {
     );
     controlledOrderIds.add(attempt.workOrderId);
     const terminalState = await waitFor(
-      () => attempt.terminalState,
+      () => {
+        if (attempt.terminalState) return attempt.terminalState;
+        const state = compactState(states[options.bot]);
+        const order = state.jobDirector?.workOrder;
+        if (
+          order?.id === attempt.workOrderId
+          && order?.phase === 'complete'
+          && order?.evidence?.code === 'blueprint_complete'
+        ) {
+          attempt.terminalState = structuredClone(state);
+          triggerStop(attempt);
+        }
+        return attempt.terminalState;
+      },
       Boolean,
       `${runId} completed emergency shelter`,
       240_000,
@@ -816,9 +843,19 @@ async function run() {
       && result.phase === 'succeeded'
       && result.code === 'skill_placed'
     ));
+    const occupancyActions = results.filter(result => (
+      result.label === 'action:goToCoordinates'
+      && result.phase === 'succeeded'
+      && result.code === 'skill_arrived'
+      && distance(result.target, FIXTURES.shelter) <= 0.25
+    ));
     const linkedPlacementIds = new Set();
     for (const placement of placements) {
       if (linkedActionTraces(traces, placement, 'job').length) linkedPlacementIds.add(placement.actionId);
+    }
+    const linkedOccupancyIds = new Set();
+    for (const occupancy of occupancyActions) {
+      if (linkedActionTraces(traces, occupancy, 'job').length) linkedOccupancyIds.add(occupancy.actionId);
     }
     const observedOrders = attempt.samples
       .map(sample => sample.jobDirector?.workOrder)
@@ -839,8 +876,9 @@ async function run() {
       && requested
       && observedOrders.length > 0
       && observedOrders.every(order => order.source === 'survival' && order.requester === options.bot)
-      && terminalState.jobDirector?.phase === 'complete'
-      && terminalState.jobDirector?.code === 'blueprint_complete'
+      && (terminalState.jobDirector?.phase === 'complete'
+        || (terminalState.jobDirector?.phase === 'suppressed'
+          && terminalState.jobDirector?.code === 'command_autonomy'))
       && terminalOrder?.id === attempt.workOrderId
       && terminalOrder?.source === 'survival'
       && terminalOrder?.requester === options.bot
@@ -849,9 +887,13 @@ async function run() {
       && paperAfter.correct === EMERGENCY_SHELTER_BLUEPRINT.cells.length
       && paperAfter.openDoorCells === 2
       && paperAfter.materialCount === 0
+      && distance(terminalState.position, FIXTURES.shelter) <= 0.75
+      && distance(paperAfter.position, FIXTURES.shelter) <= 0.75
       && survivalJobTraces.length > 0
       && placements.length > 0
+      && occupancyActions.length === 1
       && linkedPlacementIds.size > 0
+      && linkedOccupancyIds.size === 1
       && bounded
       && hold.latencyMs <= 2_000
       && hold.durationMs >= HOLD_WINDOW_MS
@@ -871,7 +913,9 @@ async function run() {
         requested,
         resultCount: results.length,
         placementCount: placements.length,
+        occupancyActionIds: occupancyActions.map(result => result.actionId),
         linkedPlacementCount: linkedPlacementIds.size,
+        linkedOccupancyActionIds: [...linkedOccupancyIds],
         bounded,
         results,
       },
@@ -932,6 +976,16 @@ async function run() {
     }
     const state = compactState(states[options.bot]);
     const publicOrder = activeWorkOrder(state.jobDirector);
+    const publicWorkOrderAbsent = state.jobDirector != null
+      && state.jobDirector.workOrder == null;
+    const alreadyDetached = Boolean(
+      diskOrder
+      && !publicOrder
+      && (
+        TERMINAL_PHASES.has(state.jobDirector?.workOrder?.phase)
+        || publicWorkOrderAbsent
+      )
+    );
     evidence.isolation.protectedJob = {
       file: jobStatePath,
       existed: originalJobExists,
@@ -945,10 +999,18 @@ async function run() {
         target: diskOrder.target,
       } : null,
       publicOrder,
+      publicSnapshot: state.jobDirector,
+      publicWorkOrderAbsent,
+      alreadyDetached,
       detached: false,
       restored: false,
     };
     if (!diskOrder && !publicOrder) return;
+    if (alreadyDetached) {
+      jobStateWasDetached = true;
+      evidence.isolation.protectedJob.detached = true;
+      return;
+    }
     if (!diskOrder || !publicOrder || diskOrder.id !== publicOrder.id) {
       throw new Error(`Persisted/public work-order mismatch: ${JSON.stringify({ diskOrder, publicOrder })}`);
     }
@@ -984,6 +1046,9 @@ async function run() {
     const document = JSON.parse(bytes.toString('utf8'));
     const order = document?.activeOrder;
     if (!order) return null;
+    if (jobStateCaptured && hashBytes(bytes) === hashBytes(originalJobBytes)) {
+      return { id: order.id, cancelled: false, protected: true };
+    }
     const shelter = FIXTURES.shelter;
     const belongsToFixture = order.source === 'survival'
       && order.kind === 'emergency_shelter'
@@ -1038,7 +1103,12 @@ async function run() {
     if (health?.checks?.minecraftReachable !== true || minecraft?.server?.phase !== 'running') {
       throw new Error('Paper is not reachable and running.');
     }
-    if (agent?.state !== 'running' || agent?.in_game !== true || agent?.socket_connected !== true || agent?.readiness !== 'world_ready') {
+    if (
+      agent?.state !== 'running'
+      || agent?.in_game !== true
+      || agent?.socket_connected !== true
+      || agent?.readiness_stage !== 'world_ready'
+    ) {
       throw new Error(`${options.bot} must already be world-ready: ${JSON.stringify(agent)}`);
     }
     const otherActive = agents.agents.filter(entry => entry?.name !== options.bot && entry?.in_game === true);
@@ -1106,6 +1176,10 @@ async function run() {
           order?.source === 'survival'
           && order?.kind === 'emergency_shelter'
           && order?.requester === options.bot
+          && !TERMINAL_PHASES.has(order.phase)
+          && Number(order.target?.x) === Math.floor(FIXTURES.shelter.x)
+          && Number(order.target?.y) === Math.floor(FIXTURES.shelter.y)
+          && Number(order.target?.z) === Math.floor(FIXTURES.shelter.z)
           && !activeAttempt.workOrderId
         ) {
           activeAttempt.workOrderId = order.id;
@@ -1117,7 +1191,7 @@ async function run() {
           && activeAttempt.workOrderId
           && order?.id === activeAttempt.workOrderId
           && order?.phase === 'complete'
-          && compact.jobDirector?.phase === 'complete'
+          && order?.evidence?.code === 'blueprint_complete'
         ) {
           activeAttempt.terminalState = structuredClone(compact);
           triggerStop(activeAttempt);
@@ -1138,6 +1212,10 @@ async function run() {
     originalInventory = { ...originalState.inventory };
     evidence.isolation.originalState = originalState;
     evidence.isolation.originalInventory = originalInventory;
+
+    if (originalState.autonomy !== 'command') {
+      throw new Error(`Survival field verification requires command autonomy; observed ${originalState.autonomy || 'unknown'}.`);
+    }
 
     if (!originalState.held || !originalState.idle || originalState.pathfinding) {
       const stopAck = await sendStop();

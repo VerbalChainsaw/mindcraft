@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 2,
+  "scenario": "isolated-survival-field-suite",
+  "bot": "MindcraftBot",
+  "selectedScenarios": [
+    "shelter"
+  ],
+  "attemptsPerScenario": 1,
+  "contract": {
+    "hunger": "consume action, hunger/inventory deltas, ownership, traces, Paper proof, <=2s stop, stable 10s hold",
+    "sleep": "safe-night policy selection, canonical sleep entry, Paper sleep proof, wake postconditions, stable hold",
+    "shelter": "survival-owned work selection, bounded physical build, complete blueprint postcondition, cleanup"
+  },
+  "fixtures": {
+    "hunger": {
+      "x": 1071.5,
+      "y": 160,
+      "z": 1007.5
+    },
+    "sleep": {
+      "x": 1111.5,
+      "y": 160,
+      "z": 1007.5
+    },
+    "shelter": {
+      "x": 1151.5,
+      "y": 160,
+      "z": 1007.5
+    },
+    "bed": {
+      "foot": {
+        "x": 1113,
+        "y": 160,
+        "z": 1007
+      },
+      "head": {
+        "x": 1114,
+        "y": 160,
+        "z": 1007
+      }
+    },
+    "shelterBlueprint": "emergency_3x3"
+  },
+  "startedAt": 1785659864771,
+  "isolation": {
+    "originalState": {
+      "sampledAt": 1785659865762,
+      "position": {
+        "x": 1046.42,
+        "y": 100,
+        "z": 1006.5
+      },
+      "health": 20,
+      "hunger": 20,
+      "timeOfDay": 9714,
+      "weather": "Clear",
+      "gamemode": "survival",
+      "sleeping": false,
+      "velocity": {
+        "x": 0,
+        "y": -0.08,
+        "z": 0
+      },
+      "onGround": true,
+      "held": true,
+      "idle": true,
+      "pathfinding": null,
+      "current": "Role recovering: interrupted",
+      "autonomy": "autonomous",
+      "lane": "operator_hold",
+      "laneCode": "operator_hold_safe",
+      "activeOwner": null,
+      "activeLabel": null,
+      "survivalDirector": {
+        "name": "survival",
+        "phase": "waiting",
+        "code": "explicit_job_active",
+        "target": null,
+        "detail": "Emergency shelter work is waiting for an available job director.",
+        "retryable": true,
+        "nextEligibleAt": null
+      },
+      "jobDirector": {
+        "phase": "recovering",
+        "code": "interrupted",
+        "retryable": true,
+        "nextAttemptAt": 1785659785123,
+        "workOrder": {
+          "id": "builder-59325ed7-6903-4929-b971-b4b7678e8caa",
+          "role": "builder",
+          "kind": "emergency_shelter",
+          "source": "survival",
+          "requester": "MindcraftBot",
+          "phase": "recover",
+          "target": {
+            "name": "worksite",
+            "x": 1071,
+            "y": 100,
+            "z": 1007
+          },
+          "attempts": 1,
+          "maxAttempts": 3,
+          "checkpoint": {},
+          "evidence": {
+            "code": "preempted",
+            "detail": "Action was interrupted.",
+            "actionId": "MindcraftBot-2-1785659782201"
+          }
+        }
+      },
+      "inventory": {
+        "cooked_beef": 0,
+        "oak_planks": 2,
+        "spruce_planks": 0,
+        "birch_planks": 0,
+        "jungle_planks": 0,
+        "acacia_planks": 0,
+        "dark_oak_planks": 0,
+        "mangrove_planks": 0,
+        "cherry_planks": 0,
+        "pale_oak_planks": 0,
+        "bamboo_planks": 0,
+        "crimson_planks": 0,
+        "warped_planks": 0,
+        "stone": 0,
+        "dirt": 0,
+        "cobblestone": 0
+      },
+      "lastResult": {
+        "actionId": "MindcraftBot-2-1785659782201",
+        "phase": "interrupted",
+        "code": "interrupted",
+        "label": "action:breakBlock",
+        "detail": "Action was interrupted.",
+        "target": {
+          "name": "cobblestone",
+          "x": 1072,
+          "y": 100,
+          "z": 1006
+        },
+        "retryable": true,
+        "durationMs": 2919,
+        "startedAt": 1785659782201,
+        "finishedAt": 1785659785120
+      }
+    },
+    "originalInventory": {
+      "cooked_beef": 0,
+      "oak_planks": 2,
+      "spruce_planks": 0,
+      "birch_planks": 0,
+      "jungle_planks": 0,
+      "acacia_planks": 0,
+      "dark_oak_planks": 0,
+      "mangrove_planks": 0,
+      "cherry_planks": 0,
+      "pale_oak_planks": 0,
+      "bamboo_planks": 0,
+      "crimson_planks": 0,
+      "warped_planks": 0,
+      "stone": 0,
+      "dirt": 0,
+      "cobblestone": 0
+    }
+  },
+  "results": {},
+  "passed": false,
+  "error": "Error: Survival field verification requires command autonomy; observed autonomous.\n    at run (file:///C:/Users/zerop/Development/minecraft-companion/tools/verify-survival-field.mjs:1208:13)",
+  "cleanup": {
+    "held": true,
+    "autonomy": "autonomous",
+    "errors": [
+      "controlled job: Refusing to cancel unrelated work order builder-4bacba59-d66e-4180-a07a-026434732d15."
+    ],
+    "position": {
+      "x": 1046.42,
+      "y": 100,
+      "z": 1006.5
+    },
+    "inventory": {
+      "cooked_beef": 0,
+      "oak_planks": 2,
+      "spruce_planks": 0,
+      "birch_planks": 0,
+      "jungle_planks": 0,
+      "acacia_planks": 0,
+      "dark_oak_planks": 0,
+      "mangrove_planks": 0,
+      "cherry_planks": 0,
+      "pale_oak_planks": 0,
+      "bamboo_planks": 0,
+      "crimson_planks": 0,
+      "warped_planks": 0,
+      "stone": 0,
+      "dirt": 0,
+      "cobblestone": 0
+    },
+    "protectedJobRestored": true
+  },
+  "finishedAt": 1785659865982,
+  "durationMs": 1211
+}
