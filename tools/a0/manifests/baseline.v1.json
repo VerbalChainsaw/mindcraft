@@ -74,15 +74,22 @@
       "routes": [
         {
           "routeOrigin": "direct",
-          "available": false,
-          "harnessPath": null,
-          "argvTemplate": null,
-          "blockers": [
-            {
-              "code": "designated-harness-path-missing",
-              "detail": "The designated obstruction harness path is absent, so this route cannot be invoked."
-            }
-          ]
+          "available": true,
+          "harnessPath": "tools/verify-obstruction-field.mjs",
+          "argvTemplate": [
+            "node",
+            "tools/verify-obstruction-field.mjs",
+            "--url",
+            "${url}",
+            "--bot",
+            "${bot}",
+            "--attempts",
+            "1",
+            "--evidence",
+            "${expectedArtifactPath}",
+            "--authorized-active-world"
+          ],
+          "blockers": []
         },
         {
           "routeOrigin": "nl",
@@ -91,10 +98,6 @@
           "argvTemplate": null,
           "blockers": [
             {
-              "code": "designated-harness-path-missing",
-              "detail": "The designated obstruction harness path is absent, so this route cannot be invoked."
-            },
-            {
               "code": "nl-route-support-unavailable",
               "detail": "No reviewable natural-language harness route is available for this family."
             }
@@ -102,10 +105,6 @@
         }
       ],
       "blockers": [
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit, so obstruction collection is not runnable."
-        },
         {
           "code": "nl-route-support-unavailable",
           "detail": "No reviewable natural-language obstruction route exists; NL slots remain held and block freeze."
@@ -1159,10 +1158,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
@@ -1261,10 +1256,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
@@ -1363,10 +1354,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
@@ -1465,10 +1452,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
@@ -1567,10 +1550,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
@@ -1670,10 +1649,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -1779,10 +1754,6 @@
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
         },
         {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
-        },
-        {
           "code": "nl-route-support-unavailable",
           "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
         }
@@ -1884,10 +1855,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -1993,10 +1960,6 @@
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
         },
         {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
-        },
-        {
           "code": "nl-route-support-unavailable",
           "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
         }
@@ -2098,10 +2061,6 @@
         {
           "code": "planned-invocation-not-executed",
           "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
-        },
-        {
-          "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
