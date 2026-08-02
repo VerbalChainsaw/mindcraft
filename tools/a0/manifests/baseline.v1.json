@@ -104,7 +104,7 @@
       "blockers": [
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit, so obstruction collection is not runnable."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit, so obstruction collection is not runnable."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -1067,10 +1067,10 @@
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1162,17 +1162,17 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1264,17 +1264,17 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1366,17 +1366,17 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1468,17 +1468,17 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1570,17 +1570,17 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         }
       ]
     },
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1673,7 +1673,7 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -1684,10 +1684,10 @@
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1780,7 +1780,7 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -1791,10 +1791,10 @@
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1887,7 +1887,7 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -1898,10 +1898,10 @@
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -1994,7 +1994,7 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
@@ -2005,10 +2005,10 @@
     {
       "family": "ordinary-obstruction",
       "variant": "ordinary-obstruction-alternate-route",
-      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "harness": "tools/verify-obstruction-field.mjs",
       "argvTemplate": [
         "node",
-        "tools/verify-follow-obstruction-field.mjs",
+        "tools/verify-obstruction-field.mjs",
         "--url",
         "${url}",
         "--bot",
@@ -2101,7 +2101,7 @@
         },
         {
           "code": "designated-harness-path-missing",
-          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+          "detail": "The required tools/verify-obstruction-field.mjs path is absent at the baseline commit."
         },
         {
           "code": "nl-route-support-unavailable",
