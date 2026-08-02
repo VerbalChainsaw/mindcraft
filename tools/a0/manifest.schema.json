@@ -1,0 +1,393 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://minecraft-companion.local/schemas/a0/manifest.v1.json",
+  "title": "A0 ManifestV1",
+  "description": "Fail-closed contract for planned or runnable A0 measurement invocations. manifestHash is SHA-256 over canonical UTF-8 JSON with the top-level manifestHash member omitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestRevision",
+    "manifestHash",
+    "manifestStatus",
+    "title",
+    "metadataStatus",
+    "missingFields",
+    "families",
+    "runs"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "a0.manifest.v1" },
+    "manifestRevision": { "$ref": "#/$defs/id" },
+    "manifestHash": {
+      "oneOf": [
+        { "const": "pending" },
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      ]
+    },
+    "manifestStatus": { "enum": ["planned", "runnable"] },
+    "title": { "$ref": "#/$defs/text" },
+    "metadataStatus": { "$ref": "#/$defs/metadataStatus" },
+    "missingFields": { "$ref": "#/$defs/missingFields" },
+    "families": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/familyDeclaration" }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 640,
+      "items": { "$ref": "#/$defs/run" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "metadataStatus": { "const": "complete" } }, "required": ["metadataStatus"] },
+      "then": { "properties": { "missingFields": { "maxItems": 0 } } },
+      "else": { "properties": { "missingFields": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "manifestHash": { "const": "pending" } }, "required": ["manifestHash"] },
+      "then": {
+        "properties": {
+          "manifestStatus": { "const": "planned" },
+          "metadataStatus": { "const": "incomplete" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "manifestStatus": { "const": "runnable" } }, "required": ["manifestStatus"] },
+      "then": {
+        "properties": {
+          "manifestHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "metadataStatus": { "const": "complete" },
+          "missingFields": { "maxItems": 0 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[a-z0-9][a-z0-9._:-]*$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._${}/-]+$"
+    },
+    "sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "metadataStatus": { "enum": ["complete", "incomplete"] },
+    "missingFields": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^/(?:[A-Za-z0-9_-]+)(?:/[A-Za-z0-9_-]+)*$"
+      }
+    },
+    "family": { "enum": ["follow-navigation", "ordinary-obstruction", "operator-hold"] },
+    "routeOrigin": { "enum": ["direct", "nl"] },
+    "diagnosticsArm": { "enum": ["off", "on"] },
+    "evidenceDisposition": { "enum": ["valid", "held", "invalid"] },
+    "freezeStatus": { "enum": ["eligible-after-evidence", "blocked"] },
+    "variant": {
+      "enum": [
+        "follow-course",
+        "ordinary-obstruction-alternate-route",
+        "operator-hold-safe-and-bounded-emergency-self-preservation"
+      ]
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "detail"],
+      "properties": {
+        "code": { "$ref": "#/$defs/id" },
+        "detail": { "$ref": "#/$defs/text" }
+      }
+    },
+    "harnessRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["routeOrigin", "available", "harnessPath", "argvTemplate", "blockers"],
+      "properties": {
+        "routeOrigin": { "$ref": "#/$defs/routeOrigin" },
+        "available": { "type": "boolean" },
+        "harnessPath": { "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }] },
+        "argvTemplate": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+            },
+            { "type": "null" }
+          ]
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/blocker" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "available": { "const": true } }, "required": ["available"] },
+          "then": {
+            "properties": {
+              "harnessPath": { "$ref": "#/$defs/path" },
+              "argvTemplate": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+              },
+              "blockers": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "harnessPath": { "type": "null" },
+              "argvTemplate": { "type": "null" },
+              "blockers": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "familyDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "variant", "selected", "freezeStatus", "routes", "blockers"],
+      "properties": {
+        "family": { "$ref": "#/$defs/family" },
+        "variant": { "$ref": "#/$defs/variant" },
+        "selected": { "type": "boolean" },
+        "freezeStatus": { "$ref": "#/$defs/freezeStatus" },
+        "routes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/harnessRoute" }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/blocker" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "freezeStatus": { "const": "blocked" } }, "required": ["freezeStatus"] },
+          "then": { "properties": { "blockers": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "bot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "runtime"],
+      "properties": {
+        "name": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" }, { "type": "null" }] },
+        "runtime": { "enum": ["mineflayer", null] }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "protocolVersion"],
+      "properties": {
+        "version": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 96 }, { "type": "null" }] },
+        "protocolVersion": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 100000 }, { "type": "null" }] }
+      }
+    },
+    "coordinate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number", "minimum": -30000000, "maximum": 30000000 },
+        "y": { "type": "number", "minimum": -2048, "maximum": 2048 },
+        "z": { "type": "number", "minimum": -30000000, "maximum": 30000000 }
+      }
+    },
+    "world": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worldId", "seed", "dimension", "resetId", "resetPolicy"],
+      "properties": {
+        "worldId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "seed": { "oneOf": [{ "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 }, { "type": "null" }] },
+        "dimension": { "enum": ["overworld", "the_nether", "the_end", null] },
+        "resetId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "resetPolicy": { "enum": ["fresh", "restored", null] }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixtureId", "fixtureHash", "coordinates"],
+      "properties": {
+        "fixtureId": { "$ref": "#/$defs/id" },
+        "fixtureHash": { "$ref": "#/$defs/sha256" },
+        "coordinates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/coordinate" }
+        }
+      }
+    },
+    "safetyBounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxAttempts",
+        "maxElapsedMs",
+        "maxMovementDistanceBlocks",
+        "maxFixtureMutations",
+        "requiresAuthorizedActiveWorld",
+        "allowExternalNetwork"
+      ],
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "maxElapsedMs": { "type": "integer", "minimum": 1000, "maximum": 3600000 },
+        "maxMovementDistanceBlocks": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "maxFixtureMutations": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "requiresAuthorizedActiveWorld": { "const": true },
+        "allowExternalNetwork": { "const": false }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "variant",
+        "harness",
+        "argvTemplate",
+        "routeOrigin",
+        "diagnosticsArm",
+        "evidenceDisposition",
+        "runId",
+        "invocationId",
+        "independentRunIndex",
+        "attemptCount",
+        "pairId",
+        "gitCommit",
+        "bot",
+        "server",
+        "world",
+        "fixture",
+        "timeoutMs",
+        "safetyBounds",
+        "expectedArtifactPath",
+        "metadataStatus",
+        "missingFields",
+        "blockers"
+      ],
+      "properties": {
+        "family": { "$ref": "#/$defs/family" },
+        "variant": { "$ref": "#/$defs/variant" },
+        "harness": { "$ref": "#/$defs/path" },
+        "argvTemplate": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        },
+        "routeOrigin": { "$ref": "#/$defs/routeOrigin" },
+        "diagnosticsArm": { "$ref": "#/$defs/diagnosticsArm" },
+        "evidenceDisposition": { "$ref": "#/$defs/evidenceDisposition" },
+        "runId": { "$ref": "#/$defs/id" },
+        "invocationId": { "$ref": "#/$defs/id" },
+        "independentRunIndex": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "attemptCount": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "pairId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "gitCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "bot": { "$ref": "#/$defs/bot" },
+        "server": { "$ref": "#/$defs/server" },
+        "world": { "$ref": "#/$defs/world" },
+        "fixture": { "$ref": "#/$defs/fixture" },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 3600000 },
+        "safetyBounds": { "$ref": "#/$defs/safetyBounds" },
+        "expectedArtifactPath": { "$ref": "#/$defs/path" },
+        "metadataStatus": { "$ref": "#/$defs/metadataStatus" },
+        "missingFields": { "$ref": "#/$defs/missingFields" },
+        "blockers": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/blocker" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "metadataStatus": { "const": "complete" } }, "required": ["metadataStatus"] },
+          "then": {
+            "properties": {
+              "missingFields": { "maxItems": 0 },
+              "evidenceDisposition": { "enum": ["valid", "invalid"] },
+              "bot": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "runtime": { "const": "mineflayer" }
+                }
+              },
+              "server": {
+                "type": "object",
+                "properties": {
+                  "version": { "type": "string" },
+                  "protocolVersion": { "type": "integer" }
+                }
+              },
+              "world": {
+                "type": "object",
+                "properties": {
+                  "worldId": { "$ref": "#/$defs/id" },
+                  "seed": { "type": "integer" },
+                  "dimension": { "enum": ["overworld", "the_nether", "the_end"] },
+                  "resetId": { "$ref": "#/$defs/id" },
+                  "resetPolicy": { "enum": ["fresh", "restored"] }
+                }
+              },
+              "fixture": {
+                "type": "object",
+                "properties": {
+                  "fixtureHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                }
+              },
+              "blockers": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "missingFields": { "minItems": 1 },
+              "evidenceDisposition": { "const": "held" },
+              "blockers": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
