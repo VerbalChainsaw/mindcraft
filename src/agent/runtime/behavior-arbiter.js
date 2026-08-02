@@ -119,6 +119,9 @@ export class BehaviorArbiter {
     this.wakeDeadline = 0;
     this.pendingWake = null;
     this.lastTickStartedAt = 0;
+    // Why the loop resumed, carried into the decision trace so an early
+    // evaluation is distinguishable from a scheduled one in recorded evidence.
+    this.lastWakeReason = null;
     const traceConfig = trace && typeof trace === 'object'
       ? trace
       : settings.decision_trace && typeof settings.decision_trace === 'object'
@@ -191,13 +194,17 @@ export class BehaviorArbiter {
       // them would drive the loop back to back with no delay whatsoever.
       wait = Math.min(bounded, floorRemaining);
     }
-    if (wait <= 0) return Promise.resolve(latched || 'immediate');
+    if (wait <= 0) {
+      this.lastWakeReason = latched || 'immediate';
+      return Promise.resolve(this.lastWakeReason);
+    }
     return new Promise(resolve => {
       const settle = reason => {
         if (this.wakeTimer) clearTimeout(this.wakeTimer);
         this.wakeTimer = null;
         this.wakeResolve = null;
         this.wakeDeadline = 0;
+        this.lastWakeReason = reason;
         resolve(reason);
       };
       this.wakeResolve = settle;
@@ -473,10 +480,18 @@ export class BehaviorArbiter {
     this.tick += 1;
     const modes = this.agent.bot?.modes;
     this.urgency = this.urgencyOf();
+    // A tick that a world edge asked for is recorded as that edge. Without this
+    // every evaluation looked scheduled, and the one thing worth measuring --
+    // whether a threat actually shortened the wait -- left no evidence behind.
+    const wakeReason = this.lastWakeReason;
+    this.lastWakeReason = null;
+    const scheduledWake = !wakeReason || wakeReason === 'scheduled' || wakeReason === 'immediate';
     this.traceRecorder.begin({
       tick: this.tick,
       trigger: {
-        code: this.directiveResumeRequested ? 'directive_resume' : 'scheduled_tick',
+        code: this.directiveResumeRequested
+          ? 'directive_resume'
+          : scheduledWake ? 'scheduled_tick' : wakeReason,
         deltaMs: Number.isFinite(Number(delta)) ? Number(delta) : null,
       },
       activeAction: this.actionState(),
