@@ -1,6 +1,6 @@
 # A0 Implementation Status
 
-Status: diagnostic foundation implemented; A0 measurement evidence is not complete.
+Status: diagnostic and offline Scenario Lab contract foundations implemented; A0 measurement evidence is not complete.
 
 ## Confirmed implementation
 
@@ -19,6 +19,10 @@ Both implementation worktrees were clean at this checkpoint. Nothing was pushed.
 - A0.2's targeted three-file command exited 0 and comprised 22 tests: 7 correlation tests plus the prior 15 tests.
 - A0.2's broader `check:behavior` exited 0 and covered the configured 104-test behavior suite plus lint and syntax checks. That command does not include the new correlation test file, so the separate targeted command remains required.
 
+## Release 0.1 Scenario Lab foundation
+
+The hashed `scenario-lab.manifest.v1` catalog and offline list/validate/plan CLI define the five Release 0.1 families against candidate commit `bc8139cea8771999d133f3f32db68d07de01de7f`. They reuse A0 canonical JSON/hash and outcome semantics. All families remain unavailable because safe adapters and immutable fixture hashes are absent. No live execution, valid A0 invocation, evidence freeze, promotion, or lab-complete claim was added.
+
 ## Current A0 coverage
 
 | A0 evidence surface | Status | Current record |
@@ -26,12 +30,12 @@ Both implementation worktrees were clean at this checkpoint. Nothing was pushed.
 | Request correlation, selected skill, route, and arguments | Covered | Bounded request context reaches the linked action trace. |
 | Owner, priority, acquire, release, and terminal outcome | Covered | Existing decision traces explicitly attribute serialized action lifecycle and linked outcome. |
 | Common precondition, observation, physical-attempt, verification, and recovery timeline | Partial | Final skill evidence remains heterogeneous and does not yet provide one common timeline shape. |
-| Frozen scenario manifests | Missing | No frozen comparison manifests yet. |
-| At least 10 independent runs per family | Missing | Required field repetitions are not complete. |
-| Baseline aggregation | Missing | No aggregate success, unsafe-outcome, conflict, timeout, latency, retry, or terminal-reason table yet. |
-| Direct/NL allocation | Missing | The required per-family request-form allocation is not frozen. |
-| Seed, server, world, and timeout capture | Missing | Run-environment metadata is not yet consistently captured. |
-| Instrumentation off/on non-interference comparison | Missing | Passive-instrumentation equivalence has not been demonstrated. |
+| Frozen scenario manifests | Foundation only | Release 0.1 is versioned and hashed, but not a runnable A0 comparison manifest; executor bindings are unavailable. |
+| At least 10 independent runs per family | Missing | Required repetitions have not been executed. |
+| Baseline aggregation | Tooling only | The A0 aggregator and planned held baseline exist; no valid collected baseline table exists. |
+| Direct/NL allocation | Contract only | Both forms and repetitions are declared per scenario; no allocation has run. |
+| Seed, server, world, and timeout capture | Contract only | Scenario inputs require them; no execution metadata has been collected. |
+| Instrumentation off/on non-interference comparison | Missing | Release 0.1 declarations are instrumentation-off and no comparison has run. |
 
 ## Selected field families
 
@@ -41,8 +45,8 @@ Both implementation worktrees were clean at this checkpoint. Nothing was pushed.
 | Tactical combat | `tools/verify-combat-field.mjs` |
 | Operator hold/emergency recovery | `tools/verify-operator-hold-field.mjs` |
 
-## Next authorized design gate
+## Current blocker
 
-The next gate is a non-runtime proposal for frozen scenario manifests and an aggregation tool. It must define reproducible inputs, run metadata, direct/NL allocation, independent-run counting, baseline metrics, and instrumentation off/on comparison before implementation is authorized.
+Safe Scenario Lab executor/evidence adapters and immutable fixture hashes do not exist. A later release must establish bounded bindings under separate live-world authorization before any scenario may move from `unavailable` to `not-run`.
 
 Until A0 measurement evidence passes the documented gates, do not introduce EvidenceFrame, TaskGraph, a scheduler, concurrency, a new executor, dependency changes, a `skills.js` rewrite, or any promotion beyond A0 diagnostics.
