@@ -389,6 +389,8 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
     worldReadyObservedAt: null,
     worldReadyMs: null,
     ready: null,
+    isolationCommand: null,
+    isolationObservedAt: null,
     commandIssuedAt: null,
     command: null,
     actionResultObservedAt: null,
@@ -450,6 +452,24 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
     observed.worldReadyMs = observed.worldReadyObservedAt - observed.startRequestedAt;
     const readyAgent = agentFrom(readyPayload, bot);
     observed.ready = readyAgent;
+
+    const isolationResult = await emitAcknowledged(
+      socket,
+      'send-message',
+      [bot, { message: '!setAutonomy("command")' }],
+      Math.min(10_000, options.deadlineMs),
+    );
+    observed.isolationCommand = isolationResult;
+    if (isolationResult?.success !== true) {
+      throw new Error(`Could not isolate lifecycle action ownership: ${String(isolationResult?.error || 'no result')}`);
+    }
+    await waitForCondition(
+      () => latestStates?.[bot] || null,
+      (state) => state?.identity?.runtime?.autonomy === 'command',
+      `${bot} command-autonomy isolation`,
+      Math.min(10_000, options.deadlineMs),
+    );
+    observed.isolationObservedAt = Date.now();
 
     const commandIssuedAt = Date.now();
     observed.commandIssuedAt = commandIssuedAt;

@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 
@@ -10,6 +11,7 @@ const BOT_START = Object.freeze({ x: 1111.5, y: 100, z: 1057.5 });
 const TARGET_START = Object.freeze({ x: 1117.5, y: 100, z: 1057.5 });
 const CLEANUP_POSITION = Object.freeze({ x: 1071.5, y: 100, z: 1007.5 });
 const WALL = Object.freeze({ x: 1114, y1: 100, y2: 102, z1: 1054, z2: 1060 });
+const ROOF = Object.freeze({ x1: 1109, x2: 1118, y: 102, z1: 1045, z2: 1067 });
 const TAG = 'mindcraft_com001';
 const PROOF_OBJECTIVE = 'com001proof';
 const DAMAGE_OBJECTIVE = 'com001damage';
@@ -26,6 +28,14 @@ const VERIFIED_FLOOR_CELLS = Object.freeze([
   { x: 1114, z: 1061, block: 'red_concrete' },
   { x: 1115, z: 1061, block: 'red_concrete' },
   { x: 1117, z: 1057, block: 'red_concrete' },
+]);
+const VERIFIED_ROOF_CELLS = Object.freeze([
+  { x: 1111, z: 1057, block: 'glass' },
+  { x: 1113, z: 1053, block: 'glass' },
+  { x: 1115, z: 1053, block: 'glass' },
+  { x: 1113, z: 1061, block: 'glass' },
+  { x: 1115, z: 1061, block: 'glass' },
+  { x: 1117, z: 1057, block: 'glass' },
 ]);
 const COURSE_HOSTILE_TYPES = Object.freeze([
   'zombie',
@@ -46,6 +56,26 @@ const COURSE_HOSTILE_TYPES = Object.freeze([
   'slime',
   'enderman',
 ]);
+const TERMINAL_JOB_PHASES = new Set(['complete', 'failed', 'cancelled']);
+
+async function readOptional(path) {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function hashBytes(bytes) {
+  return bytes ? createHash('sha256').update(bytes).digest('hex') : null;
+}
+
+function activeWorkOrder(jobDirector) {
+  const order = jobDirector?.workOrder;
+  if (!order || TERMINAL_JOB_PHASES.has(order.phase)) return null;
+  return order;
+}
 
 function parseArgs(argv) {
   const options = {
@@ -181,6 +211,7 @@ function compactState(state) {
     autonomy: state?.identity?.runtime?.autonomy || state?.identity?.autonomy || null,
     mainHand: state?.inventory?.equipment?.mainHand || null,
     hostiles: (state?.perception?.hostiles || []).map(compactHostile),
+    jobDirector: state?.action?.jobDirector || null,
     lastResult: result ? {
       actionId: result.actionId || null,
       phase: result.phase,
@@ -246,6 +277,7 @@ async function run() {
       botStart: BOT_START,
       targetStart: TARGET_START,
       wall: WALL,
+      roof: ROOF,
       alternateRoutes: [{ z: 1053 }, { z: 1061 }],
       repairedFloor: { x1: 1109, x2: 1118, y: 99, z1: 1045, z2: 1067 },
       target: { type: 'zombie', tag: TAG, activeAI: false },
@@ -263,6 +295,12 @@ async function run() {
   let states = {};
   let revisions = {};
   let activeCase = null;
+  const jobStatePath = resolve('bots', options.bot, 'job-state.json');
+  const botsRoot = `${resolve('bots')}\\`;
+  if (!jobStatePath.startsWith(botsRoot)) throw new Error('Resolved job-state path escaped the bots directory.');
+  let originalJobBytes = null;
+  let originalJobExists = false;
+  let jobStateCaptured = false;
 
   const paperCommand = command => fetchJson(options.url, '/api/minecraft-server/command', {
     method: 'POST',
@@ -286,6 +324,121 @@ async function run() {
   );
 
   const sendStop = () => sendMessage('!stop');
+
+  const isControlledFixtureOrder = order => Boolean(
+    order
+    && order.kind === 'emergency_shelter'
+    && order.source === 'survival'
+    && order.requester === options.bot
+    && Number(order.target?.x) >= ROOF.x1
+    && Number(order.target?.x) <= ROOF.x2
+    && Number(order.target?.y) >= 99
+    && Number(order.target?.y) <= 101
+    && Number(order.target?.z) >= ROOF.z1
+    && Number(order.target?.z) <= ROOF.z2
+  );
+
+  const cancelPublicWorkOrder = async (order, description) => {
+    const cancelAck = await sendMessage('!cancelJob');
+    socket.emit('request-agent-state-snapshot');
+    const cancelledState = await waitFor(
+      () => compactState(states[options.bot]).jobDirector,
+      job => job?.workOrder?.id === order.id && job?.workOrder?.phase === 'cancelled',
+      `${description} cancellation`,
+      15_000,
+    );
+    await waitFor(
+      async () => {
+        const bytes = await readOptional(jobStatePath);
+        return bytes ? JSON.parse(bytes.toString('utf8')) : null;
+      },
+      current => current?.activeOrder == null,
+      `${description} persistence cleanup`,
+      10_000,
+    );
+    return { cancelAck, cancelledState };
+  };
+
+  const detachProtectedJob = async () => {
+    originalJobBytes = await readOptional(jobStatePath);
+    originalJobExists = originalJobBytes !== null;
+    jobStateCaptured = true;
+    const document = originalJobBytes ? JSON.parse(originalJobBytes.toString('utf8')) : null;
+    const diskOrder = document?.activeOrder || null;
+    const publicSnapshot = compactState(states[options.bot]).jobDirector;
+    const publicOrder = activeWorkOrder(publicSnapshot);
+    const publicWorkOrderAbsent = publicSnapshot != null
+      && publicSnapshot.workOrder == null;
+    const alreadyDetached = Boolean(
+      diskOrder
+      && !publicOrder
+      && (
+        TERMINAL_JOB_PHASES.has(publicSnapshot?.workOrder?.phase)
+        || publicWorkOrderAbsent
+      )
+    );
+    evidence.isolation = {
+      protectedJob: {
+        file: jobStatePath,
+        existed: originalJobExists,
+        sha256: hashBytes(originalJobBytes),
+        diskOrder: diskOrder ? {
+          id: diskOrder.id,
+          kind: diskOrder.kind,
+          source: diskOrder.source,
+          requester: diskOrder.requester,
+          phase: diskOrder.phase,
+          target: diskOrder.target,
+        } : null,
+        publicOrder,
+        publicSnapshot,
+        publicWorkOrderAbsent,
+        alreadyDetached,
+        detached: false,
+        restored: false,
+      },
+    };
+    if (!diskOrder && !publicOrder) return;
+    if (alreadyDetached) {
+      evidence.isolation.protectedJob.detached = true;
+      return;
+    }
+    if (publicOrder && diskOrder?.id !== publicOrder.id && isControlledFixtureOrder(publicOrder)) {
+      const cancellation = await cancelPublicWorkOrder(publicOrder, 'controlled combat-fixture work order');
+      evidence.isolation.controlledFixtureJobs = [{
+        phase: 'startup',
+        order: publicOrder,
+        ...cancellation,
+      }];
+      evidence.isolation.protectedJob.detached = true;
+      return;
+    }
+    if (!diskOrder || !publicOrder || diskOrder.id !== publicOrder.id) {
+      throw new Error(`Persisted/public work-order mismatch: ${JSON.stringify({ diskOrder, publicOrder })}`);
+    }
+    const cancellation = await cancelPublicWorkOrder(diskOrder, `protected work order ${diskOrder.id}`);
+    evidence.isolation.protectedJob.cancelAck = cancellation.cancelAck;
+    evidence.isolation.protectedJob.cancelledState = cancellation.cancelledState;
+    evidence.isolation.protectedJob.detached = true;
+  };
+
+  const restoreProtectedJob = async () => {
+    if (originalJobExists) {
+      await writeFile(jobStatePath, originalJobBytes);
+    } else {
+      try {
+        await unlink(jobStatePath);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+    const restored = await readOptional(jobStatePath);
+    const restoredHash = hashBytes(restored);
+    const expectedHash = hashBytes(originalJobBytes);
+    if (restoredHash !== expectedHash) throw new Error('Protected job-state bytes were not restored exactly.');
+    evidence.isolation.protectedJob.restored = true;
+    evidence.isolation.protectedJob.restoredSha256 = restoredHash;
+  };
 
   const triggerStop = () => {
     if (!activeCase || activeCase.stopPromise) return;
@@ -328,6 +481,12 @@ async function run() {
         + `run scoreboard players set ${marker(runId, phase, `FLOOR_${cell.x}_${cell.z}`)} ${PROOF_OBJECTIVE} 1`,
       );
     }
+    for (const cell of VERIFIED_ROOF_CELLS) {
+      await paperCommand(
+        `execute if block ${cell.x} ${ROOF.y} ${cell.z} minecraft:${cell.block} `
+        + `run scoreboard players set ${marker(runId, phase, `ROOF_${cell.x}_${cell.z}`)} ${PROOF_OBJECTIVE} 1`,
+      );
+    }
     await paperCommand(`scoreboard players get #targethealth ${PROOF_OBJECTIVE}`);
     await paperCommand(`scoreboard players get #bothealth ${PROOF_OBJECTIVE}`);
     await paperCommand(`scoreboard players set ${end} ${PROOF_OBJECTIVE} 1`);
@@ -350,6 +509,7 @@ async function run() {
       'kill @e[type=item,x=1109,y=99,z=1045,dx=9,dy=6,dz=22]',
       'fill 1109 99 1045 1118 99 1067 red_concrete',
       'setblock 1113 99 1057 sea_lantern',
+      `fill ${ROOF.x1} ${ROOF.y} ${ROOF.z1} ${ROOF.x2} ${ROOF.y} ${ROOF.z2} glass`,
       `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} ${wallBlock}`,
       `setblock ${WALL.x} 100 1053 air`,
       `setblock ${WALL.x} 101 1053 air`,
@@ -396,6 +556,7 @@ async function run() {
     await paperCommand(`kill @e[tag=${TAG}]`);
     await paperCommand('kill @e[type=item,x=1109,y=99,z=1045,dx=9,dy=6,dz=22]');
     await paperCommand(`fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} air`);
+    await paperCommand(`fill ${ROOF.x1} ${ROOF.y} ${ROOF.z1} ${ROOF.x2} ${ROOF.y} ${ROOF.z2} air`);
     await paperCommand(`tp ${options.bot} ${CLEANUP_POSITION.x} ${CLEANUP_POSITION.y} ${CLEANUP_POSITION.z}`);
     await paperCommand(`effect give ${options.bot} minecraft:instant_health 1 4 true`);
     await paperCommand(`effect give ${options.bot} minecraft:saturation 1 255 true`);
@@ -467,17 +628,13 @@ async function run() {
     });
     socket.emit('listen-to-agents');
     socket.emit('request-agent-state-snapshot');
-    const autonomyAck = await sendMessage('!setAutonomy("command")');
-    const autonomyAcceptedAt = Number(autonomyAck?.acceptedAt) || Date.now();
-    await waitFor(
-      () => states[options.bot] || null,
-      state => Number(state?._meta?.sampledAt) >= autonomyAcceptedAt
-        && compactState(state).autonomy === 'command',
-      `${options.bot} command autonomy`,
-      20_000,
-    );
+    await waitFor(() => states[options.bot] || null, Boolean, `${options.bot} canonical state`, 15_000);
     const startupStop = await sendStop();
     await waitForHeld(Number(startupStop?.acceptedAt) || Date.now());
+    if (compactState(states[options.bot]).autonomy !== 'command') {
+      throw new Error('Combat field verification requires command autonomy.');
+    }
+    await detachProtectedJob();
     await paperCommand(`scoreboard objectives remove ${PROOF_OBJECTIVE}`);
     await paperCommand(`scoreboard objectives remove ${DAMAGE_OBJECTIVE}`);
     await paperCommand(`scoreboard objectives remove ${KILL_OBJECTIVE}`);
@@ -558,6 +715,10 @@ async function run() {
             && VERIFIED_FLOOR_CELLS.every(cell => markerObserved(
               lines,
               marker(runId, phase, `FLOOR_${cell.x}_${cell.z}`),
+            ))
+            && VERIFIED_ROOF_CELLS.every(cell => markerObserved(
+              lines,
+              marker(runId, phase, `ROOF_${cell.x}_${cell.z}`),
             ));
         });
         const tacticalChoiceCount = activeCase.outputs.reduce((count, entry) => (
@@ -655,6 +816,16 @@ async function run() {
     evidence.passed = evidence.attempts.length === options.attempts
       && evidence.attempts.every(attempt => attempt.passed);
   } catch (error) {
+    if (activeCase) {
+      evidence.failureCase = {
+        runId: activeCase.runId,
+        kind: activeCase.kind,
+        issuedAt: activeCase.issuedAt,
+        outputs: activeCase.outputs,
+        samples: activeCase.samples,
+        traces: [...activeCase.traceMap.values()],
+      };
+    }
     evidence.error = String(error?.stack || error?.message || error).slice(0, 4_000);
   } finally {
     if (socket?.connected) {
@@ -665,6 +836,16 @@ async function run() {
           acceptedAt = Number(cleanupStop?.acceptedAt) || Date.now();
         }
         await waitForHeld(acceptedAt, 10_000);
+        const fixtureOrder = activeWorkOrder(compactState(states[options.bot]).jobDirector);
+        if (isControlledFixtureOrder(fixtureOrder)) {
+          const cancellation = await cancelPublicWorkOrder(fixtureOrder, 'controlled combat-fixture cleanup order');
+          evidence.isolation.controlledFixtureJobs ||= [];
+          evidence.isolation.controlledFixtureJobs.push({
+            phase: 'cleanup',
+            order: fixtureOrder,
+            ...cancellation,
+          });
+        }
         await cleanupFixture();
         await paperCommand(`scoreboard objectives remove ${PROOF_OBJECTIVE}`);
         await paperCommand(`scoreboard objectives remove ${DAMAGE_OBJECTIVE}`);
@@ -675,11 +856,22 @@ async function run() {
           autonomy: compactState(states[options.bot]).autonomy,
           taggedTargetsRemoved: true,
           temporaryWallRemoved: true,
+          temporaryRoofRemoved: true,
         };
       } catch (cleanupError) {
         evidence.cleanupError = String(cleanupError?.stack || cleanupError?.message || cleanupError).slice(0, 2_000);
       }
       socket.close();
+    }
+    if (jobStateCaptured) {
+      try {
+        await restoreProtectedJob();
+      } catch (restoreError) {
+        evidence.cleanupError = [evidence.cleanupError, `job restore: ${String(restoreError?.message || restoreError)}`]
+          .filter(Boolean)
+          .join('; ')
+          .slice(0, 2_000);
+      }
     }
     evidence.finishedAt = Date.now();
     evidence.durationMs = evidence.finishedAt - evidence.startedAt;

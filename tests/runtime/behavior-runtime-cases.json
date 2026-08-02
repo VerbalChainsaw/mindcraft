@@ -16,6 +16,6 @@
       "code": "completed",
       "label": "action:stay"
     },
-    "mutations": ["query managed server player list", "start selected bot", "send !stay(1) to selected bot", "stop selected bot"]
+    "mutations": ["query managed server player list", "start selected bot", "set session autonomy to command", "send !stay(1) to selected bot", "stop selected bot"]
   }
 ]

@@ -1,0 +1,2899 @@
+{
+  "schemaVersion": 1,
+  "scenario": "typed-visible-resource-collection",
+  "command": "!collectBlocksInRange(\"cobblestone\", 3, 64)",
+  "bot": "MindcraftBot",
+  "startedAt": 1785660749155,
+  "fixture": {
+    "botStart": {
+      "x": 1028.5,
+      "y": 100,
+      "z": 1008.5
+    },
+    "collectionLane": {
+      "from": {
+        "x": 1026,
+        "y": 99,
+        "z": 1006
+      },
+      "to": {
+        "x": 1040,
+        "y": 103,
+        "z": 1016
+      }
+    },
+    "targets": [
+      {
+        "x": 1032,
+        "y": 100,
+        "z": 1013
+      },
+      {
+        "x": 1035,
+        "y": 100,
+        "z": 1013
+      },
+      {
+        "x": 1038,
+        "y": 100,
+        "z": 1013
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "runId": "MIN001-R1",
+      "attempt": 1,
+      "issuedAt": 1785660750900,
+      "commandAck": {
+        "success": true,
+        "agentName": "MindcraftBot",
+        "acceptedAt": 1785660750901
+      },
+      "terminal": {
+        "actionId": "MindcraftBot-135-1785660750902",
+        "phase": "failed",
+        "code": "skill_missing_tool",
+        "label": "action:collectBlocksInRange",
+        "detail": "Action output: Don't have right tools to harvest cobblestone.",
+        "target": {
+          "name": "stone",
+          "x": 1032,
+          "y": 100,
+          "z": 1013
+        },
+        "durationMs": 63,
+        "startedAt": 1785660750902,
+        "finishedAt": 1785660750965
+      },
+      "beforeState": {
+        "sampledAt": 1785660750395,
+        "position": {
+          "x": 1028.5,
+          "y": 100,
+          "z": 1008.5
+        },
+        "health": 20,
+        "hunger": 20,
+        "velocity": {
+          "x": 0,
+          "y": -0.08,
+          "z": 0
+        },
+        "held": true,
+        "idle": true,
+        "pathfinding": null,
+        "current": "Command only",
+        "cobblestone": 0,
+        "lastResult": {
+          "actionId": "MindcraftBot-134-1785660692566",
+          "phase": "succeeded",
+          "code": "skill_slept",
+          "label": "action:goToBed",
+          "detail": "Action output: You have reached at 1113, 160, 1007. You are in bed. You have woken up.",
+          "target": {
+            "name": "red_bed",
+            "x": 1113,
+            "y": 160,
+            "z": 1007
+          },
+          "durationMs": 5615,
+          "startedAt": 1785660692566,
+          "finishedAt": 1785660698181
+        }
+      },
+      "afterState": {
+        "sampledAt": 1785660762149,
+        "position": {
+          "x": 1028.5,
+          "y": 100,
+          "z": 1008.5
+        },
+        "health": 20,
+        "hunger": 20,
+        "velocity": {
+          "x": 0,
+          "y": -0.08,
+          "z": 0
+        },
+        "held": true,
+        "idle": true,
+        "pathfinding": null,
+        "current": "Role blocked: interrupted",
+        "cobblestone": 0,
+        "lastResult": {
+          "actionId": "MindcraftBot-136-1785660751043",
+          "phase": "interrupted",
+          "code": "interrupted",
+          "label": "action:placeBlockAt",
+          "detail": "Action was interrupted.",
+          "target": {
+            "name": "oak_planks",
+            "x": 1027,
+            "y": 100,
+            "z": 1007
+          },
+          "durationMs": 917,
+          "startedAt": 1785660751043,
+          "finishedAt": 1785660751960
+        }
+      },
+      "minimumY": 100,
+      "resyncRequests": 0,
+      "stop": {
+        "triggeredBy": "correlated_collection_terminal_state",
+        "issuedAt": 1785660751052,
+        "acceptedAt": 1785660751052,
+        "heldObservedAt": 1785660752000,
+        "quiescenceMs": 948,
+        "stableForTenSeconds": true
+      },
+      "paper": {
+        "beforeInventoryCount": 0,
+        "afterInventoryCount": 0,
+        "supportsVerified": true,
+        "blocksTransitioned": false,
+        "before": [
+          "[command] > scoreboard players set #MIN001_R1_BEFORE_BEGIN min001evidence 1",
+          "[command] > data get entity MindcraftBot Pos",
+          "[command] > data get entity MindcraftBot Health",
+          "[command] > data get entity MindcraftBot foodLevel",
+          "[command] > clear MindcraftBot minecraft:cobblestone 0",
+          "[command] > execute if block 1032 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_BEFORE_S0_SUPPORT min001evidence 1",
+          "[command] > execute unless block 1032 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_BEFORE_S0_NOT_SUPPORT min001evidence 1",
+          "[command] > execute if block 1032 100 1013 minecraft:stone run scoreboard players set #MIN001_R1_BEFORE_T0_STONE min001evidence 1",
+          "[command] > execute unless block 1032 100 1013 minecraft:stone run scoreboard players set #MIN001_R1_BEFORE_T0_NOT_STONE min001evidence 1",
+          "[command] > execute if block 1035 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_BEFORE_S1_SUPPORT min001evidence 1",
+          "[command] > execute unless block 1035 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_BEFORE_S1_NOT_SUPPORT min001evidence 1",
+          "[command] > execute if block 1035 100 1013 minecraft:stone run scoreboard players set #MIN001_R1_BEFORE_T1_STONE min001evidence 1",
+          "[command] > execute unless block 1035 100 1013 minecraft:stone run scoreboard players set #MIN001_R1_BEFORE_T1_NOT_STONE min001evidence 1",
+          "[command] > execute if block 1038 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_BEFORE_S2_SUPPORT min001evidence 1",
+          "[command] > execute unless block 1038 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_BEFORE_S2_NOT_SUPPORT min001evidence 1",
+          "[command] > execute if block 1038 100 1013 minecraft:stone run scoreboard players set #MIN001_R1_BEFORE_T2_STONE min001evidence 1",
+          "[command] > execute unless block 1038 100 1013 minecraft:stone run scoreboard players set #MIN001_R1_BEFORE_T2_NOT_STONE min001evidence 1",
+          "[command] > scoreboard players set #MIN001_R1_BEFORE_END min001evidence 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_BEGIN to 1",
+          "[03:52:30 INFO]: MindcraftBot has the following entity data: [\u001b[38;5;3m1028.5\u001b[38;5;9md\u001b[0m, \u001b[38;5;3m100.0\u001b[38;5;9md\u001b[0m, \u001b[38;5;3m1008.5\u001b[38;5;9md\u001b[0m]",
+          "[03:52:30 INFO]: MindcraftBot has the following entity data: \u001b[38;5;3m20.0\u001b[38;5;9mf\u001b[0m",
+          "[03:52:30 INFO]: MindcraftBot has the following entity data: \u001b[38;5;3m20\u001b[0m",
+          "[03:52:30 INFO]: \u001b[38;5;9mNo items were found on player MindcraftBot\u001b[0m",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_S0_SUPPORT to 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_T0_STONE to 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_S1_SUPPORT to 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_T1_STONE to 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_S2_SUPPORT to 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_T2_STONE to 1",
+          "[03:52:30 INFO]: Set [min001evidence] for #MIN001_R1_BEFORE_END to 1"
+        ],
+        "after": [
+          "[command] > scoreboard players set #MIN001_R1_AFTER_BEGIN min001evidence 1",
+          "[command] > data get entity MindcraftBot Pos",
+          "[command] > data get entity MindcraftBot Health",
+          "[command] > data get entity MindcraftBot foodLevel",
+          "[command] > clear MindcraftBot minecraft:cobblestone 0",
+          "[command] > execute if block 1032 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_AFTER_S0_SUPPORT min001evidence 1",
+          "[command] > execute unless block 1032 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_AFTER_S0_NOT_SUPPORT min001evidence 1",
+          "[command] > execute if block 1032 100 1013 minecraft:air run scoreboard players set #MIN001_R1_AFTER_T0_AIR min001evidence 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_BEGIN to 1",
+          "[command] > execute unless block 1032 100 1013 minecraft:air run scoreboard players set #MIN001_R1_AFTER_T0_NOT_AIR min001evidence 1",
+          "[03:52:43 INFO]: MindcraftBot has the following entity data: [\u001b[38;5;3m1028.5\u001b[38;5;9md\u001b[0m, \u001b[38;5;3m100.0\u001b[38;5;9md\u001b[0m, \u001b[38;5;3m1008.5\u001b[38;5;9md\u001b[0m]",
+          "[03:52:43 INFO]: MindcraftBot has the following entity data: \u001b[38;5;3m20.0\u001b[38;5;9mf\u001b[0m",
+          "[03:52:43 INFO]: MindcraftBot has the following entity data: \u001b[38;5;3m20\u001b[0m",
+          "[03:52:43 INFO]: \u001b[38;5;9mNo items were found on player MindcraftBot\u001b[0m",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_S0_SUPPORT to 1",
+          "[command] > execute if block 1035 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_AFTER_S1_SUPPORT min001evidence 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_T0_NOT_AIR to 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_S1_SUPPORT to 1",
+          "[command] > execute unless block 1035 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_AFTER_S1_NOT_SUPPORT min001evidence 1",
+          "[command] > execute if block 1035 100 1013 minecraft:air run scoreboard players set #MIN001_R1_AFTER_T1_AIR min001evidence 1",
+          "[command] > execute unless block 1035 100 1013 minecraft:air run scoreboard players set #MIN001_R1_AFTER_T1_NOT_AIR min001evidence 1",
+          "[command] > execute if block 1038 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_AFTER_S2_SUPPORT min001evidence 1",
+          "[command] > execute unless block 1038 99 1013 minecraft:polished_andesite run scoreboard players set #MIN001_R1_AFTER_S2_NOT_SUPPORT min001evidence 1",
+          "[command] > execute if block 1038 100 1013 minecraft:air run scoreboard players set #MIN001_R1_AFTER_T2_AIR min001evidence 1",
+          "[command] > execute unless block 1038 100 1013 minecraft:air run scoreboard players set #MIN001_R1_AFTER_T2_NOT_AIR min001evidence 1",
+          "[command] > scoreboard players set #MIN001_R1_AFTER_END min001evidence 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_T1_NOT_AIR to 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_S2_SUPPORT to 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_T2_NOT_AIR to 1",
+          "[03:52:43 INFO]: Set [min001evidence] for #MIN001_R1_AFTER_END to 1"
+        ]
+      },
+      "outputs": [
+        {
+          "at": 1785660750966,
+          "output": "Failed (skill_missing_tool): Action output: Don't have right tools to harvest cobblestone."
+        },
+        {
+          "at": 1785660752000,
+          "output": "Agent stopped. It will remain held until you give a new command or goal."
+        }
+      ],
+      "stateSamples": [
+        {
+          "sampledAt": 1785660750646,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Command only",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-134-1785660692566",
+            "phase": "succeeded",
+            "code": "skill_slept",
+            "label": "action:goToBed",
+            "detail": "Action output: You have reached at 1113, 160, 1007. You are in bed. You have woken up.",
+            "target": {
+              "name": "red_bed",
+              "x": 1113,
+              "y": 160,
+              "z": 1007
+            },
+            "durationMs": 5615,
+            "startedAt": 1785660692566,
+            "finishedAt": 1785660698181
+          }
+        },
+        {
+          "sampledAt": 1785660751044,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": false,
+          "idle": false,
+          "pathfinding": null,
+          "current": "action:placeBlockAt",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-135-1785660750902",
+            "phase": "failed",
+            "code": "skill_missing_tool",
+            "label": "action:collectBlocksInRange",
+            "detail": "Action output: Don't have right tools to harvest cobblestone.",
+            "target": {
+              "name": "stone",
+              "x": 1032,
+              "y": 100,
+              "z": 1013
+            },
+            "durationMs": 63,
+            "startedAt": 1785660750902,
+            "finishedAt": 1785660750965
+          }
+        },
+        {
+          "sampledAt": 1785660751800,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": false,
+          "pathfinding": null,
+          "current": "action:placeBlockAt",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-135-1785660750902",
+            "phase": "failed",
+            "code": "skill_missing_tool",
+            "label": "action:collectBlocksInRange",
+            "detail": "Action output: Don't have right tools to harvest cobblestone.",
+            "target": {
+              "name": "stone",
+              "x": 1032,
+              "y": 100,
+              "z": 1013
+            },
+            "durationMs": 63,
+            "startedAt": 1785660750902,
+            "finishedAt": 1785660750965
+          }
+        },
+        {
+          "sampledAt": 1785660751963,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660752000,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660756831,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660757095,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660761899,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660762149,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        }
+      ],
+      "stableSamples": [
+        {
+          "sampledAt": 1785660752000,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660752000,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660752000,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660752000,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660752000,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660757095,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660757095,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660757095,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660757095,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660757095,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        },
+        {
+          "sampledAt": 1785660762149,
+          "position": {
+            "x": 1028.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "health": 20,
+          "hunger": 20,
+          "velocity": {
+            "x": 0,
+            "y": -0.08,
+            "z": 0
+          },
+          "held": true,
+          "idle": true,
+          "pathfinding": null,
+          "current": "Role blocked: interrupted",
+          "cobblestone": 0,
+          "lastResult": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "label": "action:placeBlockAt",
+            "detail": "Action was interrupted.",
+            "target": {
+              "name": "oak_planks",
+              "x": 1027,
+              "y": 100,
+              "z": 1007
+            },
+            "durationMs": 917,
+            "startedAt": 1785660751043,
+            "finishedAt": 1785660751960
+          }
+        }
+      ],
+      "traces": [
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2143-1785660749467-2143",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660749467,
+          "monotonicStartedMs": 1002206.724,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 614
+          },
+          "activeAction": {
+            "actionId": null,
+            "owner": null,
+            "label": null,
+            "intent": null,
+            "startedAt": 0,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": null,
+              "workOrderPhase": null
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2143",
+              "source": "environment_observer",
+              "observedAt": 1785660748853,
+              "ageMs": 614,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.06
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.045
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "acquired",
+            "controlReason": "The selected lane suppressed lower-priority lanes.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.077
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.007
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.285,
+            "cleanupMs": 0.014,
+            "totalMs": 1.299
+          },
+          "correlation": {
+            "actionId": null,
+            "outcomeLinked": false
+          },
+          "outcome": null
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2144-1785660750140-2144",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660750140,
+          "monotonicStartedMs": 1002879.884,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 673
+          },
+          "activeAction": {
+            "actionId": null,
+            "owner": null,
+            "label": null,
+            "intent": null,
+            "startedAt": 0,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": null,
+              "workOrderPhase": null
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2144",
+              "source": "environment_observer",
+              "observedAt": 1785660750140,
+              "ageMs": 0,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.04
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.043
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "acquired",
+            "controlReason": "The selected lane suppressed lower-priority lanes.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.06
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.007
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.195,
+            "cleanupMs": 0.015,
+            "totalMs": 1.21
+          },
+          "correlation": {
+            "actionId": null,
+            "outcomeLinked": false
+          },
+          "outcome": null
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2145-1785660750752-2145",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660750752,
+          "monotonicStartedMs": 1003491.35,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 612
+          },
+          "activeAction": {
+            "actionId": "MindcraftBot-135-1785660750902",
+            "owner": "player",
+            "label": "action:collectBlocksInRange",
+            "intent": null,
+            "startedAt": 1785660750902,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": null,
+              "workOrderPhase": null
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2145",
+              "source": "environment_observer",
+              "observedAt": 1785660750140,
+              "ageMs": 612,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.046
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.048
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "acquired",
+            "controlReason": "The selected lane suppressed lower-priority lanes.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.059
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.007
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.31,
+            "cleanupMs": 0.015,
+            "totalMs": 1.325
+          },
+          "correlation": {
+            "actionId": "MindcraftBot-135-1785660750902",
+            "outcomeLinked": true
+          },
+          "outcome": {
+            "actionId": "MindcraftBot-135-1785660750902",
+            "phase": "failed",
+            "code": "skill_missing_tool",
+            "finishedAt": 1785660750965,
+            "durationMs": 63
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2146-1785660750967-2146",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660750967,
+          "monotonicStartedMs": 1003706.541,
+          "trigger": {
+            "code": "action_finished",
+            "deltaMs": 215
+          },
+          "activeAction": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "owner": "job",
+            "label": "action:placeBlockAt",
+            "intent": null,
+            "startedAt": 1785660751044,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": null,
+              "workOrderPhase": null
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2146",
+              "source": "environment_observer",
+              "observedAt": 1785660750967,
+              "ageMs": 0,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.032
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "ineligible",
+              "reasonCode": "operator_not_held",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.006
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.014
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "ineligible",
+              "reasonCode": "no_active_action",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.012
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.007
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "ineligible",
+              "reasonCode": "no_comportment_pause",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.004
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "ineligible",
+              "reasonCode": "directive_not_resumable",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.005
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "ineligible",
+              "reasonCode": "survival_not_selected",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 68.965
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "eligible",
+              "reasonCode": "job_execute",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 6.73
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "basic_survival",
+            "reasonCode": "job_execute",
+            "control": "acquired",
+            "controlReason": "The selected lane suppressed lower-priority lanes.",
+            "hardGate": null,
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.056
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.105
+            }
+          ],
+          "timing": {
+            "evaluationMs": 76.905,
+            "cleanupMs": 0.112,
+            "totalMs": 77.018
+          },
+          "correlation": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "outcomeLinked": false
+          },
+          "outcome": null
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2147-1785660751148-2147",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660751148,
+          "monotonicStartedMs": 1003887.547,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 181
+          },
+          "activeAction": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "owner": "job",
+            "label": "action:placeBlockAt",
+            "intent": "action:placeBlockAt",
+            "startedAt": 1785660751044,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": "builder-b84b7a76-3309-4c44-b6ef-6a31e10cfca5",
+              "workOrderPhase": "execute"
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2147",
+              "source": "environment_observer",
+              "observedAt": 1785660750967,
+              "ageMs": 181,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.05
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.046
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "retained",
+            "controlReason": "The existing serialized action retained ownership.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.057
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.005
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.19,
+            "cleanupMs": 0.01,
+            "totalMs": 1.2
+          },
+          "correlation": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "outcomeLinked": false
+          },
+          "outcome": null
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2148-1785660751750-2148",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660751750,
+          "monotonicStartedMs": 1004489.719,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 602
+          },
+          "activeAction": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "owner": "job",
+            "label": "action:placeBlockAt",
+            "intent": "action:placeBlockAt",
+            "startedAt": 1785660751044,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": "builder-b84b7a76-3309-4c44-b6ef-6a31e10cfca5",
+              "workOrderPhase": "execute"
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2148",
+              "source": "environment_observer",
+              "observedAt": 1785660751750,
+              "ageMs": 0,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.024
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.076
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "retained",
+            "controlReason": "The existing serialized action retained ownership.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.056
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.009
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.206,
+            "cleanupMs": 0.016,
+            "totalMs": 1.222
+          },
+          "correlation": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "outcomeLinked": true
+          },
+          "outcome": {
+            "actionId": "MindcraftBot-136-1785660751043",
+            "phase": "interrupted",
+            "code": "interrupted",
+            "finishedAt": 1785660751960,
+            "durationMs": 917
+          }
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2149-1785660752350-2149",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660752350,
+          "monotonicStartedMs": 1005089.299,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 600
+          },
+          "activeAction": {
+            "actionId": null,
+            "owner": null,
+            "label": null,
+            "intent": null,
+            "startedAt": 0,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": "builder-b84b7a76-3309-4c44-b6ef-6a31e10cfca5",
+              "workOrderPhase": "execute"
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2149",
+              "source": "environment_observer",
+              "observedAt": 1785660751750,
+              "ageMs": 600,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.044
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.045
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "acquired",
+            "controlReason": "The selected lane suppressed lower-priority lanes.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.047
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.007
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.204,
+            "cleanupMs": 0.013,
+            "totalMs": 1.217
+          },
+          "correlation": {
+            "actionId": null,
+            "outcomeLinked": false
+          },
+          "outcome": null
+        },
+        {
+          "schemaVersion": 1,
+          "decisionId": "MindcraftBot-2150-1785660752960-2150",
+          "agent": "MindcraftBot",
+          "wallClockTimestamp": 1785660752960,
+          "monotonicStartedMs": 1005699.347,
+          "trigger": {
+            "code": "scheduled_tick",
+            "deltaMs": 610
+          },
+          "activeAction": {
+            "actionId": null,
+            "owner": null,
+            "label": null,
+            "intent": null,
+            "startedAt": 0,
+            "commitment": {
+              "resumeAction": null,
+              "goalId": null,
+              "goalPhase": null,
+              "workOrderId": "builder-b84b7a76-3309-4c44-b6ef-6a31e10cfca5",
+              "workOrderPhase": "execute"
+            }
+          },
+          "evidence": [
+            {
+              "id": "perception-2150",
+              "source": "environment_observer",
+              "observedAt": 1785660752960,
+              "ageMs": 0,
+              "summary": "fresh"
+            }
+          ],
+          "lanes": [
+            {
+              "order": 0,
+              "lane": "emergency_self_preservation",
+              "status": "ineligible",
+              "reasonCode": "band_clear",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.057
+            },
+            {
+              "order": 1,
+              "lane": "operator_hold",
+              "status": "eligible",
+              "reasonCode": "operator_hold_safe",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": 0.048
+            },
+            {
+              "order": 2,
+              "lane": "attributed_protection",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 3,
+              "lane": "active_action_retention",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 4,
+              "lane": "bounded_recovery",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 5,
+              "lane": "comportment_pause",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 6,
+              "lane": "player_directive",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 7,
+              "lane": "basic_survival",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 8,
+              "lane": "survival_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 9,
+              "lane": "player_goal",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 10,
+              "lane": "player_job",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 11,
+              "lane": "command_policy_guard",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 12,
+              "lane": "factual_reaction",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 13,
+              "lane": "role_work",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 14,
+              "lane": "self_progression",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 15,
+              "lane": "opportunity",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 16,
+              "lane": "idle_embodiment",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 17,
+              "lane": "self_prompt",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            },
+            {
+              "order": 18,
+              "lane": "idle",
+              "status": "not_evaluated",
+              "reasonCode": "short_circuit",
+              "targetRef": null,
+              "evidenceRefs": [],
+              "durationMs": null
+            }
+          ],
+          "winner": {
+            "lane": "operator_hold",
+            "reasonCode": "operator_hold_safe",
+            "control": "acquired",
+            "controlReason": "The selected lane suppressed lower-priority lanes.",
+            "hardGate": "operator_hold",
+            "preemption": {
+              "involved": false,
+              "fromOwner": null,
+              "fromAction": null,
+              "toLane": null
+            }
+          },
+          "stages": [
+            {
+              "stage": "perception_refresh",
+              "durationMs": 0.08
+            },
+            {
+              "stage": "task_completion_check",
+              "durationMs": 0.007
+            }
+          ],
+          "timing": {
+            "evaluationMs": 1.313,
+            "cleanupMs": 0.015,
+            "totalMs": 1.328
+          },
+          "correlation": {
+            "actionId": null,
+            "outcomeLinked": false
+          },
+          "outcome": null
+        }
+      ],
+      "linkedDecisionIds": [
+        "MindcraftBot-2145-1785660750752-2145"
+      ],
+      "passed": false
+    }
+  ],
+  "passed": false,
+  "error": null,
+  "finishedAt": 1785660763508,
+  "durationMs": 14353
+}

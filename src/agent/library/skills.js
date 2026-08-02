@@ -94,7 +94,8 @@ const DIRECT_NAVIGATION_APPROACH_RANGE = 4.5;
 const DIRECT_NAVIGATION_APPROACH_STEPS = 4;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
 const DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE = 1.6;
-const DELIVERY_RETRY_DROP_DISTANCE = 2;
+const DELIVERY_MAX_DROP_HORIZONTAL_DISTANCE = 2.6;
+const DELIVERY_MAX_DROP_LATERAL_OFFSET = 0.65;
 const DELIVERY_PICKUP_TIMEOUT_MS = 3_250;
 const MAX_DELIVERY_DROP_ATTEMPTS = 3;
 const MOUNT_INTERACTION_RANGE = 4.5;
@@ -7556,6 +7557,61 @@ export function deliveryDropSpacingNeedsRetreat(botPosition, playerPosition) {
     ) < DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE;
 }
 
+export function deliveryDropStanceIsExclusive(botPosition, playerPosition) {
+    if (![botPosition?.x, botPosition?.z, playerPosition?.x, playerPosition?.z].every(Number.isFinite)) {
+        return false;
+    }
+    const dx = Math.abs(botPosition.x - playerPosition.x);
+    const dz = Math.abs(botPosition.z - playerPosition.z);
+    const distance = Math.hypot(dx, dz);
+    return distance >= DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE
+        && distance <= DELIVERY_MAX_DROP_HORIZONTAL_DISTANCE
+        && Math.min(dx, dz) <= DELIVERY_MAX_DROP_LATERAL_OFFSET;
+}
+
+function deliveryDropStances(bot, player) {
+    const y = Math.floor(Number(player?.position?.y));
+    const x = Math.floor(Number(player?.position?.x));
+    const z = Math.floor(Number(player?.position?.z));
+    if (![x, y, z].every(Number.isFinite)) return [];
+    return [
+        new Vec3(x + 2, y, z),
+        new Vec3(x - 2, y, z),
+        new Vec3(x, y, z + 2),
+        new Vec3(x, y, z - 2),
+    ].filter(position => {
+        const feet = bot.blockAt(position);
+        const head = bot.blockAt(position.offset(0, 1, 0));
+        const support = bot.blockAt(position.offset(0, -1, 0));
+        const center = position.offset(0.5, 0, 0.5);
+        return feet?.boundingBox === 'empty'
+            && head?.boundingBox === 'empty'
+            && !isHazardousGameplayBlock(feet)
+            && !isHazardousGameplayBlock(head)
+            && !isLiquidGameplayBlock(feet)
+            && !isLiquidGameplayBlock(head)
+            && isSafeGameplaySupport(support)
+            && deliveryDropStanceIsExclusive(center, player.position);
+    }).sort((left, right) => (
+        bot.entity.position.distanceTo(left.offset(0.5, 0, 0.5))
+        - bot.entity.position.distanceTo(right.offset(0.5, 0, 0.5))
+    ));
+}
+
+async function reachDeliveryDropStance(bot, player) {
+    for (let replan = 0; replan < 2 && !bot.interrupt_code; replan += 1) {
+        if (deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) return true;
+        const stances = deliveryDropStances(bot, player);
+        if (stances.length === 0) return false;
+        const routed = await goToGoal(bot, new pf.goals.GoalCompositeAny(
+            stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+        ));
+        if (!routed) return false;
+        if (deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) return true;
+    }
+    return false;
+}
+
 export async function giveToPlayer(bot, itemType, username, num=1) {
     /**
      * Give one of the specified item to the specified player
@@ -7623,36 +7679,26 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             return false;
         }
     }
-    // Inventory-window tosses become pickup-eligible after travelling roughly
-    // two blocks. Keep enough horizontal spacing for the item to enter the
-    // recipient's collision box instead of passing them and returning to us.
-    if (deliveryDropSpacingNeedsRetreat(bot.entity.position, player.position)) {
-        let too_close = true;
-        let start_moving_away = Date.now();
-        if (!await moveAwayFromEntity(bot, player, 1.75)) {
-            return false;
-        }
-        while (too_close && !bot.interrupt_code) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-            resolution = resolvePhysicalPlayer(bot, username);
-            target = playerTargetEvidence(resolution);
-            player = resolution.entity;
-            if (!player) return false;
-            too_close = deliveryDropSpacingNeedsRetreat(bot.entity.position, player.position);
-            if (too_close) {
-                if (!await moveAwayFromEntity(bot, player, 1.75)) {
-                    return false;
-                }
-            }
-            if (Date.now() - start_moving_away > 1500) {
-                break;
-            }
-        }
-        if (too_close) {
-            log(bot, `Failed to give ${itemType} to ${username}: could not make safe drop space.`);
-            return false;
-        }
+    // A diagonal toss can enter both pickup boxes and let the thrower reclaim
+    // the item first. Use a supported cardinal stance so only the recipient
+    // intersects the toss at the pickup boundary.
+    if (!await reachDeliveryDropStance(bot, player)) {
+        setActionEvidence(bot, {
+            kind: 'give',
+            outcome: 'drop_stance_unreachable',
+            target,
+            item: itemType,
+            requested,
+            transferred: 0,
+            retryable: true,
+        });
+        log(bot, `Failed to give ${itemType} to ${username}: no safe cardinal drop stance was reachable.`);
+        return false;
     }
+    resolution = resolvePhysicalPlayer(bot, username);
+    target = playerTargetEvidence(resolution);
+    player = resolution.entity;
+    if (!player) return false;
 
     let given = false;
     let reclaimed = false;
@@ -7755,14 +7801,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             }
 
             if (deliveryAttempts > 1) {
-                const retryDistance = Math.hypot(
-                    bot.entity.position.x - player.position.x,
-                    bot.entity.position.z - player.position.z,
-                );
-                if (
-                    retryDistance < DELIVERY_RETRY_DROP_DISTANCE - 0.1
-                    && !await moveAwayFromEntity(bot, player, DELIVERY_RETRY_DROP_DISTANCE)
-                ) return false;
+                if (!await reachDeliveryDropStance(bot, player)) return false;
                 resolution = resolvePhysicalPlayer(bot, username);
                 target = playerTargetEvidence(resolution);
                 player = resolution.entity;

@@ -223,6 +223,7 @@ test('runtime verifier dry-run reports the exact bounded live command without co
   assert.deepEqual(output.mutations, [
     'query managed server player list',
     'start selected bot',
+    'set session autonomy to command',
     'send !stay(1) to selected bot',
     'stop selected bot',
   ]);

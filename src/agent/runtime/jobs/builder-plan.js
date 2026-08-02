@@ -400,6 +400,27 @@ export function nextBuilderStep(order, snapshot = {}) {
     };
   }
   if (missing.length === 0 && incorrect.length === 0) {
+    if (order.kind === 'emergency_shelter') {
+      const occupied = Math.floor(Number(snapshot.x)) === Math.floor(Number(order.target?.x))
+        && Math.floor(Number(snapshot.y)) === Math.floor(Number(order.target?.y))
+        && Math.floor(Number(snapshot.z)) === Math.floor(Number(order.target?.z));
+      if (!occupied) {
+        const x = Math.floor(Number(order.target.x)) + 0.5;
+        const y = Math.floor(Number(order.target.y));
+        const z = Math.floor(Number(order.target.z)) + 0.5;
+        return {
+          command: `!goToCoordinates(${x}, ${y}, ${z}, 0.5)`,
+          nextPhase: 'deliver',
+          code: 'shelter_occupancy_required',
+          target: { name: 'shelter_interior', x, y, z },
+          checkpoint: {
+            verifiedCount: Math.max(0, Number(audit.correct) || 0),
+            nextCell: Math.max(0, Number(audit.correct) || 0),
+          },
+          reason: 'Enter the verified shelter before declaring emergency protection complete.',
+        };
+      }
+    }
     return {
       complete: true,
       code: 'blueprint_complete',
