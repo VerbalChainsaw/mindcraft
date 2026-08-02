@@ -46,3 +46,31 @@ export function interruptibleDelay(bot, milliseconds) {
     timer = setTimeout(() => finish('elapsed'), bounded);
   });
 }
+
+/**
+ * Wait for a bot event, giving up after `timeoutMs`. Resolves with the event
+ * name or 'timeout'; it never rejects. Used where a loop would otherwise poll
+ * for a condition that already has an edge behind it.
+ */
+export function waitForBotEvent(bot, event, timeoutMs) {
+  const bounded = Math.max(0, Number(timeoutMs) || 0);
+  if (!bot || typeof bot.once !== 'function' || typeof bot.removeListener !== 'function') {
+    return new Promise(resolve => setTimeout(() => resolve('timeout'), bounded));
+  }
+  return new Promise(resolve => {
+    let timer = null;
+    const onEvent = () => finish(event);
+    function finish(reason) {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      try {
+        bot.removeListener(event, onEvent);
+      } catch {
+        // The emitter went away with the bot; nothing to detach.
+      }
+      resolve(reason);
+    }
+    bot.once(event, onEvent);
+    timer = setTimeout(() => finish('timeout'), bounded);
+  });
+}

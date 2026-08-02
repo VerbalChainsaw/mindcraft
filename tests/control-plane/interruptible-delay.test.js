@@ -6,6 +6,7 @@ import {
   INTERRUPT_EVENT,
   interruptibleDelay,
   signalInterrupt,
+  waitForBotEvent,
 } from '../../src/agent/runtime/interruptible-delay.js';
 
 function createBot() {
@@ -69,4 +70,38 @@ test('Given a bot with no emitter, a wait still completes rather than throwing',
   const reason = await interruptibleDelay({}, 10);
 
   assert.equal(reason, 'elapsed');
+});
+
+test('Given the awaited edge, a waiting loop resumes without serving out its bound', async () => {
+  const bot = createBot();
+  const started = Date.now();
+  setTimeout(() => bot.emit('idle'), 30);
+
+  const reason = await waitForBotEvent(bot, 'idle', 5_000);
+  const elapsed = Date.now() - started;
+
+  assert.equal(reason, 'idle');
+  assert.ok(elapsed < 1_000, `expected the edge to release the wait, waited ${elapsed}ms`);
+});
+
+// The bound exists so a missed edge cannot park the loop forever.
+test('Given no edge, a waiting loop still gives up at its bound', async () => {
+  const bot = createBot();
+
+  const reason = await waitForBotEvent(bot, 'idle', 60);
+
+  assert.equal(reason, 'timeout');
+});
+
+test('Given many waits, no event listeners are retained', async () => {
+  const bot = createBot();
+
+  await Promise.all(Array.from({ length: 20 }, () => waitForBotEvent(bot, 'idle', 1)));
+  assert.equal(bot.listenerCount('idle'), 0, 'timed-out waits must detach');
+
+  const pending = waitForBotEvent(bot, 'idle', 5_000);
+  assert.equal(bot.listenerCount('idle'), 1);
+  bot.emit('idle');
+  await pending;
+  assert.equal(bot.listenerCount('idle'), 0, 'satisfied waits must detach');
 });

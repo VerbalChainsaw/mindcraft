@@ -5,6 +5,7 @@ import {
     executeCommand,
     truncCommandMessage,
 } from './commands/index.js';
+import { waitForBotEvent } from './runtime/interruptible-delay.js';
 
 const STOPPED = 0
 const ACTIVE = 1
@@ -295,7 +296,12 @@ export class SelfPrompter {
         try {
             while (!this.interrupt && this.state === ACTIVE) {
                 if (this.agent.actions?.isOwnerBlocked?.('autonomy')) {
-                    await new Promise(r => setTimeout(r, this.cooldown));
+                    // The body frees on the 'idle' edge. Polling for it meant a
+                    // bot could stand around for most of a cooldown after the
+                    // higher-priority action had already finished. The cooldown
+                    // stays as the upper bound so a missed edge cannot park the
+                    // loop indefinitely.
+                    await waitForBotEvent(this.agent.bot, 'idle', this.cooldown);
                     continue;
                 }
                 const previousActionId = this.agent.last_action_result?.actionId || null;
@@ -398,7 +404,15 @@ export class SelfPrompter {
                     this.agent.history.save();
                 }
 
-                await new Promise(r => setTimeout(r, this.cooldown));
+                // Pace by minimum turn period rather than by a trailing pause.
+                // A turn that already spent about a second in the model and
+                // longer still acting has more than served the rate limit;
+                // adding a further fixed wait on top of it was dead time the
+                // player watches the bot stand through after every action.
+                const remainingCooldown = this.cooldown - (Date.now() - this.last_turn_at);
+                if (remainingCooldown > 0) {
+                    await new Promise(r => setTimeout(r, remainingCooldown));
+                }
             }
         } finally {
             console.log('self prompt loop stopped')
