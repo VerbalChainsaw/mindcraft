@@ -1,6 +1,57 @@
 # Live verification runbook — reaction-latency work
 
-Status: **ready to run, nothing below has been run yet except step 0**
+Status: **boot and wake channel verified live; field suites still to run**
+
+## Already verified live, 1 Aug — do not redo
+
+Stack restarted onto this code and driven for several minutes.
+
+- **Boot.** Bot logs in, spawns, answers its init message, and executes commands.
+  The ten commits do not break startup.
+- **v2 envelope parsing.** `statePushSamples: 3`, previously `0`.
+- **Wake channel is firing.** Sampling live decision traces caught
+  `action_finished`, `self_damaged` (7 in one 60s window), and
+  `threat_approached` (2) — the last being the approach sensor, which is the one
+  path with no Mineflayer event behind it.
+- **No spin.** The headline risk. Idle steady state ran 138 decisions in 60s
+  (2.3/s) against the idle lane's 500ms cadence. A separate window showed
+  639/60s, which is `URGENCY_TICK_CAP.critical` at 80ms because the bot was at 9
+  health — pre-existing design, not wake-driven.
+- **Stop latency.** A stop issued against a live `mode:self_defense` action was
+  observed complete within 720ms, and that figure includes up to 2.5s of
+  telemetry pump lag, so the true stop was faster.
+- **Lanes exercised.** `idle`, `idle_embodiment`, `basic_survival`, `role_work`,
+  `self_progression`, `active_action` all selected. `basic_survival` still fires,
+  which is partial evidence the survival scan gating did not break that lane.
+
+Sampling scripts are in `tmp/` (gitignored): `sample-triggers.mjs <seconds>`
+tallies why each evaluation ran, `stop-latency.mjs` measures a stop.
+
+Two gotchas found while doing this. The lane is at `trace.winner.lane`, not
+`trace.selectedLane`. And a bot under operator hold records every decision as
+lane `operator_hold` and generates almost no wake events, so do not sample for
+wake evidence while the bot is stopped — that was a self-inflicted null result.
+
+## Found while verifying: operator hold defeats self-preservation
+
+Not caused by this work, and not fixed here because it changes what operator
+stop means, which is a policy call.
+
+`modes.js:95` exempts `self_preservation` from hold suppression, and
+`action_manager.js:313` exempts the `mode:self_preservation` reflex from the
+hold block. Both are deliberate carve-outs so a stopped bot can still save
+itself. `behavior-arbiter.js:517` returns on hold **before** reaching the
+emergency band at `:523`, so neither carve-out is reachable.
+
+Observed: a held bot sat at 9/20 health through seven damage events, recorded
+`operator_hold` on all 639 decisions in the window, and never acted. It had to
+be released manually before it recovered.
+
+Moving the hold check below the emergency band would make the existing
+carve-outs work as written. That is a one-line change with a real semantic
+question attached: whether stop should mean "stop even if it dies."
+
+
 
 Nine commits (`3f1be78..` through the wake-reason trace wiring) changed how the
 behavior loop is scheduled, how parked skills are released, and which world
