@@ -6,9 +6,12 @@
 - Original branch at creation: `phase0-follow-baseline`
 - Architecture worktree: `C:/Users/zerop/Development/minecraft-companion-brain-v2`
 - Architecture branch: `architecture/machine-brain-v2`
-- Committed base: `61f0730b16380d97ece82495e55813e1a48d9958`
+- Creation base: `61f0730b2b8c2eeaf94d604b08825fe7f8eac48f`
+- Architecture bootstrap commit: `a9f3d54ae690a6f59d942655d24dfb1044a26180`
+- Authorized original-WIP checkpoint commit: `4a94cdc6526c51047d17bd42124f90c0b9ae56c0`
+- V2 merge commit: `160d652cde6d55748b36fe15ce35cce3969911d3`
 
-The architecture worktree was created from committed HEAD. Therefore every modification and untracked artifact present only in the original worktree is intentionally absent. Nothing may be stashed, copied, reset, cleaned, committed, or checked out from that WIP to make this branch appear current.
+The architecture worktree was created from the committed creation base, so the original worktree's WIP was initially omitted. That original WIP was later explicitly checkpointed in its own worktree and merged into V2 with authorization; it is therefore no longer omitted from this branch. Nothing may be stashed, copied, reset, cleaned, committed, or checked out from uncheckpointed WIP to make this branch appear current.
 
 ## Isolation rules
 
@@ -27,4 +30,4 @@ Architecture evolution must be small, reversible, benchmark-gated, and side-by-s
 
 ## Handoff evidence
 
-Every handoff reports both paths and branches, base and new commit, exact files changed, statuses of both worktrees, validation performed, push state, and original dirty/untracked paths omitted from the architecture base.
+Every handoff reports both paths and branches, the creation base, architecture bootstrap, authorized original-WIP checkpoint, V2 merge, and new commit, exact files changed, statuses of both worktrees, validation performed, push state, and any dirty/untracked paths that remain omitted from the architecture branch.
