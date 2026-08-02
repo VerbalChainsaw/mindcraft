@@ -1027,6 +1027,7 @@ export function getFullState(agent, { deep = false } = {}) {
             yaw: round(bot.entity.yaw, 2),
             pitch: round(bot.entity.pitch, 2),
             onGround: bot.entity.onGround === true,
+            sleeping: bot.isSleeping === true,
             mounted: Boolean(mountedVehicle),
             vehicle: mountedVehicle,
             velocity: {

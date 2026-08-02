@@ -1,0 +1,175 @@
+{
+  "mode": "live",
+  "baseUrl": "http://localhost:8080",
+  "bot": "MindcraftBot",
+  "startedAt": "2026-08-02T07:32:27.602Z",
+  "selectedCases": [
+    "bot-lifecycle"
+  ],
+  "results": [
+    {
+      "id": "bot-lifecycle",
+      "passed": true,
+      "observed": {
+        "initial": {
+          "name": "MindcraftBot",
+          "in_game": false,
+          "retryable": true,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": false,
+          "connection_stage": "stopped",
+          "readiness_stage": "stopped",
+          "provider": null,
+          "model": [
+            {
+              "api": "openai",
+              "model": "gpt-4.1",
+              "params": {
+                "timeout": 12
+              }
+            },
+            {
+              "api": "openai",
+              "model": "gpt-4.1-mini",
+              "params": {
+                "timeout": 10
+              }
+            }
+          ],
+          "state": "stopped",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "worldOccupancy": {
+          "provedEmpty": true,
+          "authorizedOverride": false,
+          "playerCount": 0,
+          "players": [],
+          "evidence": "[02:32:27 INFO]: There are 0 of a max of 10 players online:"
+        },
+        "startRequestedAt": 1785655948181,
+        "startAcknowledgedAt": 1785655955057,
+        "startAcknowledgement": {
+          "success": true,
+          "error": null
+        },
+        "worldReadyObservedAt": 1785655955062,
+        "worldReadyMs": 6881,
+        "ready": {
+          "name": "MindcraftBot",
+          "in_game": true,
+          "retryable": false,
+          "viewerEnabled": false,
+          "viewerAvailable": false,
+          "viewerPort": null,
+          "socket_connected": true,
+          "connection_stage": "world_ready",
+          "readiness_stage": "world_ready",
+          "provider": null,
+          "model": [
+            {
+              "api": "openai",
+              "model": "gpt-4.1",
+              "params": {
+                "timeout": 12
+              }
+            },
+            {
+              "api": "openai",
+              "model": "gpt-4.1-mini",
+              "params": {
+                "timeout": 10
+              }
+            }
+          ],
+          "state": "running",
+          "lastError": null,
+          "diagnostics": []
+        },
+        "commandIssuedAt": 1785655955062,
+        "command": {
+          "success": true,
+          "agentName": "MindcraftBot",
+          "acceptedAt": 1785655955062
+        },
+        "actionResultObservedAt": 1785655957602,
+        "actionResultLatencyMs": 2540,
+        "actionResult": {
+          "actionId": "MindcraftBot-1-1785655955300",
+          "phase": "succeeded",
+          "code": "completed",
+          "label": "action:stay",
+          "detail": "Action output: Stayed for 1.019 seconds.",
+          "target": null,
+          "retryable": false,
+          "durationMs": 1021,
+          "startedAt": 1785655955300,
+          "finishedAt": 1785655956321
+        },
+        "sampledAt": 1785655957591,
+        "outputs": [
+          "Action output: Stayed for 1.019 seconds."
+        ],
+        "cleanupAttempts": [
+          {
+            "startedAt": 1785655957602,
+            "finishedAt": 1785655957656,
+            "durationMs": 54,
+            "required": true,
+            "attempted": true,
+            "success": true,
+            "acknowledgement": {
+              "success": true,
+              "error": null,
+              "agents": [
+                {
+                  "name": "MindcraftBot",
+                  "stopped": true,
+                  "forced": false,
+                  "error": null
+                }
+              ]
+            },
+            "stopped": {
+              "name": "MindcraftBot",
+              "in_game": false,
+              "retryable": true,
+              "viewerEnabled": false,
+              "viewerAvailable": false,
+              "viewerPort": null,
+              "socket_connected": false,
+              "connection_stage": "stopped",
+              "readiness_stage": "stopped",
+              "provider": null,
+              "model": [
+                {
+                  "api": "openai",
+                  "model": "gpt-4.1",
+                  "params": {
+                    "timeout": 12
+                  }
+                },
+                {
+                  "api": "openai",
+                  "model": "gpt-4.1-mini",
+                  "params": {
+                    "timeout": 10
+                  }
+                }
+              ],
+              "state": "stopped",
+              "lastError": null,
+              "diagnostics": []
+            },
+            "error": null
+          }
+        ],
+        "elapsedMs": 10052
+      }
+    }
+  ],
+  "passed": true,
+  "finishedAt": "2026-08-02T07:32:37.656Z"
+}

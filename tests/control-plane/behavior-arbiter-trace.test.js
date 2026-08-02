@@ -117,7 +117,7 @@ test('an operator-held bot admits only the bounded self-preservation reflex and 
       if (!names.includes('self_preservation') || !danger) {
         return { active: false, scheduled: false, code: 'inactive' };
       }
-      const outcome = await agent.actions.runAction('mode:self_preservation', async () => {
+      const outcome = await agent.actions.runAction('mode:self_preservation', () => {
         reflexRuns += 1;
         assert.equal(held, true);
         agent.bot.lastActionEvidence = { outcome: 'retreated' };
@@ -134,7 +134,7 @@ test('an operator-held bot admits only the bounded self-preservation reflex and 
   const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
   agent.behavior_arbiter = arbiter;
 
-  const ordinary = await agent.actions.runAction('action:consume', async () => true, { owner: 'survival' });
+  const ordinary = await agent.actions.runAction('action:consume', () => true, { owner: 'survival' });
   assert.equal(ordinary.result.code, 'operator_hold');
   assert.equal(reflexRuns, 0);
 

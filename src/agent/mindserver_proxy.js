@@ -382,6 +382,7 @@ class MindServerProxy {
                 bot.heldItem?.name || '',
                 this.agent?.actions?.currentActionLabel || '',
                 this.agent?.isOperatorHeld?.() === true ? 'held' : '',
+                bot.isSleeping === true ? 'sleeping' : '',
             ].join('|');
             if (cheap === this.lastCheapState) return;
             this.lastCheapState = cheap;
@@ -401,6 +402,8 @@ class MindServerProxy {
             'entityGone',
             'entityMoved',
             'blockUpdate',
+            'sleep',
+            'wake',
             'death',
             'respawn',
         ]) bind(event, markChanged);

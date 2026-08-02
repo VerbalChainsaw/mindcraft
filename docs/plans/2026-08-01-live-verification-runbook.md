@@ -43,9 +43,15 @@ hold block. Both are deliberate carve-outs so a stopped bot can still save
 itself. `behavior-arbiter.js:517` returns on hold **before** reaching the
 emergency band at `:523`, so neither carve-out is reachable.
 
-Observed: a held bot sat at 9/20 health through seven damage events, recorded
-`operator_hold` on all 639 decisions in the window, and never acted. It had to
-be released manually before it recovered.
+Observed, and this is not hypothetical: a held bot sat at 9/20 health through
+seven damage events, recorded `operator_hold` on all 639 decisions in that
+window, and never acted. A Phantom then killed it. The 20/20 health seen
+immediately afterwards was a respawn, not a recovery, and its carried materials
+were lost — dropped items despawn before a manual release is likely to happen.
+
+Note that this bot dies periodically in this world anyway, so the death itself
+is unremarkable. What matters is that the bot was *prevented from defending
+itself by code that was written to let it defend itself*.
 
 Moving the hold check below the emergency band would make the existing
 carve-outs work as written. That is a one-line change with a real semantic
