@@ -247,8 +247,14 @@ export class BehaviorArbiter {
     return {
       actionId: active ? boundedText(actions.currentActionId) || null : null,
       owner: active ? boundedText(actions.currentActionOwner, 'unknown') : null,
+      ownerPriority: active && typeof actions?.ownerPriority === 'function'
+        ? actions.ownerPriority(actions.currentActionOwner)
+        : null,
       label: active ? boundedText(actions.currentActionLabel, 'unknown') : null,
       intent: active ? boundedText(actions.currentActionLabel, 'unknown') : null,
+      acquiredAt: active && Number.isFinite(actions.currentActionStartedAt)
+        ? actions.currentActionStartedAt
+        : null,
       startedAt: active && Number.isFinite(actions.currentActionStartedAt)
         ? actions.currentActionStartedAt
         : null,
@@ -308,6 +314,10 @@ export class BehaviorArbiter {
 
   recordActionStart(action) {
     return this.traceRecorder.linkAction(action);
+  }
+
+  recordActionRelease(action) {
+    return this.traceRecorder.linkRelease(action);
   }
 
   recordOutcome(result) {

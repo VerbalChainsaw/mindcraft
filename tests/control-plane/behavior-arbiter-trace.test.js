@@ -213,7 +213,7 @@ test('decision trace retention remains bounded and later short-circuited lanes s
   )), true);
 });
 
-test('action start and outcome link to the selecting decision by action id', () => {
+test('action acquisition, release, and outcome link exactly once to the selecting decision', () => {
   let monotonic = 10;
   const recorder = new DecisionTraceRecorder({
     agent: 'TraceBot',
@@ -224,7 +224,26 @@ test('action start and outcome link to the selecting decision by action id', () 
   recorder.startLane('player_goal');
   recorder.select({ lane: 'player_goal', reasonCode: 'player_goal_selected', lowerLanesSuppressed: true });
   recorder.finalize({ evaluationFinishedMs: monotonic });
-  recorder.linkAction({ actionId: 'TraceBot-1-1000', owner: 'player', label: '!collect', startedAt: 1_000 });
+  assert.equal(recorder.linkAction({
+    actionId: 'TraceBot-1-1000',
+    owner: 'player',
+    ownerPriority: 30,
+    label: '!collect',
+    acquiredAt: 1_001,
+    startedAt: 1_000,
+  }), true);
+  assert.equal(recorder.linkRelease({
+    actionId: 'TraceBot-1-1000',
+    owner: 'player',
+    ownerPriority: 30,
+    releasedAt: 1_024,
+  }), true);
+  assert.equal(recorder.linkRelease({
+    actionId: 'TraceBot-1-1000',
+    owner: 'player',
+    ownerPriority: 30,
+    releasedAt: 1_999,
+  }), false);
   recorder.linkOutcome({
     actionId: 'TraceBot-1-1000',
     phase: 'succeeded',
@@ -234,9 +253,62 @@ test('action start and outcome link to the selecting decision by action id', () 
   });
 
   const trace = recorder.snapshot(1).recent[0];
+  assert.deepEqual(trace.actionLifecycle.acquisition, {
+    actionId: 'TraceBot-1-1000',
+    owner: 'player',
+    ownerPriority: 30,
+    acquiredAt: 1_001,
+    startedAt: 1_000,
+    source: 'linked_action_start',
+  });
+  assert.deepEqual(trace.actionLifecycle.release, {
+    actionId: 'TraceBot-1-1000',
+    owner: 'player',
+    ownerPriority: 30,
+    releasedAt: 1_024,
+    phase: 'succeeded',
+    code: 'skill_collected',
+  });
   assert.equal(trace.correlation.outcomeLinked, true);
   assert.equal(trace.outcome.code, 'skill_collected');
   assert.equal(trace.outcome.durationMs, 25);
+
+  trace.actionLifecycle.release.code = 'mutated';
+  assert.equal(recorder.snapshot(1).recent[0].actionLifecycle.release.code, 'skill_collected');
+});
+
+test('active action snapshots carry bounded provenance and owner priority', async () => {
+  const { agent } = fakeAgent({ emergency: true });
+  agent.actions = {
+    executing: true,
+    currentActionId: `active-${'x'.repeat(100)}`,
+    currentActionOwner: 'job',
+    currentActionLabel: '!build',
+    currentActionStartedAt: 900,
+    ownerPriority: () => 20,
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    trace: { enabled: true, retention: 1 },
+    now: () => 1_000,
+  });
+
+  await arbiter.update(25);
+
+  const acquisition = arbiter.snapshot().decisionTrace.recent[0].actionLifecycle.acquisition;
+  assert.equal(acquisition.actionId.length, 80);
+  assert.equal(acquisition.owner, 'job');
+  assert.equal(acquisition.ownerPriority, 20);
+  assert.equal(acquisition.acquiredAt, 900);
+  assert.equal(acquisition.startedAt, 900);
+  assert.equal(acquisition.source, 'active_snapshot');
+});
+
+test('disabled lifecycle recorder methods are no-ops', () => {
+  const recorder = new DecisionTraceRecorder({ enabled: false });
+  assert.equal(recorder.linkAction({ actionId: 'disabled' }), false);
+  assert.equal(recorder.linkRelease({ actionId: 'disabled', releasedAt: 1 }), false);
+  assert.equal(recorder.linkOutcome({ actionId: 'disabled', phase: 'succeeded', code: 'completed' }), false);
+  assert.equal(recorder.snapshot(), null);
 });
 
 test('the compact reporter formats the representative v1 fixture', () => {

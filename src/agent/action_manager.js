@@ -411,7 +411,9 @@ export class ActionManager {
             this.agent.behavior_arbiter?.recordActionStart?.({
                 actionId,
                 owner: actionOwner,
+                ownerPriority: this.ownerPriority(actionOwner),
                 label: actionLabel,
+                acquiredAt: this.currentActionStartedAt,
                 startedAt: this.currentActionStartedAt,
             });
             this.timedout = false;
@@ -429,6 +431,12 @@ export class ActionManager {
             const actionValue = await actionFn();
 
             // mark action as finished + cleanup
+            this.agent.behavior_arbiter?.recordActionRelease?.({
+                actionId,
+                owner: actionOwner,
+                ownerPriority: this.ownerPriority(actionOwner),
+                releasedAt: Date.now(),
+            });
             this.executing = false;
             this.currentActionId = '';
             this.currentActionLabel = '';
@@ -486,6 +494,14 @@ export class ActionManager {
             this.agent.recordActionResult?.(result);
             return { success: result.phase === 'succeeded', message: output, interrupted, timedout, result };
         } catch (err) {
+            if (this.currentActionId === actionId) {
+                this.agent.behavior_arbiter?.recordActionRelease?.({
+                    actionId,
+                    owner: actionOwner,
+                    ownerPriority: this.ownerPriority(actionOwner),
+                    releasedAt: Date.now(),
+                });
+            }
             this.executing = false;
             this.currentActionId = '';
             this.currentActionLabel = '';

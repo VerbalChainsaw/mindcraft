@@ -67,10 +67,35 @@ function normalizeAction(value = {}) {
   return {
     actionId: nullableText(value.actionId),
     owner: nullableText(value.owner),
+    ownerPriority: finite(value.ownerPriority),
     label: nullableText(value.label),
     intent: nullableText(value.intent),
     startedAt: finite(value.startedAt),
     commitment: normalizeCommitment(value.commitment),
+  };
+}
+
+function normalizeAcquisition(value = {}, source = 'linked_action_start') {
+  if (!value.actionId) return null;
+  return {
+    actionId: text(value.actionId).slice(0, 80),
+    owner: nullableText(value.owner),
+    ownerPriority: finite(value.ownerPriority),
+    acquiredAt: finite(value.acquiredAt ?? value.startedAt),
+    startedAt: finite(value.startedAt),
+    source: source === 'active_snapshot' ? 'active_snapshot' : 'linked_action_start',
+  };
+}
+
+function normalizeRelease(value = {}) {
+  if (!value.actionId) return null;
+  return {
+    actionId: text(value.actionId).slice(0, 80),
+    owner: nullableText(value.owner),
+    ownerPriority: finite(value.ownerPriority),
+    releasedAt: finite(value.releasedAt),
+    phase: nullableText(value.phase),
+    code: nullableText(value.code),
   };
 }
 
@@ -153,6 +178,12 @@ export class DecisionTraceRecorder {
         deltaMs: finite(trigger.deltaMs),
       },
       activeAction: normalizeAction(activeAction),
+      actionLifecycle: {
+        acquisition: activeAction?.actionId
+          ? normalizeAcquisition(activeAction, 'active_snapshot')
+          : null,
+        release: null,
+      },
       evidence: (Array.isArray(evidence) ? evidence : [])
         .slice(0, 16)
         .map((item, index) => normalizeEvidence(item, index, wallClockTimestamp)),
@@ -290,7 +321,14 @@ export class DecisionTraceRecorder {
     return completed;
   }
 
-  linkAction({ actionId, owner = null, label = null, startedAt = null } = {}) {
+  linkAction({
+    actionId,
+    owner = null,
+    ownerPriority = null,
+    label = null,
+    acquiredAt = null,
+    startedAt = null,
+  } = {}) {
     if (!this.enabled || !actionId) return false;
     const trace = this.current || [...this.recent].reverse().find(candidate => (
       !candidate.correlation.actionId && candidate.winner.control !== 'none'
@@ -301,10 +339,31 @@ export class DecisionTraceRecorder {
       ...trace.activeAction,
       actionId,
       owner: owner || trace.activeAction.owner,
+      ownerPriority: ownerPriority ?? trace.activeAction.ownerPriority,
       label: label || trace.activeAction.label,
       startedAt: startedAt ?? trace.activeAction.startedAt,
     });
+    trace.actionLifecycle.acquisition = normalizeAcquisition({
+      actionId,
+      owner,
+      ownerPriority,
+      acquiredAt,
+      startedAt,
+    });
     return true;
+  }
+
+  linkRelease({ actionId, owner = null, ownerPriority = null, releasedAt = null } = {}) {
+    if (!this.enabled || !actionId) return false;
+    const candidates = this.current ? [...this.recent, this.current] : this.recent;
+    const trace = [...candidates].reverse().find(candidate => (
+      candidate.correlation.actionId === actionId
+      && candidate.actionLifecycle?.acquisition?.actionId === actionId
+      && !candidate.actionLifecycle.release
+    ));
+    if (!trace) return false;
+    trace.actionLifecycle.release = normalizeRelease({ actionId, owner, ownerPriority, releasedAt });
+    return trace.actionLifecycle.release !== null;
   }
 
   linkOutcome(result) {
@@ -314,6 +373,10 @@ export class DecisionTraceRecorder {
     if (!trace) return false;
     trace.outcome = normalizeOutcome(result);
     trace.correlation.outcomeLinked = trace.outcome !== null;
+    if (trace.actionLifecycle?.release?.actionId === result.actionId) {
+      trace.actionLifecycle.release.phase = trace.outcome?.phase || null;
+      trace.actionLifecycle.release.code = trace.outcome?.code || null;
+    }
     return trace.correlation.outcomeLinked;
   }
 
