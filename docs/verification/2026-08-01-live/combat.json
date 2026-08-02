@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "scenario": "clear-and-obstructed-hostile-tactical-combat",
+  "command": "!resolveTacticalCombat(8)",
+  "expectedActionLabel": "action:resolveTacticalCombat",
+  "bot": "MindcraftBot",
+  "fixture": {
+    "arena": {
+      "x1": 1109,
+      "x2": 1118,
+      "y1": 100,
+      "y2": 105,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "botStart": {
+      "x": 1111.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "targetStart": {
+      "x": 1117.5,
+      "y": 100,
+      "z": 1057.5
+    },
+    "wall": {
+      "x": 1114,
+      "y1": 100,
+      "y2": 102,
+      "z1": 1054,
+      "z2": 1060
+    },
+    "alternateRoutes": [
+      {
+        "z": 1053
+      },
+      {
+        "z": 1061
+      }
+    ],
+    "repairedFloor": {
+      "x1": 1109,
+      "x2": 1118,
+      "y": 99,
+      "z1": 1045,
+      "z2": 1067
+    },
+    "target": {
+      "type": "zombie",
+      "tag": "mindcraft_com001",
+      "activeAI": false
+    }
+  },
+  "independentAttribution": {
+    "damageCriterion": "minecraft.custom:minecraft.damage_dealt",
+    "killCriterion": "minecraft.killed:minecraft.zombie"
+  },
+  "startedAt": 1785650954956,
+  "attempts": [],
+  "passed": false,
+  "error": "Error: Timed out waiting for MindcraftBot held actuator quiescence. Last observation: {\"_meta\":{\"sampledAt\":1785650974816,\"source\":\"live\",\"depth\":\"shallow\"},\"name\":\"MindcraftBot\",\"identity\":{\"schemaVersion\":1,\"profileId\":\"\",\"instanceId\":\"\",\"displayName\":\"MindcraftBot\",\"callSign\":\"\",\"title\":\"\",\"appearance\":\"\",\"nameplate\":{\"badge\":\"\",\"color\":\"gray\"},\"squad\":{\"id\":\"\",\"displayName\":\"\",\"badge\":\"\",\"color\":\"gray\",\"motto\":\"\",\"naming\":{\"style\":\"numbered\",\"memberNames\":[]}},\"role\":\"companion\",\"autonomy\":\"command\",\"roleFocus\":[\"follow\",\"assist\",\"conversation\"],\"job\":\"\",\"language\":\"en\",\"style\":\"\",\"attitude\":\"\",\"specialties\":[],\"runtime\":{\"autonomy\":\"command\",\"comportment\":\"neutral\",\"traversal\":\"full\",\"narration\":\"quiet\"}},\"persona\":\"\",\"gameplay\":{\"position\":{\"x\":1071.5,\"y\":100,\"z\":1007.5},\"dimension\":\"overworld\",\"gamemode\":\"survival\",\"health\":20,\"healthMax\":20,\"hunger\":20,\"hungerMax\":20,\"experienceLevel\":0,\"experiencePoints\":0,\"biome\":\"cold_ocean\",\"weather\":\"Clear\",\"timeOfDay\":8630,\"timeLabel\":\"Afternoon\"},\"action\":{\"current\":\"Command only\",\"kind\":\"stopped\",\"isIdle\":true,\"pathfinding\":null,\"held\":false,\"stopRequestedAt\":null,\"stopTimedOutAt\":null,\"lastResult\":{\"actionId\":\"MindcraftBot-119-1785650949672\",\"phase\":\"succeeded\",\"code\":\"skill_looked\",\"label\":\"action:lookAtPosition\",\"detail\":\"Action completed.\",\"target\":{\"x\":-139,\"y\":66,\"z\":-106},\"retryable\":false,\"durationMs\":35,\"startedAt\":1785650949672,\"finishedAt\":1785650949707},\"survivalDirector\":{\"name\":\"survival\",\"phase\":\"requested\",\"code\":\"emergency_shelter_requested\",\"target\":{\"name\":\"builder-c3ab39be-99dd-4a0a-824f-2b30ea9de9e9\"},\"detail\":\"Validated emergency shelter work order accepted.\",\"retryable\":false,\"nextEligibleAt\":null},\"goalDirector\":{\"phase\":\"idle\",\"code\":\"no_goal\",\"detail\":\"No typed gameplay goal is active.\",\"retryable\":false,\"inFlight\":false,\"nextAttemptAt\":0,\"plan\":null,\"goal\":{\"id\":\"goal-f68b8bb6-d47c-42e8-995d-c92d61da01f2\",\"kind\":\"deliver\",\"requester\":\"FollowTarget\",\"target\":{\"requestedName\":\"cobblestone\",\"canonicalName\":\"cobblestone\",\"inventoryName\":\"cobblestone\",\"acquisitionKind\":\"prepare_material\"},\"quantity\":1,\"destination\":{\"kind\":\"player\",\"player\":\"FollowTarget\"},\"phase\":\"cancelled\",\"attempts\":0,\"maxAttempts\":4,\"checkpoint\":{\"baselineInventory\":0,\"targetInventory\":0,\"delivered\":1},\"procedureId\":null,\"subgoals\":2,\"activeSubgoal\":{\"kind\":\"deliver\",\"state\":\"succeeded\",\"commandName\":\"!givePlayer\",\"targetName\":\"\",\"expectedIncrease\":0,\"code\":\"skill_delivered\"}}},\"jobDirector\":{\"phase\":\"suppressed\",\"code\":\"command_autonomy\",\"retryable\":false,\"nextAttemptAt\":1785645161437,\"workOrder\":{\"id\":\"builder-c3ab39be-99dd-4a0a-824f-2b30ea9de9e9\",\"role\":\"builder\",\"kind\":\"emergency_shelter\",\"phase\":\"failed\",\"target\":{\"name\":\"worksite\",\"x\":-161,\"y\":79,\"z\":-95},\"attempts\":0,\"maxAttempts\":3,\"checkpoint\":{},\"evidence\":{\"code\":\"action_pattern_detected\",\"detail\":\"The same automatic action kept restarting in the same area, so the bot stopped to avoid looping. Give it a fresh player command after checking the obstruction.\",\"actionId\":\"MindcraftBot-116-1785645160430\"}}},\"reactionDirector\":{\"phase\":\"suppressed\",\"code\":\"no_eligible_reaction\",\"spoken\":50,\"gestures\":11,\"fallbacks\":0,\"lastEventId\":\"threat-cleared-14543\",\"detail\":\"Events were remembered or observed without interrupting the current interaction.\",\"queued\":0},\"roleDirector\":{\"phase\":\"suppressed\",\"code\":\"command_autonomy\",\"role\":\"companion\",\"target\":null,\"evidence\":\"Automatic role work is disabled for this profile.\",\"retryable\":false,\"at\":1785650948033,\"nextAttemptAt\":1785645161437},\"behaviorArbiter\":{\"selectedLane\":\"idle\",\"code\":\"no_authorized_work\",\"reason\":\"Fresh perception found no authorized behavior requiring ownership.\",\"observedAt\":1785650973939,\"perceptionFreshness\":\"fresh\",\"perceptionAge\":409,\"perceptionError\":null,\"activeActionOwner\":null,\"activeActionLabel\":null,\"lowerLanesSuppressed\":false,\"tick\":89643,\"updatedAt\":1785650974348,\"urgency\":\"calm\",\"nextTickDelayMs\":500,\"comportment\":\"neutral\",\"decisionTrace\":{\"schemaVersion\"",
+  "cleanup": {
+    "held": true,
+    "position": {
+      "x": 1071.5,
+      "y": 100,
+      "z": 1007.5
+    },
+    "autonomy": "command",
+    "taggedTargetsRemoved": true,
+    "temporaryWallRemoved": true
+  },
+  "finishedAt": 1785650975228,
+  "durationMs": 20272
+}

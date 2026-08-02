@@ -4,8 +4,8 @@ const MAX_RETENTION = 512;
 const MAX_TEXT = 240;
 
 export const DECISION_TRACE_LANES = Object.freeze([
-  'operator_hold',
   'emergency_self_preservation',
+  'operator_hold',
   'attributed_protection',
   'active_action_retention',
   'bounded_recovery',

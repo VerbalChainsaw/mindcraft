@@ -314,6 +314,59 @@ test('Given command autonomy and a persisted automatic role order, JobDirector c
   assert.equal(store.saved.at(-1), null);
 });
 
+test('Given command autonomy and a persisted survival order, JobDirector restores it with ownership intact', () => {
+  const agent = createAgent('builder');
+  agent.runtime.autonomy = 'command';
+  const persisted = {
+    ...createWorkOrder({
+      id: 'survival-restart',
+      role: 'builder',
+      kind: 'emergency_shelter',
+      source: 'survival',
+      requester: 'TestMiner',
+      target: { name: 'worksite', x: 0, y: 64, z: 0 },
+      blueprint: {
+        id: 'survival_restart_block',
+        width: 1,
+        depth: 1,
+        height: 1,
+        cells: [{ x: 0, y: 0, z: 0, material: 'stone' }],
+      },
+    }),
+    phase: 'execute',
+  };
+  const store = memoryStore(persisted);
+
+  const director = new JobDirector(agent, {
+    store,
+    getSnapshot: () => ({ inventory: {}, position: { x: 0, y: 64, z: 0 } }),
+    now: () => 10_000,
+  });
+
+  assert.equal(director.activeOrder.id, 'survival-restart');
+  assert.equal(director.activeOrder.source, 'survival');
+  assert.equal(director.activeOrder.requester, 'TestMiner');
+  assert.equal(director.activeOrder.phase, 'assess');
+  assert.equal(store.saved.at(-1).evidence.code, 'restart_revalidation');
+  assert.deepEqual(director.snapshot().workOrder, {
+    id: 'survival-restart',
+    role: 'builder',
+    kind: 'emergency_shelter',
+    source: 'survival',
+    requester: 'TestMiner',
+    phase: 'assess',
+    target: { name: 'worksite', x: 0, y: 64, z: 0 },
+    attempts: 0,
+    maxAttempts: 3,
+    checkpoint: {},
+    evidence: {
+      code: 'restart_revalidation',
+      detail: 'Restart revalidation required at {"inventory":{},"position":{"x":0,"y":64,"z":0}}',
+      actionId: '',
+    },
+  });
+});
+
 test('Given corrupt persisted job state, JobDirector surfaces the load error without overwriting evidence', () => {
   const store = {
     lastError: 'invalid persisted JSON',

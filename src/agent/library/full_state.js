@@ -524,6 +524,8 @@ export function getJobDirectorState(agent) {
             id: String(workOrder.id || '').slice(0, 96),
             role: String(workOrder.role || '').slice(0, 24),
             kind: String(workOrder.kind || '').slice(0, 32),
+            source: String(workOrder.source || '').slice(0, 24),
+            requester: String(workOrder.requester || '').slice(0, 32),
             phase: String(workOrder.phase || '').slice(0, 24),
             target: boundedDirectorTarget(workOrder.target),
             attempts: Number.isFinite(workOrder.attempts) ? workOrder.attempts : 0,

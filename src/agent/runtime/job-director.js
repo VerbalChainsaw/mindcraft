@@ -636,6 +636,8 @@ export class JobDirector extends RoleDirector {
         id: order.id,
         role: order.role,
         kind: order.kind,
+        source: order.source,
+        requester: order.requester,
         phase: order.phase,
         target: order.target,
         attempts: order.attempts,

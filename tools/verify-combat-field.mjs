@@ -467,7 +467,17 @@ async function run() {
     });
     socket.emit('listen-to-agents');
     socket.emit('request-agent-state-snapshot');
-    await waitForHeld();
+    const autonomyAck = await sendMessage('!setAutonomy("command")');
+    const autonomyAcceptedAt = Number(autonomyAck?.acceptedAt) || Date.now();
+    await waitFor(
+      () => states[options.bot] || null,
+      state => Number(state?._meta?.sampledAt) >= autonomyAcceptedAt
+        && compactState(state).autonomy === 'command',
+      `${options.bot} command autonomy`,
+      20_000,
+    );
+    const startupStop = await sendStop();
+    await waitForHeld(Number(startupStop?.acceptedAt) || Date.now());
     await paperCommand(`scoreboard objectives remove ${PROOF_OBJECTIVE}`);
     await paperCommand(`scoreboard objectives remove ${DAMAGE_OBJECTIVE}`);
     await paperCommand(`scoreboard objectives remove ${KILL_OBJECTIVE}`);

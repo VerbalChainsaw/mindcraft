@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
+import { ActionManager } from '../../src/agent/action_manager.js';
 import { BehaviorArbiter } from '../../src/agent/runtime/behavior-arbiter.js';
 import {
   DecisionTraceRecorder,
@@ -9,7 +10,7 @@ import {
   formatDecisionTrace,
 } from '../../src/agent/runtime/decision-trace.js';
 
-function fakeAgent({ emergency = false } = {}) {
+function fakeAgent({ emergency = false, held = false, survival = null, job = null } = {}) {
   const calls = [];
   const modes = {
     beginUpdateCycle() { calls.push('modes:begin'); },
@@ -32,7 +33,9 @@ function fakeAgent({ emergency = false } = {}) {
         nextSampleAt: 0,
         update() { calls.push('perception:update'); },
       },
-      isOperatorHeld() { calls.push('operator:check'); return false; },
+      ...(survival ? { survival_director: survival } : {}),
+      ...(job ? { job_director: job } : {}),
+      isOperatorHeld() { calls.push('operator:check'); return held; },
       checkTaskDone() { calls.push('task:check'); },
     },
     calls,
@@ -56,9 +59,142 @@ test('trace enablement preserves the emergency selection and side-effect order',
 
   const trace = tracedArbiter.snapshot().decisionTrace.recent[0];
   assert.equal(trace.winner.lane, 'emergency_self_preservation');
-  assert.equal(trace.lanes.find(lane => lane.lane === 'operator_hold').status, 'ineligible');
   assert.equal(trace.lanes.find(lane => lane.lane === 'emergency_self_preservation').status, 'eligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'operator_hold').status, 'not_evaluated');
   assert.equal(trace.lanes.find(lane => lane.lane === 'attributed_protection').status, 'not_evaluated');
+});
+
+test('a safe operator-held bot selects the hold gate after checking only emergency self-preservation', async () => {
+  const { agent, calls } = fakeAgent({ held: true });
+  agent.operator_hold_reason = 'Operator stop is active.';
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.selectedLane, 'operator_hold');
+  assert.equal(status.code, 'operator_hold_safe');
+  assert.match(status.reason, /No immediate self-preservation response is required/);
+  assert.equal(calls.indexOf('modes:self_preservation') < calls.indexOf('operator:check'), true);
+  assert.equal(calls.some(call => call === 'modes:self_defense,cowardice'), false);
+  const trace = arbiter.snapshot().decisionTrace.recent[0];
+  assert.equal(trace.lanes.find(lane => lane.lane === 'emergency_self_preservation').status, 'ineligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'operator_hold').status, 'eligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'basic_survival').status, 'not_evaluated');
+});
+
+test('an operator-held bot admits only the bounded self-preservation reflex and returns to hold', async () => {
+  let danger = true;
+  let held = true;
+  let reflexRuns = 0;
+  const recorded = [];
+  const agent = {
+    name: 'HeldBot',
+    runtime: { autonomy: 'command' },
+    operator_hold_reason: 'Operator stop is active.',
+    bot: {
+      health: 8,
+      food: 20,
+      oxygenLevel: 20,
+      interrupt_code: false,
+      output: '',
+      lastActionEvidence: null,
+      emit() {},
+    },
+    clearBotLogs() { this.bot.output = ''; },
+    isOperatorHeld() { return held; },
+    checkTaskDone() {},
+    recordActionResult(result) {
+      recorded.push(result);
+      this.behavior_arbiter?.recordOutcome?.(result);
+    },
+    environment_observer: { nextSampleAt: 0, update() {} },
+  };
+  agent.actions = new ActionManager(agent);
+  agent.bot.modes = {
+    beginUpdateCycle() {},
+    endUpdateCycle() {},
+    async updateBand(names) {
+      if (!names.includes('self_preservation') || !danger) {
+        return { active: false, scheduled: false, code: 'inactive' };
+      }
+      const outcome = await agent.actions.runAction('mode:self_preservation', async () => {
+        reflexRuns += 1;
+        assert.equal(held, true);
+        agent.bot.lastActionEvidence = { outcome: 'retreated' };
+        return true;
+      }, { owner: 'reflex' });
+      return {
+        active: false,
+        scheduled: outcome.success,
+        mode: 'self_preservation',
+        code: outcome.success ? 'mode_scheduled' : outcome.result?.code,
+      };
+    },
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+  agent.behavior_arbiter = arbiter;
+
+  const ordinary = await agent.actions.runAction('action:consume', async () => true, { owner: 'survival' });
+  assert.equal(ordinary.result.code, 'operator_hold');
+  assert.equal(reflexRuns, 0);
+
+  const dangerStatus = await arbiter.update(25);
+  assert.equal(dangerStatus.selectedLane, 'emergency_self_preservation');
+  assert.equal(reflexRuns, 1);
+  assert.equal(held, true);
+  assert.equal(agent.actions.executing, false);
+  assert.equal(recorded.at(-1).code, 'skill_retreated');
+
+  danger = false;
+  const heldStatus = await arbiter.update(25);
+  assert.equal(heldStatus.selectedLane, 'operator_hold');
+  assert.equal(heldStatus.code, 'operator_hold_safe');
+  assert.equal(held, true);
+  const heldTrace = arbiter.snapshot().decisionTrace.recent.at(-1);
+  assert.equal(heldTrace.lanes.find(lane => lane.lane === 'emergency_self_preservation').status, 'ineligible');
+  assert.equal(heldTrace.lanes.find(lane => lane.lane === 'operator_hold').status, 'eligible');
+
+  held = false;
+});
+
+test('hunger survival ownership hands off to the persisted survival-job lane', async () => {
+  let hungerPending = true;
+  const survival = {
+    inFlight: false,
+    status: { code: 'idle' },
+    update() {
+      if (!hungerPending) return;
+      this.inFlight = true;
+      this.status = { code: 'skill_consuming' };
+    },
+    blocksLowerPriority() { return this.inFlight; },
+  };
+  const job = {
+    activeOrder: { id: 'survival-shelter', source: 'survival', phase: 'assess' },
+    status: { code: 'job_accepted' },
+    updates: 0,
+    update() {
+      this.updates += 1;
+      this.status = { code: 'job_assess' };
+    },
+  };
+  const { agent } = fakeAgent({ survival, job });
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const hungerStatus = await arbiter.update(25);
+  assert.equal(hungerStatus.selectedLane, 'basic_survival');
+  assert.equal(job.updates, 0);
+
+  hungerPending = false;
+  survival.inFlight = false;
+  survival.status = { code: 'skill_consumed' };
+  const jobStatus = await arbiter.update(25);
+  assert.equal(jobStatus.selectedLane, 'basic_survival');
+  assert.equal(jobStatus.code, 'job_assess');
+  assert.equal(job.updates, 1);
+  const trace = arbiter.snapshot().decisionTrace.recent.at(-1);
+  assert.equal(trace.lanes.find(lane => lane.lane === 'basic_survival').status, 'ineligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'survival_job').status, 'eligible');
 });
 
 test('decision trace retention remains bounded and later short-circuited lanes stay explicit', async () => {

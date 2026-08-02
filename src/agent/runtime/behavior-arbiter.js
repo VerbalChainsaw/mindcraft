@@ -513,15 +513,29 @@ export class BehaviorArbiter {
       } catch (error) {
         return this.select('degraded', 'mode_cycle_failed', `Mode cycle failed safely: ${boundedText(error?.message || error)}`, true, perception);
       }
+      // Operator Stop is authoritative over every ordinary lane, but it is not
+      // a suicide switch. modes.js and ActionManager both expose one exact,
+      // bounded exception for `reflex + mode:self_preservation`; evaluate that
+      // exception before the hold gate so drowning, burning, falling, or a
+      // severe low-health hit can use it without releasing the hold.
+      let selected = await this.evaluateModeBand('emergency_self_preservation', EMERGENCY_MODES, perception);
+      if (selected) return selected;
+
       this.traceRecorder.startLane('operator_hold');
       if (this.agent.isOperatorHeld?.()) {
         this.directiveResumeRequested = false;
-        return this.select('operator_hold', 'operator_hold', this.agent.operator_hold_reason || 'Operator Stop is authoritative.', true, perception);
+        return this.select(
+          'operator_hold',
+          'operator_hold_safe',
+          this.agent.operator_hold_reason
+            ? `${this.agent.operator_hold_reason} No immediate self-preservation response is required.`
+            : 'Operator Stop remains active; no immediate self-preservation response is required.',
+          true,
+          perception,
+        );
       }
       this.traceRecorder.finishLane('operator_hold', { status: 'ineligible', reasonCode: 'operator_not_held' });
 
-      let selected = await this.evaluateModeBand('emergency_self_preservation', EMERGENCY_MODES, perception);
-      if (selected) return selected;
       selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
       if (selected) return selected;
 

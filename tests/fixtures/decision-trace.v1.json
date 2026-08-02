@@ -29,8 +29,8 @@
     }
   ],
   "lanes": [
-    { "order": 0, "lane": "operator_hold", "status": "ineligible", "reasonCode": "operator_not_held", "targetRef": null, "evidenceRefs": [], "durationMs": 0.02 },
-    { "order": 1, "lane": "emergency_self_preservation", "status": "ineligible", "reasonCode": "inactive", "targetRef": null, "evidenceRefs": ["perception-41"], "durationMs": 0.11 },
+    { "order": 0, "lane": "emergency_self_preservation", "status": "ineligible", "reasonCode": "inactive", "targetRef": null, "evidenceRefs": ["perception-41"], "durationMs": 0.11 },
+    { "order": 1, "lane": "operator_hold", "status": "ineligible", "reasonCode": "operator_not_held", "targetRef": null, "evidenceRefs": [], "durationMs": 0.02 },
     { "order": 2, "lane": "attributed_protection", "status": "eligible", "reasonCode": "damage_attributed", "targetRef": "entity:88", "evidenceRefs": ["perception-41"], "durationMs": 0.18 },
     { "order": 3, "lane": "active_action_retention", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
     { "order": 4, "lane": "bounded_recovery", "status": "not_evaluated", "reasonCode": "short_circuit", "targetRef": null, "evidenceRefs": [], "durationMs": null },
