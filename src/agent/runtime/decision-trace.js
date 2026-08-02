@@ -2,6 +2,14 @@ const SCHEMA_VERSION = 1;
 const DEFAULT_RETENTION = 128;
 const MAX_RETENTION = 512;
 const MAX_TEXT = 240;
+const MAX_REQUEST_ARGS = 8;
+const REQUEST_ROUTE_ORIGINS = new Set([
+  'explicit-command',
+  'deterministic-nl',
+  'model-selected',
+  'directive-resume',
+  'internal',
+]);
 
 export const DECISION_TRACE_LANES = Object.freeze([
   'emergency_self_preservation',
@@ -71,8 +79,29 @@ function normalizeAction(value = {}) {
     label: nullableText(value.label),
     intent: nullableText(value.intent),
     startedAt: finite(value.startedAt),
+    requestId: value.requestId ? text(value.requestId).slice(0, 80) : null,
+    routeOrigin: value.requestId ? normalizeRouteOrigin(value.routeOrigin) : null,
+    selectedSkill: value.requestId ? nullableText(value.selectedSkill)?.slice(0, 80) || null : null,
+    args: value.requestId ? normalizeRequestArgs(value.args) : [],
+    requestedAt: value.requestId ? finite(value.requestedAt) : null,
     commitment: normalizeCommitment(value.commitment),
   };
+}
+
+function normalizeRouteOrigin(value) {
+  const normalized = text(value).toLowerCase().slice(0, 40);
+  return REQUEST_ROUTE_ORIGINS.has(normalized) ? normalized : 'internal';
+}
+
+function normalizeRequestArgs(value) {
+  return (Array.isArray(value) ? value : [])
+    .slice(0, MAX_REQUEST_ARGS)
+    .map(argument => {
+      if (argument === null || typeof argument === 'boolean') return argument;
+      if (typeof argument === 'number') return Number.isFinite(argument) ? argument : null;
+      if (typeof argument === 'string') return text(argument).slice(0, 160);
+      return null;
+    });
 }
 
 function normalizeAcquisition(value = {}, source = 'linked_action_start') {
@@ -203,7 +232,15 @@ export class DecisionTraceRecorder {
       },
       stages: [],
       timing: { evaluationMs: 0, cleanupMs: 0, totalMs: 0 },
-      correlation: { actionId: normalizeAction(activeAction).actionId, outcomeLinked: false },
+      correlation: {
+        actionId: normalizeAction(activeAction).actionId,
+        requestId: null,
+        routeOrigin: null,
+        selectedSkill: null,
+        args: [],
+        requestedAt: null,
+        outcomeLinked: false,
+      },
       outcome: null,
     };
     return this.current.decisionId;
@@ -328,6 +365,11 @@ export class DecisionTraceRecorder {
     label = null,
     acquiredAt = null,
     startedAt = null,
+    requestId = null,
+    routeOrigin = null,
+    selectedSkill = null,
+    args = [],
+    requestedAt = null,
   } = {}) {
     if (!this.enabled || !actionId) return false;
     const trace = this.current || [...this.recent].reverse().find(candidate => (
@@ -335,6 +377,11 @@ export class DecisionTraceRecorder {
     ));
     if (!trace) return false;
     trace.correlation.actionId = text(actionId).slice(0, 80);
+    trace.correlation.requestId = requestId ? text(requestId).slice(0, 80) : null;
+    trace.correlation.routeOrigin = requestId ? normalizeRouteOrigin(routeOrigin) : null;
+    trace.correlation.selectedSkill = requestId ? nullableText(selectedSkill)?.slice(0, 80) || null : null;
+    trace.correlation.args = requestId ? normalizeRequestArgs(args) : [];
+    trace.correlation.requestedAt = requestId ? finite(requestedAt) : null;
     trace.activeAction = normalizeAction({
       ...trace.activeAction,
       actionId,
@@ -342,6 +389,11 @@ export class DecisionTraceRecorder {
       ownerPriority: ownerPriority ?? trace.activeAction.ownerPriority,
       label: label || trace.activeAction.label,
       startedAt: startedAt ?? trace.activeAction.startedAt,
+      requestId,
+      routeOrigin,
+      selectedSkill,
+      args,
+      requestedAt,
     });
     trace.actionLifecycle.acquisition = normalizeAcquisition({
       actionId,

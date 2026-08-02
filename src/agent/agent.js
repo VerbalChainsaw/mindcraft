@@ -552,7 +552,7 @@ export class Agent {
         if (!command) return false;
         this.self_prompter?.interruptForManualCommand?.();
         this.role_director?.deferForManualCommand?.('Resuming an explicitly authorized companion directive.');
-        void executeCommand(this, command, { owner: 'player' })
+        void executeCommand(this, command, { owner: 'player', routeOrigin: 'directive-resume' })
             .catch(error => console.error(`[companion] Could not resume explicit directive: ${String(error?.message || error).slice(0, 240)}`));
         return true;
     }
@@ -820,7 +820,10 @@ export class Agent {
                     }
                     if (isAction(user_command_name)) this.recordPlayerOrder(source, user_command_name);
                     const commandOwner = source === 'system' ? 'autonomy' : 'player';
-                    let execute_res = await executeCommand(this, message, { owner: commandOwner });
+                    let execute_res = await executeCommand(this, message, {
+                        owner: commandOwner,
+                        routeOrigin: 'explicit-command',
+                    });
                 if (execute_res) 
                     this.routeResponse(source, execute_res);
                 return true;
@@ -887,7 +890,10 @@ export class Agent {
                 }
                 if (directiveCommand && isAction(directiveCommand)) this.recordPlayerOrder(source, directiveCommand);
                 this.routeResponse(source, directive.response);
-                const execute_res = await executeCommand(this, directive.command, { owner: 'player' });
+                const execute_res = await executeCommand(this, directive.command, {
+                    owner: 'player',
+                    routeOrigin: 'deterministic-nl',
+                });
                 if (execute_res)
                     this.routeResponse(source, execute_res);
                 return true;
@@ -993,7 +999,10 @@ export class Agent {
 
                 const previousActionId = this.last_action_result?.actionId || null;
                 const commandOwner = self_prompt || source === 'system' ? 'autonomy' : 'player';
-                let execute_res = await executeCommand(this, res, { owner: commandOwner });
+                let execute_res = await executeCommand(this, res, {
+                    owner: commandOwner,
+                    routeOrigin: 'model-selected',
+                });
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;

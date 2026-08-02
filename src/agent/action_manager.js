@@ -49,6 +49,47 @@ const PLAYER_PREEMPTIBLE_REFLEX_ACTIONS = new Set([
     'mode:idle_staring',
 ]);
 const MAX_ACTION_ERROR_CHARS = 4_096;
+const MAX_REQUEST_ARGS = 8;
+const MAX_REQUEST_TEXT = 160;
+const REQUEST_ROUTE_ORIGINS = new Set([
+    'explicit-command',
+    'deterministic-nl',
+    'model-selected',
+    'directive-resume',
+    'internal',
+]);
+
+function boundedRequestText(value, maxLength = MAX_REQUEST_TEXT) {
+    return String(value || '')
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, maxLength);
+}
+
+function normalizeRequestContext(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const requestId = boundedRequestText(value.requestId, 80);
+    if (!requestId) return null;
+    const routeOrigin = boundedRequestText(value.routeOrigin, 40).toLowerCase();
+    const args = Object.freeze((Array.isArray(value.args) ? value.args : [])
+        .slice(0, MAX_REQUEST_ARGS)
+        .map(argument => {
+            if (argument === null || typeof argument === 'boolean') return argument;
+            if (typeof argument === 'number') return Number.isFinite(argument) ? argument : null;
+            if (typeof argument === 'string') return boundedRequestText(argument);
+            return null;
+        }));
+    return Object.freeze({
+        requestId,
+        routeOrigin: REQUEST_ROUTE_ORIGINS.has(routeOrigin) ? routeOrigin : 'internal',
+        selectedSkill: boundedRequestText(value.selectedSkill, 80),
+        args,
+        requestedAt: Number.isFinite(Number(value.requestedAt))
+            ? Math.max(0, Math.floor(Number(value.requestedAt)))
+            : null,
+    });
+}
 
 function actionPosition(agent) {
     const position = agent?.bot?.entity?.position;
@@ -105,11 +146,17 @@ export class ActionManager {
         this.stopRequestedAt = null;
         this.stopTimedOutAt = null;
         this.ownerContext = new AsyncLocalStorage();
+        this.requestContext = new AsyncLocalStorage();
     }
 
     runWithOwner(owner, operation) {
         if (typeof operation !== 'function') throw new TypeError('Action owner operation must be a function.');
         return this.ownerContext.run(normalizeActionOwner(owner), operation);
+    }
+
+    runWithRequestContext(context, operation) {
+        if (typeof operation !== 'function') throw new TypeError('Action request operation must be a function.');
+        return this.requestContext.run(normalizeRequestContext(context), operation);
     }
 
     ownerPriority(owner) {
@@ -308,6 +355,7 @@ export class ActionManager {
         const startedAt = Date.now();
         const actionId = `${this.agent.name || 'bot'}-${++this.nextActionId}-${startedAt}`;
         const actionOwner = normalizeActionOwner(owner);
+        const commandRequest = this.requestContext.getStore();
         try {
             if (
                 this.agent.isOperatorHeld?.()
@@ -415,6 +463,7 @@ export class ActionManager {
                 label: actionLabel,
                 acquiredAt: this.currentActionStartedAt,
                 startedAt: this.currentActionStartedAt,
+                ...(commandRequest || {}),
             });
             this.timedout = false;
 

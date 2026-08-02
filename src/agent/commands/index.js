@@ -1,8 +1,58 @@
 import { getBlockId, getItemId } from "../../utils/mcdata.js";
+import { randomUUID } from 'node:crypto';
 import { actionsList } from './actions.js';
 import { queryList } from './queries.js';
 
 let suppressNoDomainWarning = true;
+
+const COMMAND_REQUEST_ROUTE_ORIGINS = new Set([
+    'explicit-command',
+    'deterministic-nl',
+    'model-selected',
+    'directive-resume',
+    'internal',
+]);
+const MAX_COMMAND_REQUEST_ARGS = 8;
+const MAX_COMMAND_REQUEST_TEXT = 160;
+
+function boundedRequestText(value, maxLength = MAX_COMMAND_REQUEST_TEXT) {
+    return String(value || '')
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, maxLength);
+}
+
+function normalizeRequestArgument(value) {
+    if (value === null || typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string') return boundedRequestText(value);
+    return null;
+}
+
+export function normalizeCommandRouteOrigin(value) {
+    const normalized = boundedRequestText(value, 40).toLowerCase();
+    return COMMAND_REQUEST_ROUTE_ORIGINS.has(normalized) ? normalized : 'internal';
+}
+
+export function createCommandRequestContext({
+    routeOrigin = 'internal',
+    selectedSkill = '',
+    args = [],
+    requestedAt = Date.now(),
+} = {}) {
+    const normalizedArgs = Object.freeze((Array.isArray(args) ? args : [])
+        .slice(0, MAX_COMMAND_REQUEST_ARGS)
+        .map(normalizeRequestArgument));
+    const timestamp = Number(requestedAt);
+    return Object.freeze({
+        requestId: `command-request-${randomUUID()}`,
+        routeOrigin: normalizeCommandRouteOrigin(routeOrigin),
+        selectedSkill: boundedRequestText(selectedSkill, 80),
+        args: normalizedArgs,
+        requestedAt: Number.isFinite(timestamp) && timestamp >= 0 ? Math.floor(timestamp) : Date.now(),
+    });
+}
 
 const commandList = queryList.concat(actionsList);
 const commandMap = {};
@@ -295,7 +345,7 @@ function numParams(command) {
     return commandParams(command).length;
 }
 
-export async function executeCommand(agent, message, { owner = 'player' } = {}) {
+export async function executeCommand(agent, message, { owner = 'player', routeOrigin = 'internal' } = {}) {
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
         return parsed; //The command was incorrectly formatted or an invalid input was given.
@@ -309,10 +359,18 @@ export async function executeCommand(agent, message, { owner = 'player' } = {}) 
         if (numArgs !== numParams(command))
             return `Command ${command.name} was given ${numArgs} args, but requires ${numParams(command)} args.`;
         else {
+            const requestContext = createCommandRequestContext({
+                routeOrigin,
+                selectedSkill: parsed.commandName,
+                args: parsed.args,
+            });
             const perform = () => command.perform(agent, ...parsed.args);
+            const performWithRequestContext = typeof agent.actions?.runWithRequestContext === 'function'
+                ? () => agent.actions.runWithRequestContext(requestContext, perform)
+                : perform;
             const result = typeof agent.actions?.runWithOwner === 'function'
-                ? await agent.actions.runWithOwner(owner, perform)
-                : await perform();
+                ? await agent.actions.runWithOwner(owner, performWithRequestContext)
+                : await performWithRequestContext();
             return result;
         }
     }
