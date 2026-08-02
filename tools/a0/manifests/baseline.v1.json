@@ -1,0 +1,3018 @@
+{
+  "schemaVersion": "a0.manifest.v1",
+  "manifestRevision": "baseline.v1",
+  "manifestHash": "pending",
+  "manifestStatus": "planned",
+  "title": "A0 planned baseline measurement allocation",
+  "metadataStatus": "incomplete",
+  "missingFields": [
+    "/manifestHash"
+  ],
+  "families": [
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "selected": true,
+      "freezeStatus": "blocked",
+      "routes": [
+        {
+          "routeOrigin": "direct",
+          "available": true,
+          "harnessPath": "tools/verify-follow-field.mjs",
+          "argvTemplate": [
+            "node",
+            "tools/verify-follow-field.mjs",
+            "--url",
+            "${url}",
+            "--bot",
+            "${bot}",
+            "--attempts",
+            "1",
+            "--evidence",
+            "${expectedArtifactPath}",
+            "--mode",
+            "follow",
+            "--authorized-active-world"
+          ],
+          "blockers": []
+        },
+        {
+          "routeOrigin": "nl",
+          "available": true,
+          "harnessPath": "tools/verify-follow-field.mjs",
+          "argvTemplate": [
+            "node",
+            "tools/verify-follow-field.mjs",
+            "--url",
+            "${url}",
+            "--bot",
+            "${bot}",
+            "--attempts",
+            "1",
+            "--evidence",
+            "${expectedArtifactPath}",
+            "--mode",
+            "follow",
+            "--natural-language",
+            "--authorized-active-world"
+          ],
+          "blockers": []
+        }
+      ],
+      "blockers": [
+        {
+          "code": "planned-evidence-not-collected",
+          "detail": "All A0 follow-navigation slots are planned and held; no freeze eligibility is claimed before complete admissible evidence exists."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "selected": true,
+      "freezeStatus": "blocked",
+      "routes": [
+        {
+          "routeOrigin": "direct",
+          "available": false,
+          "harnessPath": null,
+          "argvTemplate": null,
+          "blockers": [
+            {
+              "code": "designated-harness-path-missing",
+              "detail": "The designated obstruction harness path is absent, so this route cannot be invoked."
+            }
+          ]
+        },
+        {
+          "routeOrigin": "nl",
+          "available": false,
+          "harnessPath": null,
+          "argvTemplate": null,
+          "blockers": [
+            {
+              "code": "designated-harness-path-missing",
+              "detail": "The designated obstruction harness path is absent, so this route cannot be invoked."
+            },
+            {
+              "code": "nl-route-support-unavailable",
+              "detail": "No reviewable natural-language harness route is available for this family."
+            }
+          ]
+        }
+      ],
+      "blockers": [
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit, so obstruction collection is not runnable."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "No reviewable natural-language obstruction route exists; NL slots remain held and block freeze."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "selected": true,
+      "freezeStatus": "blocked",
+      "routes": [
+        {
+          "routeOrigin": "direct",
+          "available": true,
+          "harnessPath": "tools/verify-operator-hold-field.mjs",
+          "argvTemplate": [
+            "node",
+            "tools/verify-operator-hold-field.mjs",
+            "--url",
+            "${url}",
+            "--bot",
+            "${bot}",
+            "--attempts",
+            "1",
+            "--evidence",
+            "${expectedArtifactPath}",
+            "--authorized-active-world"
+          ],
+          "blockers": []
+        },
+        {
+          "routeOrigin": "nl",
+          "available": false,
+          "harnessPath": null,
+          "argvTemplate": null,
+          "blockers": [
+            {
+              "code": "nl-route-support-unavailable",
+              "detail": "No reviewable natural-language harness route is available for this family."
+            }
+          ]
+        }
+      ],
+      "blockers": [
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "tools/verify-operator-hold-field.mjs has no natural-language route; NL slots remain held and block freeze."
+        }
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-direct-01",
+      "invocationId": "inv-follow-navigation-direct-01",
+      "independentRunIndex": 1,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-direct-01.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-direct-02",
+      "invocationId": "inv-follow-navigation-direct-02",
+      "independentRunIndex": 2,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-direct-02.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-direct-03",
+      "invocationId": "inv-follow-navigation-direct-03",
+      "independentRunIndex": 3,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-direct-03.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-direct-04",
+      "invocationId": "inv-follow-navigation-direct-04",
+      "independentRunIndex": 4,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-direct-04.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-direct-05",
+      "invocationId": "inv-follow-navigation-direct-05",
+      "independentRunIndex": 5,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-direct-05.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-nl-01",
+      "invocationId": "inv-follow-navigation-nl-01",
+      "independentRunIndex": 6,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-nl-01.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-nl-02",
+      "invocationId": "inv-follow-navigation-nl-02",
+      "independentRunIndex": 7,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-nl-02.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-nl-03",
+      "invocationId": "inv-follow-navigation-nl-03",
+      "independentRunIndex": 8,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-nl-03.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-nl-04",
+      "invocationId": "inv-follow-navigation-nl-04",
+      "independentRunIndex": 9,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-nl-04.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "follow-navigation",
+      "variant": "follow-course",
+      "harness": "tools/verify-follow-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--mode",
+        "follow",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-follow-navigation-nl-05",
+      "invocationId": "inv-follow-navigation-nl-05",
+      "independentRunIndex": 10,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "follow-course-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          {
+            "x": 1029.5,
+            "y": 101,
+            "z": 1014.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-follow-navigation-nl-05.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-direct-01",
+      "invocationId": "inv-ordinary-obstruction-direct-01",
+      "independentRunIndex": 1,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-direct-01.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-direct-02",
+      "invocationId": "inv-ordinary-obstruction-direct-02",
+      "independentRunIndex": 2,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-direct-02.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-direct-03",
+      "invocationId": "inv-ordinary-obstruction-direct-03",
+      "independentRunIndex": 3,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-direct-03.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-direct-04",
+      "invocationId": "inv-ordinary-obstruction-direct-04",
+      "independentRunIndex": 4,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-direct-04.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-direct-05",
+      "invocationId": "inv-ordinary-obstruction-direct-05",
+      "independentRunIndex": 5,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-direct-05.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-nl-01",
+      "invocationId": "inv-ordinary-obstruction-nl-01",
+      "independentRunIndex": 6,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-nl-01.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-nl-02",
+      "invocationId": "inv-ordinary-obstruction-nl-02",
+      "independentRunIndex": 7,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-nl-02.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-nl-03",
+      "invocationId": "inv-ordinary-obstruction-nl-03",
+      "independentRunIndex": 8,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-nl-03.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-nl-04",
+      "invocationId": "inv-ordinary-obstruction-nl-04",
+      "independentRunIndex": 9,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-nl-04.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "ordinary-obstruction",
+      "variant": "ordinary-obstruction-alternate-route",
+      "harness": "tools/verify-follow-obstruction-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-follow-obstruction-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-ordinary-obstruction-nl-05",
+      "invocationId": "inv-ordinary-obstruction-nl-05",
+      "independentRunIndex": 10,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "ordinary-obstruction-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1071.5,
+            "y": 100,
+            "z": 1007.5
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1007
+          },
+          {
+            "x": 1074,
+            "y": 100,
+            "z": 1006
+          },
+          {
+            "x": 1078.5,
+            "y": 100,
+            "z": 1007.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-ordinary-obstruction-nl-05.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "designated-harness-path-missing",
+          "detail": "The required tools/verify-follow-obstruction-field.mjs path is absent at the baseline commit."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-direct-01",
+      "invocationId": "inv-operator-hold-direct-01",
+      "independentRunIndex": 1,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-direct-01.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-direct-02",
+      "invocationId": "inv-operator-hold-direct-02",
+      "independentRunIndex": 2,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-direct-02.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-direct-03",
+      "invocationId": "inv-operator-hold-direct-03",
+      "independentRunIndex": 3,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-direct-03.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-direct-04",
+      "invocationId": "inv-operator-hold-direct-04",
+      "independentRunIndex": 4,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-direct-04.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "direct",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-direct-05",
+      "invocationId": "inv-operator-hold-direct-05",
+      "independentRunIndex": 5,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-direct-05.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-nl-01",
+      "invocationId": "inv-operator-hold-nl-01",
+      "independentRunIndex": 6,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-nl-01.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-nl-02",
+      "invocationId": "inv-operator-hold-nl-02",
+      "independentRunIndex": 7,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-nl-02.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "off",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-nl-03",
+      "invocationId": "inv-operator-hold-nl-03",
+      "independentRunIndex": 8,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-nl-03.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-nl-04",
+      "invocationId": "inv-operator-hold-nl-04",
+      "independentRunIndex": 9,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-nl-04.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    },
+    {
+      "family": "operator-hold",
+      "variant": "operator-hold-safe-and-bounded-emergency-self-preservation",
+      "harness": "tools/verify-operator-hold-field.mjs",
+      "argvTemplate": [
+        "node",
+        "tools/verify-operator-hold-field.mjs",
+        "--url",
+        "${url}",
+        "--bot",
+        "${bot}",
+        "--attempts",
+        "1",
+        "--evidence",
+        "${expectedArtifactPath}",
+        "--natural-language",
+        "--authorized-active-world"
+      ],
+      "routeOrigin": "nl",
+      "diagnosticsArm": "on",
+      "evidenceDisposition": "held",
+      "runId": "a0-operator-hold-nl-05",
+      "invocationId": "inv-operator-hold-nl-05",
+      "independentRunIndex": 10,
+      "attemptCount": 1,
+      "pairId": null,
+      "gitCommit": "36140143034aa1a83ac92f4607bf8b9d1fef3190",
+      "bot": {
+        "name": null,
+        "runtime": null
+      },
+      "server": {
+        "version": null,
+        "protocolVersion": null
+      },
+      "world": {
+        "worldId": null,
+        "seed": null,
+        "dimension": null,
+        "resetId": null,
+        "resetPolicy": null
+      },
+      "fixture": {
+        "fixtureId": "operator-hold-fixture",
+        "fixtureHash": null,
+        "coordinates": [
+          {
+            "x": 1230.5,
+            "y": 251,
+            "z": 1100.5
+          },
+          {
+            "x": 1242.5,
+            "y": 251,
+            "z": 1100.5
+          }
+        ]
+      },
+      "timeoutMs": 300000,
+      "safetyBounds": {
+        "maxAttempts": 1,
+        "maxElapsedMs": 300000,
+        "maxMovementDistanceBlocks": 100,
+        "maxFixtureMutations": 10000,
+        "requiresAuthorizedActiveWorld": true,
+        "allowExternalNetwork": false
+      },
+      "expectedArtifactPath": "artifacts/a0/inv-operator-hold-nl-05.json",
+      "metadataStatus": "incomplete",
+      "missingFields": [
+        "/pairId",
+        "/bot/name",
+        "/bot/runtime",
+        "/server/version",
+        "/server/protocolVersion",
+        "/world/worldId",
+        "/world/seed",
+        "/world/dimension",
+        "/world/resetId",
+        "/world/resetPolicy",
+        "/fixture/fixtureHash"
+      ],
+      "blockers": [
+        {
+          "code": "planned-invocation-not-executed",
+          "detail": "This is an independent planned invocation slot only; no harness was run and no evidence artifact or execution metadata was collected."
+        },
+        {
+          "code": "nl-route-support-unavailable",
+          "detail": "The family has no reviewable natural-language harness route; this slot is held and freeze-blocking."
+        }
+      ]
+    }
+  ]
+}
