@@ -495,8 +495,8 @@ try {
         timed_out = $harnessTimedOut
         started_at_unix_ms = $harnessStartedAt
         duration_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $harnessStartedAt
-        stdout = if (Test-Path -LiteralPath $harnessStdout) { (Get-Content -LiteralPath $harnessStdout -Raw).Trim() } else { '' }
-        stderr = if (Test-Path -LiteralPath $harnessStderr) { (Get-Content -LiteralPath $harnessStderr -Raw).Trim() } else { '' }
+        stdout = if (Test-Path -LiteralPath $harnessStdout) { [IO.File]::ReadAllText($harnessStdout).Trim() } else { '' }
+        stderr = if (Test-Path -LiteralPath $harnessStderr) { [IO.File]::ReadAllText($harnessStderr).Trim() } else { '' }
     }
     if (-not (Test-Path -LiteralPath $harnessEvidencePath)) {
         throw 'Follow field harness did not produce an evidence file.'
