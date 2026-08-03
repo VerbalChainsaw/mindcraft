@@ -145,6 +145,37 @@ function Invoke-JsonPost([string]$uri, [hashtable]$body, [int]$timeoutSeconds = 
     Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Body ($body | ConvertTo-Json -Depth 10 -Compress) -TimeoutSec $timeoutSeconds
 }
 
+function ConvertTo-ProcessArgument([string]$argument) {
+    if ($null -eq $argument -or $argument.Length -eq 0) { return '""' }
+    if ($argument -notmatch '[\s"]') { return $argument }
+
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $argument.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$builder.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
 function Set-ServerProperty([string]$path, [string]$name, [string]$value) {
     $lines = @(Get-Content -LiteralPath $path)
     $pattern = '^\s*' + [Regex]::Escape($name) + '='
@@ -474,29 +505,40 @@ try {
     )
     if ($RequestForm -eq 'natural-language') { $harnessArgs += '--natural-language' }
     $harnessStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $harnessProcess = Start-Process -FilePath $nodePath -ArgumentList $harnessArgs -WorkingDirectory $repo -PassThru -WindowStyle Hidden -RedirectStandardOutput $harnessStdout -RedirectStandardError $harnessStderr
-    $harnessDeadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
-    while ([DateTime]::UtcNow -lt $harnessDeadline) {
-        $harnessProcess.Refresh()
-        if ($harnessProcess.HasExited) { break }
-        Start-Sleep -Milliseconds 250
-    }
-    $harnessProcess.Refresh()
-    $harnessTimedOut = -not $harnessProcess.HasExited
+    $harnessStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $harnessStartInfo.FileName = $nodePath
+    $harnessStartInfo.Arguments = (($harnessArgs | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join ' ')
+    $harnessStartInfo.WorkingDirectory = $repo
+    $harnessStartInfo.UseShellExecute = $false
+    $harnessStartInfo.CreateNoWindow = $true
+    $harnessStartInfo.RedirectStandardOutput = $true
+    $harnessStartInfo.RedirectStandardError = $true
+    $harnessProcess = New-Object System.Diagnostics.Process
+    $harnessProcess.StartInfo = $harnessStartInfo
+    if (-not $harnessProcess.Start()) { throw 'Follow field harness process was not created.' }
+    $harnessStdoutTask = $harnessProcess.StandardOutput.ReadToEndAsync()
+    $harnessStderrTask = $harnessProcess.StandardError.ReadToEndAsync()
+    $harnessTimedOut = -not $harnessProcess.WaitForExit($TimeoutMs)
     if ($harnessTimedOut) {
         Stop-Process -Id $harnessProcess.Id -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
-        $harnessProcess.Refresh()
+        if (-not $harnessProcess.WaitForExit(5000)) {
+            throw 'Follow field harness process did not terminate after timeout.'
+        }
     }
-    $harnessExitCode = if ($harnessProcess.HasExited) { $harnessProcess.ExitCode } else { $null }
+    $harnessProcess.WaitForExit()
+    $harnessExitCode = $harnessProcess.ExitCode
+    $harnessStdoutText = $harnessStdoutTask.GetAwaiter().GetResult()
+    $harnessStderrText = $harnessStderrTask.GetAwaiter().GetResult()
+    [IO.File]::WriteAllText($harnessStdout, $harnessStdoutText, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($harnessStderr, $harnessStderrText, [Text.UTF8Encoding]::new($false))
     $report.harness_process = [ordered]@{
         pid = $harnessProcess.Id
         exit_code = $harnessExitCode
         timed_out = $harnessTimedOut
         started_at_unix_ms = $harnessStartedAt
         duration_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $harnessStartedAt
-        stdout = if (Test-Path -LiteralPath $harnessStdout) { [IO.File]::ReadAllText($harnessStdout).Trim() } else { '' }
-        stderr = if (Test-Path -LiteralPath $harnessStderr) { [IO.File]::ReadAllText($harnessStderr).Trim() } else { '' }
+        stdout = $harnessStdoutText.Trim()
+        stderr = $harnessStderrText.Trim()
     }
     if (-not (Test-Path -LiteralPath $harnessEvidencePath)) {
         throw 'Follow field harness did not produce an evidence file.'

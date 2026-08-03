@@ -116,9 +116,12 @@ test('live workers require portable provenance and one managed-runtime lock', as
   assert.match(followWorker, /"--path=\$relativePath"/);
   assert.match(followRunner, /taskkill\.exe/);
   assert.match(followRunner, /processResult\.exitCode !== 0/);
-  assert.match(followWorker, /stdout = if .*\[IO\.File\]::ReadAllText\(\$harnessStdout\)\.Trim\(\)/);
-  assert.match(followWorker, /stderr = if .*\[IO\.File\]::ReadAllText\(\$harnessStderr\)\.Trim\(\)/);
-  assert.doesNotMatch(followWorker, /Get-Content .* -Raw.*\.Trim\(\)/);
+  assert.match(followWorker, /function ConvertTo-ProcessArgument/);
+  assert.match(followWorker, /System\.Diagnostics\.ProcessStartInfo/);
+  assert.match(followWorker, /ReadToEndAsync\(\)/);
+  assert.match(followWorker, /WaitForExit\(\$TimeoutMs\)/);
+  assert.match(followWorker, /\$harnessExitCode = \$harnessProcess\.ExitCode/);
+  assert.doesNotMatch(followWorker, /Start-Process -FilePath \$nodePath -ArgumentList \$harnessArgs/);
   assert.match(followHarness, /--request-file/);
   assert.match(followHarness, /doorway-corridor/);
   assert.match(followHarness, /target\.chat\(options\.requestMessage\)/);
