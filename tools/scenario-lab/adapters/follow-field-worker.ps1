@@ -20,8 +20,12 @@ param(
     [ValidatePattern('^[a-f0-9]{64}$')]
     [string]$ExpectedFixtureHash,
 
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^-?\d+$')]
+    [string]$ExpectedSeed,
+
     [ValidateRange(1000, 3600000)]
-    [int]$TimeoutMs = 600000,
+    [int]$TimeoutMs = 180000,
 
     [string]$FixtureRoot = ''
 )
@@ -30,35 +34,43 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
-    $FixtureRoot = $env:SCENARIO_LAB_STONE_FIXTURE_ROOT
+    $FixtureRoot = $env:SCENARIO_LAB_FOLLOW_FIXTURE_ROOT
 }
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
-    throw 'FixtureRoot or SCENARIO_LAB_STONE_FIXTURE_ROOT must identify the frozen fixture directory.'
+    throw 'FixtureRoot or SCENARIO_LAB_FOLLOW_FIXTURE_ROOT must identify the frozen fixture directory.'
 }
-$archive = Join-Path $FixtureRoot 'trial-world.zip'
-$archivedMemory = Join-Path $FixtureRoot 'trial-bot-memory'
+
+$archive = Join-Path $FixtureRoot 'follow-world.zip'
+$fixtureProfile = Join-Path $FixtureRoot 'scenario-profile.json'
+$fixtureMetadata = Join-Path $FixtureRoot 'fixture-metadata.json'
 $managed = Join-Path $repo 'server_data\managed-java'
 $configPath = Join-Path $managed 'mindcraft-server.json'
 $propertiesPath = Join-Path $managed 'server.properties'
 $botDir = Join-Path $repo 'bots\MindcraftBot'
-$profilePath = Join-Path $archivedMemory 'last_profile.json'
 $captureScript = Join-Path $PSScriptRoot 'capture-agent-state.mjs'
+$runner = Join-Path $PSScriptRoot 'run-follow-field.mjs'
+$evidenceAdapter = Join-Path $PSScriptRoot 'follow-field-evidence.mjs'
+$harness = Join-Path $repo 'tools\verify-follow-field.mjs'
+$directiveRouter = Join-Path $repo 'src\agent\player-directives.js'
+$skills = Join-Path $repo 'src\agent\library\skills.js'
 $baseUrl = 'http://localhost:8080'
-$expectedSkillsHash = 'CC524C4CEAFCCB4B850B7F3E65BB705E5E843E2268F94AFA3D11052E4D3A21A5'
-$expectedArchiveHash = $ExpectedFixtureHash.ToUpperInvariant()
-$sourceWorldName = 'viability-unseen-02-20260802-164450'
-$sourceSeed = '8781215452871762684'
+$expectedMetadataHash = 'ddcc34aba25090cbc1e760c3a8dca2883ed47f35337f8d55ab3f1c235cc49a67'
+$expectedProfileHash = 'e82b8f03e0411678073191db52b35c9ad74d6cfe8e36572db07c866f0817ae57'
+$expectedBaselineHash = '850d7cd7abd6410be3a6a3becd87bc6f4914dac6cc0ac18c38a9cd700fe13a42'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
-$worldName = "scenario-lab-stone-recovery-$RequestForm-$stamp"
+$worldName = "scenario-lab-follow-field-$RequestForm-$stamp"
 $runDir = [IO.Path]::GetFullPath($OutputDirectory)
 $scenarioProfilePath = Join-Path $runDir 'scenario-profile.json'
+$requestPath = Join-Path $runDir 'request-message.txt'
 $statusPath = Join-Path $runDir 'active-live-status.json'
 $reportPath = Join-Path $runDir 'live-report.json'
 $stackStdout = Join-Path $runDir 'stack-stdout.log'
 $stackStderr = Join-Path $runDir 'stack-stderr.log'
+$harnessStdout = Join-Path $runDir 'harness-stdout.log'
+$harnessStderr = Join-Path $runDir 'harness-stderr.log'
+$harnessEvidencePath = Join-Path $runDir 'follow-field-evidence.json'
 $worldPath = Join-Path $managed $worldName
 $extractRoot = Join-Path $runDir 'archive-extract'
-$sourceExtractPath = Join-Path $extractRoot $sourceWorldName
 $preMemory = Join-Path $runDir 'pre-run-bot-memory'
 $postMemory = Join-Path $runDir 'post-run-bot-memory'
 $postWorld = Join-Path $runDir 'post-run-world'
@@ -67,6 +79,10 @@ $propertiesBackup = Join-Path $runDir 'pre-run-server.properties'
 $markerPath = Join-Path $managed 'scenario-lab-managed-runtime.active'
 $nodePath = $null
 $mainProcess = $null
+$harnessProcess = $null
+$sourceWorldName = $null
+$sourceSeed = $null
+$sourceExtractPath = $null
 $backedUp = $false
 $memoryMoved = $false
 $runtimeMemoryInstalled = $false
@@ -75,7 +91,7 @@ $configurationChanged = $false
 $lockAcquired = $false
 
 $report = [ordered]@{
-    schema_version = 2
+    schema_version = 1
     status = 'running'
     phase = 'preflight'
     started_utc = [DateTime]::UtcNow.ToString('o')
@@ -84,14 +100,19 @@ $report = [ordered]@{
     request_message = $RequestMessage
     candidate_commit = $ExpectedCandidateCommit
     fixture_authorized = $false
+    endpoints_local_only = $true
     conflict = $false
     branch = $null
     current_head = $null
-    gameplay_file = 'src/agent/library/skills.js'
-    candidate_sha256 = $null
-    source_trial = 'autonomy-unseen-02-20260802-164450'
-    source_seed = $sourceSeed
+    source_world = $null
+    source_seed = $null
     source_archive_sha256 = $null
+    fixture_metadata_sha256 = $null
+    fixture_profile_sha256 = $null
+    baseline_contract_sha256 = $null
+    measurement_harness_sha256 = $null
+    gameplay_skills_sha256 = $null
+    candidate_blob_checks = $null
     replay_world = $worldName
     run_dir = $runDir
     main_pid = $null
@@ -102,13 +123,12 @@ $report = [ordered]@{
         default_goal_disabled = $true
         load_memory_disabled = $true
         profile_sha256 = $null
-        pre_command_last_result = $null
+        pre_harness_last_result = $null
     }
     health = $null
     before = $null
-    command = $null
-    observations = @()
-    final = $null
+    harness_process = $null
+    harness_evidence = $null
     verdict = $null
     cleanup = $null
     error = $null
@@ -117,7 +137,7 @@ $report = [ordered]@{
 function Save-Status([string]$phase) {
     $report.phase = $phase
     $report.updated_utc = [DateTime]::UtcNow.ToString('o')
-    $json = $report | ConvertTo-Json -Depth 24
+    $json = $report | ConvertTo-Json -Depth 50
     [IO.File]::WriteAllText($statusPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 }
 
@@ -157,10 +177,10 @@ function Summarize-State($state) {
         position = $state.gameplay.position
         health = $state.gameplay.health
         hunger = $state.gameplay.hunger
-        main_hand = $state.body.mainHand
-        inventory = $state.inventory.counts
         action_current = $state.action.current
         action_idle = $state.action.isIdle
+        action_held = $state.action.held
+        pathfinding = $state.action.pathfinding
         last_result = $state.action.lastResult
     }
 }
@@ -172,10 +192,6 @@ function Capture-State([string]$label) {
         throw "State capture failed ($captureExit): $($captureOutput -join ' ')"
     }
     $state = Get-Content -LiteralPath (Join-Path $runDir 'latest-state.json') -Raw | ConvertFrom-Json
-    $summary = Summarize-State $state
-    $report.observations += $summary
-    $report.current_observation = $summary
-    Save-Status "observing-$label"
     return $state
 }
 
@@ -183,6 +199,7 @@ if (Test-Path -LiteralPath $runDir) {
     throw "Output directory already exists: $runDir"
 }
 New-Item -ItemType Directory -Path $runDir | Out-Null
+[IO.File]::WriteAllText($requestPath, $RequestMessage, [Text.UTF8Encoding]::new($false))
 Save-Status 'preflight'
 
 try {
@@ -200,9 +217,40 @@ try {
         throw 'Another Scenario Lab invocation owns the managed runtime.'
     }
 
-    foreach ($required in @($repo, $archive, $archivedMemory, $configPath, $propertiesPath, $profilePath, $captureScript)) {
+    foreach ($required in @(
+        $repo,
+        $archive,
+        $fixtureProfile,
+        $fixtureMetadata,
+        $configPath,
+        $propertiesPath,
+        $captureScript,
+        $runner,
+        $evidenceAdapter,
+        $harness,
+        $directiveRouter,
+        $skills
+    )) {
         if (-not (Test-Path -LiteralPath $required)) { throw "Missing required path: $required" }
     }
+
+    $metadata = Get-Content -LiteralPath $fixtureMetadata -Raw | ConvertFrom-Json
+    if ([string]$metadata.schema_version -ne 'scenario-lab.fixture.v1') {
+        throw 'Unsupported follow fixture metadata schema.'
+    }
+    if ([string]$metadata.fixture_id -ne 'scenario-lab.doorway-corridor-follow.v1' -or [int]$metadata.fixture_version -ne 1) {
+        throw 'Fixture metadata identifies the wrong scenario or version.'
+    }
+    $sourceWorldName = [string]$metadata.source.world_name
+    $sourceSeed = [string]$metadata.source.seed
+    $sourceExtractPath = Join-Path $extractRoot $sourceWorldName
+    if ([string]::IsNullOrWhiteSpace($sourceWorldName) -or $sourceSeed -notmatch '^-?\d+$') {
+        throw 'Fixture metadata has an invalid source world or seed.'
+    }
+    if ($sourceSeed -ne $ExpectedSeed) {
+        throw "Fixture seed mismatch: expected $ExpectedSeed but metadata declares $sourceSeed."
+    }
+
     $branch = ((& git -C $repo branch --show-current 2>&1 | Out-String).Trim())
     $head = ((& git -C $repo rev-parse HEAD 2>&1 | Out-String).Trim())
     & git -C $repo merge-base --is-ancestor $ExpectedCandidateCommit HEAD 2>$null
@@ -210,25 +258,85 @@ try {
         throw "Candidate commit $ExpectedCandidateCommit is not an ancestor of current HEAD $head."
     }
     $dirty = @(& git -C $repo status --porcelain=v1 --untracked-files=all)
-    $unexpectedDirty = @($dirty | Where-Object {
-        $dirtyPath = if ($_.Length -gt 3) { $_.Substring(3).Trim() } else { '' }
-        $dirtyPath -notmatch '^(tools/scenario-lab\.mjs$|tools/scenario-lab(?:/|$)|tests/control-plane/scenario-lab\.test\.js$|docs/architecture/machine-brain-v2/(?:SCENARIO-LAB|A0-IMPLEMENTATION-STATUS)\.md$|package\.json$)'
-    })
-    $skillsHash = (Get-FileHash -LiteralPath (Join-Path $repo 'src\agent\library\skills.js') -Algorithm SHA256).Hash
-    $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+    if ($dirty.Count -ne 0) {
+        throw "Repository must be clean for a registered live replay: $($dirty -join '; ')"
+    }
+
+    $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $profileHash = (Get-FileHash -LiteralPath $fixtureProfile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $metadataHash = (Get-FileHash -LiteralPath $fixtureMetadata -Algorithm SHA256).Hash.ToLowerInvariant()
+    $harnessHash = (Get-FileHash -LiteralPath $harness -Algorithm SHA256).Hash.ToLowerInvariant()
+    $skillsHash = (Get-FileHash -LiteralPath $skills -Algorithm SHA256).Hash.ToLowerInvariant()
     $report.branch = $branch
     $report.current_head = $head
-    $report.candidate_sha256 = $skillsHash.ToLowerInvariant()
-    $report.source_archive_sha256 = $archiveHash.ToLowerInvariant()
-    if ($unexpectedDirty.Count -gt 0) {
-        throw "Unexpected non-lab worktree changes: $($unexpectedDirty -join '; ')"
+    $report.source_world = $sourceWorldName
+    $report.source_seed = $sourceSeed
+    $report.source_archive_sha256 = $archiveHash
+    $report.fixture_metadata_sha256 = $metadataHash
+    $report.fixture_profile_sha256 = $profileHash
+    $report.baseline_contract_sha256 = [string]$metadata.course_contract.baseline_sha256
+    $report.measurement_harness_sha256 = $harnessHash
+    $report.gameplay_skills_sha256 = $skillsHash
+
+    if ($archiveHash -ne $ExpectedFixtureHash) { throw "Archived world hash mismatch: $archiveHash" }
+    if ($metadataHash -ne $expectedMetadataHash) { throw 'Fixture metadata hash does not match the registered frozen contract.' }
+    if ($profileHash -ne $expectedProfileHash) { throw 'Scenario profile hash does not match the registered frozen contract.' }
+    if ($archiveHash -ne [string]$metadata.archive.sha256) { throw 'Archive hash does not match fixture metadata.' }
+    if ($profileHash -ne [string]$metadata.profile.sha256) { throw 'Scenario profile hash does not match fixture metadata.' }
+    if ([string]$metadata.course_contract.baseline_sha256 -ne $expectedBaselineHash) { throw 'Baseline course contract does not match the registered frozen contract.' }
+    $boundCandidateFiles = [ordered]@{
+        follow_worker = [ordered]@{
+            relative_path = 'tools/scenario-lab/adapters/follow-field-worker.ps1'
+            path = $PSCommandPath
+        }
+        follow_runner = [ordered]@{
+            relative_path = 'tools/scenario-lab/adapters/run-follow-field.mjs'
+            path = $runner
+        }
+        evidence_adapter = [ordered]@{
+            relative_path = 'tools/scenario-lab/adapters/follow-field-evidence.mjs'
+            path = $evidenceAdapter
+        }
+        capture_helper = [ordered]@{
+            relative_path = 'tools/scenario-lab/adapters/capture-agent-state.mjs'
+            path = $captureScript
+        }
+        measurement_harness = [ordered]@{
+            relative_path = 'tools/verify-follow-field.mjs'
+            path = $harness
+        }
+        directive_router = [ordered]@{
+            relative_path = 'src/agent/player-directives.js'
+            path = $directiveRouter
+        }
+        gameplay_controller = [ordered]@{
+            relative_path = 'src/agent/library/skills.js'
+            path = $skills
+        }
     }
-    if ($skillsHash -ne $expectedSkillsHash) { throw "Unexpected skills.js hash: $skillsHash" }
-    if ($archiveHash -ne $expectedArchiveHash) { throw "Archived world hash mismatch: $archiveHash" }
+    $blobChecks = [ordered]@{}
+    foreach ($entry in $boundCandidateFiles.GetEnumerator()) {
+        $relativePath = [string]$entry.Value.relative_path
+        $absolutePath = [string]$entry.Value.path
+        $candidateBlob = ((& git -C $repo rev-parse "${ExpectedCandidateCommit}:$relativePath" 2>&1 | Out-String).Trim())
+        $currentBlob = ((& git -C $repo hash-object "--path=$relativePath" -- $absolutePath 2>&1 | Out-String).Trim())
+        if ($candidateBlob -notmatch '^[a-f0-9]{40}$' -or $currentBlob -ne $candidateBlob) {
+            throw "$($entry.Key) does not match the registered candidate commit."
+        }
+        $blobChecks[$entry.Key] = [ordered]@{
+            relative_path = $relativePath
+            candidate_blob = $candidateBlob
+            current_blob = $currentBlob
+            matched = $true
+        }
+    }
+    $report.candidate_blob_checks = $blobChecks
+    if ($skillsHash -ne [string]$metadata.candidate.gameplay_skills_sha256) { throw 'Gameplay controller drifted from the frozen fixture contract.' }
     $report.fixture_authorized = $true
+
     if (Test-Path -LiteralPath $worldPath) { throw "Replay world already exists: $worldPath" }
     if (Test-Path -LiteralPath $sourceExtractPath) { throw "Archive source world unexpectedly exists: $sourceExtractPath" }
-    if (@(Get-Process -Name java -ErrorAction SilentlyContinue).Count -gt 0) {
+    if (@(Get-Process -Name java,javaw -ErrorAction SilentlyContinue).Count -gt 0) {
         $report.conflict = $true
         throw 'Java is already running.'
     }
@@ -242,17 +350,19 @@ try {
     $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
     & $nodePath --check $captureScript
     if ($LASTEXITCODE -ne 0) { throw 'Capture script syntax check failed.' }
+    & $nodePath --check $harness
+    if ($LASTEXITCODE -ne 0) { throw 'Follow harness syntax check failed.' }
 
-    $scenarioProfile = Get-Content -LiteralPath $profilePath -Raw | ConvertFrom-Json
+    $scenarioProfile = Get-Content -LiteralPath $fixtureProfile -Raw | ConvertFrom-Json
     if ([string]$scenarioProfile.name -ne 'MindcraftBot') {
-        throw 'The Scenario Lab source profile is not MindcraftBot.'
+        throw 'The Scenario Lab fixture profile is not MindcraftBot.'
     }
     if ($null -eq $scenarioProfile.runtime) {
         $scenarioProfile | Add-Member -NotePropertyName runtime -NotePropertyValue ([pscustomobject]@{ autonomy = 'command' }) -Force
     } else {
         $scenarioProfile.runtime | Add-Member -NotePropertyName autonomy -NotePropertyValue 'command' -Force
     }
-    $scenarioProfileJson = ($scenarioProfile | ConvertTo-Json -Depth 24) + [Environment]::NewLine
+    $scenarioProfileJson = ($scenarioProfile | ConvertTo-Json -Depth 30) + [Environment]::NewLine
     [IO.File]::WriteAllText($scenarioProfilePath, $scenarioProfileJson, [Text.UTF8Encoding]::new($false))
     $report.startup_isolation.profile_sha256 = (Get-FileHash -LiteralPath $scenarioProfilePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $launchSettingsJson = ([ordered]@{
@@ -272,8 +382,8 @@ try {
         Move-Item -LiteralPath $botDir -Destination $preMemory
         $memoryMoved = $true
     }
+    New-Item -ItemType Directory -Path $botDir | Out-Null
     $runtimeMemoryInstalled = $true
-    Copy-Item -LiteralPath $archivedMemory -Destination $botDir -Recurse
 
     Save-Status 'restoring-archived-world'
     Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
@@ -340,92 +450,89 @@ try {
     if ($hold.success -ne $true) { throw 'Could not place the replay bot under operator hold.' }
     Start-Sleep -Seconds 3
 
-    $beforeState = Capture-State 'before-command'
-    $beforeSummary = Summarize-State $beforeState
-    $report.before = $beforeSummary
-    $report.startup_isolation.pre_command_last_result = $beforeState.action.lastResult
-    if ($null -ne $beforeState.action.lastResult -and [string]$beforeState.action.lastResult.label -eq 'action:prepareTool') {
-        throw 'Startup isolation failed: prepareTool ran before the measured request.'
-    }
-    $beforeCounts = $beforeState.inventory.counts
-    $beforePosition = $beforeState.gameplay.position
-    if ([int]($beforeCounts.wooden_pickaxe) -lt 1) { throw 'Archived replay did not restore the wooden pickaxe precondition.' }
-    if ([int]($beforeCounts.stone_pickaxe) -gt 0) { throw 'Archived replay already contains a stone pickaxe.' }
-    if ([int]($beforeCounts.cobblestone) -gt 0) { throw 'Archived replay no longer begins at the zero-cobblestone failure state.' }
-    if ([Math]::Abs([double]$beforePosition.x - 503.33) -gt 2 -or [Math]::Abs([double]$beforePosition.y - 77) -gt 2 -or [Math]::Abs([double]$beforePosition.z - 604.55) -gt 2) {
-        throw "Archived replay position drifted from the recorded failure: $($beforePosition | ConvertTo-Json -Compress)"
+    $beforeState = Capture-State 'before-harness'
+    $report.before = Summarize-State $beforeState
+    $report.startup_isolation.pre_harness_last_result = $beforeState.action.lastResult
+    if (
+        $null -ne $beforeState.action.lastResult -and
+        [string]$beforeState.action.lastResult.label -eq 'action:followPlayer'
+    ) {
+        throw 'Startup isolation failed: followPlayer ran before the measured request.'
     }
 
-    Save-Status 'dispatching-stone-pickaxe'
-    $commandStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $commandResponse = Invoke-JsonPost "$baseUrl/api/director/command" @{
-        agent = 'MindcraftBot'
-        message = $RequestMessage
+    Save-Status 'running-follow-field-harness'
+    $harnessArgs = @(
+        $harness,
+        '--url', $baseUrl,
+        '--bot', 'MindcraftBot',
+        '--attempts', '1',
+        '--evidence', $harnessEvidencePath,
+        '--mode', 'follow',
+        '--course', 'doorway-corridor',
+        '--request-file', $requestPath,
+        '--authorized-active-world'
+    )
+    if ($RequestForm -eq 'natural-language') { $harnessArgs += '--natural-language' }
+    $harnessStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $harnessProcess = Start-Process -FilePath $nodePath -ArgumentList $harnessArgs -WorkingDirectory $repo -PassThru -WindowStyle Hidden -RedirectStandardOutput $harnessStdout -RedirectStandardError $harnessStderr
+    $harnessDeadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $harnessDeadline) {
+        $harnessProcess.Refresh()
+        if ($harnessProcess.HasExited) { break }
+        Start-Sleep -Milliseconds 250
     }
-    $report.command = [ordered]@{
-        form = $RequestForm
-        message = $RequestMessage
-        started_at_unix_ms = $commandStartedAt
-        response = $commandResponse
+    $harnessProcess.Refresh()
+    $harnessTimedOut = -not $harnessProcess.HasExited
+    if ($harnessTimedOut) {
+        Stop-Process -Id $harnessProcess.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        $harnessProcess.Refresh()
     }
-    if ($commandResponse.success -ne $true) { throw 'Stone-pickaxe command was not accepted.' }
+    $harnessExitCode = if ($harnessProcess.HasExited) { $harnessProcess.ExitCode } else { $null }
+    $report.harness_process = [ordered]@{
+        pid = $harnessProcess.Id
+        exit_code = $harnessExitCode
+        timed_out = $harnessTimedOut
+        started_at_unix_ms = $harnessStartedAt
+        duration_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $harnessStartedAt
+        stdout = if (Test-Path -LiteralPath $harnessStdout) { (Get-Content -LiteralPath $harnessStdout -Raw).Trim() } else { '' }
+        stderr = if (Test-Path -LiteralPath $harnessStderr) { (Get-Content -LiteralPath $harnessStderr -Raw).Trim() } else { '' }
+    }
+    if (-not (Test-Path -LiteralPath $harnessEvidencePath)) {
+        throw 'Follow field harness did not produce an evidence file.'
+    }
 
-    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
-    $passed = $false
-    $terminalFailure = $null
-    $sampleIndex = 0
-    $finalState = $null
-    while ([DateTime]::UtcNow -lt $deadline) {
-        Start-Sleep -Seconds 2
-        $sampleIndex += 1
-        $state = Capture-State ("after-command-{0:d2}" -f $sampleIndex)
-        $finalState = $state
-        $counts = $state.inventory.counts
-        $lastResult = $state.action.lastResult
-        $hasStonePickaxe = [int]($counts.stone_pickaxe) -ge 1
-        $stoneInHand = [string]$state.body.mainHand -eq 'stone_pickaxe'
-        $matchingResult = (
-            $null -ne $lastResult -and
-            [string]$lastResult.label -eq 'action:prepareTool' -and
-            [double]$lastResult.startedAt -ge ($commandStartedAt - 5000)
-        )
-        if ($hasStonePickaxe -and $stoneInHand -and $matchingResult -and [string]$lastResult.phase -eq 'succeeded') {
-            $passed = $true
-            break
-        }
-        if ($matchingResult -and [string]$lastResult.phase -eq 'failed') {
-            $terminalFailure = $lastResult
-            break
-        }
-    }
-    if ($null -eq $finalState) { $finalState = Capture-State 'after-command-timeout' }
-
-    $finalSummary = Summarize-State $finalState
-    $report.final = $finalSummary
-    $dx = [double]$finalState.gameplay.position.x - [double]$beforePosition.x
-    $dy = [double]$finalState.gameplay.position.y - [double]$beforePosition.y
-    $dz = [double]$finalState.gameplay.position.z - [double]$beforePosition.z
-    $movement = [Math]::Sqrt(($dx * $dx) + ($dy * $dy) + ($dz * $dz))
+    $harnessEvidence = Get-Content -LiteralPath $harnessEvidencePath -Raw | ConvertFrom-Json
+    $report.harness_evidence = $harnessEvidence
+    $attempts = @($harnessEvidence.attempts)
+    $attempt = if ($attempts.Count -eq 1) { $attempts[0] } else { $null }
+    $physicalEvidenceComplete = (
+        $null -ne $attempt -and
+        $attempt.passed -eq $true -and
+        $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+        $attempt.physicalAcceptance.doorwayCrossed -eq $true -and
+        $attempt.physicalAcceptance.corridorCompleted -eq $true -and
+        $attempt.physicalAcceptance.finalWaypointReached -eq $true -and
+        $attempt.stop.stableForTenSeconds -eq $true -and
+        [double]$attempt.stop.quiescenceMs -le 2000
+    )
+    $falseSuccess = $harnessEvidence.passed -eq $true -and -not $physicalEvidenceComplete
     $report.verdict = [ordered]@{
-        passed = $passed
-        stone_pickaxe_count = [int]($finalState.inventory.counts.stone_pickaxe)
-        main_hand = [string]$finalState.body.mainHand
-        displacement_blocks = [Math]::Round($movement, 3)
-        health = $finalState.gameplay.health
-        hunger = $finalState.gameplay.hunger
-        terminal_result = $finalState.action.lastResult
-        terminal_failure = $terminalFailure
-        duration_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $commandStartedAt
-        external_retry_count = 0
-        false_success_observed = (
-            [string]$finalState.action.lastResult.phase -eq 'succeeded' -and
-            [int]($finalState.inventory.counts.stone_pickaxe) -lt 1
+        passed = (
+            -not $harnessTimedOut -and
+            $harnessExitCode -eq 0 -and
+            $harnessEvidence.passed -eq $true -and
+            $physicalEvidenceComplete
         )
+        duration_ms = [int64]$harnessEvidence.durationMs
+        external_retry_count = 0
+        false_success_observed = $falseSuccess
     }
-    if (-not $passed) {
-        throw "Exact-world stone recovery did not pass: $($report.verdict | ConvertTo-Json -Depth 10 -Compress)"
+    if ($harnessTimedOut) { throw 'Follow field harness exceeded the scenario timeout.' }
+    if ($falseSuccess) { throw 'The follow harness claimed success without complete physical evidence.' }
+    if ($harnessExitCode -ne 0 -or $harnessEvidence.passed -ne $true -or -not $physicalEvidenceComplete) {
+        throw "Doorway/corridor follow did not pass: $($report.verdict | ConvertTo-Json -Compress)"
     }
-    if ($report.verdict.false_success_observed) { throw 'A false success was observed.' }
 
     $report.status = 'passed'
     Save-Status 'cleaning-up-after-pass'
@@ -440,6 +547,7 @@ finally {
         hold_requested = $false
         api_stop_succeeded = $false
         main_forced = $false
+        harness_forced = $false
         managed_java_fallback_kills = @()
         configuration_restored = $false
         properties_restored = $false
@@ -451,6 +559,17 @@ finally {
         errors = @()
     }
     try {
+        if ($harnessProcess) {
+            try {
+                $harnessProcess.Refresh()
+                if (-not $harnessProcess.HasExited) {
+                    Stop-Process -Id $harnessProcess.Id -Force -ErrorAction Stop
+                    $cleanup.harness_forced = $true
+                }
+            } catch {
+                $cleanup.errors += "harness stop: $($_.Exception.Message)"
+            }
+        }
         try {
             $cleanupHold = Invoke-JsonPost "$baseUrl/api/director/command" @{ agent = 'MindcraftBot'; message = '!stop' } 10
             $cleanup.hold_requested = $cleanupHold.success -eq $true
@@ -517,7 +636,7 @@ finally {
         if ($worldInstalled -and (Test-Path -LiteralPath $worldPath)) {
             Move-Item -LiteralPath $worldPath -Destination $postWorld
             $cleanup.replay_world_preserved = $true
-        } elseif (Test-Path -LiteralPath $sourceExtractPath) {
+        } elseif ($sourceExtractPath -and (Test-Path -LiteralPath $sourceExtractPath)) {
             Move-Item -LiteralPath $sourceExtractPath -Destination (Join-Path $runDir 'partial-extracted-world')
             $cleanup.replay_world_preserved = $true
         }
@@ -544,7 +663,7 @@ finally {
     $report.finished_utc = [DateTime]::UtcNow.ToString('o')
     $report.updated_utc = $report.finished_utc
     $report.phase = 'finished'
-    $finalJson = $report | ConvertTo-Json -Depth 24
+    $finalJson = $report | ConvertTo-Json -Depth 50
     [IO.File]::WriteAllText($reportPath, $finalJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($statusPath, $finalJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 }

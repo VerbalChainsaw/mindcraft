@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
@@ -40,6 +41,9 @@ function parseArgs(argv) {
     attempts: 1,
     evidence: '',
     mode: 'follow',
+    course: 'full',
+    requestFile: '',
+    requestMessage: '',
     naturalLanguage: false,
     authorized: false,
   };
@@ -50,6 +54,8 @@ function parseArgs(argv) {
     else if (value === '--attempts') options.attempts = Number(argv[++index]);
     else if (value === '--evidence') options.evidence = String(argv[++index] || '');
     else if (value === '--mode') options.mode = String(argv[++index] || '');
+    else if (value === '--course') options.course = String(argv[++index] || '');
+    else if (value === '--request-file') options.requestFile = String(argv[++index] || '');
     else if (value === '--natural-language') options.naturalLanguage = true;
     else if (value === '--authorized-active-world') options.authorized = true;
     else throw new Error(`Unknown argument: ${value}`);
@@ -61,6 +67,12 @@ function parseArgs(argv) {
     throw new Error('Attempts must be an integer from 1 through 3.');
   }
   if (!['follow', 'stop'].includes(options.mode)) throw new Error('Mode must be follow or stop.');
+  if (!['full', 'doorway-corridor'].includes(options.course)) {
+    throw new Error('Course must be full or doorway-corridor.');
+  }
+  if (options.mode === 'stop' && options.course !== 'full') {
+    throw new Error('Stop verification requires the full course.');
+  }
   const parsed = new URL(options.url);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('URL must use HTTP or HTTPS.');
   parsed.pathname = '';
@@ -68,6 +80,17 @@ function parseArgs(argv) {
   parsed.hash = '';
   options.url = parsed.toString().replace(/\/$/, '');
   options.evidence = resolve(options.evidence);
+  options.requestFile = options.requestFile ? resolve(options.requestFile) : '';
+  options.requestMessage = options.requestFile
+    ? readFileSync(options.requestFile, 'utf8')
+    : (options.naturalLanguage ? 'follow me' : COMMAND);
+  if (
+    !options.requestMessage
+    || options.requestMessage.length > 512
+    || /[\r\n]/.test(options.requestMessage)
+  ) {
+    throw new Error('The measured request must be one non-empty line of at most 512 characters.');
+  }
   return options;
 }
 
@@ -362,13 +385,18 @@ function createControlledTarget(eventLog) {
 
 async function run() {
   const options = parseArgs(process.argv.slice(2));
+  const activeWaypoints = options.mode === 'stop' || options.course === 'full'
+    ? WAYPOINTS
+    : WAYPOINTS.slice(0, 2);
   const evidence = {
     schemaVersion: 1,
     scenario: options.mode === 'follow'
-      ? 'follow-controlled-player-through-course'
+      ? (options.course === 'doorway-corridor'
+        ? 'follow-controlled-player-through-doorway-corridor'
+        : 'follow-controlled-player-through-course')
       : 'stop-during-active-follow',
     route: options.naturalLanguage ? 'natural-language-player-chat' : 'typed-dashboard-command',
-    command: options.naturalLanguage ? 'FollowTarget chat: follow me' : COMMAND,
+    command: options.requestMessage,
     bot: options.bot,
     controlledTarget: {
       name: TARGET_NAME,
@@ -378,7 +406,16 @@ async function run() {
       scheduler: false,
       events: [],
     },
-    fixture: { course: COURSE, botStart: BOT_START, targetStart: TARGET_START, wall: WALL, doorway: DOORWAY, platform: PLATFORM, waypoints: WAYPOINTS },
+    fixture: {
+      course: COURSE,
+      courseVariant: options.course,
+      botStart: BOT_START,
+      targetStart: TARGET_START,
+      wall: WALL,
+      doorway: DOORWAY,
+      platform: PLATFORM,
+      waypoints: activeWaypoints,
+    },
     startedAt: Date.now(),
     attempts: [],
     passed: false,
@@ -749,10 +786,10 @@ async function run() {
         paperBefore,
       };
       if (options.naturalLanguage) {
-        target.chat('follow me');
+        target.chat(options.requestMessage);
         activeAttempt.commandAck = { success: true, source: TARGET_NAME, acceptedAt: activeAttempt.issuedAt };
       } else {
-        activeAttempt.commandAck = await sendMessage(COMMAND);
+        activeAttempt.commandAck = await sendMessage(options.requestMessage);
       }
       const activeState = await waitFor(
         () => states[options.bot] || null,
@@ -769,7 +806,7 @@ async function run() {
       );
       activeAttempt.activeAt = Number(activeState?._meta?.sampledAt) || Date.now();
 
-      await driveTarget(WAYPOINTS[0]);
+      await driveTarget(activeWaypoints[0]);
       if (options.mode === 'stop') {
         await waitFor(
           () => activeAttempt.samples,
@@ -778,13 +815,14 @@ async function run() {
           15_000,
         );
       } else {
-        await driveTarget(WAYPOINTS[1]);
-        await driveTarget(WAYPOINTS[2]);
+        for (const waypoint of activeWaypoints.slice(1)) await driveTarget(waypoint);
+        const finalWaypoint = activeWaypoints.at(-1);
         await waitFor(
           () => compactState(states[options.bot]),
-          state => distance(state.position, WAYPOINTS[2]) <= 4.25
-            && activeAttempt.samples.some(sample => Number(sample.position?.y) >= 100.8),
-          `${runId} bot completion of doorway/turn/elevation course`,
+          state => distance(state.position, finalWaypoint) <= 4.25
+            && (options.course !== 'full'
+              || activeAttempt.samples.some(sample => Number(sample.position?.y) >= 100.8)),
+          `${runId} bot completion of ${options.course} course`,
           25_000,
         );
       }
@@ -847,11 +885,16 @@ async function run() {
       const fixtureVerified = [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
         .every(snapshot => snapshot.wallVerified && snapshot.doorwayVerified && snapshot.platformVerified);
       const targetReachedRequiredWaypoints = options.mode === 'follow'
-        ? activeAttempt.waypoints.length === 3
-        : activeAttempt.waypoints.length === 3;
+        ? activeAttempt.waypoints.length === activeWaypoints.length
+        : activeAttempt.waypoints.length === WAYPOINTS.length;
+      const finalWaypoint = activeWaypoints.at(-1);
+      const corridorCompleted = activeAttempt.waypoints.length >= 2;
+      const finalWaypointReached = distance(paperAfter.botPosition, finalWaypoint) <= 4.5;
       const stopQuiescenceMs = Math.max(0, heldAt - stopAcceptedAt);
       const passed = targetReachedRequiredWaypoints
-        && targetTravel >= (options.mode === 'follow' ? 20 : 20)
+        && targetTravel >= (options.mode === 'follow'
+          ? (options.course === 'full' ? 20 : 12)
+          : 20)
         && stopQuiescenceMs <= 2_000
         && stable
         && distance(paperAfter.botPosition, stopPosition) <= 0.1
@@ -859,10 +902,11 @@ async function run() {
         && activeAttempt.terminal?.phase === 'interrupted'
         && activeAttempt.terminal?.code === 'interrupted'
         && (options.mode === 'stop' || (
-          botTravel >= 10
+          botTravel >= (options.course === 'full' ? 10 : 7)
           && doorwayCrossed
-          && elevated
-          && distance(paperAfter.botPosition, WAYPOINTS[2]) <= 4.5
+          && corridorCompleted
+          && (options.course !== 'full' || elevated)
+          && finalWaypointReached
         ));
       evidence.attempts.push({
         attempt: attemptNumber,
@@ -891,8 +935,11 @@ async function run() {
           interruptionCount: activeAttempt.terminal?.phase === 'interrupted' ? 1 : 0,
         },
         physicalAcceptance: {
+          course: options.course,
           doorwayCrossed,
           doorwayObservation,
+          corridorCompleted,
+          finalWaypointReached,
           twoTurnsCompleted: activeAttempt.waypoints.length === 3,
           oneBlockElevationCompleted: elevated,
           finalDistanceToTarget: distance(paperAfter.botPosition, paperAfter.targetPosition),

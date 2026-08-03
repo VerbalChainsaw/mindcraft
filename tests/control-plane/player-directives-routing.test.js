@@ -36,6 +36,7 @@ test('surface, coordinates, move-away, bed, fish, and death recovery route direc
 
 test('new branches do not shadow existing follow/come/stay/stop directives', () => {
   assert.equal(commandFor('follow me'), '!followPlayer("Gabriel", 3)');
+  assert.equal(commandFor('Follow me through the doorway and down the corridor.'), '!followPlayer("Gabriel", 3)');
   assert.equal(commandFor('come here'), '!goToPlayer("Gabriel", 2)');
   assert.equal(commandFor('stay here'), '!stay(-1)');
   assert.equal(commandFor('stop'), '!stop');

@@ -17,6 +17,10 @@ import {
   validateScenarioManifest,
 } from '../../tools/scenario-lab.mjs';
 import {
+  aggregateFollowFieldObservations,
+  observeFollowFieldRun,
+} from '../../tools/scenario-lab/adapters/follow-field-evidence.mjs';
+import {
   aggregateStoneRecoveryObservations,
   observeStoneRecoveryRun,
 } from '../../tools/scenario-lab/adapters/stone-recovery-evidence.mjs';
@@ -24,6 +28,9 @@ import {
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const CLI = path.join(ROOT, 'tools', 'scenario-lab.mjs');
 const STONE_WORKER = path.join(ROOT, 'tools', 'scenario-lab', 'adapters', 'stone-recovery-worker.ps1');
+const FOLLOW_WORKER = path.join(ROOT, 'tools', 'scenario-lab', 'adapters', 'follow-field-worker.ps1');
+const FOLLOW_RUNNER = path.join(ROOT, 'tools', 'scenario-lab', 'adapters', 'run-follow-field.mjs');
+const FOLLOW_HARNESS = path.join(ROOT, 'tools', 'verify-follow-field.mjs');
 
 const clone = (value) => structuredClone(value);
 const rehash = (manifest) => {
@@ -76,12 +83,30 @@ test('the frozen v1 manifest registers one bounded replay and keeps other famili
     )));
 });
 
-test('the live worker requires portable, explicit fixture provenance', async () => {
-  const worker = await readFile(STONE_WORKER, 'utf8');
+test('live workers require portable provenance and one managed-runtime lock', async () => {
+  const [stoneWorker, followWorker, followRunner, followHarness] = await Promise.all([
+    readFile(STONE_WORKER, 'utf8'),
+    readFile(FOLLOW_WORKER, 'utf8'),
+    readFile(FOLLOW_RUNNER, 'utf8'),
+    readFile(FOLLOW_HARNESS, 'utf8'),
+  ]);
   const userDirectoryPattern = new RegExp('[A-Za-z]:\\\\Users\\\\', 'i');
-  assert.doesNotMatch(worker, userDirectoryPattern);
-  assert.match(worker, /SCENARIO_LAB_STONE_FIXTURE_ROOT/);
-  assert.match(worker, /must identify the frozen fixture directory/);
+  assert.doesNotMatch(stoneWorker, userDirectoryPattern);
+  assert.doesNotMatch(followWorker, userDirectoryPattern);
+  assert.match(stoneWorker, /SCENARIO_LAB_STONE_FIXTURE_ROOT/);
+  assert.match(followWorker, /SCENARIO_LAB_FOLLOW_FIXTURE_ROOT/);
+  assert.match(stoneWorker, /scenario-lab-managed-runtime\.active/);
+  assert.match(followWorker, /scenario-lab-managed-runtime\.active/);
+  assert.match(followWorker, /candidate_blob_checks/);
+  assert.match(followWorker, /src\/agent\/player-directives\.js/);
+  assert.match(followWorker, /tools\/scenario-lab\/adapters\/follow-field-evidence\.mjs/);
+  assert.match(followWorker, /"--path=\$relativePath"/);
+  assert.match(followRunner, /taskkill\.exe/);
+  assert.match(followRunner, /processResult\.exitCode !== 0/);
+  assert.match(followHarness, /--request-file/);
+  assert.match(followHarness, /doorway-corridor/);
+  assert.match(followHarness, /target\.chat\(options\.requestMessage\)/);
+  assert.match(followHarness, /sendMessage\(options\.requestMessage\)/);
 });
 
 test('list ordering and canonical CLI JSON are stable', async () => {
@@ -309,4 +334,139 @@ test('stone-recovery evidence requires physical success and the declared request
   const modelRouted = makeRun('natural-language', 'model-selected');
   assert.equal(modelRouted.success, false);
   assert.ok(modelRouted.safetyInvariantViolations.includes('deterministic-local-request-route'));
+});
+
+test('follow-field evidence requires correlated physical completion and quiescence', async () => {
+  const manifest = readyManifest(await loadScenarioManifest());
+  const scenarioId = 'doorway-corridor-follow';
+  const plan = createExecutionPlan(manifest, scenarioId);
+
+  const makeRun = (form, routeOrigin, {
+    doorwayCrossed = true,
+    healthObserved = true,
+    terminalFinishedAt = 26000,
+    botTrajectoryDistance = 12,
+    quiescenceMs = 100,
+  } = {}) => {
+    const actionId = 'action-' + form;
+    const issuedAt = 1000;
+    const attempt = {
+      attempt: 1,
+      issuedAt,
+      activeAt: issuedAt + 25,
+      commandAck: { success: true },
+      terminal: {
+        actionId,
+        phase: 'interrupted',
+        code: 'interrupted',
+        label: 'action:followPlayer',
+        startedAt: issuedAt + 5,
+        finishedAt: terminalFinishedAt,
+      },
+      traces: [{
+        correlation: {
+          actionId,
+          requestId: 'request-' + form,
+          routeOrigin,
+          selectedSkill: '!followPlayer',
+          args: ['FollowTarget', 3],
+        },
+      }],
+      samples: healthObserved ? [{ health: 20 }] : [],
+      performance: {
+        botTrajectoryDistance,
+        targetTrajectoryDistance: 16,
+      },
+      physicalAcceptance: {
+        course: 'doorway-corridor',
+        fixtureVerified: true,
+        doorwayCrossed,
+        doorwayObservation: {
+          position: doorwayCrossed ? { x: 1033, y: 100, z: 1008.5 } : null,
+        },
+        corridorCompleted: true,
+        finalWaypointReached: true,
+        finalDistanceToTarget: 3,
+      },
+      stop: {
+        quiescenceMs,
+        stableForTenSeconds: true,
+        stableSamples: healthObserved ? [{ health: 20 }] : [],
+      },
+      passed: doorwayCrossed,
+    };
+    const harness = {
+      passed: true,
+      finishedAt: issuedAt + 26000,
+      durationMs: 26000,
+      attempts: [attempt],
+      fixture: { mobSpawning: { restored: true } },
+      cleanup: {
+        fixtureRestored: true,
+        botHeld: true,
+        targetDisconnected: true,
+      },
+    };
+    const report = {
+      request_form: form,
+      fixture_authorized: true,
+      endpoints_local_only: true,
+      status: 'passed',
+      finished_utc: '2026-08-03T00:00:26.000Z',
+      harness_evidence: harness,
+      verdict: {
+        passed: true,
+        duration_ms: 26000,
+        external_retry_count: 0,
+        false_success_observed: false,
+      },
+      cleanup: {
+        configuration_restored: true,
+        properties_restored: true,
+        pre_run_memory_restored: true,
+        remaining_managed_java: [],
+        errors: [],
+      },
+    };
+    return observeFollowFieldRun(report, plan.timeoutMs);
+  };
+
+  const direct = makeRun('direct', 'explicit-command');
+  const naturalLanguage = makeRun('natural-language', 'deterministic-nl');
+  assert.equal(direct.success, true);
+  assert.equal(naturalLanguage.success, true);
+
+  const observation = aggregateFollowFieldObservations(plan, [direct, naturalLanguage]);
+  const result = createExecutionResult(manifest, scenarioId, observation);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidenceCompleteness, 'complete');
+  assert.equal(result.liveScenarioPassed, true);
+
+  const modelRouted = makeRun('natural-language', 'model-selected');
+  assert.equal(modelRouted.success, false);
+  assert.ok(modelRouted.safetyInvariantViolations.includes('deterministic-local-request-route'));
+
+  const falseSuccess = makeRun('direct', 'explicit-command', { doorwayCrossed: false });
+  assert.equal(falseSuccess.success, false);
+  assert.ok(falseSuccess.safetyInvariantViolations.includes('no-false-success'));
+
+  const missingHealth = makeRun('direct', 'explicit-command', { healthObserved: false });
+  assert.equal(missingHealth.success, false);
+  assert.ok(missingHealth.safetyInvariantViolations.includes('no-false-success'));
+
+  const invalidLifecycle = makeRun('direct', 'explicit-command', {
+    terminalFinishedAt: Number.NaN,
+  });
+  assert.equal(invalidLifecycle.success, false);
+  assert.equal(invalidLifecycle.checks['follow-action-lifecycle'], false);
+
+  const invalidMovement = makeRun('direct', 'explicit-command', {
+    botTrajectoryDistance: Number.NaN,
+  });
+  assert.equal(invalidMovement.success, false);
+  assert.equal(invalidMovement.checks['corridor-progress-confirmed'], false);
+
+  const missingQuiescence = makeRun('direct', 'explicit-command', { quiescenceMs: null });
+  assert.equal(missingQuiescence.success, false);
+  assert.equal(missingQuiescence.checks['terminal-quiescence-confirmed'], false);
 });
