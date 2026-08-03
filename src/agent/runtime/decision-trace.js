@@ -3,6 +3,10 @@ const DEFAULT_RETENTION = 128;
 const MAX_RETENTION = 512;
 const MAX_TEXT = 240;
 const MAX_REQUEST_ARGS = 8;
+// Invocation telemetry must outlive selecting-trace eviction without sharing
+// the trace-retention budget. ActionManager is serialized, and both the active
+// map and completed ring remain capped by this independent diagnostic bound.
+const ACTION_LIFECYCLE_RETENTION = 128;
 const REQUEST_ROUTE_ORIGINS = new Set([
   'explicit-command',
   'deterministic-nl',
@@ -47,6 +51,7 @@ function nullableText(value) {
 }
 
 function finite(value) {
+  if (value === null || value === undefined || value === '') return null;
   return Number.isFinite(Number(value)) ? Number(value) : null;
 }
 
@@ -59,6 +64,29 @@ function clampRetention(value) {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed)) return DEFAULT_RETENTION;
   return Math.min(MAX_RETENTION, Math.max(1, parsed));
+}
+
+function nearestRank(values, percentile) {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const rank = Math.max(1, Math.ceil(percentile * sorted.length));
+  return sorted[rank - 1];
+}
+
+function summarize(values, retentionLimit) {
+  return {
+    samples: values.length,
+    retentionLimit,
+    p50: nearestRank(values, 0.5),
+    p95: nearestRank(values, 0.95),
+    p99: nearestRank(values, 0.99),
+    max: values.length === 0 ? null : Math.max(...values),
+  };
+}
+
+function retain(values, value, retentionLimit) {
+  values.push(value);
+  if (values.length > retentionLimit) values.splice(0, values.length - retentionLimit);
 }
 
 function normalizeCommitment(value = {}) {
@@ -186,6 +214,32 @@ export class DecisionTraceRecorder {
     this.recent = [];
     this.laneStarted = new Map();
     this.stageStarted = new Map();
+    this.timingSamples = {
+      evaluationMs: [],
+      cleanupMs: [],
+      totalMs: [],
+      scheduledLoopDelayMs: [],
+    };
+    this.activeActionLifecycles = new Map();
+    this.recentActionLifecycles = [];
+  }
+
+  /**
+   * Record delay beyond the previously requested behavior-loop period. This is
+   * scheduled-loop delay/overrun only: it does not isolate all Node event-loop
+   * lag, and event-driven early wakes are deliberately excluded by the caller.
+   */
+  recordScheduledLoopDelay(deltaMs, requestedTickPeriodMs, scheduled = true) {
+    if (!this.enabled || scheduled !== true) return false;
+    const delta = finite(deltaMs);
+    const requested = finite(requestedTickPeriodMs);
+    if (delta === null || requested === null || delta < 0 || requested < 0) return false;
+    retain(
+      this.timingSamples.scheduledLoopDelayMs,
+      duration(Math.max(0, delta - requested)) ?? 0,
+      this.retention,
+    );
+    return true;
   }
 
   begin({ tick = 0, trigger = {}, activeAction = {}, evidence = [] } = {}) {
@@ -347,6 +401,9 @@ export class DecisionTraceRecorder {
       cleanupMs: duration(finished - evaluationEnd) ?? 0,
       totalMs: duration(finished - started) ?? 0,
     };
+    for (const field of ['evaluationMs', 'cleanupMs', 'totalMs']) {
+      retain(this.timingSamples[field], this.current.timing[field], this.retention);
+    }
     const completed = this.current;
     this.current = null;
     this.laneStarted.clear();
@@ -372,10 +429,31 @@ export class DecisionTraceRecorder {
     requestedAt = null,
   } = {}) {
     if (!this.enabled || !actionId) return false;
+    const normalizedActionId = text(actionId).slice(0, 80);
+    if (
+      this.activeActionLifecycles.has(normalizedActionId)
+      || this.recentActionLifecycles.some(candidate => candidate.actionId === normalizedActionId)
+    ) return false;
+    if (this.activeActionLifecycles.size >= ACTION_LIFECYCLE_RETENTION) {
+      this.activeActionLifecycles.delete(this.activeActionLifecycles.keys().next().value);
+    }
+    this.activeActionLifecycles.set(normalizedActionId, {
+      actionId: normalizedActionId,
+      acquisition: normalizeAcquisition({
+        actionId,
+        owner,
+        ownerPriority,
+        acquiredAt,
+        startedAt,
+      }),
+      release: null,
+      outcome: null,
+      durationMs: null,
+    });
     const trace = this.current || [...this.recent].reverse().find(candidate => (
       !candidate.correlation.actionId && candidate.winner.control !== 'none'
     ));
-    if (!trace) return false;
+    if (!trace) return true;
     trace.correlation.actionId = text(actionId).slice(0, 80);
     trace.correlation.requestId = requestId ? text(requestId).slice(0, 80) : null;
     trace.correlation.routeOrigin = requestId ? normalizeRouteOrigin(routeOrigin) : null;
@@ -407,29 +485,58 @@ export class DecisionTraceRecorder {
 
   linkRelease({ actionId, owner = null, ownerPriority = null, releasedAt = null } = {}) {
     if (!this.enabled || !actionId) return false;
+    const normalizedActionId = text(actionId).slice(0, 80);
+    const lifecycle = this.activeActionLifecycles.get(normalizedActionId);
+    if (!lifecycle || lifecycle.release) return false;
+    lifecycle.release = normalizeRelease({ actionId, owner, ownerPriority, releasedAt });
+    if (!lifecycle.release) return false;
+    if (lifecycle.outcome) {
+      lifecycle.release.phase = lifecycle.outcome.phase;
+      lifecycle.release.code = lifecycle.outcome.code;
+    }
+    const startedAt = lifecycle.acquisition?.startedAt ?? lifecycle.acquisition?.acquiredAt;
+    lifecycle.durationMs = Number.isFinite(startedAt) && Number.isFinite(lifecycle.release.releasedAt)
+      ? duration(lifecycle.release.releasedAt - startedAt)
+      : null;
+    this.activeActionLifecycles.delete(normalizedActionId);
+    retain(this.recentActionLifecycles, lifecycle, ACTION_LIFECYCLE_RETENTION);
     const candidates = this.current ? [...this.recent, this.current] : this.recent;
     const trace = [...candidates].reverse().find(candidate => (
-      candidate.correlation.actionId === actionId
-      && candidate.actionLifecycle?.acquisition?.actionId === actionId
+      candidate.correlation.actionId === normalizedActionId
+      && candidate.actionLifecycle?.acquisition?.actionId === normalizedActionId
       && !candidate.actionLifecycle.release
     ));
-    if (!trace) return false;
-    trace.actionLifecycle.release = normalizeRelease({ actionId, owner, ownerPriority, releasedAt });
-    return trace.actionLifecycle.release !== null;
+    if (trace) trace.actionLifecycle.release = structuredClone(lifecycle.release);
+    return true;
   }
 
   linkOutcome(result) {
     if (!this.enabled || !result?.actionId) return false;
-    const candidates = this.current ? [...this.recent, this.current] : this.recent;
-    const trace = [...candidates].reverse().find(candidate => candidate.correlation.actionId === result.actionId);
-    if (!trace) return false;
-    trace.outcome = normalizeOutcome(result);
-    trace.correlation.outcomeLinked = trace.outcome !== null;
-    if (trace.actionLifecycle?.release?.actionId === result.actionId) {
-      trace.actionLifecycle.release.phase = trace.outcome?.phase || null;
-      trace.actionLifecycle.release.code = trace.outcome?.code || null;
+    const normalizedActionId = text(result.actionId).slice(0, 80);
+    const normalizedOutcome = normalizeOutcome(result);
+    const lifecycle = this.activeActionLifecycles.get(normalizedActionId)
+      || [...this.recentActionLifecycles].reverse().find(candidate => candidate.actionId === normalizedActionId);
+    let linked = false;
+    if (lifecycle && !lifecycle.outcome) {
+      lifecycle.outcome = normalizedOutcome;
+      linked = normalizedOutcome !== null;
+      if (lifecycle.release) {
+        lifecycle.release.phase = normalizedOutcome?.phase || null;
+        lifecycle.release.code = normalizedOutcome?.code || null;
+      }
     }
-    return trace.correlation.outcomeLinked;
+    const candidates = this.current ? [...this.recent, this.current] : this.recent;
+    const trace = [...candidates].reverse().find(candidate => candidate.correlation.actionId === normalizedActionId);
+    if (trace && !trace.correlation.outcomeLinked) {
+      trace.outcome = normalizedOutcome;
+      trace.correlation.outcomeLinked = normalizedOutcome !== null;
+      linked ||= trace.correlation.outcomeLinked;
+      if (trace.actionLifecycle?.release?.actionId === normalizedActionId) {
+        trace.actionLifecycle.release.phase = trace.outcome?.phase || null;
+        trace.actionLifecycle.release.code = trace.outcome?.code || null;
+      }
+    }
+    return linked;
   }
 
   snapshot(recentLimit = 4) {
@@ -440,6 +547,25 @@ export class DecisionTraceRecorder {
       retained: this.recent.length,
       retentionLimit: this.retention,
       recent: this.recent.slice(-limit).map(trace => structuredClone(trace)),
+      diagnostics: {
+        timing: {
+          evaluationMs: summarize(this.timingSamples.evaluationMs, this.retention),
+          cleanupMs: summarize(this.timingSamples.cleanupMs, this.retention),
+          totalMs: summarize(this.timingSamples.totalMs, this.retention),
+        },
+        scheduledLoopDelayMs: summarize(this.timingSamples.scheduledLoopDelayMs, this.retention),
+        actionLifecycles: {
+          retained: this.recentActionLifecycles.length,
+          retentionLimit: ACTION_LIFECYCLE_RETENTION,
+          durationMs: summarize(
+            this.recentActionLifecycles
+              .map(lifecycle => lifecycle.durationMs)
+              .filter(Number.isFinite),
+            ACTION_LIFECYCLE_RETENTION,
+          ),
+          recent: this.recentActionLifecycles.slice(-limit).map(lifecycle => structuredClone(lifecycle)),
+        },
+      },
     };
   }
 }

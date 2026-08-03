@@ -148,6 +148,125 @@ function extractSampledStates(payload) {
   return Object.values(payload);
 }
 
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeLiveStates(states, payload) {
+  if (!isRecord(payload)) return;
+  if (payload.type === 'snapshot') {
+    states.clear();
+    if (!isRecord(payload.states)) return;
+    for (const [agentName, state] of Object.entries(payload.states)) {
+      if (isRecord(state)) states.set(agentName, state);
+    }
+    return;
+  }
+  if (payload.type === 'delta') {
+    if (!isRecord(payload.changes)) return;
+    for (const [agentName, change] of Object.entries(payload.changes)) {
+      if (!isRecord(change)) continue;
+      const prior = isRecord(states.get(agentName)) ? states.get(agentName) : {};
+      const next = { ...prior, ...(isRecord(change.set) ? change.set : {}) };
+      for (const key of Array.isArray(change.unset) ? change.unset : []) {
+        if (typeof key === 'string') delete next[key];
+      }
+      states.set(agentName, next);
+    }
+    return;
+  }
+  if (payload.version || payload.type) return;
+  states.clear();
+  for (const [agentName, state] of Object.entries(payload)) {
+    if (isRecord(state)) states.set(agentName, state);
+  }
+}
+
+function readNearestRankSummary(value) {
+  if (!isRecord(value)) return null;
+  const { samples, retentionLimit, p50, p95, p99, max } = value;
+  if (
+    !Number.isSafeInteger(samples)
+    || samples < 0
+    || !Number.isSafeInteger(retentionLimit)
+    || retentionLimit < 1
+    || samples > retentionLimit
+  ) return null;
+  const values = [p50, p95, p99, max];
+  if (samples === 0) {
+    if (!values.every(item => item === null)) return null;
+  } else {
+    if (!values.every(item => Number.isFinite(item) && item >= 0)) return null;
+    if (!(p50 <= p95 && p95 <= p99 && p99 <= max)) return null;
+  }
+  return { samples, retentionLimit, p50, p95, p99, max };
+}
+
+function hotPathDiagnosticSummary(agentName, state) {
+  const invalid = field => ({
+    agent: agentName,
+    valid: false,
+    error: `missing_or_malformed:${field}`,
+  });
+  const decisionTrace = state?.action?.behaviorArbiter?.decisionTrace;
+  if (
+    !isRecord(decisionTrace)
+    || decisionTrace.schemaVersion !== 1
+    || !Number.isSafeInteger(decisionTrace.retained)
+    || decisionTrace.retained < 0
+    || !Number.isSafeInteger(decisionTrace.retentionLimit)
+    || decisionTrace.retentionLimit < 1
+    || decisionTrace.retained > decisionTrace.retentionLimit
+  ) return invalid('decisionTrace');
+  const diagnostics = decisionTrace.diagnostics;
+  if (!isRecord(diagnostics) || !isRecord(diagnostics.timing)) {
+    return invalid('diagnostics');
+  }
+  const evaluationMs = readNearestRankSummary(diagnostics.timing.evaluationMs);
+  const cleanupMs = readNearestRankSummary(diagnostics.timing.cleanupMs);
+  const totalMs = readNearestRankSummary(diagnostics.timing.totalMs);
+  const scheduledLoopDelayMs = readNearestRankSummary(diagnostics.scheduledLoopDelayMs);
+  if (!evaluationMs) return invalid('timing.evaluationMs');
+  if (!cleanupMs) return invalid('timing.cleanupMs');
+  if (!totalMs) return invalid('timing.totalMs');
+  if (!scheduledLoopDelayMs) return invalid('scheduledLoopDelayMs');
+  if (
+    evaluationMs.samples !== decisionTrace.retained
+    || evaluationMs.samples !== cleanupMs.samples
+    || cleanupMs.samples !== totalMs.samples
+    || evaluationMs.retentionLimit !== decisionTrace.retentionLimit
+    || cleanupMs.retentionLimit !== decisionTrace.retentionLimit
+    || totalMs.retentionLimit !== decisionTrace.retentionLimit
+    || scheduledLoopDelayMs.retentionLimit !== decisionTrace.retentionLimit
+  ) return invalid('timing.consistency');
+
+  const actionLifecycles = diagnostics.actionLifecycles;
+  const actionDurationMs = readNearestRankSummary(actionLifecycles?.durationMs);
+  if (
+    !isRecord(actionLifecycles)
+    || !Number.isSafeInteger(actionLifecycles.retained)
+    || actionLifecycles.retained < 0
+    || !Number.isSafeInteger(actionLifecycles.retentionLimit)
+    || actionLifecycles.retentionLimit < 1
+    || actionLifecycles.retained > actionLifecycles.retentionLimit
+    || !actionDurationMs
+    || actionDurationMs.retentionLimit !== actionLifecycles.retentionLimit
+    || actionDurationMs.samples > actionLifecycles.retained
+  ) return invalid('actionLifecycles');
+
+  return {
+    agent: agentName,
+    valid: true,
+    timing: { evaluationMs, cleanupMs, totalMs },
+    scheduledLoopDelayMs,
+    actionLifecycles: {
+      retained: actionLifecycles.retained,
+      retentionLimit: actionLifecycles.retentionLimit,
+      durationMs: actionDurationMs,
+    },
+  };
+}
+
 async function runLiveBenchmark(options) {
   if (!options.url) return null;
   const socket = io(options.url, { transports: ['websocket'] });
@@ -164,11 +283,14 @@ async function runLiveBenchmark(options) {
   });
   const stateDeliveries = [];
   const stateIntervals = [];
+  const liveStates = new Map();
+  const liveBotNames = new Set();
   let previousStateAt = null;
   const recordStatePayload = (payload) => {
     const receivedAt = Date.now();
     if (previousStateAt !== null) stateIntervals.push(receivedAt - previousStateAt);
     previousStateAt = receivedAt;
+    mergeLiveStates(liveStates, payload);
     for (const state of extractSampledStates(payload)) {
       const sampledAt = Number(state?._meta?.sampledAt);
       if (Number.isFinite(sampledAt)) stateDeliveries.push(Math.max(0, receivedAt - sampledAt));
@@ -195,19 +317,31 @@ async function runLiveBenchmark(options) {
       if (!response.ok) throw new Error(`Live telemetry returned HTTP ${response.status}.`);
       const parsed = JSON.parse(body);
       const states = parsed?.latest || parsed?.states || parsed?.agents || {};
-      liveBots = Math.max(liveBots, Object.keys(states && typeof states === 'object' ? states : {}).length);
+      const names = Object.keys(isRecord(states) ? states : {});
+      for (const name of names) liveBotNames.add(name);
+      liveBots = Math.max(liveBots, names.length);
     }
-    if (liveBots > 0 && stateDeliveries.length < 3) {
+    if (liveBots > 0) {
       const deadline = Date.now() + 3_500;
-      while (stateDeliveries.length < 3 && Date.now() < deadline) await delay(100);
+      const diagnosticsReady = () => [...liveBotNames].every(agentName => (
+        hotPathDiagnosticSummary(agentName, liveStates.get(agentName)).valid
+      ));
+      while (
+        (stateDeliveries.length < 3 || !diagnosticsReady())
+        && Date.now() < deadline
+      ) await delay(100);
     }
   } finally {
     socket.close();
   }
+  const hotPathDiagnostics = [...liveBotNames]
+    .sort()
+    .map(agentName => hotPathDiagnosticSummary(agentName, liveStates.get(agentName)));
   return {
     url: options.url,
     samples: options.samples,
     liveBots,
+    hotPathDiagnostics,
     responseP50Ms: round(percentile(durations, 0.5)),
     responseP95Ms: round(percentile(durations, 0.95)),
     payloadP50Bytes: Math.round(percentile(payloadBytes, 0.5)),
@@ -273,6 +407,20 @@ async function main() {
     if (uncached.findBlocksCalls === 0) throw new Error('Survival scan benchmark performed no scans; the fixture no longer reaches the scanned path.');
     if (scanReduction < 0.6) throw new Error('Survival environment scan reduction fell below 60%.');
     if (gated.findBlocksCalls !== 0) throw new Error(`Survival scans ran ${gated.findBlocksCalls} times with no policy able to read the result.`);
+    // A0 fails closed on diagnostic shape only. Latency gates wait for a
+    // frozen baseline instead of turning an arbitrary first sample into policy.
+    if (live?.liveBots > 0) {
+      const diagnostics = Array.isArray(live.hotPathDiagnostics) ? live.hotPathDiagnostics : [];
+      const failures = diagnostics
+        .filter(item => item?.valid !== true)
+        .map(item => `${item?.agent || 'unknown'} (${item?.error || 'invalid'})`);
+      if (diagnostics.length < live.liveBots) {
+        failures.push(`reported ${diagnostics.length} diagnostic surfaces for ${live.liveBots} live bots`);
+      }
+      if (failures.length > 0) {
+        throw new Error(`Live hot-path diagnostics are missing or malformed: ${failures.join(', ')}.`);
+      }
+    }
   }
 }
 

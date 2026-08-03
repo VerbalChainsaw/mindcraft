@@ -462,7 +462,7 @@ export class ActionManager {
                 ownerPriority: this.ownerPriority(actionOwner),
                 label: actionLabel,
                 acquiredAt: this.currentActionStartedAt,
-                startedAt: this.currentActionStartedAt,
+                startedAt,
                 ...(commandRequest || {}),
             });
             this.timedout = false;

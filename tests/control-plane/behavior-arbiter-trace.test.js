@@ -213,6 +213,103 @@ test('decision trace retention remains bounded and later short-circuited lanes s
   )), true);
 });
 
+test('scheduled wakes record prior-period overrun while event-driven early wakes do not', async () => {
+  const { agent } = fakeAgent({ emergency: true });
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  await arbiter.update(350);
+  arbiter.lastWakeReason = 'entity_hurt';
+  await arbiter.update(900);
+  assert.equal(
+    arbiter.snapshot().decisionTrace.recent.at(-1).trigger.code,
+    'entity_hurt',
+  );
+  await arbiter.update(100);
+
+  const delay = arbiter.snapshot().decisionTrace.diagnostics.scheduledLoopDelayMs;
+  assert.deepEqual(delay, {
+    samples: 2,
+    retentionLimit: 4,
+    p50: 20,
+    p95: 50,
+    p99: 50,
+    max: 50,
+  });
+});
+
+test('nearest-rank timing summaries are deterministic, bounded, and null when empty', () => {
+  let monotonic = 0;
+  const recorder = new DecisionTraceRecorder({
+    retention: 4,
+    now: () => 1_000,
+    monotonicNow: () => monotonic,
+  });
+  for (const [evaluation, cleanup] of [[1, 9], [2, 8], [3, 7], [4, 6], [100, 5]]) {
+    const started = monotonic;
+    recorder.begin();
+    monotonic += evaluation + cleanup;
+    recorder.finalize({ evaluationFinishedMs: started + evaluation });
+  }
+  for (const overrun of [1, 2, 3, 4, 100]) {
+    recorder.recordScheduledLoopDelay(300 + overrun, 300);
+  }
+
+  const diagnostics = recorder.snapshot().diagnostics;
+  assert.deepEqual(diagnostics.timing.evaluationMs, {
+    samples: 4,
+    retentionLimit: 4,
+    p50: 3,
+    p95: 100,
+    p99: 100,
+    max: 100,
+  });
+  assert.deepEqual(diagnostics.timing.cleanupMs, {
+    samples: 4,
+    retentionLimit: 4,
+    p50: 6,
+    p95: 8,
+    p99: 8,
+    max: 8,
+  });
+  assert.deepEqual(diagnostics.timing.totalMs, {
+    samples: 4,
+    retentionLimit: 4,
+    p50: 10,
+    p95: 105,
+    p99: 105,
+    max: 105,
+  });
+  assert.deepEqual(diagnostics.scheduledLoopDelayMs, {
+    samples: 4,
+    retentionLimit: 4,
+    p50: 3,
+    p95: 100,
+    p99: 100,
+    max: 100,
+  });
+
+  const empty = new DecisionTraceRecorder({ retention: 4 }).snapshot().diagnostics;
+  const emptySummary = {
+    samples: 0,
+    retentionLimit: 4,
+    p50: null,
+    p95: null,
+    p99: null,
+    max: null,
+  };
+  for (const summary of [
+    empty.timing.evaluationMs,
+    empty.timing.cleanupMs,
+    empty.timing.totalMs,
+    empty.scheduledLoopDelayMs,
+  ]) assert.deepEqual(summary, emptySummary);
+  assert.equal(empty.actionLifecycles.durationMs.samples, 0);
+  assert.equal(empty.actionLifecycles.durationMs.p50, null);
+  assert.equal(empty.actionLifecycles.durationMs.p95, null);
+  assert.equal(empty.actionLifecycles.durationMs.p99, null);
+  assert.equal(empty.actionLifecycles.durationMs.max, null);
+});
+
 test('action acquisition, release, and outcome link exactly once to the selecting decision', () => {
   let monotonic = 10;
   const recorder = new DecisionTraceRecorder({
@@ -244,13 +341,25 @@ test('action acquisition, release, and outcome link exactly once to the selectin
     ownerPriority: 30,
     releasedAt: 1_999,
   }), false);
-  recorder.linkOutcome({
+  assert.equal(recorder.linkOutcome({
     actionId: 'TraceBot-1-1000',
     phase: 'succeeded',
     code: 'skill_collected',
     startedAt: 1_000,
     finishedAt: 1_025,
-  });
+  }), true);
+  assert.equal(recorder.linkAction({
+    actionId: 'TraceBot-1-1000',
+    acquiredAt: 2_000,
+    startedAt: 2_000,
+  }), false);
+  assert.equal(recorder.linkOutcome({
+    actionId: 'TraceBot-1-1000',
+    phase: 'failed',
+    code: 'duplicate',
+    startedAt: 1_000,
+    finishedAt: 1_999,
+  }), false);
 
   const trace = recorder.snapshot(1).recent[0];
   assert.deepEqual(trace.actionLifecycle.acquisition, {
@@ -272,9 +381,82 @@ test('action acquisition, release, and outcome link exactly once to the selectin
   assert.equal(trace.correlation.outcomeLinked, true);
   assert.equal(trace.outcome.code, 'skill_collected');
   assert.equal(trace.outcome.durationMs, 25);
+  const lifecycle = recorder.snapshot(1).diagnostics.actionLifecycles.recent[0];
+  assert.equal(lifecycle.durationMs, 24);
+  assert.equal(lifecycle.outcome.code, 'skill_collected');
+  assert.equal(recorder.snapshot(1).diagnostics.actionLifecycles.retained, 1);
 
   trace.actionLifecycle.release.code = 'mutated';
   assert.equal(recorder.snapshot(1).recent[0].actionLifecycle.release.code, 'skill_collected');
+
+  const fallback = new DecisionTraceRecorder();
+  assert.equal(fallback.linkAction({
+    actionId: 'fallback-action',
+    acquiredAt: 2_000,
+  }), true);
+  assert.equal(fallback.linkRelease({
+    actionId: 'fallback-action',
+    releasedAt: 2_010,
+  }), true);
+  assert.equal(
+    fallback.snapshot(1).diagnostics.actionLifecycles.recent[0].durationMs,
+    10,
+  );
+});
+
+test('action lifecycle survives selecting trace eviction and records release once', () => {
+  const recorder = new DecisionTraceRecorder({ retention: 1, now: () => 1_000 });
+  recorder.begin({ tick: 1 });
+  recorder.select({ lane: 'player_goal', reasonCode: 'selected', lowerLanesSuppressed: true });
+  recorder.finalize();
+  recorder.linkAction({ actionId: 'evicted-action', owner: 'player', acquiredAt: 10, startedAt: 10 });
+
+  recorder.begin({ tick: 2 });
+  recorder.finalize();
+  assert.equal(recorder.snapshot().recent[0].correlation.actionId, null);
+  assert.equal(recorder.linkRelease({ actionId: 'evicted-action', owner: 'player', releasedAt: 35 }), true);
+  assert.equal(recorder.linkRelease({ actionId: 'evicted-action', owner: 'player', releasedAt: 99 }), false);
+  assert.equal(recorder.linkOutcome({
+    actionId: 'evicted-action',
+    phase: 'succeeded',
+    code: 'completed',
+    startedAt: 10,
+    finishedAt: 36,
+  }), true);
+
+  const lifecycles = recorder.snapshot().diagnostics.actionLifecycles;
+  assert.equal(lifecycles.retained, 1);
+  assert.equal(lifecycles.recent[0].durationMs, 25);
+  assert.equal(lifecycles.recent[0].release.code, 'completed');
+  assert.equal(lifecycles.recent[0].outcome.code, 'completed');
+});
+
+test('action lifecycle retention is bounded independently of trace retention', () => {
+  const recorder = new DecisionTraceRecorder({ retention: 1 });
+  const lifecycleRetention = recorder.snapshot().diagnostics.actionLifecycles.retentionLimit;
+  assert.equal(lifecycleRetention > recorder.retention, true);
+
+  for (let index = 0; index <= lifecycleRetention; index += 1) {
+    const actionId = `bounded-${index}`;
+    assert.equal(recorder.linkAction({
+      actionId,
+      startedAt: index * 10,
+    }), true);
+    assert.equal(recorder.linkRelease({
+      actionId,
+      releasedAt: index * 10 + 5,
+    }), true);
+  }
+
+  const diagnostics = recorder.snapshot().diagnostics.actionLifecycles;
+  assert.equal(recorder.snapshot().retained, 0);
+  assert.equal(diagnostics.retained, lifecycleRetention);
+  assert.equal(diagnostics.durationMs.samples, lifecycleRetention);
+  assert.equal(diagnostics.durationMs.p50, 5);
+  assert.equal(diagnostics.durationMs.p95, 5);
+  assert.equal(diagnostics.durationMs.p99, 5);
+  assert.equal(diagnostics.durationMs.max, 5);
+  assert.equal(diagnostics.recent.at(-1).actionId, `bounded-${lifecycleRetention}`);
 });
 
 test('active action snapshots carry bounded provenance and owner priority', async () => {
@@ -305,6 +487,7 @@ test('active action snapshots carry bounded provenance and owner priority', asyn
 
 test('disabled lifecycle recorder methods are no-ops', () => {
   const recorder = new DecisionTraceRecorder({ enabled: false });
+  assert.equal(recorder.recordScheduledLoopDelay(500, 300, true), false);
   assert.equal(recorder.linkAction({ actionId: 'disabled' }), false);
   assert.equal(recorder.linkRelease({ actionId: 'disabled', releasedAt: 1 }), false);
   assert.equal(recorder.linkOutcome({ actionId: 'disabled', phase: 'succeeded', code: 'completed' }), false);

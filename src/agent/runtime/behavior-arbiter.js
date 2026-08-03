@@ -496,6 +496,10 @@ export class BehaviorArbiter {
     const wakeReason = this.lastWakeReason;
     this.lastWakeReason = null;
     const scheduledWake = !wakeReason || wakeReason === 'scheduled' || wakeReason === 'immediate';
+    // `delta` spans behavior-loop starts and `nextTickDelayMs` is the period
+    // requested by the prior decision. Their positive difference is scheduled
+    // loop delay/overrun, not a general measurement of Node event-loop lag.
+    this.traceRecorder.recordScheduledLoopDelay(delta, this.nextTickDelayMs, scheduledWake);
     this.traceRecorder.begin({
       tick: this.tick,
       trigger: {

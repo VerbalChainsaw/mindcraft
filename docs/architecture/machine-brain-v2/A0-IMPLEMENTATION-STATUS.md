@@ -36,6 +36,8 @@ The hashed `scenario-lab.manifest.v1` catalog and offline list/validate/plan CLI
 | Direct/NL allocation | Contract only | Both forms and repetitions are declared per scenario; no allocation has run. |
 | Seed, server, world, and timeout capture | Contract only | Scenario inputs require them; no execution metadata has been collected. |
 | Instrumentation off/on non-interference comparison | Missing | Release 0.1 declarations are instrumentation-off and no comparison has run. |
+| Arbiter hot-path diagnostics | Implemented, baseline not frozen | The bounded DecisionTrace snapshot reports nearest-rank p50/p95/p99/max for evaluation, cleanup, total, scheduled-loop delay/overrun, and action invocation lifetime. Scheduled-loop delay compares the actual behavior-loop start delta with the prior requested tick period; it does not isolate all Node event-loop lag, and early event-driven wakes are excluded. Live `npm run perf:runtime -- --url=...` reports the per-bot summary and, with `--assert`, fails closed on a missing or malformed surface. No latency threshold is claimed before a baseline is frozen. |
+| EvidenceFrame assembly timing | Deferred | EvidenceFrame does not exist. No assembly metric is claimed; measurement remains deferred until an authorized component exists after A0 passes. |
 
 ## Selected field families
 
