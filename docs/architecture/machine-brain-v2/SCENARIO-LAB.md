@@ -1,6 +1,6 @@
 # Release 0.1 Scenario Lab
 
-Status: two bounded replay adapters are registered, and each has passed one direct plus one deterministic-natural-language invocation from independent frozen-world restores. Three families remain unavailable, the repetition and non-interference gates remain open, and the lab is not complete.
+Status: two bounded replay adapters are registered. Doorway/corridor follow has completed a 10-run instrumentation-off campaign (5 direct, 5 deterministic natural language) at 10/10 strict success; stone recovery remains at one direct plus one deterministic-NL replay. Three families, diagnostics-on non-interference, and the full lab gates remain open.
 
 ## Contract and evidence boundary
 
@@ -21,6 +21,8 @@ The natural-language request is deliberately local and deterministic: `Please up
 The follow natural-language request is also local and deterministic: `Follow me through the doorway and down the corridor.` must select `!followPlayer` for the speaking target at distance 3 with route origin `deterministic-nl`. A model-routed substitution, uncorrelated action, missing health observation, non-finite timing, or claimed physical completion without doorway and corridor evidence fails closed.
 
 The decisive 2026-08-03 replay passed both forms on independent restores. The [frozen verification record](verification/doorway-corridor-follow-20260803/README.md) preserves the canonical plan, result, run summary, physical acceptance metrics, hashes, and cleanup outcome.
+
+The first full off-arm campaign is preserved unchanged as a [9/10 baseline and terminal-anchor finding](verification/doorway-corridor-follow-a0-off-20260803/README.md). After a verifier-only settling-anchor repair, a fresh [10/10 instrumentation-off campaign](verification/doorway-corridor-follow-a0-off-anchor-fixed-20260803/README.md) completed all five direct and five deterministic-NL invocations with complete records and no safety outcome, retry, managed-process, or runtime-lock residue. This is one fixed-fixture family/arm result, not diagnostics non-interference or cross-seed generalization.
 
 ## Closed statuses
 
@@ -53,10 +55,10 @@ Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.p
 
 | Family | Release 0.1 state |
 |---|---|
-| Doorway/corridor follow | Passed on the frozen fixture: one direct and one deterministic-NL invocation on independent restores; broader repetition and cross-seed gates remain open. |
+| Doorway/corridor follow | Instrumentation-off allocation passed on the frozen fixture: 5/5 direct and 5/5 deterministic-NL on independent restores. Diagnostics-on non-interference and cross-seed gates remain open. |
 | Elevation follow | Unavailable: follow harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Operator stop/quiescence | Unavailable: operator-hold harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Autonomous wood-to-stone recovery after `no_safe_stance` | Runnable: bounded adapter and immutable fixture registered. Decisive 2026-08-03 replay passed direct and deterministic-NL forms; broader repetition gate remains open. |
 | Chunk-unloaded versus confirmed-air semantics | Unavailable: executor, evidence adapter, and frozen fixture absent. |
 
-The catalog is not general live-world authorization. Each later family must register a bounded adapter and freeze its fixture before moving to `not-run`. Preserve raw evidence and canonical run envelopes; never infer success from command acceptance, absent evidence, unloaded chunks, or a generated plan. The stone-recovery and doorway/corridor-follow passes each prove one direct plus one deterministic-NL replay on one fixed fixture. Neither result proves cross-seed generalization, satisfies the required independent repetitions, or completes the lab.
+The catalog is not general live-world authorization. Each later family must register a bounded adapter and freeze its fixture before moving to `not-run`. Preserve raw evidence and canonical run envelopes; never infer success from command acceptance, absent evidence, unloaded chunks, or a generated plan. Stone recovery currently proves one direct plus one deterministic-NL replay on one fixed fixture. Doorway/corridor follow proves a 10-run instrumentation-off allocation on one fixed fixture. Neither result proves diagnostics non-interference or cross-seed generalization, and the lab is not complete.
