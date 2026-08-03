@@ -1,0 +1,64 @@
+{
+    "schemaVersion":  "scenario-lab.terminal-quiescence-finding.v1",
+    "campaign":  "follow-a0-5x5-20260803",
+    "invocationId":  "doorway-corridor-follow:direct:3",
+    "originalOutcome":  {
+                            "success":  false,
+                            "terminalReason":  "Scenario worker process did not complete cleanly; exit=1; signal=null; error=null",
+                            "missingEvidence":  [
+                                                    "terminal-quiescence-confirmed"
+                                                ],
+                            "processExitCode":  1
+                        },
+    "physicalOutcome":  {
+                            "doorwayCrossed":  true,
+                            "corridorCompleted":  true,
+                            "finalWaypointReached":  true,
+                            "botTrajectoryDistance":  11.626205842396873,
+                            "targetTrajectoryDistance":  14.7576014814144,
+                            "finalDistanceToTarget":  2.8014602540234792
+                        },
+    "stopWindow":  {
+                       "held":  true,
+                       "idle":  true,
+                       "pathfinding":  null,
+                       "sampleCount":  40,
+                       "initialPosition":  {
+                                               "x":  1036.52,
+                                               "y":  100,
+                                               "z":  1012.26
+                                           },
+                       "initialHorizontalVelocity":  {
+                                                         "x":  0,
+                                                         "z":  0.04
+                                                     },
+                       "settledAfterMs":  253,
+                       "settledPosition":  {
+                                               "x":  1036.52,
+                                               "y":  100,
+                                               "z":  1012.35
+                                           },
+                       "settledHorizontalVelocity":  {
+                                                         "x":  0,
+                                                         "z":  0
+                                                     },
+                       "postHoldDriftBlocks":  0.09,
+                       "samplesAtSettledPosition":  38,
+                       "notHeldSampleCount":  0,
+                       "notIdleSampleCount":  0,
+                       "pathfindingPresentSampleCount":  0
+                   },
+    "verifierFinding":  {
+                            "classification":  "measurement-terminal-anchor-race",
+                            "detail":  "The verifier anchored stopPosition at the first held sample while residual horizontal velocity was 0.04. The bot settled 0.09 blocks later after 253 ms and then remained fixed, but every later sample was required to remain within 0.05 blocks of the premature anchor.",
+                            "originalResultPreserved":  true,
+                            "behaviorChangeAuthorized":  false,
+                            "nextAction":  "Anchor the ten-second stability window only after a stricter settled-state observation, then rerun a fresh off-arm campaign before comparing diagnostics-on."
+                        },
+    "source":  {
+                   "rawEvidenceSha256":  "e6ec0d5716bd59295ed04f0843be5ee84a6c8e04579b66c71c1a7ac32d43b8f",
+                   "campaignAnalysisSha256":  "7a4481bbbba0d4439fdec940d2422fa35846045445769e4966baba99b2bcf971",
+                   "executionHead":  "0ddcb90fc8df433db992eb177bf23adac7d9534c",
+                   "candidateCommit":  "18206eceb023547c3f78f45e3de5164d47989c95"
+               }
+}

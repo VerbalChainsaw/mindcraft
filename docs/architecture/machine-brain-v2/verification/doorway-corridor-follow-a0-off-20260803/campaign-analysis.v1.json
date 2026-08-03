@@ -1,0 +1,712 @@
+{
+    "schemaVersion":  "scenario-lab.follow-a0-campaign-analysis.v1",
+    "campaign":  "follow-a0-5x5-20260803",
+    "candidateCommit":  "18206eceb023547c3f78f45e3de5164d47989c95",
+    "executionHead":  "0ddcb90fc8df433db992eb177bf23adac7d9534c",
+    "diagnosticsArm":  "off",
+    "instrumentationMode":  "off",
+    "manifest":  {
+                     "manifestHash":  "b05608676f64aa7612b9f8fb0069014cce87166f8a2c0244cdedd1ae2622c019",
+                     "manifestRevision":  "a0-follow-5x5-20260803.v1",
+                     "schemaVersion":  "scenario-lab.manifest.v1"
+                 },
+    "planHash":  "64296ace7f6b51e7dbbaab8afb160f1849e9c1debdbec25c4ffc10e69b7125c3",
+    "aggregate":  {
+                      "invocationCount":  10,
+                      "directCount":  5,
+                      "naturalLanguageCount":  5,
+                      "successCount":  9,
+                      "failureCount":  1,
+                      "successRate":  0.9,
+                      "directSuccessCount":  4,
+                      "directSuccessRate":  0.8,
+                      "naturalLanguageSuccessCount":  5,
+                      "naturalLanguageSuccessRate":  1,
+                      "completeDiagnosticRecordCount":  10,
+                      "completeDiagnosticRecordRate":  1,
+                      "unsafeCount":  0,
+                      "deathCount":  0,
+                      "conflictCount":  0,
+                      "timeoutCount":  0,
+                      "retryCount":  0,
+                      "p50ElapsedMs":  18499,
+                      "p95ElapsedMs":  26674,
+                      "directP50ElapsedMs":  18499,
+                      "directP95ElapsedMs":  26674,
+                      "naturalLanguageP50ElapsedMs":  19928,
+                      "naturalLanguageP95ElapsedMs":  23049,
+                      "dominantFailureClass":  "terminal-quiescence",
+                      "failedInvocationIds":  [
+                                                  "doorway-corridor-follow:direct:3"
+                                              ]
+                  },
+    "decision":  {
+                     "a0AllocationMetForFamily":  true,
+                     "diagnosticCompletenessGateMet":  true,
+                     "boundedContinuationThresholdMet":  true,
+                     "promotionAuthorized":  false,
+                     "a0Complete":  false,
+                     "architectureFreezeRemains":  true,
+                     "nextAction":  "Preserve the off-arm baseline, investigate the single terminal-quiescence miss, then run a matched diagnostics-on non-interference arm before A-lite."
+                 },
+    "sourceArtifacts":  {
+                            "receipt":  {
+                                            "path":  "follow-a0-5x5-20260803-164328.receipt.json",
+                                            "sha256":  "a6c41164a3ff8451fe69229bc9f014aba3a0b011891800dffcc92b912b2307ff"
+                                        },
+                            "plan":  {
+                                         "path":  "doorway-corridor-follow.plan.v1.json",
+                                         "sha256":  "c8df04ccc279a890a9e8d16e6f27ad7c03095efab37eaa269c86ad3133252e1c"
+                                     },
+                            "result":  {
+                                           "path":  "doorway-corridor-follow.result.v1.json",
+                                           "sha256":  "941271a5bc54efb5c432a810cd566e01177e881c2c8e5e505a802e30a87d0d42"
+                                       },
+                            "runSummary":  {
+                                               "path":  "run-summary.v1.json",
+                                               "sha256":  "7facdbb87170d65d982334ec3217c5d66b6a449a3181b7c67a952873030383bb"
+                                           }
+                        },
+    "invocations":  [
+                        {
+                            "invocationId":  "doorway-corridor-follow:direct:1",
+                            "form":  "direct",
+                            "routeOrigin":  "explicit-command",
+                            "actionId":  "MindcraftBot-4-1785775447491",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  25793,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  12.028711511065255,
+                                             "targetTrajectoryDistance":  14.75772514788048,
+                                             "timeToFirstPhysicalProgressMs":  8513,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.8902185492974848
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  195,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775458914,
+                                         "lastSampleAt":  1785775468793,
+                                         "sampleWindowMs":  9879,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-direct-20260803-114329-762",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "e02332c15b29052c2ee223dd22dbd1f7bad72fcd3f2dbaf8e59393d041d7a951",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "8ab0d568e3d27196f69810f2cc57b97cce59d0eb5f9eb61eb93ae3da52a5ce79"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:direct:2",
+                            "form":  "direct",
+                            "routeOrigin":  "explicit-command",
+                            "actionId":  "MindcraftBot-3-1785775514201",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  26674,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  12.131688661754715,
+                                             "targetTrajectoryDistance":  14.757561672503286,
+                                             "timeToFirstPhysicalProgressMs":  10019,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.9168721480256732
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  19,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775527219,
+                                         "lastSampleAt":  1785775535570,
+                                         "sampleWindowMs":  8351,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-direct-20260803-114439-108",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "2782fb3b70d9a65ae159cd95c413100f61e057c10389be05cb16451147143bc6",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "ede23962671f2f059fd8b584d9fd082258d25c533b632a34ab9dad37263505b0"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:direct:3",
+                            "form":  "direct",
+                            "routeOrigin":  "explicit-command",
+                            "actionId":  "MindcraftBot-6-1785775582134",
+                            "success":  false,
+                            "completed":  true,
+                            "terminalReason":  "Scenario worker process did not complete cleanly; exit=1; signal=null; error=null",
+                            "elapsedMs":  18499,
+                            "processExitCode":  1,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  false,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  false
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.626205842396873,
+                                             "targetTrajectoryDistance":  14.7576014814144,
+                                             "timeToFirstPhysicalProgressMs":  1744,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.8014602540234792
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  20,
+                                         "stableForTenSeconds":  false,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775586723,
+                                         "lastSampleAt":  1785775593802,
+                                         "sampleWindowMs":  7079,
+                                         "maxDisplacementBlocks":  0.09,
+                                         "maxHorizontalVelocity":  0.04,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-direct-20260803-114547-194",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "e6ec0d571f6bd59295ed04f0843be5ee84a6c8e04579b66c71c1a7ac32d43b8f",
+                                                   "adapterProcess":  "dc6031c84f3d8e42d8d2a51538fa0c8d52be1898ba1e4d82e2953baf0882cb26",
+                                                   "harnessStdout":  "80d39e70d62f861f2d0050d982b24352d09d30b6329c09e3cdc2e67a00a646c3"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:direct:4",
+                            "form":  "direct",
+                            "routeOrigin":  "explicit-command",
+                            "actionId":  "MindcraftBot-4-1785775641743",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  18385,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.617723950763558,
+                                             "targetTrajectoryDistance":  14.757533224263478,
+                                             "timeToFirstPhysicalProgressMs":  1595,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.8232144118915881
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  211,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775646314,
+                                         "lastSampleAt":  1785775653250,
+                                         "sampleWindowMs":  6936,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-direct-20260803-114646-750",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "538384aad84d16e7e513af9f3a5391904b2f697753b3beda057f2f7600ee4687",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "23cf01683c12c4078b16c8cf2962cff72f83daa0068b458616d19f5e877c2906"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:direct:5",
+                            "form":  "direct",
+                            "routeOrigin":  "explicit-command",
+                            "actionId":  "MindcraftBot-5-1785775703811",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  18489,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.022654110034839,
+                                             "targetTrajectoryDistance":  14.757607602040071,
+                                             "timeToFirstPhysicalProgressMs":  1535,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  3.1821773903121877
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  6,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775708013,
+                                         "lastSampleAt":  1785775717646,
+                                         "sampleWindowMs":  9633,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-direct-20260803-114746-325",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "20d5d9f4af783eb9b2bd71fe807772d820ac6f9ea5e769ef8f4a00ebbc9217c3",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "e6a1b5091354c752f328fe99ab1edce54877292410d0c7ad32dc6f752875c3a8"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:natural-language:1",
+                            "form":  "natural-language",
+                            "routeOrigin":  "deterministic-nl",
+                            "actionId":  "MindcraftBot-5-1785775763073",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  20138,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.625774667492298,
+                                             "targetTrajectoryDistance":  14.757559990584346,
+                                             "timeToFirstPhysicalProgressMs":  3108,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.8014602540234792
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  199,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775769259,
+                                         "lastSampleAt":  1785775778586,
+                                         "sampleWindowMs":  9327,
+                                         "maxDisplacementBlocks":  0.02,
+                                         "maxHorizontalVelocity":  0.01,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-natural-language-20260803-114847-978",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "074e937bf9ec8c3c3f129e0429b263d11a7ab2f162e263cc95ce7792e3bc5182",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "6d077d8a4d0bda36380d352d007194f0acd528a7b1dd4ca9d4ba9c5ff75fe49b"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:natural-language:2",
+                            "form":  "natural-language",
+                            "routeOrigin":  "deterministic-nl",
+                            "actionId":  "MindcraftBot-3-1785775824427",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  18269,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.063445658793382,
+                                             "targetTrajectoryDistance":  14.757725318235732,
+                                             "timeToFirstPhysicalProgressMs":  1739,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  3.1548733133154476
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  16,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775828927,
+                                         "lastSampleAt":  1785775837407,
+                                         "sampleWindowMs":  8480,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-natural-language-20260803-114949-502",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "58e366452802a1cd4bc6c5826d7a5335d5e545a51c189097760e2a8ca775daa8",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "b9b77e70e1ba96bc6f9ed8061d12e7fd33e8a12b25eb5a6e93acbfe130dedcaf"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:natural-language:3",
+                            "form":  "natural-language",
+                            "routeOrigin":  "deterministic-nl",
+                            "actionId":  "MindcraftBot-4-1785775885615",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  19928,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.758552371025091,
+                                             "targetTrajectoryDistance":  14.757611218934644,
+                                             "timeToFirstPhysicalProgressMs":  1844,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.6888010953712942
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  15,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775889616,
+                                         "lastSampleAt":  1785775897072,
+                                         "sampleWindowMs":  7456,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-natural-language-20260803-115048-826",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "9a8fb703960114e917a1823e512f7c5420d98da628f7fc4d3d905a737a352686",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "a9665b91f160f46df35ce498b64cddd54709675ca85ef86c16e1fcfd1037a72a"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:natural-language:4",
+                            "form":  "natural-language",
+                            "routeOrigin":  "deterministic-nl",
+                            "actionId":  "MindcraftBot-6-1785775944584",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  23049,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  11.746261080532484,
+                                             "targetTrajectoryDistance":  14.75772160063355,
+                                             "timeToFirstPhysicalProgressMs":  5942,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.699315961412442
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  8,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785775953621,
+                                         "lastSampleAt":  1785775962778,
+                                         "sampleWindowMs":  9157,
+                                         "maxDisplacementBlocks":  0,
+                                         "maxHorizontalVelocity":  0,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-natural-language-20260803-115149-717",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "535c9f2e82294d745c75b1018d3e103a14c9452c78b29e35a966390728f8c2f2",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "dda6729b2100ba07041d3dcceea3b2a8b15a37b76e4eb59cd32ffa7c56e75ec7"
+                                               }
+                        },
+                        {
+                            "invocationId":  "doorway-corridor-follow:natural-language:5",
+                            "form":  "natural-language",
+                            "routeOrigin":  "deterministic-nl",
+                            "actionId":  "MindcraftBot-4-1785776008933",
+                            "success":  true,
+                            "completed":  true,
+                            "terminalReason":  "doorway-corridor-follow-verified",
+                            "elapsedMs":  18339,
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "adapterError":  null,
+                            "harnessPassed":  true,
+                            "retryCount":  0,
+                            "unsafe":  false,
+                            "death":  false,
+                            "conflict":  false,
+                            "timeout":  false,
+                            "safetyInvariantViolations":  [
+
+                                                          ],
+                            "checks":  {
+                                           "doorwayCrossingConfirmed":  true,
+                                           "corridorProgressConfirmed":  true,
+                                           "followActionLifecycle":  true,
+                                           "requestCorrelation":  true,
+                                           "terminalQuiescenceConfirmed":  true
+                                       },
+                            "physical":  {
+                                             "botTrajectoryDistance":  12.225098675451733,
+                                             "targetTrajectoryDistance":  14.757525451216972,
+                                             "timeToFirstPhysicalProgressMs":  1810,
+                                             "replanSignals":  0,
+                                             "interruptionCount":  1,
+                                             "doorwayCrossed":  true,
+                                             "corridorCompleted":  true,
+                                             "finalWaypointReached":  true,
+                                             "finalDistanceToTarget":  2.8612280851338356
+                                         },
+                            "stop":  {
+                                         "quiescenceMs":  218,
+                                         "stableForTenSeconds":  true,
+                                         "stableSampleCount":  40,
+                                         "firstSampleAt":  1785776013420,
+                                         "lastSampleAt":  1785776016854,
+                                         "sampleWindowMs":  3434,
+                                         "maxDisplacementBlocks":  0.014142,
+                                         "maxHorizontalVelocity":  0.014142,
+                                         "notHeldSampleCount":  0,
+                                         "notIdleSampleCount":  0,
+                                         "pathfindingPresentSampleCount":  0
+                                     },
+                            "replayWorld":  "scenario-lab-follow-field-natural-language-20260803-115253-809",
+                            "cleanup":  {
+                                            "fixtureRestored":  true,
+                                            "botHeld":  true,
+                                            "targetDisconnected":  true
+                                        },
+                            "artifactSha256":  {
+                                                   "evidence":  "3489e7624ed11a0040ac11e2a16f4a3f78eae2c8c149bdc5fd8af8742b1a957b",
+                                                   "adapterProcess":  "6a82037c17439e711667b3c7e1988ad0ee8924f08e8bc30631036fbe923e2ca1",
+                                                   "harnessStdout":  "1cede948c876e59c0311fa56511dc713ff1d0a75f487ba61a911b9d1630d0a5d"
+                                               }
+                        }
+                    ]
+}

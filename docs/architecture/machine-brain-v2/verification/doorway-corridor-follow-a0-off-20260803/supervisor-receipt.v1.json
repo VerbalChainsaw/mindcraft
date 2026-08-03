@@ -1,0 +1,30 @@
+{
+    "schema_version":  1,
+    "campaign":  "follow-a0-5x5-20260803",
+    "started_utc":  "2026-08-03T16:43:29.0904042Z",
+    "finished_utc":  "2026-08-03T16:53:53.2638366Z",
+    "output_directory":  "C:\\Users\\zerop\\Development\\JordanWorkspace\\tasks\\minecraft-scenario-lab-adapter-20260803\\campaigns\\follow-a0-5x5-20260803\\runs\\follow-a0-5x5-20260803-164328",
+    "repo_head_before":  "0ddcb90fc8df433db992eb177bf23adac7d9534c",
+    "repo_head_after":  "0ddcb90fc8df433db992eb177bf23adac7d9534c",
+    "repo_status_after":  "clean",
+    "runner_exit_code":  4,
+    "result_status":  "failed",
+    "result_success":  false,
+    "manifest":  {
+                     "manifestHash":  "b05608676f64aa7612b9f8fb0069014cce87166f8a2c0244cdedd1ae2622c019",
+                     "manifestRevision":  "a0-follow-5x5-20260803.v1",
+                     "schemaVersion":  "scenario-lab.manifest.v1"
+                 },
+    "plan_hash":  "64296ace7f6b51e7dbbaab8afb160f1849e9c1debdbec25c4ffc10e69b7125c3",
+    "planned_invocation_count":  10,
+    "completed_invocation_count":  10,
+    "direct_count":  5,
+    "natural_language_count":  5,
+    "successful_invocation_count":  9,
+    "failed_invocation_count":  1,
+    "remaining_java_processes":  [
+
+                                 ],
+    "runtime_lock_present":  false,
+    "error":  "Campaign runner exited 4."
+}
