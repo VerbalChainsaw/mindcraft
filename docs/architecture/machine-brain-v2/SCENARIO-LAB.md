@@ -51,7 +51,7 @@ Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.p
 
 | Family | Release 0.1 state |
 |---|---|
-| Doorway/corridor follow | Runnable: bounded adapter and immutable fixture registered against candidate `c87cd0c454a6be9b52bc800de6252b1d2e889c6d`; decisive replay not yet run. |
+| Doorway/corridor follow | Runnable: bounded adapter and immutable fixture registered against candidate `18206eceb023547c3f78f45e3de5164d47989c95`; decisive replay not yet run. |
 | Elevation follow | Unavailable: follow harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Operator stop/quiescence | Unavailable: operator-hold harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Autonomous wood-to-stone recovery after `no_safe_stance` | Runnable: bounded adapter and immutable fixture registered. Decisive 2026-08-03 replay passed direct and deterministic-NL forms; broader repetition gate remains open. |
