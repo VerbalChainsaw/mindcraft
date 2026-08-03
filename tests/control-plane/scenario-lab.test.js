@@ -115,6 +115,10 @@ test('live workers require portable provenance and one managed-runtime lock', as
   assert.match(followWorker, /tools\/scenario-lab\/adapters\/follow-field-evidence\.mjs/);
   assert.match(followWorker, /"--path=\$relativePath"/);
   assert.match(followRunner, /taskkill\.exe/);
+  assert.match(followRunner, /'-InstrumentationMode', plan\.instrumentationMode/);
+  assert.match(followWorker, /\[ValidateSet\('off', 'on'\)\]/);
+  assert.match(followWorker, /decision_trace = \[ordered\]@\{/);
+  assert.match(followWorker, /observed_decision_trace_present/);
   assert.match(followRunner, /processResult\.exitCode !== 0/);
   assert.match(followWorker, /function ConvertTo-ProcessArgument/);
   assert.match(followWorker, /System\.Diagnostics\.ProcessStartInfo/);
@@ -385,6 +389,8 @@ test('follow-field evidence requires correlated physical completion and quiescen
     terminalFinishedAt = 26000,
     botTrajectoryDistance = 12,
     quiescenceMs = 100,
+    observedDecisionTracePresent = false,
+    instrumentationVerified = true,
   } = {}) => {
     const actionId = 'action-' + form;
     const issuedAt = 1000;
@@ -400,16 +406,17 @@ test('follow-field evidence requires correlated physical completion and quiescen
         label: 'action:followPlayer',
         startedAt: issuedAt + 5,
         finishedAt: terminalFinishedAt,
-      },
-      traces: [{
-        correlation: {
-          actionId,
-          requestId: 'request-' + form,
-          routeOrigin,
-          selectedSkill: '!followPlayer',
-          args: ['FollowTarget', 3],
+        evidence: {
+          request: {
+            requestId: 'request-' + form,
+            routeOrigin,
+            selectedSkill: '!followPlayer',
+            args: ['FollowTarget', 3],
+            requestedAt: issuedAt,
+          },
         },
-      }],
+      },
+      traces: [],
       samples: healthObserved ? [{ health: 20 }] : [],
       performance: {
         botTrajectoryDistance,
@@ -447,6 +454,13 @@ test('follow-field evidence requires correlated physical completion and quiescen
     };
     const report = {
       request_form: form,
+      instrumentation: {
+        requested_mode: plan.instrumentationMode,
+        decision_trace_enabled: plan.instrumentationMode === 'on',
+        observed_decision_trace_present: observedDecisionTracePresent,
+        observed_schema_version: observedDecisionTracePresent ? 1 : null,
+        verified: instrumentationVerified,
+      },
       fixture_authorized: true,
       endpoints_local_only: true,
       status: 'passed',
@@ -466,7 +480,7 @@ test('follow-field evidence requires correlated physical completion and quiescen
         errors: [],
       },
     };
-    return observeFollowFieldRun(report, plan.timeoutMs);
+    return observeFollowFieldRun(report, plan.timeoutMs, plan.instrumentationMode);
   };
 
   const direct = makeRun('direct', 'explicit-command');
@@ -507,4 +521,11 @@ test('follow-field evidence requires correlated physical completion and quiescen
   const missingQuiescence = makeRun('direct', 'explicit-command', { quiescenceMs: null });
   assert.equal(missingQuiescence.success, false);
   assert.equal(missingQuiescence.checks['terminal-quiescence-confirmed'], false);
+
+  const instrumentationMismatch = makeRun('direct', 'explicit-command', {
+    observedDecisionTracePresent: true,
+  });
+  assert.equal(instrumentationMismatch.success, false);
+  assert.equal(instrumentationMismatch.checks['instrumentation-mode-confirmed'], false);
+  assert.ok(instrumentationMismatch.safetyInvariantViolations.includes('declared-instrumentation-mode-required'));
 });

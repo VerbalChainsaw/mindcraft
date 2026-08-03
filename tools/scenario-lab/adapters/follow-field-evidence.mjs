@@ -1,5 +1,6 @@
 export const FOLLOW_FIELD_EVIDENCE = Object.freeze([
   'request-correlation',
+  'instrumentation-mode-confirmed',
   'follow-action-lifecycle',
   'doorway-crossing-confirmed',
   'corridor-progress-confirmed',
@@ -11,8 +12,15 @@ const EXPECTED_ROUTE = Object.freeze({
   'natural-language': 'deterministic-nl',
 });
 
-function traceCandidates(attempt) {
+function requestCandidates(attempt) {
   const candidates = [];
+  const terminalRequest = attempt?.terminal?.evidence?.request;
+  if (terminalRequest && typeof terminalRequest === 'object') {
+    candidates.push({
+      ...terminalRequest,
+      actionId: attempt?.terminal?.actionId,
+    });
+  }
   for (const trace of Array.isArray(attempt?.traces) ? attempt.traces : []) {
     if (trace?.correlation) candidates.push(trace.correlation);
     if (trace?.activeAction) candidates.push(trace.activeAction);
@@ -22,7 +30,7 @@ function traceCandidates(attempt) {
 
 function requestCorrelated(attempt, expectedRoute) {
   const actionId = attempt?.terminal?.actionId;
-  return Boolean(actionId && traceCandidates(attempt).some((candidate) => (
+  return Boolean(actionId && requestCandidates(attempt).some((candidate) => (
     candidate?.actionId === actionId
     && typeof candidate?.requestId === 'string'
     && candidate.requestId.length > 0
@@ -31,6 +39,20 @@ function requestCorrelated(attempt, expectedRoute) {
     && String(candidate?.args?.[0] || '') === 'FollowTarget'
     && candidate?.args?.[1] === 3
   )));
+}
+
+function instrumentationModeConfirmed(report, expectedMode) {
+  if (expectedMode !== 'off' && expectedMode !== 'on') return false;
+  const instrumentation = report?.instrumentation;
+  const traceExpected = expectedMode === 'on';
+  const schemaValid = traceExpected
+    ? instrumentation?.observed_schema_version === 1
+    : instrumentation?.observed_schema_version === null;
+  return instrumentation?.requested_mode === expectedMode
+    && instrumentation?.decision_trace_enabled === traceExpected
+    && instrumentation?.observed_decision_trace_present === traceExpected
+    && instrumentation?.verified === true
+    && schemaValid;
 }
 
 function harnessCleanupSafe(harness) {
@@ -112,15 +134,17 @@ function terminalQuiescent(attempt, harness) {
     && harnessCleanupSafe(harness);
 }
 
-export function observeFollowFieldRun(report, timeoutMs = 180000) {
+export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentationMode = 'off') {
   const form = report?.request_form;
   const expectedRoute = EXPECTED_ROUTE[form] || null;
   const harness = report?.harness_evidence;
   const attempts = Array.isArray(harness?.attempts) ? harness.attempts : [];
   const attempt = attempts.length === 1 ? attempts[0] : null;
   const correlated = Boolean(expectedRoute && requestCorrelated(attempt, expectedRoute));
+  const instrumentationConfirmed = instrumentationModeConfirmed(report, instrumentationMode);
   const checks = {
     'request-correlation': correlated,
+    'instrumentation-mode-confirmed': instrumentationConfirmed,
     'follow-action-lifecycle': lifecycleComplete(attempt),
     'doorway-crossing-confirmed': doorwayComplete(attempt),
     'corridor-progress-confirmed': corridorComplete(attempt),
@@ -148,6 +172,9 @@ export function observeFollowFieldRun(report, timeoutMs = 180000) {
   }
   if (report?.endpoints_local_only !== true) {
     safetyInvariantViolations.push('fixture-endpoints-local-only');
+  }
+  if (!instrumentationConfirmed) {
+    safetyInvariantViolations.push('declared-instrumentation-mode-required');
   }
   if (!correlated) {
     safetyInvariantViolations.push('deterministic-local-request-route');
@@ -187,6 +214,7 @@ export function observeFollowFieldRun(report, timeoutMs = 180000) {
     elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : 0,
     actionId: attempt?.terminal?.actionId || null,
     routeOrigin: expectedRoute,
+    instrumentationMode,
     routeCorrelated: correlated,
     checks,
   };

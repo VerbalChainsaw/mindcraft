@@ -534,7 +534,11 @@ export class ActionManager {
                             ? 'The server-side action was requested; waiting for Minecraft state to verify it.'
                         : 'Action completed.'),
                 target: skillEvidence?.target || null,
-                evidence: { output: output || null, skill: skillEvidence },
+                evidence: {
+                    output: output || null,
+                    skill: skillEvidence,
+                    request: commandRequest || null,
+                },
                 retryable: interrupted || timedout || skillRetryable || requestedRetryable,
                 startedAt,
             });
@@ -582,7 +586,10 @@ export class ActionManager {
                 detail: message,
                 interrupted,
                 startedAt,
-                evidence: { skill: this.agent.bot.lastActionEvidence || null },
+                evidence: {
+                    skill: this.agent.bot.lastActionEvidence || null,
+                    request: commandRequest || null,
+                },
             });
             this.lastResult = result;
             this.agent.recordActionResult?.(result);

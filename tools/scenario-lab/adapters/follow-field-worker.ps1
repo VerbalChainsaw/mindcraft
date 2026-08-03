@@ -24,6 +24,10 @@ param(
     [ValidatePattern('^-?\d+$')]
     [string]$ExpectedSeed,
 
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('off', 'on')]
+    [string]$InstrumentationMode,
+
     [ValidateRange(1000, 3600000)]
     [int]$TimeoutMs = 180000,
 
@@ -99,6 +103,13 @@ $report = [ordered]@{
     request_form = $RequestForm
     request_message = $RequestMessage
     candidate_commit = $ExpectedCandidateCommit
+    instrumentation = [ordered]@{
+        requested_mode = $InstrumentationMode
+        decision_trace_enabled = ($InstrumentationMode -eq 'on')
+        observed_decision_trace_present = $null
+        observed_schema_version = $null
+        verified = $false
+    }
     fixture_authorized = $false
     endpoints_local_only = $true
     conflict = $false
@@ -402,6 +413,10 @@ try {
         init_message = ''
         default_goal = ''
         load_memory = $false
+        decision_trace = [ordered]@{
+            enabled = ($InstrumentationMode -eq 'on')
+            retention = 128
+        }
     } | ConvertTo-Json -Compress)
 
     Save-Status 'backing-up-runtime'
@@ -483,6 +498,20 @@ try {
 
     $beforeState = Capture-State 'before-harness'
     $report.before = Summarize-State $beforeState
+    $decisionTrace = $beforeState.action.behaviorArbiter.decisionTrace
+    $tracePresent = $null -ne $decisionTrace
+    $observedSchemaVersion = if ($tracePresent) { $decisionTrace.schemaVersion } else { $null }
+    $instrumentationVerified = if ($InstrumentationMode -eq 'on') {
+        $tracePresent -and $observedSchemaVersion -eq 1
+    } else {
+        -not $tracePresent
+    }
+    $report.instrumentation.observed_decision_trace_present = $tracePresent
+    $report.instrumentation.observed_schema_version = $observedSchemaVersion
+    $report.instrumentation.verified = $instrumentationVerified
+    if (-not $instrumentationVerified) {
+        throw "Instrumentation mode '$InstrumentationMode' was not observed in the runtime state."
+    }
     $report.startup_isolation.pre_harness_last_result = $beforeState.action.lastResult
     if (
         $null -ne $beforeState.action.lastResult -and

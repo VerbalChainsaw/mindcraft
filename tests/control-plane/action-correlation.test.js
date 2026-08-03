@@ -130,6 +130,7 @@ test('ActionManager propagates the bounded request context to the exact action s
   ));
 
   assert.equal(outcome.result.phase, 'succeeded');
+  assert.deepEqual(outcome.result.evidence.request, context);
   assert.equal(acquisitions.length, 1);
   assert.equal(acquisitions[0].actionId, outcome.result.actionId);
   assert.equal(acquisitions[0].requestId, context.requestId);
@@ -223,6 +224,7 @@ test('actions and traces preserve existing behavior when no request context exis
 
   assert.equal(outcome.result.phase, 'succeeded');
   assert.equal(acquisitions.length, 1);
+  assert.equal(outcome.result.evidence.request, null);
   assert.equal(Object.hasOwn(acquisitions[0], 'requestId'), false);
 
   const recorder = new DecisionTraceRecorder({ now: () => 4000, monotonicNow: () => 20 });

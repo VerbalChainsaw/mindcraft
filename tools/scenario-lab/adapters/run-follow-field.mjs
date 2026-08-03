@@ -115,6 +115,7 @@ async function executeInvocation({
     '-ExpectedFixtureHash', plan.world.fixtureHash,
     '-ExpectedSeed', String(plan.seed),
     '-TimeoutMs', String(plan.timeoutMs),
+    '-InstrumentationMode', plan.instrumentationMode,
   ];
   if (fixtureRoot) args.push('-FixtureRoot', fixtureRoot);
 
@@ -168,7 +169,7 @@ async function executeInvocation({
       'error=' + String(processResult.error),
     ].join('; ');
   }
-  const observation = observeFollowFieldRun(report, plan.timeoutMs);
+  const observation = observeFollowFieldRun(report, plan.timeoutMs, plan.instrumentationMode);
   return { invocation, processResult, report, observation };
 }
 
@@ -229,6 +230,7 @@ async function main(argv = process.argv.slice(2)) {
       scenarioId: SCENARIO_ID,
       manifest: plan.manifest,
       planHash: plan.planHash,
+      instrumentationMode: plan.instrumentationMode,
       resultStatus: result.status,
       invocations: executions.map(({ invocation, processResult, observation: item }) => ({
         invocationId: invocation.invocationId,
