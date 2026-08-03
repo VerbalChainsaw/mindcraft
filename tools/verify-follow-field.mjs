@@ -268,6 +268,15 @@ function actuatorVelocityIsQuiescent(state) {
     && (verticalSpeed <= 0.05 || (state?.onGround === true && verticalSpeed <= 0.09));
 }
 
+function actuatorVelocityIsSettled(state) {
+  const horizontalSpeed = Math.hypot(
+    Number(state?.velocity?.x) || 0,
+    Number(state?.velocity?.z) || 0,
+  );
+  return actuatorVelocityIsQuiescent(state)
+    && horizontalSpeed <= 0.01;
+}
+
 function compactResult(result) {
   if (!result) return null;
   return {
@@ -843,7 +852,22 @@ async function run() {
         : Promise.resolve();
       const heldState = await waitForHeld(stopAcceptedAt, 10_000);
       const heldAt = Number(heldState?._meta?.sampledAt) || Date.now();
-      const stopPosition = compactState(heldState).position;
+      const settledState = await waitFor(
+        () => states[options.bot] || null,
+        state => {
+          const compact = compactState(state);
+          return compact.sampledAt >= heldAt
+            && compact.held
+            && compact.idle
+            && !compact.pathfinding
+            && compact.stopTimedOutAt === null
+            && actuatorVelocityIsSettled(compact);
+        },
+        `${options.bot} settled stop anchor`,
+        2_000,
+      );
+      const settledAt = Number(settledState?._meta?.sampledAt) || Date.now();
+      const stopPosition = compactState(settledState).position;
       const stableSamples = [];
       const stableStartedAt = Date.now();
       while (Date.now() - stableStartedAt < 10_000) {
@@ -891,6 +915,7 @@ async function run() {
       const corridorCompleted = activeAttempt.waypoints.length >= 2;
       const finalWaypointReached = distance(paperAfter.botPosition, finalWaypoint) <= 4.5;
       const stopQuiescenceMs = Math.max(0, heldAt - stopAcceptedAt);
+      const settlingMs = Math.max(0, settledAt - heldAt);
       const passed = targetReachedRequiredWaypoints
         && targetTravel >= (options.mode === 'follow'
           ? (options.course === 'full' ? 20 : 12)
@@ -921,6 +946,8 @@ async function run() {
           acceptedAt: stopAcceptedAt,
           heldAt,
           quiescenceMs: stopQuiescenceMs,
+          settledAt,
+          settlingMs,
           position: stopPosition,
           stableForTenSeconds: stable,
           stableSamples,

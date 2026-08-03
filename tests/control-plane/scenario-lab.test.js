@@ -126,6 +126,10 @@ test('live workers require portable provenance and one managed-runtime lock', as
   assert.match(followHarness, /doorway-corridor/);
   assert.match(followHarness, /target\.chat\(options\.requestMessage\)/);
   assert.match(followHarness, /sendMessage\(options\.requestMessage\)/);
+  assert.match(followHarness, /actuatorVelocityIsSettled/);
+  assert.match(followHarness, /settled stop anchor/);
+  assert.match(followHarness, /settledAt/);
+  assert.match(followHarness, /settlingMs/);
 });
 
 test('list ordering and canonical CLI JSON are stable', async () => {
