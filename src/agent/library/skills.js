@@ -1953,9 +1953,57 @@ export async function prepareTool(bot, toolName) {
     const ensureCobblestone = async (minimum) => {
         if (inventoryCount(bot, 'cobblestone') >= minimum) return true;
         if (!await ensurePickaxeTier(1) || interrupt()) return false;
-        const missing = minimum - inventoryCount(bot, 'cobblestone');
-        if (!await collectBlock(bot, 'cobblestone', missing) || interrupt()) return false;
-        return inventoryCount(bot, 'cobblestone') >= minimum;
+
+        const collectMissing = async () => {
+            const missing = minimum - inventoryCount(bot, 'cobblestone');
+            if (missing <= 0) return true;
+            await collectBlock(bot, 'cobblestone', missing);
+            return inventoryCount(bot, 'cobblestone') >= minimum;
+        };
+
+        if (await collectMissing()) return true;
+        if (interrupt()) return false;
+
+        // A buried stone face can be known but have no pre-existing standing
+        // cell. Open a bounded, supported route to it, then rescan from the
+        // new position instead of repeating the same impossible collection.
+        // Budget one route per missing block: a safe route may expose exactly
+        // one collectible face, while the progress guard still stops dead ends.
+        const routeBudget = Math.max(
+            1,
+            Math.min(8, minimum - inventoryCount(bot, 'cobblestone')),
+        );
+        for (let attempt = 0; attempt < routeBudget; attempt += 1) {
+            const beforeCount = inventoryCount(bot, 'cobblestone');
+            const beforePosition = bot.entity?.position?.clone?.() || null;
+            log(bot, `No stable stone face is reachable; opening a bounded mining route (attempt ${attempt + 1}/${routeBudget}).`);
+
+            const advanced = await mineSearchTunnel(bot, 'cobblestone', MINING_TUNNEL_LENGTH);
+            if (interrupt()) return false;
+            if (inventoryCount(bot, 'cobblestone') >= minimum) return true;
+            if (await collectMissing()) return true;
+            if (interrupt()) return false;
+
+            const gained = inventoryCount(bot, 'cobblestone') > beforeCount;
+            const moved = beforePosition && bot.entity?.position
+                ? bot.entity.position.distanceTo(beforePosition) >= NAVIGATION_PROGRESS_DISTANCE
+                : false;
+            if (!advanced && !gained && !moved) break;
+        }
+        const available = inventoryCount(bot, 'cobblestone');
+        setActionEvidence(bot, {
+            kind: 'tool_prepare',
+            outcome: 'cobblestone_route_exhausted',
+            target,
+            required: minimum,
+            available,
+            retryable: true,
+        });
+        log(
+            bot,
+            `Could only verify ${available}/${minimum} cobblestone after bounded safe-route recovery.`,
+        );
+        return false;
     };
 
     const nearestResource = (names) => {
@@ -4220,11 +4268,15 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         : null;
                     let directReach = liveTarget?.type === block.type
                         && bot.entity.position.distanceTo(block.position) <= 4.5
-                        && bot.canSeeBlock?.(liveTarget)
-                        && (!miningAssessment || (
-                            miningAssessment.safe
-                            && isAtCollectionStance(bot, miningAssessment.stances)
-                        ));
+                        // The mining assessment already raycasts the exact
+                        // stable stance; canSeeBlock is unreliable for adjacent
+                        // blocks below eye height and must not veto that proof.
+                        && (miningAssessment
+                            ? (
+                                miningAssessment.safe
+                                && isAtCollectionStance(bot, miningAssessment.stances)
+                            )
+                            : bot.canSeeBlock?.(liveTarget));
                     if (!directReach && allowNaturalRouteDigging) {
                         if (!miningAssessment?.safe) {
                             setActionEvidence(bot, {
@@ -4260,8 +4312,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             && liveTarget?.type === block.type
                             && miningAssessment?.safe
                             && isAtCollectionStance(bot, miningAssessment.stances)
-                            && bot.entity.position.distanceTo(block.position) <= 4.5
-                            && bot.canSeeBlock?.(liveTarget);
+                            && bot.entity.position.distanceTo(block.position) <= 4.5;
                         if (!directReach) {
                             const outcome = bot.interrupt_code
                                 ? 'interrupted'
@@ -8780,7 +8831,13 @@ function nearestKnownMiningTarget(bot, resourceName = '') {
             const rightScore = rightHorizontal + (Math.abs(right.position.y - origin.y) * 2);
             return leftScore - rightScore || leftHorizontal - rightHorizontal;
         });
-        return blocks[0] || null;
+        // A merely known block is not yet a usable route target. If every
+        // nearby block lacks a stable prospective side stance, let the mining
+        // controller use its supported exploratory corridor instead of
+        // repeatedly accepting GoalNear at an impossible vertical target.
+        return blocks.find(block => (
+            prospectiveMiningStandingPositions(bot, block).length > 0
+        )) || null;
     } catch {
         return null;
     }
@@ -8818,6 +8875,44 @@ function isMiningTargetExposed(bot, targetBlock) {
     ].some(([x, y, z]) => (
         bot.blockAt(targetBlock.position.offset(x, y, z))?.boundingBox === 'empty'
     ));
+}
+
+function prospectiveMiningStandingPositions(bot, targetBlock) {
+    const target = targetBlock?.position;
+    const origin = bot.entity?.position;
+    if (!target?.offset || !origin) return [];
+
+    // These cells may still be solid. A pre-carve raycast would hit the
+    // candidate itself, so cardinal adjacency proves future visibility.
+    const canBecomeClear = (position) => {
+        let block;
+        try {
+            block = bot.blockAt(position);
+        } catch {
+            return false;
+        }
+        return isCollectionStandingCellClear(block) || isNaturalFillBlock(bot, block);
+    };
+    const positions = [];
+    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const feet = target.offset(x, 0, z);
+        let support;
+        try {
+            support = bot.blockAt(feet.offset(0, -1, 0));
+        } catch {
+            continue;
+        }
+        if (!canBecomeClear(feet)) continue;
+        if (!canBecomeClear(feet.offset(0, 1, 0))) continue;
+        if (!isSafeGameplaySupport(support)) continue;
+        positions.push(feet);
+    }
+    positions.sort((left, right) => (
+        origin.distanceTo(left) - origin.distanceTo(right)
+        || left.x - right.x
+        || left.z - right.z
+    ));
+    return positions;
 }
 
 async function carveMiningStaircase(bot, targetY) {
@@ -9036,11 +9131,20 @@ export async function mineSearchTunnel(bot, resourceName, length = MINING_TUNNEL
                     y: Math.floor(start.y),
                     z: Math.floor(start.z) + (heading.z * segmentLength),
                 };
+            // GoalNear accepts the cell directly above a buried block, but that
+            // is intentionally not a valid mining stance: breaking the target
+            // would remove the bot's floor. On the final segment, carve toward
+            // a stable horizontal cell from which the target can be collected.
+            const approachGoal = finalKnownSegment
+                ? collectionApproachGoal(prospectiveMiningStandingPositions(bot, knownTarget))
+                : null;
             const reached = await goToGoal(
                 bot,
-                new pf.goals.GoalNear(lastTarget.x, lastTarget.y, lastTarget.z, 1),
+                approachGoal || new pf.goals.GoalNear(lastTarget.x, lastTarget.y, lastTarget.z, 1),
                 {
-                    movements: () => miningMovements(bot),
+                    movements: () => approachGoal
+                        ? collectionApproachMovements(bot, knownTarget)
+                        : miningMovements(bot),
                     stallTimeoutMs: 12_000,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
