@@ -5,9 +5,9 @@ function commandString(value) {
 }
 
 export function routeCompoundToolGoal(playerName, command) {
-    const match = /^!prepareTool\(\s*(["'])stone_pickaxe\1\s*\)\s*$/.exec(String(command || ''));
+    const match = /^!prepareTool\(\s*(["'])((?:stone|iron)_pickaxe)\1\s*\)\s*$/.exec(String(command || ''));
     if (!match) return command;
-    return `!requestItemGoal("acquire", "stone_pickaxe", 1, ${commandString(playerName)})`;
+    return `!requestItemGoal("acquire", ${commandString(match[2])}, 1, ${commandString(playerName)})`;
 }
 
 function normalizedMessage(message) {

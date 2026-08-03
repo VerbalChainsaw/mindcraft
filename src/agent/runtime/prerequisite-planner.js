@@ -253,6 +253,7 @@ function recipeScore(bot, context, target, recipe) {
   for (const ingredient of ingredients) {
     const available = ledgerCount(context, ingredient.name);
     score += Math.min(ingredient.count, available) * 100;
+    if (nearbyBlock(bot, ingredient.name, context.range)) score += 40;
     // What the bot still has to go and get is what actually costs it time.
     score -= Math.max(0, ingredient.count - available) * acquisitionCost(ingredient.name);
     if (ingredient.name === 'cobblestone') score += 12;
