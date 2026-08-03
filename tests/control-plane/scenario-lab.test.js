@@ -23,6 +23,7 @@ import {
 
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const CLI = path.join(ROOT, 'tools', 'scenario-lab.mjs');
+const STONE_WORKER = path.join(ROOT, 'tools', 'scenario-lab', 'adapters', 'stone-recovery-worker.ps1');
 
 const clone = (value) => structuredClone(value);
 const rehash = (manifest) => {
@@ -73,6 +74,14 @@ test('the frozen v1 manifest registers one bounded replay and keeps other famili
     .every(({ status, executor }) => (
       status === 'unavailable' && executor.safe === false && executor.adapterId === null
     )));
+});
+
+test('the live worker requires portable, explicit fixture provenance', async () => {
+  const worker = await readFile(STONE_WORKER, 'utf8');
+  const userDirectoryPattern = new RegExp('[A-Za-z]:\\\\Users\\\\', 'i');
+  assert.doesNotMatch(worker, userDirectoryPattern);
+  assert.match(worker, /SCENARIO_LAB_STONE_FIXTURE_ROOT/);
+  assert.match(worker, /must identify the frozen fixture directory/);
 });
 
 test('list ordering and canonical CLI JSON are stable', async () => {

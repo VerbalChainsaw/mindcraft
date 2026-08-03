@@ -30,11 +30,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
-    $FixtureRoot = if (-not [string]::IsNullOrWhiteSpace($env:SCENARIO_LAB_STONE_FIXTURE_ROOT)) {
-        $env:SCENARIO_LAB_STONE_FIXTURE_ROOT
-    } else {
-        'C:\Users\zerop\Development\JordanWorkspace\artifacts\minecraft-viability\autonomy-unseen-02-20260802-164450'
-    }
+    $FixtureRoot = $env:SCENARIO_LAB_STONE_FIXTURE_ROOT
+}
+if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
+    throw 'FixtureRoot or SCENARIO_LAB_STONE_FIXTURE_ROOT must identify the frozen fixture directory.'
 }
 $archive = Join-Path $FixtureRoot 'trial-world.zip'
 $archivedMemory = Join-Path $FixtureRoot 'trial-bot-memory'

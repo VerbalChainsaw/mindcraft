@@ -35,8 +35,10 @@ node tools/scenario-lab.mjs list
 node tools/scenario-lab.mjs validate
 node tools/scenario-lab.mjs plan --scenario <id> --output-dir <new-directory>
 npm run test:scenario-lab
-npm run scenario:stone-recovery -- --output-dir <new-directory>
+npm run scenario:stone-recovery -- --output-dir <new-directory> --fixture-root <frozen-fixture-directory>
 ```
+
+The live adapter never guesses a machine-specific fixture path. Supply `--fixture-root` or set `SCENARIO_LAB_STONE_FIXTURE_ROOT` to the directory containing the frozen `trial-world.zip` and `trial-bot-memory`.
 
 Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.plan.v1.json` and `<id>.result.v1.json` and refuses overwrite. It never starts Paper, Mineflayer, a bot, a world, or a gameplay harness. The separate `scenario:stone-recovery` entry point is the only registered live adapter. Unavailable/not-run/blocked exits `3`; validation/usage/write errors exit `2`; observed failure exits `4`; only a verified live result may exit `0`.
 
