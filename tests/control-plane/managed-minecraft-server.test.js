@@ -1583,6 +1583,18 @@ test('Given an installed local server and current Java, when lifecycle controls 
     await waitFor(async () => (await manager.getStatus()).phase === 'running', 'server readiness');
     await manager.sendCommand('say hello from Mindcraft');
     assert.ok(stdinWrites.includes('say hello from Mindcraft\n'));
+    const longCommand = `say ${'x'.repeat(512)}`;
+    await manager.sendCommand(longCommand);
+    assert.ok(stdinWrites.includes(`${longCommand}\n`));
+    await manager.sendCommands(['time set day', 'weather clear'], { settleMs: 0 });
+    assert.deepEqual(stdinWrites.slice(-2), ['time set day\n', 'weather clear\n']);
+    assert.throws(() => manager.sendCommand(`say ${'x'.repeat(2049)}`), /1-2048 characters/i);
+    assert.throws(() => manager.sendCommand('say first\nsay second'), /one line/i);
+    await assert.rejects(
+      () => manager.sendCommands(['say allowed', 'stop']),
+      /dashboard Stop Server or Restart/i,
+    );
+    assert.equal(stdinWrites.includes('say allowed\n'), false);
     for (const blocked of ['stop', '/restart', 'minecraft:reload confirm']) {
       assert.throws(() => manager.sendCommand(blocked), /dashboard Stop Server or Restart/i);
       assert.equal(stdinWrites.includes(`${blocked}\n`), false);
@@ -2521,6 +2533,7 @@ test('Given a managed server adapter, when dashboard lifecycle endpoints are cal
     restart: () => { calls.push(['restart']); return summary; },
     repairCrossplay: () => { calls.push(['repair-crossplay']); return summary; },
     sendCommand: (command) => { calls.push(['command', command]); return summary; },
+    sendCommands: (commands, options) => { calls.push(['commands', commands, options]); return summary; },
   };
   const server = await createMindServer(false, 0, 1, { managedMinecraftServer: manager });
 
@@ -2540,6 +2553,10 @@ test('Given a managed server adapter, when dashboard lifecycle endpoints are cal
       method: 'POST',
       body: { command: 'say hello' },
     });
+    const commandedBatch = await requestJson(server, '/api/minecraft-server/commands', {
+      method: 'POST',
+      body: { commands: ['time set day', 'weather clear'], settleMs: 150 },
+    });
     const applied = await requestJson(server, '/api/minecraft-server/apply-settings', {
       method: 'POST',
       body: { maxPlayers: 12, bedrockBindAddress: '127.0.0.1' },
@@ -2547,7 +2564,7 @@ test('Given a managed server adapter, when dashboard lifecycle endpoints are cal
     const stoppedEverything = await requestJson(server, '/api/system/stop', { method: 'POST', body: {} });
     const stopped = await requestJson(server, '/api/minecraft-server/stop', { method: 'POST', body: {} });
 
-    for (const response of [installed, configured, started, repaired, restarted, commanded, applied, stoppedEverything, stopped]) {
+    for (const response of [installed, configured, started, repaired, restarted, commanded, commandedBatch, applied, stoppedEverything, stopped]) {
       assert.equal(response.statusCode, 200);
       assert.equal(response.body.success, true);
     }
@@ -2563,6 +2580,7 @@ test('Given a managed server adapter, when dashboard lifecycle endpoints are cal
       ['restart'],
       ['wait-ready'],
       ['command', 'say hello'],
+      ['commands', ['time set day', 'weather clear'], { settleMs: 150 }],
       ['validate', { maxPlayers: 12, bedrockBindAddress: '127.0.0.1' }],
       ['stop-preserve'],
       ['configure', { maxPlayers: 12, bedrockBindAddress: '127.0.0.1' }],

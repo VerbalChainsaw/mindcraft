@@ -1,0 +1,256 @@
+{
+  "schemaVersion": "minecraft-tree-ab.v1",
+  "generatedAt": "2026-08-03T19:25:11.470Z",
+  "repo": "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2",
+  "baseUrl": "http://localhost:8080",
+  "test": {
+    "botX": 1071.5,
+    "botY": 200,
+    "botZ": 1007.5,
+    "treeX": 1077,
+    "treeZ": 1007,
+    "trunkBottomY": 200,
+    "trunkTopY": 203,
+    "targetLogs": 4,
+    "range": 32
+  },
+  "sequence": [
+    "pair-1-new-connected-tree",
+    "pair-1-old-per-log",
+    "pair-2-old-per-log",
+    "pair-2-new-connected-tree"
+  ],
+  "runs": [
+    {
+      "id": "pair-1-new-connected-tree",
+      "kind": "new-connected-tree",
+      "command": "!collectWoodInRange(4, 32)",
+      "accepted": {
+        "success": true,
+        "error": null
+      },
+      "commandStartedAt": 1785785062497,
+      "durationMs": 3834,
+      "logs": 4,
+      "targetLogs": 4,
+      "success": true,
+      "phase": "succeeded",
+      "code": "skill_collected",
+      "detail": "Action output: Felling one connected oak tree with 4 loaded logs. You have reached at 1077, 200, 1007. Broke oak_log at x:1077.0, y:200.0, z:1007.0. Broke oak_log at x:1077.0, y:201.0, z:1007.0. Broke oak_log at x:1077.0, y:202.0, z:1007.0. Broke oak_log at x:1077.0, y:203.0, z:1",
+      "startPosition": {
+        "x": 1071.5,
+        "y": 200,
+        "z": 1007.5
+      },
+      "endPosition": {
+        "x": 1077.51,
+        "y": 200,
+        "z": 1007.79
+      },
+      "displacementBlocks": 6.0169926042832955,
+      "connectedTreeSignal": true,
+      "completeTreeSignal": false,
+      "outputs": [
+        "Action output: Felling one connected oak tree with 4 loaded logs. You have reached at 1077, 200, 1007. Broke oak_log at x:1077.0, y:200.0, z:1007.0. Broke oak_log at x:1077.0, y:201.0, z:1007.0. Broke oak_log at x:1077.0, y:202.0, z:1007..."
+      ],
+      "lastResult": {
+        "actionId": "MindcraftBot-4-1785785062607",
+        "phase": "succeeded",
+        "code": "skill_collected",
+        "label": "action:collectWoodInRange",
+        "detail": "Action output: Felling one connected oak tree with 4 loaded logs. You have reached at 1077, 200, 1007. Broke oak_log at x:1077.0, y:200.0, z:1007.0. Broke oak_log at x:1077.0, y:201.0, z:1007.0. Broke oak_log at x:1077.0, y:202.0, z:1007.0. Broke oak_log at x:1077.0, y:203.0, z:1",
+        "target": {
+          "name": "oak_log",
+          "x": 1077,
+          "y": 200,
+          "z": 1007
+        },
+        "retryable": false,
+        "durationMs": 3724,
+        "startedAt": 1785785062607,
+        "finishedAt": 1785785066331
+      },
+      "stateFreshnessMs": 32
+    },
+    {
+      "id": "pair-1-old-per-log",
+      "kind": "old-per-log",
+      "command": "!collectBlocksInRange(\"oak_log\", 4, 32)",
+      "accepted": {
+        "success": true,
+        "error": null
+      },
+      "commandStartedAt": 1785785073763,
+      "durationMs": 8848,
+      "logs": 4,
+      "targetLogs": 4,
+      "success": true,
+      "phase": "succeeded",
+      "code": "skill_collected",
+      "detail": "Action output: You have reached at 1077, 200, 1007. Collected 4 oak_log.",
+      "startPosition": {
+        "x": 1071.5,
+        "y": 200,
+        "z": 1007.5
+      },
+      "endPosition": {
+        "x": 1077.52,
+        "y": 200,
+        "z": 1007.5
+      },
+      "displacementBlocks": 6.019999999999982,
+      "connectedTreeSignal": false,
+      "completeTreeSignal": false,
+      "outputs": [
+        "Action output: You have reached at 1077, 200, 1007. Collected 4 oak_log."
+      ],
+      "lastResult": {
+        "actionId": "MindcraftBot-5-1785785073844",
+        "phase": "succeeded",
+        "code": "skill_collected",
+        "label": "action:collectBlocksInRange",
+        "detail": "Action output: You have reached at 1077, 200, 1007. Collected 4 oak_log.",
+        "target": {
+          "name": "oak_log",
+          "x": 1077,
+          "y": 200,
+          "z": 1007
+        },
+        "retryable": false,
+        "durationMs": 8767,
+        "startedAt": 1785785073844,
+        "finishedAt": 1785785082611
+      },
+      "stateFreshnessMs": 0
+    },
+    {
+      "id": "pair-2-old-per-log",
+      "kind": "old-per-log",
+      "command": "!collectBlocksInRange(\"oak_log\", 4, 32)",
+      "accepted": {
+        "success": true,
+        "error": null
+      },
+      "commandStartedAt": 1785785089321,
+      "durationMs": 9403,
+      "logs": 4,
+      "targetLogs": 4,
+      "success": true,
+      "phase": "succeeded",
+      "code": "skill_collected",
+      "detail": "Action output: You have reached at 1077, 200, 1007. Collected 4 oak_log.",
+      "startPosition": {
+        "x": 1071.5,
+        "y": 200,
+        "z": 1007.5
+      },
+      "endPosition": {
+        "x": 1077.38,
+        "y": 200,
+        "z": 1007.49
+      },
+      "displacementBlocks": 5.880008503395321,
+      "connectedTreeSignal": false,
+      "completeTreeSignal": false,
+      "outputs": [
+        "Action output: You have reached at 1077, 200, 1007. Collected 4 oak_log."
+      ],
+      "lastResult": {
+        "actionId": "MindcraftBot-6-1785785089331",
+        "phase": "succeeded",
+        "code": "skill_collected",
+        "label": "action:collectBlocksInRange",
+        "detail": "Action output: You have reached at 1077, 200, 1007. Collected 4 oak_log.",
+        "target": {
+          "name": "oak_log",
+          "x": 1077,
+          "y": 200,
+          "z": 1007
+        },
+        "retryable": false,
+        "durationMs": 9393,
+        "startedAt": 1785785089331,
+        "finishedAt": 1785785098724
+      },
+      "stateFreshnessMs": 218
+    },
+    {
+      "id": "pair-2-new-connected-tree",
+      "kind": "new-connected-tree",
+      "command": "!collectWoodInRange(4, 32)",
+      "accepted": {
+        "success": true,
+        "error": null
+      },
+      "commandStartedAt": 1785785105971,
+      "durationMs": 3747,
+      "logs": 4,
+      "targetLogs": 4,
+      "success": true,
+      "phase": "succeeded",
+      "code": "skill_collected",
+      "detail": "Action output: Felling one connected oak tree with 4 loaded logs. You have reached at 1077, 200, 1007. Broke oak_log at x:1077.0, y:200.0, z:1007.0. Broke oak_log at x:1077.0, y:201.0, z:1007.0. Broke oak_log at x:1077.0, y:202.0, z:1007.0. Broke oak_log at x:1077.0, y:203.0, z:1",
+      "startPosition": {
+        "x": 1071.5,
+        "y": 200,
+        "z": 1007.5
+      },
+      "endPosition": {
+        "x": 1077.91,
+        "y": 200,
+        "z": 1007.05
+      },
+      "displacementBlocks": 6.425776217703282,
+      "connectedTreeSignal": true,
+      "completeTreeSignal": false,
+      "outputs": [
+        "Action output: Felling one connected oak tree with 4 loaded logs. You have reached at 1077, 200, 1007. Broke oak_log at x:1077.0, y:200.0, z:1007.0. Broke oak_log at x:1077.0, y:201.0, z:1007.0. Broke oak_log at x:1077.0, y:202.0, z:1007..."
+      ],
+      "lastResult": {
+        "actionId": "MindcraftBot-7-1785785105993",
+        "phase": "succeeded",
+        "code": "skill_collected",
+        "label": "action:collectWoodInRange",
+        "detail": "Action output: Felling one connected oak tree with 4 loaded logs. You have reached at 1077, 200, 1007. Broke oak_log at x:1077.0, y:200.0, z:1007.0. Broke oak_log at x:1077.0, y:201.0, z:1007.0. Broke oak_log at x:1077.0, y:202.0, z:1007.0. Broke oak_log at x:1077.0, y:203.0, z:1",
+        "target": {
+          "name": "oak_log",
+          "x": 1077,
+          "y": 200,
+          "z": 1007
+        },
+        "retryable": false,
+        "durationMs": 3725,
+        "startedAt": 1785785105993,
+        "finishedAt": 1785785109718
+      },
+      "stateFreshnessMs": 473
+    }
+  ],
+  "summary": {
+    "connectedTree": {
+      "kind": "new-connected-tree",
+      "runs": 2,
+      "successes": 2,
+      "medianDurationMs": 3790.5,
+      "minDurationMs": 3747,
+      "maxDurationMs": 3834,
+      "medianLogs": 4,
+      "connectedTreeSignalRuns": 2,
+      "completeTreeSignalRuns": 0
+    },
+    "oldPerLog": {
+      "kind": "old-per-log",
+      "runs": 2,
+      "successes": 2,
+      "medianDurationMs": 9125.5,
+      "minDurationMs": 8848,
+      "maxDurationMs": 9403,
+      "medianLogs": 4,
+      "connectedTreeSignalRuns": 0,
+      "completeTreeSignalRuns": 0
+    },
+    "speedup": 2.407466033504815,
+    "verdict": "new-method-wins",
+    "materiallyFasterThreshold": 1.15
+  }
+}

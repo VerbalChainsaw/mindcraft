@@ -1,0 +1,13 @@
+{
+    "schemaVersion":  "minecraft-validation-current.v1",
+    "canonicalWorktree":  "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2",
+    "branch":  "architecture/machine-brain-v2",
+    "generatedUtc":  "2026-08-03T19:26:11.9823218Z",
+    "treeCollection":  {
+                           "verdict":  "new-method-wins",
+                           "connectedTreeMedianMs":  3790.5,
+                           "perLogMedianMs":  9125.5,
+                           "speedup":  2.407466033504815,
+                           "source":  "tree-collection-ab.v1.json"
+                       }
+}

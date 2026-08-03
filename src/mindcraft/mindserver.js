@@ -1395,6 +1395,13 @@ async function createMindServerAtPort(port, dependencies = {}) {
       runManagedServerAction(res, () => managedMinecraftServer.sendCommand(req.body?.command))
     ));
 
+    app.post('/api/minecraft-server/commands', (req, res) => (
+      runManagedServerAction(res, () => managedMinecraftServer.sendCommands(
+        req.body?.commands,
+        { settleMs: req.body?.settleMs },
+      ))
+    ));
+
     app.post('/api/quickstart/local', async (req, res) => {
       try {
         const models = await discoverOllama();

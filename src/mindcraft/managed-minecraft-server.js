@@ -63,6 +63,9 @@ const BOOLEAN_SERVER_SETTINGS = Object.freeze([
   'allowFlight',
   'enableCommandBlock',
 ]);
+const MAX_CONSOLE_COMMAND_CHARS = 2_048;
+const MAX_CONSOLE_COMMAND_BATCH = 128;
+const MAX_CONSOLE_COMMAND_SETTLE_MS = 2_000;
 const BLOCKED_CONSOLE_COMMANDS = new Set([
   'stop',
   'minecraft:stop',
@@ -1566,10 +1569,12 @@ export class ManagedMinecraftServer {
     }
   }
 
-  sendCommand(command) {
+  validateConsoleCommand(command) {
     const value = typeof command === 'string' ? command.trim() : '';
-    if (!value || value.length > 200 || /[\r\n\0]/.test(value)) {
-      throw new ManagedMinecraftServerError('Server command must be 1-200 characters on one line.');
+    if (!value || value.length > MAX_CONSOLE_COMMAND_CHARS || /[\r\n\0]/.test(value)) {
+      throw new ManagedMinecraftServerError(
+        `Server command must be 1-${MAX_CONSOLE_COMMAND_CHARS} characters on one line.`,
+      );
     }
     const commandName = value.replace(/^\/+/, '').split(/\s+/, 1)[0].toLowerCase();
     if (BLOCKED_CONSOLE_COMMANDS.has(commandName)) {
@@ -1577,11 +1582,44 @@ export class ManagedMinecraftServer {
         'Use the dashboard Stop Server or Restart controls; direct lifecycle and reload commands are blocked so bot recovery stays coordinated.',
       );
     }
+    return value;
+  }
+
+  assertCommandConsoleReady() {
     if (!this.child || this.phase !== 'running' || !this.child.stdin?.writable) {
       throw new ManagedMinecraftServerError('Minecraft server is not ready for commands.');
     }
+  }
+
+  sendCommand(command) {
+    const value = this.validateConsoleCommand(command);
+    this.assertCommandConsoleReady();
     this.child.stdin.write(`${value}\n`);
     this.pushLog(`[command] > ${redactCommandForLog(value)}`);
+    return this.getStatus();
+  }
+
+  async sendCommands(commands, { settleMs = 0 } = {}) {
+    if (!Array.isArray(commands) || commands.length < 1 || commands.length > MAX_CONSOLE_COMMAND_BATCH) {
+      throw new ManagedMinecraftServerError(
+        `Server command batch must contain 1-${MAX_CONSOLE_COMMAND_BATCH} commands.`,
+      );
+    }
+    const boundedSettleMs = Number(settleMs);
+    if (!Number.isInteger(boundedSettleMs) || boundedSettleMs < 0 || boundedSettleMs > MAX_CONSOLE_COMMAND_SETTLE_MS) {
+      throw new ManagedMinecraftServerError(
+        `Server command settleMs must be a whole number from 0-${MAX_CONSOLE_COMMAND_SETTLE_MS}.`,
+      );
+    }
+    const validated = commands.map((command) => this.validateConsoleCommand(command));
+    this.assertCommandConsoleReady();
+    for (const value of validated) {
+      this.child.stdin.write(`${value}\n`);
+      this.pushLog(`[command] > ${redactCommandForLog(value)}`);
+      if (boundedSettleMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, boundedSettleMs));
+      }
+    }
     return this.getStatus();
   }
 

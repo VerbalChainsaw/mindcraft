@@ -1,0 +1,74 @@
+{
+    "schema_version":  "minecraft-tree-ab-wrapper.v1",
+    "generated_utc":  "2026-08-03T19:25:18.8859422Z",
+    "repo":  "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2",
+    "branch":  "architecture/machine-brain-v2",
+    "head":  "fb85c685b1af9a5533781c319106f34097ece02f",
+    "worktree_status_before":  [
+                                   " M package.json",
+                                   " M src/mindcraft/managed-minecraft-server.js",
+                                   " M src/mindcraft/mindserver.js",
+                                   " M src/mindcraft/public/js/minecraft-server.js",
+                                   " M tests/control-plane/managed-minecraft-server.test.js",
+                                   "?? docs/validation/",
+                                   "?? tools/validate-companion.mjs",
+                                   "?? tools/validation/"
+                               ],
+    "runner_exit_code":  0,
+    "error":  null,
+    "result_path":  "C:\\Users\\zerop\\Development\\JordanWorkspace\\artifacts\\minecraft-validation\\results\\tree-ab-20260803-142346-699\\tree-ab-result.json",
+    "result_summary":  {
+                           "connectedTree":  {
+                                                 "kind":  "new-connected-tree",
+                                                 "runs":  2,
+                                                 "successes":  2,
+                                                 "medianDurationMs":  3790.5,
+                                                 "minDurationMs":  3747,
+                                                 "maxDurationMs":  3834,
+                                                 "medianLogs":  4,
+                                                 "connectedTreeSignalRuns":  2,
+                                                 "completeTreeSignalRuns":  0
+                                             },
+                           "oldPerLog":  {
+                                             "kind":  "old-per-log",
+                                             "runs":  2,
+                                             "successes":  2,
+                                             "medianDurationMs":  9125.5,
+                                             "minDurationMs":  8848,
+                                             "maxDurationMs":  9403,
+                                             "medianLogs":  4,
+                                             "connectedTreeSignalRuns":  0,
+                                             "completeTreeSignalRuns":  0
+                                         },
+                           "speedup":  2.407466033504815,
+                           "verdict":  "new-method-wins",
+                           "materiallyFasterThreshold":  1.15
+                       },
+    "cleanup":  {
+                    "api_stop_succeeded":  true,
+                    "main_forced":  true,
+                    "preflight_harness_node_kills":  [
+
+                                                     ],
+                    "harness_node_kills":  [
+
+                                           ],
+                    "managed_java_kills":  [
+
+                                           ],
+                    "runtime_memory_removed":  true,
+                    "original_memory_restored":  true,
+                    "configuration_restored":  true,
+                    "properties_restored":  true,
+                    "disposable_world_removed":  true,
+                    "remaining_harness_node":  [
+
+                                               ],
+                    "remaining_managed_java":  [
+
+                                               ],
+                    "errors":  [
+
+                               ]
+                }
+}

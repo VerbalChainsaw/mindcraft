@@ -824,7 +824,7 @@ export class MinecraftServerWorkspace {
     commandInput.value = this.commandDraft;
     commandInput.placeholder = 'Example: gamemode creative MindcraftBot';
     commandInput.autocomplete = 'off';
-    commandInput.maxLength = 200;
+    commandInput.maxLength = 2048;
     commandInput.disabled = !running || Boolean(this.busy);
     commandInput.addEventListener('input', () => {
       this.commandDraft = commandInput.value;
@@ -843,7 +843,7 @@ export class MinecraftServerWorkspace {
     commandForm.append(
       commandLabel,
       commandRow,
-      node('small', 'muted command-hint', 'One line, up to 200 characters. Use ↑ and ↓ to recall successful commands.'),
+      node('small', 'muted command-hint', 'One line, up to 2048 characters. Use ↑ and ↓ to recall successful commands.'),
     );
     commandPane.append(commandForm);
     const feedback = node('div', 'command-feedback');
