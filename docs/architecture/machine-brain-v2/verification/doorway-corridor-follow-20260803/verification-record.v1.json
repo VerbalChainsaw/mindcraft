@@ -1,0 +1,148 @@
+{
+    "schemaVersion":  "scenario-lab.verification-record.v1",
+    "scenarioId":  "doorway-corridor-follow",
+    "observedDate":  "2026-08-03",
+    "outcome":  {
+                    "status":  "passed",
+                    "success":  true,
+                    "classificationReason":  "verified-complete",
+                    "terminalReason":  "all-request-forms-verified",
+                    "liveScenarioPassed":  true,
+                    "labComplete":  false,
+                    "completedInvocationCount":  2,
+                    "plannedInvocationCount":  2,
+                    "evidenceCompleteness":  "complete",
+                    "missingEvidence":  [
+
+                                        ],
+                    "missingFields":  [
+
+                                      ],
+                    "safetyInvariantViolations":  [
+
+                                                  ],
+                    "retryCount":  0,
+                    "falseSuccessObserved":  false,
+                    "death":  false,
+                    "conflict":  false,
+                    "timeout":  false,
+                    "unsafe":  false,
+                    "elapsedMs":  42366
+                },
+    "provenance":  {
+                       "candidateCommit":  "18206eceb023547c3f78f45e3de5164d47989c95",
+                       "executionCommit":  "2a8dfe2ecc2950561748326a9fc541264f746415",
+                       "manifest":  {
+                                        "schemaVersion":  "scenario-lab.manifest.v1",
+                                        "manifestRevision":  "release-0.1.v6",
+                                        "manifestHash":  "0bb57f7aa19e6ac56aac6dbc59bcc4b6521af5b57c746a79980936e5a664b362"
+                                    },
+                       "planHash":  "2325d591fcdf8ed1e0fea75fb8facb8a3bb78dfd9ebc59831656b89675a0fc33",
+                       "server":  {
+                                      "implementation":  "paper",
+                                      "version":  "1.21.11",
+                                      "protocolVersion":  774
+                                  },
+                       "fixture":  {
+                                       "seed":  "3579780610592225162",
+                                       "sourceWorld":  "viability-pilot-disposable",
+                                       "archiveSha256":  "be49ccbd9115e34ccd3ea6b0958302fa7c794709dfdcc6b379d06fba31a026b8",
+                                       "metadataSha256":  "ddcc34aba25090cbc1e760c3a8dca2883ed47f35337f8d55ab3f1c235cc49a67",
+                                       "profileSha256":  "e82b8f03e0411678073191db52b35c9ad74d6cfe8e36572db07c866f0817ae57",
+                                       "baselineCourseSha256":  "850d7cd7abd6410be3a6a3becd87bc6f4914dac6cc0ac18c38a9cd700fe13a42"
+                                   }
+                   },
+    "invocations":  [
+                        {
+                            "form":  "direct",
+                            "request":  "!followPlayer(\"FollowTarget\", 3)",
+                            "routeOrigin":  "explicit-command",
+                            "actionId":  "MindcraftBot-5-1785774282770",
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "durationMs":  23154,
+                            "externalRetryCount":  0,
+                            "fixtureVerified":  true,
+                            "doorwayCrossed":  true,
+                            "corridorCompleted":  true,
+                            "finalWaypointReached":  true,
+                            "finalDistanceToTarget":  2.9363889684256668,
+                            "botTrajectoryDistance":  12.145026250893132,
+                            "targetTrajectoryDistance":  14.757607205468718,
+                            "timeToFirstPhysicalProgressMs":  2759,
+                            "terminalQuiescenceConfirmed":  true,
+                            "stableForTenSeconds":  true,
+                            "quiescenceMs":  201,
+                            "falseSuccessObserved":  false
+                        },
+                        {
+                            "form":  "natural-language",
+                            "request":  "Follow me through the doorway and down the corridor.",
+                            "routeOrigin":  "deterministic-nl",
+                            "actionId":  "MindcraftBot-4-1785774344123",
+                            "processExitCode":  0,
+                            "processTimedOut":  false,
+                            "durationMs":  19212,
+                            "externalRetryCount":  0,
+                            "fixtureVerified":  true,
+                            "doorwayCrossed":  true,
+                            "corridorCompleted":  true,
+                            "finalWaypointReached":  true,
+                            "finalDistanceToTarget":  2.6693195375900993,
+                            "botTrajectoryDistance":  11.7671047935349,
+                            "targetTrajectoryDistance":  14.757636921265563,
+                            "timeToFirstPhysicalProgressMs":  1016,
+                            "terminalQuiescenceConfirmed":  true,
+                            "stableForTenSeconds":  true,
+                            "quiescenceMs":  8,
+                            "falseSuccessObserved":  false
+                        }
+                    ],
+    "restoration":  {
+                        "configurationRestored":  true,
+                        "propertiesRestored":  true,
+                        "preRunMemoryRestored":  true,
+                        "replayMemoryPreserved":  true,
+                        "replayWorldPreserved":  true,
+                        "remainingManagedJavaProcesses":  [
+
+                                                          ],
+                        "runtimeLockPresent":  false,
+                        "repositoryStatusAfter":  "clean",
+                        "errors":  [
+
+                                   ]
+                    },
+    "artifacts":  [
+                      {
+                          "name":  "doorway-corridor-follow.plan.v1.json",
+                          "sha256":  "91222bcfff1d17b06f8cdc85e042226112baddc2eaffc2d1e264231bf34af931",
+                          "bytes":  1730
+                      },
+                      {
+                          "name":  "doorway-corridor-follow.result.v1.json",
+                          "sha256":  "93747452324af6842ae80572c4a36d635a8e94bcd1aa08251163b70fe0071308",
+                          "bytes":  1437
+                      },
+                      {
+                          "name":  "run-summary.v1.json",
+                          "sha256":  "e88268ff88cd91950138fd761533bc69472624dd290ab2cd461be78ded188d76",
+                          "bytes":  1988
+                      },
+                      {
+                          "name":  "detached-replay-receipt",
+                          "sha256":  "a6badd2cb86b6888096d19b09ad7c47f1dd86e4c15b8c764ed31b0a430caecab",
+                          "bytes":  1104
+                      }
+                  ],
+    "scope":  {
+                  "proves":  "One direct and one deterministic-natural-language invocation passed on independent restores of the declared frozen fixture.",
+                  "doesNotProve":  [
+                                       "cross-seed generalization",
+                                       "the required ten independent runs per family",
+                                       "instrumentation off/on non-interference",
+                                       "Scenario Lab completion",
+                                       "authorization for Release B architecture"
+                                   ]
+              }
+}

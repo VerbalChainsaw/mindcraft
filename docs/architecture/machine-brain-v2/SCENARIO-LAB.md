@@ -1,6 +1,6 @@
 # Release 0.1 Scenario Lab
 
-Status: two bounded replay adapters are registered. Stone recovery has passed one direct plus one deterministic-natural-language invocation from independent frozen-world restores; doorway/corridor follow is ready for its decisive replay. Three families remain unavailable, and the lab is not complete.
+Status: two bounded replay adapters are registered, and each has passed one direct plus one deterministic-natural-language invocation from independent frozen-world restores. Three families remain unavailable, the repetition and non-interference gates remain open, and the lab is not complete.
 
 ## Contract and evidence boundary
 
@@ -19,6 +19,8 @@ The natural-language request is deliberately local and deterministic: `Please up
 `tools/scenario-lab/adapters/run-follow-field.mjs` runs the doorway/corridor follow scenario. Direct and deterministic-NL request forms receive independent restores of frozen seed `3579780610592225162`. Before launch, the worker verifies the fixture archive, metadata, profile, baseline course contract, and candidate gameplay/controller/harness blobs. It confines both endpoints to loopback, forces command-only autonomy, records exact request/action attribution plus health, doorway crossing, corridor progress, and terminal quiescence, and restores every managed runtime input.
 
 The follow natural-language request is also local and deterministic: `Follow me through the doorway and down the corridor.` must select `!followPlayer` for the speaking target at distance 3 with route origin `deterministic-nl`. A model-routed substitution, uncorrelated action, missing health observation, non-finite timing, or claimed physical completion without doorway and corridor evidence fails closed.
+
+The decisive 2026-08-03 replay passed both forms on independent restores. The [frozen verification record](verification/doorway-corridor-follow-20260803/README.md) preserves the canonical plan, result, run summary, physical acceptance metrics, hashes, and cleanup outcome.
 
 ## Closed statuses
 
@@ -51,10 +53,10 @@ Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.p
 
 | Family | Release 0.1 state |
 |---|---|
-| Doorway/corridor follow | Runnable: bounded adapter and immutable fixture registered against candidate `18206eceb023547c3f78f45e3de5164d47989c95`; decisive replay not yet run. |
+| Doorway/corridor follow | Passed on the frozen fixture: one direct and one deterministic-NL invocation on independent restores; broader repetition and cross-seed gates remain open. |
 | Elevation follow | Unavailable: follow harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Operator stop/quiescence | Unavailable: operator-hold harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Autonomous wood-to-stone recovery after `no_safe_stance` | Runnable: bounded adapter and immutable fixture registered. Decisive 2026-08-03 replay passed direct and deterministic-NL forms; broader repetition gate remains open. |
 | Chunk-unloaded versus confirmed-air semantics | Unavailable: executor, evidence adapter, and frozen fixture absent. |
 
-The catalog is not general live-world authorization. Each later family must register a bounded adapter and freeze its fixture before moving to `not-run`. Preserve raw evidence and canonical run envelopes; never infer success from command acceptance, absent evidence, unloaded chunks, or a generated plan. The stone-recovery pass proves that adapter and one fixed replay; the registered follow fixture still requires its decisive run. Neither registration nor a single replay proves cross-seed generalization or lab completion.
+The catalog is not general live-world authorization. Each later family must register a bounded adapter and freeze its fixture before moving to `not-run`. Preserve raw evidence and canonical run envelopes; never infer success from command acceptance, absent evidence, unloaded chunks, or a generated plan. The stone-recovery and doorway/corridor-follow passes each prove one direct plus one deterministic-NL replay on one fixed fixture. Neither result proves cross-seed generalization, satisfies the required independent repetitions, or completes the lab.
