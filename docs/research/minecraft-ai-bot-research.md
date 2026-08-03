@@ -8,12 +8,12 @@ Voyager is an open-source Minecraft agent created by researchers from NVIDIA, Ca
 
 ```text
 Minecraft world state
-→ structured text observation
-→ GPT-4 chooses a task and writes JavaScript
-→ Mineflayer executes deterministic movement/gameplay
-→ world state, errors, and results are observed
-→ GPT-4 critiques and revises the program
-→ successful program is saved as a reusable skill
+â†’ structured text observation
+â†’ GPT-4 chooses a task and writes JavaScript
+â†’ Mineflayer executes deterministic movement/gameplay
+â†’ world state, errors, and results are observed
+â†’ GPT-4 critiques and revises the program
+â†’ successful program is saved as a reusable skill
 ```
 
 ### Primary sources
@@ -26,8 +26,8 @@ Minecraft world state
 
 In three-run research evaluations, Voyager:
 
-- Discovered **63 unique items in 160 prompting iterations**, reported as **3.3× more** than the baselines.
-- Traveled **2.3× farther** than the comparison agents.
+- Discovered **63 unique items in 160 prompting iterations**, reported as **3.3Ã— more** than the baselines.
+- Traveled **2.3Ã— farther** than the comparison agents.
 - Reached wooden, stone, and iron tool milestones substantially faster.
 - Was the only evaluated system to reach the diamond-tool tier, although it managed that in only **one of three trials**.
 - With its learned skill library, completed each of four unseen task categories in all three trials:
@@ -42,7 +42,7 @@ Voyager was successful by embodied-agent research standards, but it was not a pe
 
 ### 1. The LLM operates at the strategy and program level
 
-GPT-4 does not continuously decide whether to press forward, jump, or turn. It writes asynchronous JavaScript functions such as “collect wood, craft planks, make sticks, then craft a pickaxe.” These programs call controlled primitives including:
+GPT-4 does not continuously decide whether to press forward, jump, or turn. It writes asynchronous JavaScript functions such as â€œcollect wood, craft planks, make sticks, then craft a pickaxe.â€ These programs call controlled primitives including:
 
 - `mineBlock`
 - `craftItem`
@@ -78,12 +78,12 @@ Voyager therefore sidesteps visual perception and low-level motor learning. It q
 
 ### 3. It uses an automatic curriculum
 
-A separate GPT-4 role examines the bot’s current equipment, inventory, environment, completed tasks, and failed tasks, then selects one achievable next objective.
+A separate GPT-4 role examines the botâ€™s current equipment, inventory, environment, completed tasks, and failed tasks, then selects one achievable next objective.
 
 It starts with simple objectives such as collecting a wood log and gradually proposes more advanced goals. Tasks are intended to be:
 
 - Immediately achievable
-- Slightly beyond the bot’s existing capabilities
+- Slightly beyond the botâ€™s existing capabilities
 - Novel enough to expand its knowledge
 - Verifiable using available game state
 
@@ -95,10 +95,10 @@ Voyager runs the generated program and returns the results to GPT-4:
 
 ```text
 Program
-→ execution
-→ errors and resulting state
-→ critique
-→ revised program
+â†’ execution
+â†’ errors and resulting state
+â†’ critique
+â†’ revised program
 ```
 
 Each task gets up to four program-generation attempts. This allows the model to correct mistakes such as:
@@ -142,15 +142,15 @@ For a new objective, Voyager retrieves the top five relevant skills and includes
 
 ```text
 collect logs
-→ craft planks
-→ craft sticks
-→ craft pickaxe
-→ mine stone
-→ craft stone tools
-→ acquire iron
+â†’ craft planks
+â†’ craft sticks
+â†’ craft pickaxe
+â†’ mine stone
+â†’ craft stone tools
+â†’ acquire iron
 ```
 
-This is Voyager’s form of learning. It is in-context, code-based learning rather than neural-network weight training.
+This is Voyagerâ€™s form of learning. It is in-context, code-based learning rather than neural-network weight training.
 
 ## Second project: Mindcraft
 
@@ -161,7 +161,7 @@ Mindcraft is particularly relevant because it is a companion-style Minecraft bot
 - [Mindcraft repository](https://github.com/mindcraft-bots/mindcraft)
 - [MineCollab/Mindcraft paper](https://arxiv.org/abs/2504.17950)
 
-Mindcraft is also AI-powered. It connects configurable LLMs—including hosted models and local Ollama models—to Mineflayer. Its architecture includes:
+Mindcraft is also AI-powered. It connects configurable LLMsâ€”including hosted models and local Ollama modelsâ€”to Mineflayer. Its architecture includes:
 
 - Natural-language conversation
 - LLM selection of explicit commands
@@ -184,34 +184,34 @@ Action manager: controls ownership, interruption, and timeout
 Result: returned to the LLM as structured action output
 ```
 
-Mindcraft’s published results are more sobering than Voyager’s. Its MineCollab benchmark contains crafting, cooking, and construction tasks. It demonstrates successful runs, but the paper also reports that contemporary models struggle with complex construction and multi-agent coordination. Even Claude 3.5 Sonnet placed less than approximately 40% of the required blocks in its harder construction evaluation.
+Mindcraftâ€™s published results are more sobering than Voyagerâ€™s. Its MineCollab benchmark contains crafting, cooking, and construction tasks. It demonstrates successful runs, but the paper also reports that contemporary models struggle with complex construction and multi-agent coordination. Even Claude 3.5 Sonnet placed less than approximately 40% of the required blocks in its harder construction evaluation.
 
 Mindcraft is therefore a functioning AI-bot platform, but not evidence that LLMs can reliably solve arbitrary Minecraft work.
 
 ## Transferable lessons
 
-1. **Do not use the LLM as the body.**  
+1. **Do not use the LLM as the body.**
    Use it for intent interpretation, task selection, decomposition, and recovery decisions. Keep movement, mining, crafting, following, and combat deterministic.
 
-2. **Route language into a bounded command vocabulary first.**  
+2. **Route language into a bounded command vocabulary first.**
    Known gameplay should use tested skills. Generate new code only for genuinely novel work.
 
-3. **Close the loop with live world observations.**  
+3. **Close the loop with live world observations.**
    Every action needs to return inventory changes, positions, nearby objects, errors, interruption status, and physical outcomes.
 
-4. **Judge completion from Minecraft state.**  
-   Prefer checks such as inventory counts, block coordinates, entity state, and measured distance—not an LLM saying “that looks successful.”
+4. **Judge completion from Minecraft state.**
+   Prefer checks such as inventory counts, block coordinates, entity state, and measured distanceâ€”not an LLM saying â€œthat looks successful.â€
 
-5. **Persist proven procedures, not conversations alone.**  
+5. **Persist proven procedures, not conversations alone.**
    A reusable executable skill is much more valuable than another paragraph in chat history.
 
-6. **Make actions interruptible and centrally owned.**  
-   Mindcraft’s action manager stops pathfinding, collection, digging, and combat before replacing an action. This prevents multiple behaviors from fighting over the bot.
+6. **Make actions interruptible and centrally owned.**
+   Mindcraftâ€™s action manager stops pathfinding, collection, digging, and combat before replacing an action. This prevents multiple behaviors from fighting over the bot.
 
-7. **Use bounded retry-and-repair loops.**  
+7. **Use bounded retry-and-repair loops.**
    Supply the failed action, observed world state, and exact error to the model. Do not continually regenerate from scratch.
 
-8. **Treat arbitrary code generation as dangerous.**  
+8. **Treat arbitrary code generation as dangerous.**
    Mindcraft disables it by default and warns against enabling it on public servers. Even its sandbox is described as vulnerable to prompt injection.
 
 ## Bottom line
@@ -225,4 +225,26 @@ Successful AI-powered Minecraft bots exist. The best-supported example is Voyage
 - **Skill database:** reusable learned behavior
 - **World-state verification:** evidence of progress
 
-Voyager is the stronger autonomous-learning result. Mindcraft is the stronger reference for an interactive conversational companion. The best practical architecture combines Voyager’s feedback-and-skill approach with Mindcraft’s command layer and action ownership, while replacing LLM-only success judgments with deterministic physical verification wherever possible.
+Voyager is the stronger autonomous-learning result. Mindcraft is the stronger reference for an interactive conversational companion. The best practical architecture combines Voyagerâ€™s feedback-and-skill approach with Mindcraftâ€™s command layer and action ownership, while replacing LLM-only success judgments with deterministic physical verification wherever possible.
+
+
+## Local architecture result: Hybrid Goal Recovery (2026-08-03)
+
+The project has now reproduced the core hybrid-agent lesson locally rather than relying only on published systems.
+
+A controlled disposable-world comparison tested whether stone-tool progression should remain a monolithic deterministic skill or be owned as a persistent typed goal over the existing deterministic body.
+
+The monolithic path failed after about 14.9 seconds with `skill_cobblestone_route_exhausted`. It found 12 stone candidates with no safe stance, but no persistent goal owned the retryable result, so the player outcome ended without a stone pickaxe.
+
+The hybrid path preserved Mineflayer, the deterministic skills, `BehaviorArbiter`, and `ActionManager`, but routed the compound player outcome through `GoalDirector`. It recovered by moving, reassessing, retrying collection, crafting, equipping, and verifying the resulting inventory.
+
+The direct request completed in about 35.7 seconds. The natural-language request completed in about 29.9 seconds. Both produced and equipped a stone pickaxe from the same disposable starting state.
+
+This result supports the same separation identified in Voyager and Mindcraft research:
+
+> Persistent planning and recovery should operate above a deterministic body. The body does not need to be replaced merely because a one-shot skill cannot finish a compound outcome.
+
+The project decision is **HYBRID WINS**. Keep the existing physical engine and extend persistent goal ownership one live-proven vertical slice at a time. Do not perform a wholesale rewrite.
+
+Full record: [Hybrid Goal Recovery milestone](2026-08-03-hybrid-goal-recovery-milestone.md)
+Forward implementation: [Hybrid companion forward plan](../plans/2026-08-03-hybrid-companion-forward-plan.md)
