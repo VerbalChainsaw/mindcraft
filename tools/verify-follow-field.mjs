@@ -20,6 +20,14 @@ const COURSE = Object.freeze({ x1: 1026, x2: 1040, y1: 100, y2: 102, z1: 1006, z
 const WALL = Object.freeze({ x: 1033, y1: 100, y2: 102, z1: 1006, z2: 1012 });
 const DOORWAY = Object.freeze({ x: 1033, y1: 100, y2: 101, z: 1008 });
 const PLATFORM = Object.freeze({ x1: 1028, x2: 1034, y: 100, z1: 1013, z2: 1015 });
+const DOORWAY_CAPTURE = Object.freeze({
+  x1: 1032.4,
+  x2: 1034.2,
+  y1: 99.75,
+  y2: 101.75,
+  z1: 1007.35,
+  z2: 1009.65,
+});
 const OBJECTIVE = 'fol001proof';
 const COMMAND = '!followPlayer("FollowTarget", 3)';
 const POLL_MS = 100;
@@ -170,6 +178,58 @@ function trajectoryDistance(samples) {
     if (Number.isFinite(segment)) travelled += segment;
   }
   return travelled;
+}
+
+function doorwayContains(position) {
+  if (!position) return false;
+  return Number(position.x) >= DOORWAY_CAPTURE.x1
+    && Number(position.x) <= DOORWAY_CAPTURE.x2
+    && Number(position.y) >= DOORWAY_CAPTURE.y1
+    && Number(position.y) <= DOORWAY_CAPTURE.y2
+    && Number(position.z) >= DOORWAY_CAPTURE.z1
+    && Number(position.z) <= DOORWAY_CAPTURE.z2;
+}
+
+function doorwayCrossing(samples, source) {
+  const positioned = samples.filter(sample => positionOf({ position: sample?.position }));
+  for (const sample of positioned) {
+    if (!doorwayContains(sample.position)) continue;
+    return {
+      source,
+      method: 'sample',
+      sampledAt: Number(sample.sampledAt ?? sample.at) || null,
+      position: sample.position,
+    };
+  }
+
+  for (let index = 1; index < positioned.length; index += 1) {
+    const left = positioned[index - 1];
+    const right = positioned[index];
+    const leftX = Number(left.position.x);
+    const rightX = Number(right.position.x);
+    const crossesWallPlane = (leftX < WALL.x && rightX >= WALL.x)
+      || (leftX > WALL.x && rightX <= WALL.x);
+    if (!crossesWallPlane) continue;
+    const fraction = (WALL.x - leftX) / (rightX - leftX);
+    const position = {
+      x: WALL.x,
+      y: Number(left.position.y) + fraction * (Number(right.position.y) - Number(left.position.y)),
+      z: Number(left.position.z) + fraction * (Number(right.position.z) - Number(left.position.z)),
+    };
+    if (!doorwayContains(position)) continue;
+    const leftAt = Number(left.sampledAt ?? left.at);
+    const rightAt = Number(right.sampledAt ?? right.at);
+    return {
+      source,
+      method: 'interpolated-segment',
+      sampledAt: Number.isFinite(leftAt) && Number.isFinite(rightAt)
+        ? Math.round(leftAt + fraction * (rightAt - leftAt))
+        : null,
+      position,
+      intervalMs: Number.isFinite(leftAt) && Number.isFinite(rightAt) ? rightAt - leftAt : null,
+    };
+  }
+  return null;
 }
 
 function actuatorVelocityIsQuiescent(state) {
@@ -645,8 +705,15 @@ async function run() {
     };
 
     targetSampler = setInterval(() => {
-      if (!activeAttempt || !target?.entity || activeAttempt.targetSamples.length >= 600) return;
-      activeAttempt.targetSamples.push({ at: Date.now(), position: positionOf(target.entity) });
+      if (!activeAttempt || !target?.entity) return;
+      const sampledAt = Date.now();
+      if (activeAttempt.targetSamples.length < 600) {
+        activeAttempt.targetSamples.push({ at: sampledAt, position: positionOf(target.entity) });
+      }
+      const observedBotPosition = positionOf(target.players?.[options.bot]?.entity);
+      if (observedBotPosition && activeAttempt.physicalSamples.length < 600) {
+        activeAttempt.physicalSamples.push({ sampledAt, position: observedBotPosition });
+      }
     }, POLL_MS);
     targetPathListener = path => {
       if (!activeAttempt || activeAttempt.targetPathUpdates.length >= 80) return;
@@ -672,6 +739,7 @@ async function run() {
         commandAck: null,
         samples: [],
         targetSamples: [],
+        physicalSamples: [],
         targetPathUpdates: [],
         outputs: [],
         traceMap: new Map(),
@@ -755,18 +823,18 @@ async function run() {
 
       const traces = [...activeAttempt.traceMap.values()]
         .sort((left, right) => Number(left.wallClockTimestamp) - Number(right.wallClockTimestamp));
-      const botTravel = trajectoryDistance(activeAttempt.samples);
+      const physicalBotSamples = activeAttempt.physicalSamples.length >= 2
+        ? activeAttempt.physicalSamples
+        : activeAttempt.samples;
+      const botTravel = trajectoryDistance(physicalBotSamples);
       const targetTravel = trajectoryDistance(activeAttempt.targetSamples);
-      const doorwayCrossed = activeAttempt.samples.some(sample => (
-        Number(sample.position?.x) >= 1032.4
-        && Number(sample.position?.x) <= 1034.2
-        && Number(sample.position?.z) >= 1007.35
-        && Number(sample.position?.z) <= 1009.65
-      ));
-      const elevated = activeAttempt.samples.some(sample => Number(sample.position?.y) >= 100.8);
+      const doorwayObservation = doorwayCrossing(activeAttempt.physicalSamples, 'controlled-target-observer')
+        || doorwayCrossing(activeAttempt.samples, 'dashboard-state');
+      const doorwayCrossed = Boolean(doorwayObservation);
+      const elevated = physicalBotSamples.some(sample => Number(sample.position?.y) >= 100.8);
       const timeToFirstProgressMs = (() => {
-        const sample = activeAttempt.samples.find(entry => distance(entry.position, BOT_START) >= 0.4);
-        return sample ? Number(sample.sampledAt) - activeAttempt.issuedAt : null;
+        const sample = physicalBotSamples.find(entry => distance(entry.position, BOT_START) >= 0.4);
+        return sample ? Number(sample.sampledAt ?? sample.at) - activeAttempt.issuedAt : null;
       })();
       const stable = stableSamples.length >= 35 && stableSamples.every(sample => {
         return sample.held
@@ -816,6 +884,7 @@ async function run() {
         performance: {
           durationMs: Date.now() - activeAttempt.issuedAt,
           timeToFirstPhysicalProgressMs: timeToFirstProgressMs,
+          botTrajectorySource: physicalBotSamples === activeAttempt.physicalSamples ? 'controlled-target-observer' : 'dashboard-state',
           botTrajectoryDistance: botTravel,
           targetTrajectoryDistance: targetTravel,
           replanSignals: activeAttempt.outputs.filter(entry => /replan|reacquir|recover/i.test(entry.output)).length,
@@ -823,6 +892,7 @@ async function run() {
         },
         physicalAcceptance: {
           doorwayCrossed,
+          doorwayObservation,
           twoTurnsCompleted: activeAttempt.waypoints.length === 3,
           oneBlockElevationCompleted: elevated,
           finalDistanceToTarget: distance(paperAfter.botPosition, paperAfter.targetPosition),
@@ -831,6 +901,7 @@ async function run() {
         paper: { before: paperBefore, waypoints: activeAttempt.waypoints.map(entry => entry.paper), after: paperAfter },
         waypoints: activeAttempt.waypoints.map(({ paper, ...entry }) => entry),
         samples: activeAttempt.samples,
+        physicalSamples: activeAttempt.physicalSamples,
         targetSamples: activeAttempt.targetSamples,
         targetPathUpdates: activeAttempt.targetPathUpdates,
         outputs: activeAttempt.outputs,
@@ -856,6 +927,7 @@ async function run() {
         waypointFailure: activeAttempt.waypointFailure || null,
         waypoints: activeAttempt.waypoints,
         samples: activeAttempt.samples,
+        physicalSamples: activeAttempt.physicalSamples,
         targetSamples: activeAttempt.targetSamples,
         targetPathUpdates: activeAttempt.targetPathUpdates,
         outputs: activeAttempt.outputs,
