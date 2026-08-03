@@ -1,0 +1,247 @@
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { canonicalJson } from '../../a0/aggregate.mjs';
+import {
+  createExecutionPlan,
+  createExecutionResult,
+  loadScenarioManifest,
+  validateScenarioManifest,
+} from '../../scenario-lab.mjs';
+import {
+  aggregateStoneRecoveryObservations,
+  observeStoneRecoveryRun,
+} from './stone-recovery-evidence.mjs';
+
+const SCENARIO_ID = 'autonomous-wood-to-stone-no-safe-stance-recovery';
+const ADAPTER_ID = 'stone-recovery-live-replay-v1';
+const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const WORKER = path.join(SCRIPT_DIRECTORY, 'stone-recovery-worker.ps1');
+
+function parseOptions(argv) {
+  if (argv.length % 2 !== 0) throw new Error('Arguments must be flag/value pairs.');
+  const options = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    if (!['--output-dir', '--fixture-root', '--manifest'].includes(flag) || Object.hasOwn(options, flag)) {
+      throw new Error(`Unsupported or repeated option: ${flag}`);
+    }
+    options[flag] = argv[index + 1];
+  }
+  if (!options['--output-dir']) throw new Error('--output-dir is required.');
+  return options;
+}
+
+function boundedAppend(current, chunk, limit = 131072) {
+  const next = current + String(chunk);
+  return next.length <= limit ? next : next.slice(next.length - limit);
+}
+
+function spawnBounded(command, args, { cwd, timeoutMs }) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    child.stdout.on('data', (chunk) => { stdout = boundedAppend(stdout, chunk); });
+    child.stderr.on('data', (chunk) => { stderr = boundedAppend(stderr, chunk); });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      resolve({ exitCode: null, signal: null, timedOut, stdout, stderr, error: String(error?.message || error) });
+    });
+    child.once('exit', (exitCode, signal) => {
+      clearTimeout(timer);
+      resolve({ exitCode, signal, timedOut, stdout, stderr, error: null });
+    });
+  });
+}
+
+async function readSamples(filename) {
+  try {
+    const contents = await readFile(filename, 'utf8');
+    return contents
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+async function readJson(filename) {
+  return JSON.parse(await readFile(filename, 'utf8'));
+}
+
+async function executeInvocation({
+  invocation,
+  plan,
+  outputDirectory,
+  fixtureRoot,
+  repo,
+}) {
+  const invocationDirectory = path.join(
+    outputDirectory,
+    'raw',
+    invocation.invocationId.replace(/[^a-z0-9._-]+/gi, '_'),
+  );
+  const args = [
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', WORKER,
+    '-RequestForm', invocation.form,
+    '-RequestMessage', invocation.request,
+    '-OutputDirectory', invocationDirectory,
+    '-ExpectedCandidateCommit', plan.candidateCommit,
+    '-ExpectedFixtureHash', plan.world.fixtureHash,
+    '-TimeoutMs', String(plan.timeoutMs),
+  ];
+  if (fixtureRoot) args.push('-FixtureRoot', fixtureRoot);
+
+  const processResult = await spawnBounded('powershell.exe', args, {
+    cwd: repo,
+    timeoutMs: plan.timeoutMs + 180000,
+  });
+  await writeFile(
+    path.join(invocationDirectory, 'adapter-process.json'),
+    `${canonicalJson(processResult)}\n`,
+    { encoding: 'utf8', flag: 'wx' },
+  ).catch(async (error) => {
+    if (error?.code !== 'ENOENT') throw error;
+    await mkdir(invocationDirectory, { recursive: true });
+    await writeFile(
+      path.join(invocationDirectory, 'adapter-process.json'),
+      `${canonicalJson(processResult)}\n`,
+      { encoding: 'utf8', flag: 'wx' },
+    );
+  });
+
+  let report;
+  try {
+    report = await readJson(path.join(invocationDirectory, 'live-report.json'));
+  } catch (error) {
+    report = {
+      request_form: invocation.form,
+      status: 'failed',
+      error: `Worker did not produce a readable report: ${String(error?.message || error)}`,
+      conflict: processResult.error !== null,
+      verdict: { duration_ms: 0 },
+      cleanup: null,
+      finished_utc: null,
+    };
+  }
+  if (processResult.timedOut) {
+    report.status = 'failed';
+    report.error = 'Scenario adapter exceeded its bounded process timeout.';
+    report.verdict = { ...(report.verdict || {}), duration_ms: plan.timeoutMs + 1 };
+  }
+  const samples = await readSamples(path.join(invocationDirectory, 'live-samples.jsonl'));
+  const observation = observeStoneRecoveryRun(report, samples, plan.timeoutMs);
+  return { invocation, processResult, report, observation };
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const options = parseOptions(argv);
+  const repo = fileURLToPath(new URL('../../../', import.meta.url));
+  const manifest = await loadScenarioManifest(options['--manifest']);
+  const diagnostics = validateScenarioManifest(manifest);
+  if (diagnostics.length) {
+    throw new Error(`Scenario manifest is invalid: ${canonicalJson(diagnostics)}`);
+  }
+  const plan = createExecutionPlan(manifest, SCENARIO_ID);
+  if (
+    plan.status !== 'not-run'
+    || plan.executor?.safe !== true
+    || plan.executor?.adapterId !== ADAPTER_ID
+  ) {
+    throw new Error('Stone-recovery scenario is not registered to this safe adapter.');
+  }
+
+  const outputDirectory = path.resolve(options['--output-dir']);
+  await mkdir(path.dirname(outputDirectory), { recursive: true });
+  await mkdir(outputDirectory);
+  await writeFile(
+    path.join(outputDirectory, `${SCENARIO_ID}.plan.v1.json`),
+    `${canonicalJson(plan)}\n`,
+    { encoding: 'utf8', flag: 'wx' },
+  );
+
+  const executions = [];
+  for (const invocation of plan.invocations) {
+    const execution = await executeInvocation({
+      invocation,
+      plan,
+      outputDirectory,
+      fixtureRoot: options['--fixture-root'],
+      repo,
+    });
+    executions.push(execution);
+    if (execution.observation.safetyInvariantViolations.includes('runtime-restoration-required')) break;
+  }
+
+  const observation = aggregateStoneRecoveryObservations(
+    plan,
+    executions.map(({ observation: item }) => item),
+  );
+  const result = createExecutionResult(manifest, SCENARIO_ID, observation);
+  const resultFile = `${SCENARIO_ID}.result.v1.json`;
+  await writeFile(
+    path.join(outputDirectory, resultFile),
+    `${canonicalJson(result)}\n`,
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  await writeFile(
+    path.join(outputDirectory, 'run-summary.v1.json'),
+    `${canonicalJson({
+      schemaVersion: 'scenario-lab.stone-recovery-run.v1',
+      scenarioId: SCENARIO_ID,
+      manifest: plan.manifest,
+      planHash: plan.planHash,
+      resultStatus: result.status,
+      invocations: executions.map(({ invocation, processResult, observation: item }) => ({
+        invocationId: invocation.invocationId,
+        form: invocation.form,
+        processExitCode: processResult.exitCode,
+        processTimedOut: processResult.timedOut,
+        observation: item,
+      })),
+    })}\n`,
+    { encoding: 'utf8', flag: 'wx' },
+  );
+
+  process.stdout.write(`${canonicalJson({
+    schemaVersion: 'scenario-lab.cli-result.v1',
+    command: 'stone-recovery-live-replay',
+    ok: result.status === 'passed',
+    status: result.status,
+    outputDirectory,
+    resultFile,
+  })}\n`);
+  return result.status === 'passed' ? 0 : 4;
+}
+
+try {
+  process.exitCode = await main();
+} catch (error) {
+  process.stdout.write(`${canonicalJson({
+    schemaVersion: 'scenario-lab.cli-result.v1',
+    command: 'stone-recovery-live-replay',
+    ok: false,
+    status: 'blocked',
+    diagnostics: [{
+      path: '/adapter',
+      code: 'adapter-failed',
+      message: String(error?.message || error).slice(0, 1000),
+    }],
+  })}\n`);
+  process.exitCode = 2;
+}

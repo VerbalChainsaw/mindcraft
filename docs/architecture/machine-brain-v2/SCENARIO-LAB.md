@@ -1,14 +1,20 @@
 # Release 0.1 Scenario Lab
 
-Status: deterministic contract and offline planning foundation only. No executor or evidence adapter is registered, no live scenario has passed, and the lab is not complete.
+Status: one bounded replay adapter is registered and has passed one direct plus one deterministic-natural-language invocation from independent frozen-world restores. Four families remain unavailable, and the lab is not complete.
 
 ## Contract and evidence boundary
 
 `tools/scenario-lab/scenarios.v1.json` is the frozen `scenario-lab.manifest.v1` contract. Its hash reuses the A0 rule: canonical recursive JSON, array order preserved, root `manifestHash` omitted, then UTF-8 SHA-256. The executable validator is `tools/scenario-lab.mjs`.
 
-The manifest records candidate commit, seed, Paper version/protocol, world or fixture identity, timeout, direct and natural-language request forms with repetitions, expected evidence, safety invariants, instrumentation mode, executor declaration, and blockers. Moving a declaration to `not-run` requires a safe executor, evidence adapter, immutable fixture hash, and no blockers.
+The manifest records candidate commit, gameplay-file hash, seed, Paper version/protocol, world or fixture identity, timeout, direct and natural-language request forms with repetitions, expected evidence, safety invariants, instrumentation mode, executor declaration, and blockers. Moving a declaration to `not-run` requires a safe executor, evidence adapter, immutable fixture hash, and no blockers.
 
-Plan and result artifacts reuse A0 outcome names and unknown-value discipline: `evidenceCompleteness`, `missingFields`, `success`, `unsafe`, `death`, `conflict`, `timeout`, `retryCount`, `terminalReason`, and `elapsedMs`. Unknown facts remain `null`. These offline artifacts are not admissible A0 run evidence.
+Plan and result artifacts reuse A0 outcome names and unknown-value discipline: `evidenceCompleteness`, `missingFields`, `success`, `unsafe`, `death`, `conflict`, `timeout`, `retryCount`, `terminalReason`, and `elapsedMs`. Unknown facts remain `null`. Offline plan artifacts are not admissible A0 run evidence; a live adapter result is admissible only for its declared scenario and repetitions.
+
+## Registered live adapter
+
+`tools/scenario-lab/adapters/run-stone-recovery.mjs` runs the wood-to-stone recovery scenario. Each request form receives an independent restore of the frozen fixture. The worker forces a per-run command-only profile, disables startup messages/goals and memory loading, verifies the pre-command state, and rejects startup action contamination. It launches Paper and Mineflayer within a bounded timeout, captures action/request correlation and physical inventory evidence, holds and stops the bot, restores managed configuration/properties/pre-run memory, preserves post-run world and replay memory, and fails closed when required evidence or cleanup is absent.
+
+The natural-language request is deliberately local and deterministic: `Please upgrade to a stone pickaxe.` must resolve to `!prepareTool("stone_pickaxe")` with route origin `deterministic-nl`. A model-routed substitution does not satisfy this scenario.
 
 ## Closed statuses
 
@@ -29,9 +35,10 @@ node tools/scenario-lab.mjs list
 node tools/scenario-lab.mjs validate
 node tools/scenario-lab.mjs plan --scenario <id> --output-dir <new-directory>
 npm run test:scenario-lab
+npm run scenario:stone-recovery -- --output-dir <new-directory>
 ```
 
-Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.plan.v1.json` and `<id>.result.v1.json` and refuses overwrite. It never starts Paper, Mineflayer, a bot, a world, or a gameplay harness. Unavailable/not-run/blocked exits `3`; validation/usage/write errors exit `2`; observed failure is reserved as `4`; only a verified result may exit `0`.
+Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.plan.v1.json` and `<id>.result.v1.json` and refuses overwrite. It never starts Paper, Mineflayer, a bot, a world, or a gameplay harness. The separate `scenario:stone-recovery` entry point is the only registered live adapter. Unavailable/not-run/blocked exits `3`; validation/usage/write errors exit `2`; observed failure exits `4`; only a verified live result may exit `0`.
 
 ## Registered families
 
@@ -40,7 +47,7 @@ Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.p
 | Doorway/corridor follow | Unavailable: follow harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Elevation follow | Unavailable: follow harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Operator stop/quiescence | Unavailable: operator-hold harness not registered as a Scenario Lab adapter; fixture not frozen. |
-| Autonomous wood-to-stone recovery after `no_safe_stance` | Unavailable: executor, evidence adapter, and frozen fixture absent. |
+| Autonomous wood-to-stone recovery after `no_safe_stance` | Runnable: bounded adapter and immutable fixture registered. Decisive 2026-08-03 replay passed direct and deterministic-NL forms; broader repetition gate remains open. |
 | Chunk-unloaded versus confirmed-air semantics | Unavailable: executor, evidence adapter, and frozen fixture absent. |
 
-The catalog is not live-world authorization. A later release must register bounded adapters and freeze fixtures before any family can move to `not-run`. Preserve future raw evidence and submit canonical run envelopes to the existing A0 aggregation gate; never infer success from command acceptance, absent evidence, unloaded chunks, or a generated plan.
+The catalog is not general live-world authorization. Each later family must register a bounded adapter and freeze its fixture before moving to `not-run`. Preserve raw evidence and canonical run envelopes; never infer success from command acceptance, absent evidence, unloaded chunks, or a generated plan. The single stone-recovery pass proves the adapter and one fixed replay, not cross-seed generalization or lab completion.

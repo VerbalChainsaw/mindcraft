@@ -23,6 +23,9 @@ const HEX40 = /^[a-f0-9]{40}$/;
 const HEX64 = /^[a-f0-9]{64}$/;
 const ID = /^[a-z0-9][a-z0-9._:-]*$/;
 const TEXT = /^\S(?:[\s\S]*\S)?$/;
+const SIGNED_SEED = /^-?(?:0|[1-9]\d*)$/;
+const MIN_SIGNED_64 = -(1n << 63n);
+const MAX_SIGNED_64 = (1n << 63n) - 1n;
 
 function plain(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -108,6 +111,22 @@ function validateServer(value, pathname, c) {
   c.integer(value.protocolVersion, `${pathname}/protocolVersion`, 1, 100000);
 }
 
+function validateSeed(value, pathname, c) {
+  if (Number.isSafeInteger(value)) return;
+  if (typeof value !== 'string' || !SIGNED_SEED.test(value)) {
+    c.add(pathname, 'type', 'must be a safe integer or signed 64-bit decimal string');
+    return;
+  }
+  try {
+    const seed = BigInt(value);
+    if (seed < MIN_SIGNED_64 || seed > MAX_SIGNED_64) {
+      c.add(pathname, 'bounds', 'must fit a signed 64-bit Minecraft seed');
+    }
+  } catch {
+    c.add(pathname, 'type', 'must be a safe integer or signed 64-bit decimal string');
+  }
+}
+
 function validateWorld(value, pathname, c) {
   if (!c.object(value, pathname, ['worldId', 'fixtureId', 'fixtureVersion', 'fixtureHash', 'dimension'])) return;
   if (value.worldId !== null) c.string(value.worldId, `${pathname}/worldId`, { max: 96, pattern: ID });
@@ -156,7 +175,7 @@ function validateScenario(value, pathname, c) {
   c.enumeration(value.family, `${pathname}/family`, FAMILIES);
   c.string(value.title, `${pathname}/title`, { max: 160, pattern: TEXT });
   c.enumeration(value.status, `${pathname}/status`, DECLARATION_STATUSES);
-  c.integer(value.seed, `${pathname}/seed`, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true);
+  validateSeed(value.seed, `${pathname}/seed`, c);
   validateWorld(value.world, `${pathname}/world`, c);
   c.integer(value.timeoutMs, `${pathname}/timeoutMs`, 1000, 3600000);
   validateRequests(value.requestForms, `${pathname}/requestForms`, c);

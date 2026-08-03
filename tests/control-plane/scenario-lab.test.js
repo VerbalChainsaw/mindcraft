@@ -16,6 +16,10 @@ import {
   loadScenarioManifest,
   validateScenarioManifest,
 } from '../../tools/scenario-lab.mjs';
+import {
+  aggregateStoneRecoveryObservations,
+  observeStoneRecoveryRun,
+} from '../../tools/scenario-lab/adapters/stone-recovery-evidence.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const CLI = path.join(ROOT, 'tools', 'scenario-lab.mjs');
@@ -50,14 +54,25 @@ function readyManifest(manifest) {
   return rehash(ready);
 }
 
-test('the frozen v1 manifest validates with exactly the requested unavailable families', async () => {
+test('the frozen v1 manifest registers one bounded replay and keeps other families unavailable', async () => {
   const manifest = await loadScenarioManifest();
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
   assert.deepEqual(manifest.scenarios.map(({ family }) => family).sort(), [...FAMILIES]);
-  assert.ok(manifest.scenarios.every(({ status, executor }) => (
-    status === 'unavailable' && executor.safe === false && executor.adapterId === null
-  )));
+
+  const stone = manifest.scenarios.find(({ id }) => (
+    id === 'autonomous-wood-to-stone-no-safe-stance-recovery'
+  ));
+  assert.equal(stone.status, 'not-run');
+  assert.equal(stone.executor.safe, true);
+  assert.equal(stone.world.fixtureHash.length, 64);
+  assert.equal(stone.seed, '8781215452871762684');
+
+  assert.ok(manifest.scenarios
+    .filter(({ id }) => id !== stone.id)
+    .every(({ status, executor }) => (
+      status === 'unavailable' && executor.safe === false && executor.adapterId === null
+    )));
 });
 
 test('list ordering and canonical CLI JSON are stable', async () => {
@@ -132,7 +147,7 @@ test('duplicate scenario IDs are rejected', async () => {
 test('invalid seed, timeout, and repetitions are rejected', async (t) => {
   const manifest = await loadScenarioManifest();
   for (const [name, mutate, expectedPath, expectedCode] of [
-    ['seed', (value) => { value.scenarios[0].seed = '104729'; }, '/scenarios/0/seed', 'type'],
+    ['seed', (value) => { value.scenarios[0].seed = 'not-a-seed'; }, '/scenarios/0/seed', 'type'],
     ['timeout', (value) => { value.scenarios[0].timeoutMs = 0; }, '/scenarios/0/timeoutMs', 'bounds'],
     ['repetitions', (value) => { value.scenarios[0].requestForms[0].repetitions = 0; }, '/scenarios/0/requestForms/0/repetitions', 'bounds'],
   ]) {
@@ -149,7 +164,8 @@ test('invalid seed, timeout, and repetitions are rejected', async (t) => {
 
 test('an unavailable adapter cannot be declared ready', async () => {
   const invalid = clone(await loadScenarioManifest());
-  invalid.scenarios[0].status = 'not-run';
+  const scenario = invalid.scenarios.find(({ status }) => status === 'unavailable');
+  scenario.status = 'not-run';
   rehash(invalid);
   const diagnostics = validateScenarioManifest(invalid);
   assert.ok(diagnostics.some(({ path: itemPath, code }) => itemPath.endsWith('/executor/adapterId') && code === 'relationship'));
@@ -191,4 +207,97 @@ test('missing evidence, safety reporting, or outcome facts have zero false-pass 
   assert.equal(forged.status, 'unavailable');
   assert.equal(forged.success, null);
   assert.equal(forged.liveScenarioPassed, false);
+});
+
+test('signed 64-bit Minecraft seed strings are accepted without precision loss', async () => {
+  const manifest = clone(await loadScenarioManifest());
+  manifest.scenarios[1].seed = '-9223372036854775808';
+  rehash(manifest);
+  assert.ok(!validateScenarioManifest(manifest).some(({ path: itemPath }) => (
+    itemPath === '/scenarios/1/seed'
+  )));
+
+  manifest.scenarios[1].seed = '9223372036854775808';
+  rehash(manifest);
+  assert.ok(validateScenarioManifest(manifest).some(({ path: itemPath, code }) => (
+    itemPath === '/scenarios/1/seed' && code === 'bounds'
+  )));
+});
+
+test('stone-recovery evidence requires physical success and the declared request route', async () => {
+  const manifest = await loadScenarioManifest();
+  const scenarioId = 'autonomous-wood-to-stone-no-safe-stance-recovery';
+  const plan = createExecutionPlan(manifest, scenarioId);
+
+  const makeRun = (form, routeOrigin) => {
+    const actionId = `action-${form}`;
+    const report = {
+      request_form: form,
+      fixture_authorized: true,
+      status: 'passed',
+      finished_utc: '2026-08-03T00:00:01.000Z',
+      before: {
+        inventory: { wooden_pickaxe: 1 },
+        health: 20,
+      },
+      final: {
+        inventory: { wooden_pickaxe: 1, stone_pickaxe: 1 },
+        main_hand: 'stone_pickaxe',
+        health: 20,
+      },
+      verdict: {
+        passed: true,
+        duration_ms: 35000,
+        external_retry_count: 0,
+        false_success_observed: false,
+        terminal_result: {
+          actionId,
+          phase: 'succeeded',
+          code: 'skill_prepared',
+          label: 'action:prepareTool',
+          detail: 'no_safe_stance:12; opening a bounded mining route (attempt 1/3).',
+        },
+      },
+      cleanup: {
+        configuration_restored: true,
+        properties_restored: true,
+        pre_run_memory_restored: true,
+        remaining_managed_java: [],
+        errors: [],
+      },
+    };
+    const samples = [{
+      action: {
+        behaviorArbiter: {
+          decisionTrace: {
+            recent: [{
+              correlation: {
+                actionId,
+                requestId: `request-${form}`,
+                routeOrigin,
+                selectedSkill: '!prepareTool',
+                args: ['stone_pickaxe'],
+              },
+            }],
+          },
+        },
+      },
+    }];
+    return observeStoneRecoveryRun(report, samples, plan.timeoutMs);
+  };
+
+  const direct = makeRun('direct', 'explicit-command');
+  const naturalLanguage = makeRun('natural-language', 'deterministic-nl');
+  assert.equal(direct.success, true);
+  assert.equal(naturalLanguage.success, true);
+
+  const observation = aggregateStoneRecoveryObservations(plan, [direct, naturalLanguage]);
+  const result = createExecutionResult(manifest, scenarioId, observation);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidenceCompleteness, 'complete');
+  assert.equal(result.liveScenarioPassed, true);
+
+  const modelRouted = makeRun('natural-language', 'model-selected');
+  assert.equal(modelRouted.success, false);
+  assert.ok(modelRouted.safetyInvariantViolations.includes('deterministic-local-request-route'));
 });

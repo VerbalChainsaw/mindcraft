@@ -45,6 +45,10 @@ test('new branches do not shadow existing follow/come/stay/stop directives', () 
   assert.equal(commandFor('head to the surface'), '!goToSurface');
 });
 
+test('stone-pickaxe upgrade request routes to prepareTool before generic equip handling', () => {
+  assert.equal(commandFor('Please upgrade to a stone pickaxe.'), '!prepareTool("stone_pickaxe")');
+});
+
 test('non-directive chatter still returns null (falls through to the model)', () => {
   assert.equal(commandFor('what a lovely day it is'), null);
   assert.equal(commandFor('go to the store and buy milk'), null);

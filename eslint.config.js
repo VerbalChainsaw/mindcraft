@@ -20,6 +20,8 @@ const CONTROL_PLANE_FILES = [
   "src/process/agent_process.js",
   "src/process/init_agent.js",
   "src/utils/agent-name.js",
+  "tools/scenario-lab.mjs",
+  "tools/scenario-lab/**/*.mjs",
   "tests/control-plane/**/*.js",
 ];
 
