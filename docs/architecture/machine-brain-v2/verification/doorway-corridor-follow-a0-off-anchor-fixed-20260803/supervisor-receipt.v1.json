@@ -1,0 +1,30 @@
+{
+    "schema_version":  1,
+    "campaign":  "follow-a0-off-anchor-fixed-5x5-20260803",
+    "started_utc":  "2026-08-03T17:25:40.3510465Z",
+    "finished_utc":  "2026-08-03T17:36:04.9591499Z",
+    "output_directory":  "C:\\Users\\zerop\\Development\\JordanWorkspace\\tasks\\minecraft-scenario-lab-adapter-20260803\\campaigns\\follow-a0-off-anchor-fixed-5x5-20260803\\runs\\follow-a0-off-anchor-fixed-5x5-20260803-172540",
+    "repo_head_before":  "7a3917ae744a4957fba3c88615448d0313f7fc89",
+    "repo_head_after":  "7a3917ae744a4957fba3c88615448d0313f7fc89",
+    "repo_status_after":  "clean",
+    "runner_exit_code":  0,
+    "result_status":  "passed",
+    "result_success":  true,
+    "manifest":  {
+                     "manifestHash":  "2ba55b770a1d5d1d2a67b985a80c34e3432a7531928f26ec0d9155d5b214007a",
+                     "manifestRevision":  "a0-follow-off-anchor-fixed-5x5-20260803.v1",
+                     "schemaVersion":  "scenario-lab.manifest.v1"
+                 },
+    "plan_hash":  "d4ee38d7dab813dc420bf8fde5297dc4a3060ad1f4f07ed116d1d333e8737c2f",
+    "planned_invocation_count":  10,
+    "completed_invocation_count":  10,
+    "direct_count":  5,
+    "natural_language_count":  5,
+    "successful_invocation_count":  10,
+    "failed_invocation_count":  0,
+    "remaining_java_processes":  [
+
+                                 ],
+    "runtime_lock_present":  false,
+    "error":  null
+}
