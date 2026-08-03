@@ -62,11 +62,13 @@ function readyManifest(manifest) {
   return rehash(ready);
 }
 
-test('the frozen v1 manifest registers one bounded replay and keeps other families unavailable', async () => {
+test('the frozen v1 manifest registers two bounded replays and keeps other families unavailable', async () => {
   const manifest = await loadScenarioManifest();
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
   assert.deepEqual(manifest.scenarios.map(({ family }) => family).sort(), [...FAMILIES]);
+  assert.equal(manifest.manifestRevision, 'release-0.1.v4');
+  assert.equal(manifest.candidateCommit, '7f5272e33b5e7becebc60c4797c6ea90697e6372');
 
   const stone = manifest.scenarios.find(({ id }) => (
     id === 'autonomous-wood-to-stone-no-safe-stance-recovery'
@@ -76,8 +78,19 @@ test('the frozen v1 manifest registers one bounded replay and keeps other famili
   assert.equal(stone.world.fixtureHash.length, 64);
   assert.equal(stone.seed, '8781215452871762684');
 
+  const follow = manifest.scenarios.find(({ id }) => id === 'doorway-corridor-follow');
+  assert.equal(follow.status, 'not-run');
+  assert.equal(follow.executor.safe, true);
+  assert.equal(follow.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(follow.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(follow.world.fixtureHash, 'be49ccbd9115e34ccd3ea6b0958302fa7c794709dfdcc6b379d06fba31a026b8');
+  assert.equal(follow.seed, '3579780610592225162');
+  assert.equal(follow.requestForms[0].request, '!followPlayer("FollowTarget", 3)');
+  assert.equal(follow.requestForms[1].request, 'Follow me through the doorway and down the corridor.');
+
+  const registered = new Set([stone.id, follow.id]);
   assert.ok(manifest.scenarios
-    .filter(({ id }) => id !== stone.id)
+    .filter(({ id }) => !registered.has(id))
     .every(({ status, executor }) => (
       status === 'unavailable' && executor.safe === false && executor.adapterId === null
     )));
@@ -122,7 +135,7 @@ test('list ordering and canonical CLI JSON are stable', async () => {
 });
 
 test('plan emits stable unavailable plan/result artifacts and refuses overwrite', async () => {
-  const scenarioId = 'doorway-corridor-follow';
+  const scenarioId = 'elevation-follow';
   await withTempDirectory(async (firstDirectory) => {
     await withTempDirectory(async (secondDirectory) => {
       const args = (directory) => [
@@ -236,7 +249,22 @@ test('missing evidence, safety reporting, or outcome facts have zero false-pass 
     assert.equal(result.liveScenarioPassed, false);
   }
 
-  const unavailable = await loadScenarioManifest();
+  const unavailable = clone(manifest);
+  const unavailableScenario = unavailable.scenarios.find(({ id }) => id === scenarioId);
+  unavailableScenario.status = 'unavailable';
+  unavailableScenario.world.fixtureHash = null;
+  unavailableScenario.executor = {
+    adapterId: null,
+    safe: false,
+    command: null,
+    evidenceAdapterId: null,
+  };
+  unavailableScenario.blockers = [{
+    code: 'safe-executor-unavailable',
+    detail: 'Synthetic negative fixture has no executor.',
+  }];
+  rehash(unavailable);
+  assert.deepEqual(validateScenarioManifest(unavailable), []);
   const forged = createExecutionResult(unavailable, scenarioId, complete);
   assert.equal(forged.status, 'unavailable');
   assert.equal(forged.success, null);

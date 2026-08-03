@@ -1,9 +1,9 @@
 {
   "schemaVersion": "scenario-lab.manifest.v1",
-  "manifestRevision": "release-0.1.v3",
-  "manifestHash": "f9a240c0b91d61c6fe3ebaec197621c4eda1c4c86b73dd7553a6bc29c839db0b",
+  "manifestRevision": "release-0.1.v4",
+  "manifestHash": "a02f74b9746d69ff86cd17bdc5b99068696734d073742b25d7f61e6ba9472b41",
   "title": "Release 0.1 deterministic Scenario Lab catalog",
-  "candidateCommit": "4c6ab2ea2bb8e8e7ef99f2c1cdbdbd8e042cee44",
+  "candidateCommit": "7f5272e33b5e7becebc60c4797c6ea90697e6372",
   "server": {
     "implementation": "paper",
     "version": "1.21.11",
@@ -131,13 +131,13 @@
       "id": "doorway-corridor-follow",
       "family": "doorway-corridor-follow",
       "title": "Doorway and corridor follow",
-      "status": "unavailable",
-      "seed": 104729,
+      "status": "not-run",
+      "seed": "3579780610592225162",
       "world": {
-        "worldId": null,
+        "worldId": "viability-pilot-disposable",
         "fixtureId": "scenario-lab.doorway-corridor-follow.v1",
         "fixtureVersion": 1,
-        "fixtureHash": null,
+        "fixtureHash": "be49ccbd9115e34ccd3ea6b0958302fa7c794709dfdcc6b379d06fba31a026b8",
         "dimension": "overworld"
       },
       "timeoutMs": 180000,
@@ -163,26 +163,22 @@
       ],
       "safetyInvariants": [
         "authorized-active-world-required",
-        "external-network-disabled",
+        "deterministic-local-request-route",
+        "fixture-endpoints-local-only",
         "bounded-timeout",
-        "no-false-success"
+        "no-false-success",
+        "runtime-restoration-required"
       ],
       "executor": {
-        "adapterId": null,
-        "safe": false,
-        "command": null,
-        "evidenceAdapterId": null
+        "adapterId": "follow-field-live-replay-v1",
+        "safe": true,
+        "command": [
+          "node",
+          "tools/scenario-lab/adapters/run-follow-field.mjs"
+        ],
+        "evidenceAdapterId": "follow-field-evidence-v1"
       },
-      "blockers": [
-        {
-          "code": "safe-executor-unavailable",
-          "detail": "The follow field harness is not registered as a safe Scenario Lab executor."
-        },
-        {
-          "code": "fixture-evidence-unavailable",
-          "detail": "The fixture identity has no immutable hash or registered canonical evidence adapter."
-        }
-      ]
+      "blockers": []
     },
     {
       "id": "elevation-follow",
