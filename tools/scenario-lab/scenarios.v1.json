@@ -1,9 +1,9 @@
 {
   "schemaVersion": "scenario-lab.manifest.v1",
-  "manifestRevision": "release-0.1.v4",
-  "manifestHash": "a02f74b9746d69ff86cd17bdc5b99068696734d073742b25d7f61e6ba9472b41",
+  "manifestRevision": "release-0.1.v5",
+  "manifestHash": "1836c0c5e299d246f36310d6a767fefdefbea9452bb76926ef8ccdbb52a321ee",
   "title": "Release 0.1 deterministic Scenario Lab catalog",
-  "candidateCommit": "7f5272e33b5e7becebc60c4797c6ea90697e6372",
+  "candidateCommit": "c87cd0c454a6be9b52bc800de6252b1d2e889c6d",
   "server": {
     "implementation": "paper",
     "version": "1.21.11",

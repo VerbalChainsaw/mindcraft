@@ -67,8 +67,8 @@ test('the frozen v1 manifest registers two bounded replays and keeps other famil
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
   assert.deepEqual(manifest.scenarios.map(({ family }) => family).sort(), [...FAMILIES]);
-  assert.equal(manifest.manifestRevision, 'release-0.1.v4');
-  assert.equal(manifest.candidateCommit, '7f5272e33b5e7becebc60c4797c6ea90697e6372');
+  assert.equal(manifest.manifestRevision, 'release-0.1.v5');
+  assert.equal(manifest.candidateCommit, 'c87cd0c454a6be9b52bc800de6252b1d2e889c6d');
 
   const stone = manifest.scenarios.find(({ id }) => (
     id === 'autonomous-wood-to-stone-no-safe-stance-recovery'

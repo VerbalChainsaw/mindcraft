@@ -43,7 +43,7 @@ npm run scenario:stone-recovery -- --output-dir <new-directory> --fixture-root <
 npm run scenario:follow-field -- --output-dir <new-directory> --fixture-root <frozen-follow-fixture-directory>
 ```
 
-Live adapters never guess a machine-specific fixture path. Supply `--fixture-root`, or set `SCENARIO_LAB_STONE_FIXTURE_ROOT` for the stone fixture and `SCENARIO_LAB_FOLLOW_FIXTURE_ROOT` for the follow fixture. The follow directory must contain `follow-world.zip`, `fixture-metadata.json`, `scenario-profile.json`, and `baseline-course-contract.json` with the hashes frozen in the worker contract.
+Live adapters never guess a machine-specific fixture path. Supply `--fixture-root`, or set `SCENARIO_LAB_STONE_FIXTURE_ROOT` for the stone fixture and `SCENARIO_LAB_FOLLOW_FIXTURE_ROOT` for the follow fixture. The follow directory must contain `follow-world.zip`, `fixture-metadata.json`, and `scenario-profile.json`; metadata carries the frozen baseline-course hash, and the worker verifies all four hashes.
 
 Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.plan.v1.json` and `<id>.result.v1.json` and refuses overwrite. It never starts Paper, Mineflayer, a bot, a world, or a gameplay harness. The separate `scenario:stone-recovery` and `scenario:follow-field` entry points are the registered live adapters. Unavailable/not-run/blocked exits `3`; validation/usage/write errors exit `2`; observed failure exits `4`; only a verified live result may exit `0`.
 
@@ -51,7 +51,7 @@ Output is canonical JSON. `list` is ID-sorted. `plan` exclusively writes `<id>.p
 
 | Family | Release 0.1 state |
 |---|---|
-| Doorway/corridor follow | Runnable: bounded adapter and immutable fixture registered against candidate `7f5272e33b5e7becebc60c4797c6ea90697e6372`; decisive replay not yet run. |
+| Doorway/corridor follow | Runnable: bounded adapter and immutable fixture registered against candidate `c87cd0c454a6be9b52bc800de6252b1d2e889c6d`; decisive replay not yet run. |
 | Elevation follow | Unavailable: follow harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Operator stop/quiescence | Unavailable: operator-hold harness not registered as a Scenario Lab adapter; fixture not frozen. |
 | Autonomous wood-to-stone recovery after `no_safe_stance` | Runnable: bounded adapter and immutable fixture registered. Decisive 2026-08-03 replay passed direct and deterministic-NL forms; broader repetition gate remains open. |
