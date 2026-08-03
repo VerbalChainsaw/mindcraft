@@ -4,6 +4,12 @@ function commandString(value) {
     return JSON.stringify(String(value || ''));
 }
 
+export function routeCompoundToolGoal(playerName, command) {
+    const match = /^!prepareTool\(\s*(["'])stone_pickaxe\1\s*\)\s*$/.exec(String(command || ''));
+    if (!match) return command;
+    return `!requestItemGoal("acquire", "stone_pickaxe", 1, ${commandString(playerName)})`;
+}
+
 function normalizedMessage(message) {
     return String(message || '')
         .trim()
@@ -638,7 +644,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         && /\b(?:make|craft|prepare|get|replace|equip|upgrade)\b/.test(text)
     ) {
         return {
-            command: `!prepareTool(${commandString(tool)})`,
+            command: routeCompoundToolGoal(playerName, `!prepareTool(${commandString(tool)})`),
             response: `I will prepare and equip a usable ${tool.replaceAll('_', ' ')}.`,
             releasesHold: true,
         };

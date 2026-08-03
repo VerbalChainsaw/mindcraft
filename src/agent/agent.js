@@ -19,7 +19,7 @@ import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { resolveBlockedActions } from './command-policy.js';
 import { addressesAgent } from './chat-address.js';
-import { resolvePlayerDirective } from './player-directives.js';
+import { resolvePlayerDirective, routeCompoundToolGoal } from './player-directives.js';
 import { parsePlayerAgenda } from './player-agenda.js';
 import { normalizeRuntimeBehavior } from './runtime/behavior-config.js';
 import { JobDirector } from './runtime/job-director.js';
@@ -779,6 +779,7 @@ export class Agent {
             : null;
 
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands
+            message = routeCompoundToolGoal(source, message);
             const user_command_name = containsCommand(message);
                 if (user_command_name) {
                     if (!commandExists(user_command_name)) {

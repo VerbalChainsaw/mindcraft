@@ -39,6 +39,10 @@ function commandName(command) {
   return String(command || '').match(/^![A-Za-z0-9_]+/)?.[0] || '';
 }
 
+function budgetedSubgoalCount(goal) {
+  return (goal?.subgoals || []).filter(subgoal => subgoal.kind !== 'recover').length;
+}
+
 function actionResultEvidence(result) {
   return result?.evidence?.skill && typeof result.evidence.skill === 'object'
     ? result.evidence.skill
@@ -452,6 +456,11 @@ export class GoalDirector {
 
   appendActingSubgoal(kind, command, step = null) {
     const now = this.now();
+    const retainedSubgoals = [...this.activeGoal.subgoals];
+    if (retainedSubgoals.length >= this.activeGoal.maxSubgoals) {
+      const oldestRecovery = retainedSubgoals.findIndex(subgoal => subgoal.kind === 'recover');
+      if (oldestRecovery >= 0) retainedSubgoals.splice(oldestRecovery, 1);
+    }
     const targetInventory = step?.expectedName
       ? plannedInventoryCount(this.agent.bot, step.expectedName, step.expectedFamily)
       : 0;
@@ -478,7 +487,7 @@ export class GoalDirector {
     };
     return this.persist({
       ...this.activeGoal,
-      subgoals: [...this.activeGoal.subgoals, subgoal],
+      subgoals: [...retainedSubgoals, subgoal],
       updatedAt: now,
     });
   }
@@ -698,7 +707,7 @@ export class GoalDirector {
     const attempts = preemptionRecovery ? goal.attempts : goal.attempts + 1;
     if (
       preemptionRecovery
-      && goal.subgoals.length < goal.maxSubgoals
+      && budgetedSubgoalCount(goal) < goal.maxSubgoals
     ) {
       this.persist({
         ...goal,
@@ -721,7 +730,7 @@ export class GoalDirector {
     if (
       (effectiveResult.retryable === true || deliveryRecovery || preemptionRecovery)
       && attempts <= goal.maxAttempts
-      && goal.subgoals.length < goal.maxSubgoals
+      && budgetedSubgoalCount(goal) < goal.maxSubgoals
     ) {
       this.persist({
         ...goal,
@@ -742,7 +751,7 @@ export class GoalDirector {
 
   dispatch(kind, command, step = null) {
     if (!this.activeGoal || this.inFlight) return false;
-    if (this.activeGoal.subgoals.length >= this.activeGoal.maxSubgoals) {
+    if (budgetedSubgoalCount(this.activeGoal) >= this.activeGoal.maxSubgoals) {
       this.fail('subgoal_budget_exhausted', `Goal reached its ${this.activeGoal.maxSubgoals}-subgoal safety limit.`);
       return false;
     }

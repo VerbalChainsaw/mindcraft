@@ -46,8 +46,11 @@ test('new branches do not shadow existing follow/come/stay/stop directives', () 
   assert.equal(commandFor('head to the surface'), '!goToSurface');
 });
 
-test('stone-pickaxe upgrade request routes to prepareTool before generic equip handling', () => {
-  assert.equal(commandFor('Please upgrade to a stone pickaxe.'), '!prepareTool("stone_pickaxe")');
+test('stone-pickaxe upgrade request routes through the resumable typed goal', () => {
+  assert.equal(
+    commandFor('Please upgrade to a stone pickaxe.'),
+    '!requestItemGoal("acquire", "stone_pickaxe", 1, "Gabriel")',
+  );
 });
 
 test('non-directive chatter still returns null (falls through to the model)', () => {
