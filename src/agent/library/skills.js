@@ -907,6 +907,33 @@ function isCollectionStandingCellClear(block) {
     );
 }
 
+function physicallyOccupiesStandingCell(bot, expected) {
+    const position = bot.entity?.position;
+    if (!position || !expected) return false;
+    // Minecraft can report a supported player's Y a tiny fraction below the
+    // integer feet coordinate. floor() then names the support cell while
+    // Pathfinder correctly resolves the intended GoalBlock one cell above.
+    // Verify the actual body volume and support instead of trusting the
+    // transient onGround bit or raw flooring alone.
+    if (
+        Math.floor(position.x) !== expected.x
+        || Math.floor(position.z) !== expected.z
+        || Math.abs(position.y - expected.y) > 0.2
+    ) return false;
+    return Boolean(
+        isCollectionStandingCellClear(bot.blockAt(expected))
+        && isCollectionStandingCellClear(bot.blockAt(expected.offset(0, 1, 0)))
+        && isSafeGameplaySupport(bot.blockAt(expected.offset(0, -1, 0)))
+    );
+}
+
+function observedSupportedStandingCell(bot) {
+    const floored = bot.entity?.position?.floored?.();
+    if (!floored) return null;
+    return [floored, floored.offset(0, 1, 0)]
+        .find(candidate => physicallyOccupiesStandingCell(bot, candidate)) || null;
+}
+
 function collectionDropSupport(bot, targetPosition) {
     for (let depth = 1; depth <= MAX_COLLECTION_DROP_DEPTH + 1; depth += 1) {
         const position = targetPosition.offset(0, -depth, 0);
@@ -1011,22 +1038,16 @@ function collectionApproachGoal(stances) {
 }
 
 function isAtCollectionStance(bot, stances) {
-    const feet = bot.entity?.position?.floored?.();
-    return Boolean(feet && stances?.some(position => (
-        position.x === feet.x
-        && position.y === feet.y
-        && position.z === feet.z
-    )));
+    return Boolean(stances?.some(position => physicallyOccupiesStandingCell(bot, position)));
 }
 
-function collectionApproachMovements(bot, targetBlock) {
-    const movements = miningMovements(bot);
-    const safeToBreak = movements.safeToBreak;
-    movements.safeToBreak = candidate => (
-        !sameBlockPosition(candidate, targetBlock)
-        && safeToBreak(candidate)
-    );
-    return movements;
+function collectionApproachMovements(bot) {
+    // Route probing and execution must answer the same question: can native
+    // Pathfinder reach an already-clear mining stance without excavating?
+    // When it cannot, deterministic mining binds and authorizes the exact
+    // corridor. Letting A* dig here creates a second excavation planner and
+    // makes a successful probe meaningless to the actual safety contract.
+    return clearedMiningMovements(bot);
 }
 
 function targetScopedCollectionMovements(bot, targetBlock, {
@@ -1222,7 +1243,7 @@ function collectionCandidateObservations(
             : probeCollectionRoute(
                 bot,
                 block,
-                targetAssessment ? collectionApproachMovements(bot, block) : movements,
+                targetAssessment ? collectionApproachMovements(bot) : movements,
                 targetAssessment,
             );
         return {
@@ -1412,7 +1433,11 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
         // Buried registry targets have no pre-existing standing cell by
         // definition. Reuse the bounded supported mining route to create one;
         // ordinary resources still use the non-digging local recovery below.
-        if (candidateEntry.routeStatus === 'no_safe_stance' && allowNaturalRouteDigging) {
+        const requiresDeterministicMiningAccess = allowNaturalRouteDigging && (
+            candidateEntry.routeStatus === 'no_safe_stance'
+            || candidateEntry.reachable === false
+        );
+        if (requiresDeterministicMiningAccess) {
             const opened = await mineSearchTunnel(
                 bot,
                 candidate.name,
@@ -4476,7 +4501,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         let approachNavigation = null;
                         try {
                             reached = await goToGoal(bot, approachGoal, {
-                                movements: () => collectionApproachMovements(bot, liveTarget),
+                                movements: () => collectionApproachMovements(bot),
                                 stallTimeoutMs: 12_000,
                                 allowHealthBoundedDescent: false,
                                 allowLocalRecovery: false,
@@ -8939,15 +8964,16 @@ function stableMiningStagingCandidates(bot) {
 }
 
 async function stageMiningStaircase(bot) {
-    const current = bot.entity?.position?.floored?.();
+    const current = observedSupportedStandingCell(bot);
     if (!current) return false;
     if (isStableMiningStagingCell(bot, current)) {
-        if (bot.entity?.onGround) return true;
-        const grounded = await waitForWorldCondition(bot, () => (
-            bot.entity?.onGround
-            && isStableMiningStagingCell(bot, bot.entity.position.floored())
-        ), GROUND_SETTLE_TIMEOUT_MS, 25);
-        if (grounded) return true;
+        const settled = await waitForWorldCondition(
+            bot,
+            () => physicallyOccupiesStandingCell(bot, current),
+            GROUND_SETTLE_TIMEOUT_MS,
+            25,
+        );
+        if (settled) return true;
     }
 
     const candidates = stableMiningStagingCandidates(bot);
@@ -8973,12 +8999,9 @@ async function stageMiningStaircase(bot) {
             },
         );
         if (bot.interrupt_code) return false;
-        const standing = bot.entity?.position?.floored?.();
         if (
-            reached
-            && bot.entity?.onGround
-            && standing
-            && isStableMiningStagingCell(bot, standing)
+            (reached || physicallyOccupiesStandingCell(bot, candidate.position))
+            && isStableMiningStagingCell(bot, candidate.position)
         ) {
             log(bot, 'Reached stable dry ground before opening the mining staircase.');
             return true;
@@ -9497,7 +9520,7 @@ function assessMiningAccessPlan(
 }
 
 function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) {
-    const origin = bot.entity?.position?.floored?.();
+    const origin = observedSupportedStandingCell(bot);
     if (!origin) return { ok: false, outcome: 'position_unavailable' };
     const stances = prospectiveMiningStandingPositions(bot, targetBlock);
     if (stances.length === 0) return { ok: false, outcome: 'no_safe_stance' };
@@ -9579,19 +9602,15 @@ async function traverseClearedMiningStep(bot, route, stepIndex) {
             allowLocalRecovery: false,
         },
     );
-    if (!bot.entity?.onGround) {
-        await waitForWorldCondition(
-            bot,
-            () => bot.entity?.onGround === true,
-            GROUND_SETTLE_TIMEOUT_MS,
-            25,
-        );
-    }
-    const observed = bot.entity?.position?.floored?.();
+    await waitForWorldCondition(
+        bot,
+        () => physicallyOccupiesStandingCell(bot, step),
+        GROUND_SETTLE_TIMEOUT_MS,
+        25,
+    );
+    const observed = bot.entity?.position?.clone?.() || null;
     const arrived = Boolean(
-        reached
-        && bot.entity?.onGround
-        && sameMiningCell(observed, step)
+        physicallyOccupiesStandingCell(bot, step)
         && isMiningRouteCellReturnable(bot, step)
     );
     return {
@@ -9600,6 +9619,7 @@ async function traverseClearedMiningStep(bot, route, stepIndex) {
         landedIndex: arrived ? stepIndex : stepIndex - 1,
         observed,
         reached,
+        onGround: bot.entity?.onGround === true,
     };
 }
 
@@ -9663,6 +9683,8 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 stepIndex: nextIndex,
                 step: step.position,
                 observed: traversal.observed,
+                reached: traversal.reached,
+                onGround: traversal.onGround,
             };
         }
         for (let index = 0; index <= traversal.landedIndex; index += 1) {
@@ -9759,8 +9781,7 @@ function cardinalHeading(bot, direction) {
 
 /** Let Pathfinder move through one already-cleared tunnel cell without digging. */
 async function stepIntoTunnelCell(bot, cell) {
-    const center = new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5);
-    const arrived = await goToGoal(
+    await goToGoal(
         bot,
         new pf.goals.GoalBlock(cell.x, cell.y, cell.z),
         {
@@ -9770,7 +9791,7 @@ async function stepIntoTunnelCell(bot, cell) {
             allowLocalRecovery: false,
         },
     );
-    return arrived && bot.entity.position.distanceTo(center) < 1.3;
+    return physicallyOccupiesStandingCell(bot, cell);
 }
 
 /**
@@ -9962,6 +9983,11 @@ export async function mineSearchTunnel(
                 blockBudget: plan.blockBudget,
                 estimatedDurationMs: plan.estimatedDurationMs,
                 durability: plan.durability,
+                failedStepIndex: Number.isFinite(access.stepIndex) ? access.stepIndex : null,
+                failedStep: access.step || null,
+                observedPosition: access.observed || null,
+                pathfinderReached: access.reached ?? null,
+                onGround: access.onGround ?? null,
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });

@@ -110,7 +110,8 @@ export const queryList = [
                 if (plan?.nextStep) {
                     res += `\n- Causal plan: revision ${plan.revision}; ${plan.remainingActions} remaining action(s); learned ranking applied=${plan.experienceApplied}`;
                     res += `\n- Causal next step: ${plan.nextStep.reason}`;
-                    res += `\n- Planned verified command: ${plan.nextStep.command}`;
+                    res += `\n- Planned capability: ${plan.nextStep.capability?.id || 'unknown'}`;
+                    res += `\n- Bound deterministic command: ${plan.nextStep.capability?.binding?.command || 'unbound'}`;
                     if (plan.actions?.length > 1) {
                         res += `\n- Following plan steps: ${plan.actions.slice(1, 5).map(step => `${step.kind} ${step.target}`).join(' -> ')}`;
                     }

@@ -576,7 +576,11 @@ export function getGoalDirectorState(agent) {
                     ? {
                         kind: String(plan.nextStep.kind || '').slice(0, 32),
                         target: String(plan.nextStep.target || '').slice(0, 80),
-                        command: String(plan.nextStep.command || '').slice(0, 240),
+                        capabilityId: String(plan.nextStep.capability?.id || '').slice(0, 80),
+                        command: String(plan.nextStep.capability?.binding?.command || '').slice(0, 240),
+                        expectedEffects: Array.isArray(plan.nextStep.capability?.expectedEffects)
+                            ? plan.nextStep.capability.expectedEffects.slice(0, 4)
+                            : [],
                         reason: String(plan.nextStep.reason || '').slice(0, 280),
                         learningKey: plan.nextStep.learningKey
                             ? String(plan.nextStep.learningKey).slice(0, 160)
@@ -588,7 +592,11 @@ export function getGoalDirectorState(agent) {
                     ? plan.actions.slice(0, 8).map(action => ({
                         kind: String(action.kind || '').slice(0, 32),
                         target: String(action.target || '').slice(0, 80),
-                        command: String(action.command || '').slice(0, 240),
+                        capabilityId: String(action.capability?.id || '').slice(0, 80),
+                        command: String(action.capability?.binding?.command || '').slice(0, 240),
+                        expectedEffects: Array.isArray(action.capability?.expectedEffects)
+                            ? action.capability.expectedEffects.slice(0, 4)
+                            : [],
                         expectedIncrease: Math.max(0, Number(action.expectedIncrease) || 0),
                         reason: String(action.reason || '').slice(0, 280),
                         learningKey: action.learningKey

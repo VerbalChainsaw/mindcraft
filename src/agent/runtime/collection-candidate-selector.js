@@ -9,6 +9,7 @@ const ROUTE_PENALTIES = Object.freeze({
 
 const UNREACHABLE_ROUTE_STATUSES = new Set([
     'noPath',
+    'action_deadline',
     'unreachable',
     'timeout',
     'probe_error',

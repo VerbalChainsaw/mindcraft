@@ -14,6 +14,10 @@ import {
 } from '../src/agent/runtime/goal-contract.js';
 import { PersonalMemory } from '../src/agent/runtime/personal-memory.js';
 import { classifyMethodOutcome } from '../src/agent/runtime/action-result.js';
+import {
+  executeCapabilityAction,
+  getCapabilityDefinition,
+} from '../src/agent/runtime/capability-catalogue.js';
 import { buildPrerequisitePlan } from '../src/agent/runtime/prerequisite-planner.js';
 import { ProcedureStore } from '../src/agent/runtime/procedure-store.js';
 
@@ -179,14 +183,14 @@ test('The causal planner uses learned outcomes only to rank otherwise viable met
     target: 'test_gem',
     quantity: 1,
   });
-  assert.match(baseline.nextStep.command, /alpha_ore/);
+  assert.match(baseline.nextStep.capability.binding.command, /alpha_ore/);
 
   const learned = buildPrerequisitePlan(plannerBot(), {
     target: 'test_gem',
     quantity: 1,
     experience: key => key.includes('beta_ore') ? 8 : key.includes('alpha_ore') ? -8 : 0,
   });
-  assert.match(learned.nextStep.command, /beta_ore/);
+  assert.match(learned.nextStep.capability.binding.command, /beta_ore/);
   assert.equal(learned.nextStep.learningKey, 'collect:beta_ore->test_gem');
   assert.equal(learned.nextStep.learnedPreference, 8);
 });
@@ -199,7 +203,7 @@ test('The causal planner prefers the nearest physical source behind equivalent r
   });
 
   assert.equal(plan.status, 'ready');
-  assert.equal(plan.nextStep.command, '!collectBlocksInRange("birch_log", 1, 64)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64)');
 });
 
 test('The causal planner keeps a hand-equipment completion open until Minecraft reports the item equipped', () => {
@@ -214,7 +218,7 @@ test('The causal planner keeps a hand-equipment completion open until Minecraft 
     completion: { kind: 'main_hand' },
   });
   assert.equal(pending.status, 'ready');
-  assert.equal(pending.nextStep.command, '!equip("test_gem", "main_hand")');
+  assert.equal(pending.nextStep.capability.binding.command, '!equip("test_gem", "main_hand")');
 
   bot.inventory.slots[9] = null;
   bot.inventory.slots[36] = { name: 'test_gem', count: 1 };
@@ -224,6 +228,37 @@ test('The causal planner keeps a hand-equipment completion open until Minecraft 
     completion: { kind: 'main_hand' },
   });
   assert.equal(complete.status, 'complete');
+});
+
+test('Planner capabilities expose and enforce the typed execution contract', async () => {
+  const bot = plannerBot();
+  const plan = buildPrerequisitePlan(bot, { target: 'test_gem', quantity: 1 });
+  const capability = plan.nextStep.capability;
+  const definition = getCapabilityDefinition(capability.id);
+
+  assert.equal(capability.id, 'collect_block');
+  assert.equal(capability.preconditions.ok, true);
+  assert.deepEqual(capability.expectedEffects, [{
+    kind: 'inventory_increase',
+    name: 'test_gem',
+    family: null,
+    minimumIncrease: 1,
+  }]);
+  for (const member of ['parameters', 'preconditions', 'expectedEffects', 'bind', 'execute', 'verify', 'cost']) {
+    assert.ok(definition[member], `capability definition is missing ${member}`);
+  }
+
+  const agent = { bot, last_action_result: null };
+  const outcome = await executeCapabilityAction(capability, {
+    agent,
+    executeCommand: (_agent, command, options) => {
+      assert.equal(command, '!collectBlocksInRange("alpha_ore", 1, 64)');
+      assert.equal(options.owner, 'player');
+      bot.inventory.slots = [{ name: 'test_gem', count: 1 }];
+      return 'collected';
+    },
+  });
+  assert.equal(outcome.verification.ok, true);
 });
 
 test('A persisted goal preserves the learning identity of its active plan step', () => {

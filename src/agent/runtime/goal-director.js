@@ -6,6 +6,10 @@ import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
 import { classifyMethodOutcome, isPreemption } from './action-result.js';
 import {
+  capabilityCommandName,
+  executeCapabilityAction,
+} from './capability-catalogue.js';
+import {
   completionRequirementSatisfied,
   goalContractDescription,
   inventoryCountForGoalTarget,
@@ -187,6 +191,15 @@ function plannedDisengagementCommand(goal) {
     && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken|timeout|action_deadline)/.test(code)
   ) return '!moveAway(32)';
   return null;
+}
+
+function latestPlanFailureHasConcreteTarget(goal) {
+  const subgoal = goal.subgoals.at(-1);
+  if (subgoal?.kind !== 'plan' || subgoal.state !== 'failed') return false;
+  return (goal.memory?.failedTargets || []).some(target => (
+    target.kind === 'collect'
+    && target.lastFailedAt >= Math.max(0, Number(subgoal.finishedAt) || 0)
+  ));
 }
 
 export class GoalDirector {
@@ -905,7 +918,10 @@ export class GoalDirector {
       this.fail('subgoal_budget_exhausted', `Goal reached its ${this.activeGoal.maxSubgoals}-subgoal safety limit.`);
       return false;
     }
-    const selectedName = commandName(command);
+    const capability = kind === 'plan' ? step?.capability : null;
+    const selectedName = capability
+      ? capabilityCommandName(capability)
+      : commandName(command);
     if (!selectedName || !isSafeProcedureCommand(selectedName) || !getCommand(selectedName)) {
       this.fail('unsafe_goal_command', `Goal attempted unavailable or unsafe command '${selectedName || 'unknown'}'.`);
       return false;
@@ -916,13 +932,21 @@ export class GoalDirector {
     }
 
     const previousActionId = this.agent.last_action_result?.actionId || null;
-    this.appendActingSubgoal(kind, command, step);
+    this.appendActingSubgoal(kind, capability?.binding?.command || command, step);
     this.inFlight = true;
     this.setStatus('acting', `goal_${kind}`, `Executing ${selectedName} through the deterministic command path.`, true);
-    void Promise.resolve(this.executeGoalCommand(this.agent, command, { owner: 'player' }))
-      .then(() => {
+    const execution = capability
+      ? executeCapabilityAction(capability, {
+        agent: this.agent,
+        executeCommand: this.executeGoalCommand,
+        owner: 'player',
+      })
+      : Promise.resolve(this.executeGoalCommand(this.agent, command, { owner: 'player' }))
+        .then(value => ({ value, verification: null, result: null }));
+    void Promise.resolve(execution)
+      .then(outcome => {
         if (!this.activeGoal) return;
-        let result = this.agent.last_action_result;
+        let result = outcome?.result || this.agent.last_action_result;
         if (!result?.actionId || result.actionId === previousActionId) {
           result = {
             actionId: `missing-${this.now()}`,
@@ -931,6 +955,15 @@ export class GoalDirector {
             detail: `${selectedName} returned without a new structured action result.`,
             retryable: true,
             evidence: null,
+          };
+        }
+        if (result.phase === 'succeeded' && outcome?.verification?.ok === false) {
+          result = {
+            ...result,
+            phase: 'failed',
+            code: outcome.verification.code || 'verification_failed',
+            detail: outcome.verification.detail || 'The capability effects were not verified in Minecraft.',
+            retryable: true,
           };
         }
         this.handleResult(kind, result);
@@ -1048,6 +1081,17 @@ export class GoalDirector {
 
       if (goal.phase === 'recover') {
         if (goal.subgoals.at(-1)?.kind === 'plan') {
+          if (latestPlanFailureHasConcreteTarget(goal)) {
+            this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
+            this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+            this.setStatus(
+              'planning',
+              'concrete_target_excluded',
+              'The failed physical source is excluded; selecting a different target without blind relocation.',
+              true,
+            );
+            return;
+          }
           const disengagement = plannedDisengagementCommand(goal);
           if (disengagement) {
             this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
@@ -1100,7 +1144,11 @@ export class GoalDirector {
             workstationRequirement: goal.memory?.workstationRequirement,
           });
           const planSignature = JSON.stringify(
-            (plan.actions || []).map(action => [action.command, action.learningKey]),
+            (plan.actions || []).map(action => [
+              action.capability?.id,
+              action.capability?.arguments,
+              action.learningKey,
+            ]),
           );
           if (planSignature !== this.lastPlanSignature) {
             this.planRevision += 1;
@@ -1135,7 +1183,7 @@ export class GoalDirector {
             `${plan.detail} ${plan.nextStep.reason}`.slice(0, 280),
             true,
           );
-          this.dispatch('plan', plan.nextStep.command, plan.nextStep);
+          this.dispatch('plan', null, plan.nextStep);
           return;
         }
         const shortage = Math.max(1, required - current);

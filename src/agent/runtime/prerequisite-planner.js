@@ -1,4 +1,5 @@
 import * as mc from '../../utils/mcdata.js';
+import { createCapabilityPlanAction } from './capability-catalogue.js';
 import { completionRequirementSatisfied } from './goal-contract.js';
 
 const DEFAULT_RANGE = 64;
@@ -34,10 +35,6 @@ function canonicalName(value) {
     .replace(/[\s-]+/g, '_')
     .replace(/[^a-z0-9_]/g, '')
     .slice(0, 80);
-}
-
-function commandString(value) {
-  return JSON.stringify(String(value || ''));
 }
 
 function itemName(bot, id) {
@@ -134,7 +131,7 @@ function addAction(context, action) {
   }
   context.actions.push(Object.freeze({
     kind: action.kind,
-    command: action.command,
+    capability: action.capability,
     target: action.target,
     expectedName: action.expectedName || action.target,
     expectedFamily: action.expectedFamily || null,
@@ -145,6 +142,24 @@ function addAction(context, action) {
     learnedPreference: learnedPreference(context, action.learningKey),
   }));
   return null;
+}
+
+function addCapabilityAction(bot, context, capabilityId, args, metadata) {
+  try {
+    return addAction(context, createCapabilityPlanAction(
+      capabilityId,
+      args,
+      metadata,
+      { bot, inventory: context.ledger },
+    ));
+  } catch (error) {
+    return blocked(
+      'capability_binding_failed',
+      error?.message || `The planner could not bind capability ${capabilityId}.`,
+      metadata.target,
+      metadata.trail,
+    );
+  }
 }
 
 function blocked(code, detail, target, trail = []) {
@@ -367,7 +382,7 @@ function requiredHarvestTools(bot, block) {
     .sort((left, right) => toolScore(left) - toolScore(right) || left.localeCompare(right));
 }
 
-function reserveFuel(context, amount, trail) {
+function reserveFuel(bot, context, amount, trail) {
   let remaining = Math.max(1, amount);
   const fuels = [...context.ledger.entries()]
     .map(([name, count]) => ({ name, count, output: fuelOutput(name) }))
@@ -382,9 +397,12 @@ function reserveFuel(context, amount, trail) {
   if (remaining <= 0) return null;
 
   const logsNeeded = Math.max(1, Math.ceil(remaining / 1.5));
-  const actionFailure = addAction(context, {
+  const actionFailure = addCapabilityAction(bot, context, 'collect_wood', {
+    count: Math.min(64, logsNeeded),
+    range: context.range,
+    expectedIncrease: logsNeeded,
+  }, {
     kind: 'collect_fuel',
-    command: `!collectWoodInRange(${Math.min(64, logsNeeded)}, ${context.range})`,
     target: 'logs',
     expectedName: 'logs',
     expectedFamily: 'logs',
@@ -427,9 +445,12 @@ function planFromRecipe(bot, context, target, amount, recipe, trail) {
   }
 
   const produced = batches * outputCount;
-  const actionFailure = addAction(context, {
+  const actionFailure = addCapabilityAction(bot, context, 'craft', {
+    item: target,
+    batches,
+    expectedIncrease: produced,
+  }, {
     kind: 'craft',
-    command: `!craftRecipe(${commandString(target)}, ${batches})`,
     target,
     expectedIncrease: produced,
     reason: `${target} is produced from ${ingredients.map(ingredient => `${ingredient.count * batches} ${ingredient.name}`).join(' + ')}.`,
@@ -446,13 +467,17 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
   if (inputFailure) return inputFailure;
   const furnaceFailure = ensurePersistentItem(bot, context, 'furnace', [...trail, `${target}:furnace`]);
   if (furnaceFailure) return furnaceFailure;
-  const fuelFailure = reserveFuel(context, amount, [...trail, `${target}:fuel`]);
+  const fuelFailure = reserveFuel(bot, context, amount, [...trail, `${target}:fuel`]);
   if (fuelFailure) return fuelFailure;
 
   setLedgerCount(context, input, ledgerCount(context, input) - amount);
-  const actionFailure = addAction(context, {
+  const actionFailure = addCapabilityAction(bot, context, 'smelt', {
+    input,
+    output: target,
+    count: amount,
+    expectedIncrease: amount,
+  }, {
     kind: 'smelt',
-    command: `!smeltItem(${commandString(input)}, ${amount})`,
     target,
     expectedIncrease: amount,
     reason: `${input} plus furnace fuel produces ${target}.`,
@@ -498,9 +523,14 @@ function planFromWorldSource(bot, context, target, amount, trail) {
       if (!toolPrepared) continue;
     }
 
-    const actionFailure = addAction(candidate, {
+    const actionFailure = addCapabilityAction(bot, candidate, 'collect_block', {
+      source: source.name,
+      output: target,
+      count: Math.min(2304, amount),
+      range: context.range,
+      expectedIncrease: amount,
+    }, {
       kind: 'collect',
-      command: `!collectBlocksInRange(${commandString(source.name)}, ${Math.min(2304, amount)}, ${context.range})`,
       target,
       expectedIncrease: amount,
       reason: `${source.name} is a connected-registry block source whose drop produces ${target}.`,
@@ -596,7 +626,7 @@ function ensureItem(bot, context, targetName, requiredCount, trail = []) {
 function publicAction(action) {
   return {
     kind: action.kind,
-    command: action.command,
+    capability: action.capability,
     target: action.target,
     expectedName: action.expectedName,
     expectedFamily: action.expectedFamily,
@@ -644,9 +674,11 @@ export function buildPrerequisitePlan(bot, {
       && !completionRequirementSatisfied(bot, { inventoryName: canonicalTarget }, { kind: completionKind })
     ) {
       const destination = completionKind === 'main_hand' ? 'main_hand' : 'off_hand';
-      const action = publicAction({
+      const action = publicAction(createCapabilityPlanAction('equip', {
+        item: canonicalTarget,
+        destination,
+      }, {
         kind: 'equip',
-        command: `!equip(${commandString(canonicalTarget)}, ${commandString(destination)})`,
         target: canonicalTarget,
         expectedName: null,
         expectedFamily: null,
@@ -655,7 +687,7 @@ export function buildPrerequisitePlan(bot, {
         trail: [canonicalTarget, completionKind],
         learningKey: `equip:${canonicalTarget}->${completionKind}`,
         learnedPreference: 0,
-      });
+      }, { bot }));
       return {
         status: 'ready',
         code: 'equipment_completion_ready',
