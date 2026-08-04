@@ -48,18 +48,12 @@ const DEFENSE_SWING_INTERVAL_MS = 550;
 const MAX_PVP_ENGAGEMENT_MS = 30_000;
 const MAX_BOT_OUTPUT_CHARS = 2_048;
 const MAX_MELEE_REACH = 3.2;
-const TACTICAL_MELEE_REACH_MARGIN = 0.25;
-const TACTICAL_MELEE_STANCE_RADIUS = 3;
-const MAX_TACTICAL_MELEE_STANCES = 24;
-const MAX_TACTICAL_MELEE_REPLANS = 2;
-const TACTICAL_MELEE_REPLAN_DISTANCE = 0.75;
 const ATTACK_CONFIRM_TIMEOUT_MS = 900;
 const ATTACK_INTERRUPT_POLL_MS = 50;
 const MAX_TACTICAL_COMBAT_STEPS = 24;
 const TACTICAL_COMBAT_RANGE = 16;
 const TACTICAL_BOW_CHARGE_MS = 900;
 const TACTICAL_SHOT_CONFIRM_MS = 1_500;
-const TACTICAL_SHIELD_WINDOW_MS = 450;
 const TABLE_DROP_SEARCH_RADIUS = 4;
 const TABLE_DROP_APPEAR_TIMEOUT_MS = 1_500;
 const TABLE_PICKUP_TIMEOUT_MS = 1_500;
@@ -3263,6 +3257,31 @@ async function waitCombatWindow(bot, durationMs) {
     return !bot.interrupt_code;
 }
 
+function pvpCombatIsSettled(bot) {
+    const controls = bot?.controlState || {};
+    return !bot?.pvp?.target
+        && bot?.pathfinder?.goal == null
+        && bot?.pathfinder?.isMoving?.() !== true
+        && !Object.values(controls).some(Boolean);
+}
+
+async function stopPvpCombatAndSettle(bot) {
+    try { await bot.pvp?.stop?.(); } catch { /* physical settlement below is authoritative */ }
+    let warned = false;
+    while (!pvpCombatIsSettled(bot)) {
+        // entityGone asks mineflayer-pvp to stop without awaiting it. Clearing
+        // Pathfinder's goal here settles that package-owned transition before
+        // ActionManager is allowed to hand locomotion to another action.
+        stopNavigationGoal(bot);
+        try { bot.clearControlStates?.(); } catch { /* disconnected body */ }
+        await new Promise(resolve => setTimeout(resolve, 25));
+        if (!warned) {
+            warned = true;
+            console.warn('[combat] PvP cancellation is settling; ActionManager ownership remains held.');
+        }
+    }
+}
+
 async function equipCombatShield(bot) {
     const equipped = equippedItemAt(bot, 'off-hand');
     if (equipped?.name === 'shield') return true;
@@ -3276,292 +3295,6 @@ async function equipCombatShield(bot) {
     }
     return equippedItemAt(bot, 'off-hand')?.name === 'shield';
 }
-
-async function holdShield(bot, durationMs) {
-    if (!await equipCombatShield(bot)) return false;
-    let activated = false;
-    try {
-        bot.activateItem(true);
-        activated = true;
-        return await waitCombatWindow(bot, durationMs);
-    } catch (error) {
-        log(bot, `Could not raise shield: ${error?.message || error}.`);
-        return false;
-    } finally {
-        if (activated) {
-            try { bot.deactivateItem(); } catch { /* best-effort shield release */ }
-        }
-    }
-}
-
-function isTacticalMeleeStandingCellClear(block) {
-    return Boolean(
-        block
-        && block.boundingBox === 'empty'
-        && !isLiquidGameplayBlock(block)
-        && !isHazardousGameplayBlock(block)
-    );
-}
-
-function hasLineOfSightFromTacticalStance(bot, stance, entity) {
-    if (!bot?.world?.raycast || !stance || !entity?.position) return false;
-    const origin = new Vec3(
-        stance.x + 0.5,
-        stance.y + (Number(bot.entity?.eyeHeight) || 1.62),
-        stance.z + 0.5,
-    );
-    const entityHeight = Math.max(0.6, Number(entity.height) || Number(entity.eyeHeight) || 1.8);
-    const samples = [0.2, 0.55, 0.9].map(ratio => (
-        entity.position.offset(0, entityHeight * ratio, 0)
-    ));
-    for (const sample of samples) {
-        const direction = sample.minus(origin);
-        const distance = direction.norm();
-        if (!Number.isFinite(distance)) continue;
-        if (distance <= 0.25) return true;
-        if (!bot.world.raycast(origin, direction.scaled(1 / distance), distance)) return true;
-    }
-    return false;
-}
-
-function tacticalMeleeStanceClearance(bot, stance) {
-    let clearance = 0;
-    for (const [dx, dz] of [
-        [-1, -1], [0, -1], [1, -1],
-        [-1, 0], [1, 0],
-        [-1, 1], [0, 1], [1, 1],
-    ]) {
-        const feet = stance.offset(dx, 0, dz);
-        try {
-            if (!isTacticalMeleeStandingCellClear(bot.blockAt(feet))) continue;
-            if (!isTacticalMeleeStandingCellClear(bot.blockAt(feet.offset(0, 1, 0)))) continue;
-            if (!isSafeGameplaySupport(bot.blockAt(feet.offset(0, -1, 0)))) continue;
-            clearance += 1;
-        } catch {
-            // Unloaded neighbours cannot prove route clearance.
-        }
-    }
-    return clearance;
-}
-
-export function findTacticalMeleeStances(bot, entity) {
-    if (!bot?.entity?.position || !entity?.position?.floored) return [];
-    const targetFeet = entity.position.floored();
-    const stances = [];
-    for (let y = targetFeet.y - 1; y <= targetFeet.y + 1; y += 1) {
-        for (let x = targetFeet.x - TACTICAL_MELEE_STANCE_RADIUS;
-            x <= targetFeet.x + TACTICAL_MELEE_STANCE_RADIUS;
-            x += 1) {
-            for (let z = targetFeet.z - TACTICAL_MELEE_STANCE_RADIUS;
-                z <= targetFeet.z + TACTICAL_MELEE_STANCE_RADIUS;
-                z += 1) {
-                if (x === targetFeet.x && y === targetFeet.y && z === targetFeet.z) continue;
-                const feet = new Vec3(x, y, z);
-                const standingPosition = new Vec3(x + 0.5, y, z + 0.5);
-                if (standingPosition.distanceTo(entity.position) > MAX_MELEE_REACH - TACTICAL_MELEE_REACH_MARGIN) {
-                    continue;
-                }
-                let feetBlock;
-                let headBlock;
-                let supportBlock;
-                try {
-                    feetBlock = bot.blockAt(feet);
-                    headBlock = bot.blockAt(feet.offset(0, 1, 0));
-                    supportBlock = bot.blockAt(feet.offset(0, -1, 0));
-                } catch {
-                    continue;
-                }
-                if (!isTacticalMeleeStandingCellClear(feetBlock)) continue;
-                if (!isTacticalMeleeStandingCellClear(headBlock)) continue;
-                if (!isSafeGameplaySupport(supportBlock)) continue;
-                if (!hasLineOfSightFromTacticalStance(bot, feet, entity)) continue;
-                stances.push({
-                    position: feet,
-                    clearance: tacticalMeleeStanceClearance(bot, feet),
-                });
-            }
-        }
-    }
-    stances.sort((left, right) => {
-        const leftPosition = new Vec3(
-            left.position.x + 0.5,
-            left.position.y,
-            left.position.z + 0.5,
-        );
-        const rightPosition = new Vec3(
-            right.position.x + 0.5,
-            right.position.y,
-            right.position.z + 0.5,
-        );
-        return right.clearance - left.clearance
-            || bot.entity.position.distanceTo(leftPosition) - bot.entity.position.distanceTo(rightPosition)
-            || leftPosition.distanceTo(entity.position) - rightPosition.distanceTo(entity.position)
-            || left.position.y - right.position.y
-            || left.position.x - right.position.x
-            || left.position.z - right.position.z;
-    });
-    const bestClearance = stances[0]?.clearance;
-    return stances
-        .filter(candidate => candidate.clearance === bestClearance)
-        .slice(0, MAX_TACTICAL_MELEE_STANCES)
-        .map(candidate => candidate.position);
-}
-
-function tacticalMeleeApproachGoal(stances) {
-    if (!Array.isArray(stances) || stances.length === 0) return null;
-    return new pf.goals.GoalCompositeAny(
-        stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
-    );
-}
-
-function isReadyForTacticalMelee(bot, entity) {
-    if (!bot?.entity?.position || !entity?.position) return false;
-    if (bot.entity.position.distanceTo(entity.position) > MAX_MELEE_REACH - TACTICAL_MELEE_REACH_MARGIN) {
-        return false;
-    }
-    return world.hasLineOfSightToEntity(bot, entity) !== false;
-}
-
-export function shouldReplanTacticalMeleeApproach({
-    replan,
-    navigated,
-    physicalProgress,
-    targetMovement,
-    lineOfSightBefore,
-    lineOfSightAfter,
-}) {
-    if (replan >= MAX_TACTICAL_MELEE_REPLANS) return false;
-    if (targetMovement >= TACTICAL_MELEE_REPLAN_DISTANCE) return true;
-    return !navigated
-        && physicalProgress >= NAVIGATION_PROGRESS_DISTANCE
-        && lineOfSightBefore === false
-        && lineOfSightAfter === true;
-}
-
-async function approachTacticalMeleeRange(bot, entity) {
-    const target = { name: entity?.username || entity?.name || 'entity', id: entity?.id };
-    const attempts = [];
-    const finish = (success, outcome, detail = {}) => {
-        setActionEvidence(bot, {
-            kind: 'combat_approach',
-            outcome,
-            target,
-            attempts,
-            retryable: !success && !bot.interrupt_code,
-            ...detail,
-        });
-        return success;
-    };
-
-    for (let replan = 0; replan <= MAX_TACTICAL_MELEE_REPLANS; replan += 1) {
-        if (bot.interrupt_code) return finish(false, 'interrupted', { replanCount: replan });
-        const liveEntity = bot.entities?.[entity?.id];
-        if (!liveEntity?.position) return finish(false, 'target_lost', { replanCount: replan });
-        if (isReadyForTacticalMelee(bot, liveEntity)) {
-            return finish(true, 'melee_range_reached', { replanCount: replan });
-        }
-
-        const plannedPosition = liveEntity.position.clone();
-        const routeStart = bot.entity.position.clone();
-        const lineOfSightBefore = world.hasLineOfSightToEntity(bot, liveEntity);
-        // GoalFollow is Pathfinder's native moving-entity primitive. An exposed
-        // hostile must stay live-bound while it moves; freezing its current
-        // position into a composite of static stance goals makes a successful
-        // hit look like a failed approach as soon as knockback moves it.
-        // Exact stance binding remains authoritative when geometry blocks line
-        // of sight, where "near the entity" is not yet an attackable position.
-        const followsMovingTarget = lineOfSightBefore !== false;
-        const stances = followsMovingTarget ? [] : findTacticalMeleeStances(bot, liveEntity);
-        const attempt = {
-            replan,
-            strategy: followsMovingTarget ? 'native_goal_follow' : 'safe_line_of_sight_stance',
-            targetPosition: {
-                x: plannedPosition.x,
-                y: plannedPosition.y,
-                z: plannedPosition.z,
-            },
-            stanceCount: stances.length,
-        };
-        attempts.push(attempt);
-        const goal = followsMovingTarget
-            ? new pf.goals.GoalFollow(liveEntity, MAX_MELEE_REACH - 0.4)
-            : tacticalMeleeApproachGoal(stances);
-        if (!goal) return finish(false, 'no_safe_melee_stance', { replanCount: replan });
-
-        const navigated = await goToGoal(bot, goal);
-        attempt.navigationOutcome = bot.lastActionEvidence?.outcome || (navigated ? 'arrived' : 'route_blocked');
-        if (bot.interrupt_code) return finish(false, 'interrupted', { replanCount: replan });
-        const currentEntity = bot.entities?.[entity.id];
-        if (!currentEntity?.position) return finish(false, 'target_lost', { replanCount: replan });
-        if (isReadyForTacticalMelee(bot, currentEntity)) {
-            return finish(true, 'melee_range_reached', { replanCount: replan });
-        }
-
-        const targetMovement = currentEntity.position.distanceTo(plannedPosition);
-        const physicalProgress = bot.entity.position.distanceTo(routeStart);
-        const lineOfSightAfter = world.hasLineOfSightToEntity(bot, currentEntity);
-        attempt.targetMovement = Math.round(targetMovement * 100) / 100;
-        attempt.physicalProgress = Math.round(physicalProgress * 100) / 100;
-        attempt.lineOfSightBefore = lineOfSightBefore;
-        attempt.lineOfSightAfter = lineOfSightAfter;
-        if (
-            followsMovingTarget
-            && lineOfSightAfter === false
-            && replan < MAX_TACTICAL_MELEE_REPLANS
-        ) {
-            attempt.strategyTransition = 'safe_line_of_sight_stance';
-            continue;
-        }
-        if (shouldReplanTacticalMeleeApproach({
-            replan,
-            navigated,
-            physicalProgress,
-            targetMovement,
-            lineOfSightBefore,
-            lineOfSightAfter,
-        })) {
-            continue;
-        }
-        if (!navigated) {
-            return finish(false, 'melee_route_blocked', {
-                replanCount: replan,
-                navigation: bot.lastActionEvidence,
-            });
-        }
-        return finish(false, 'melee_stance_unverified', { replanCount: replan });
-    }
-    return finish(false, 'melee_replan_limit_reached', {
-        replanCount: MAX_TACTICAL_MELEE_REPLANS,
-    });
-}
-
-async function closeWithShield(bot, entity) {
-    if (!entity?.position || !await equipCombatShield(bot)) return false;
-    let activated = false;
-    try {
-        bot.activateItem(true);
-        activated = true;
-        return await approachTacticalMeleeRange(bot, entity);
-    } catch (error) {
-        log(bot, `Could not close safely behind the shield: ${error?.message || error}.`);
-        return false;
-    } finally {
-        if (activated) {
-            try { bot.deactivateItem(); } catch { /* best-effort shield release */ }
-        }
-    }
-}
-
-async function closeForMelee(bot, entity) {
-    if (!entity?.position) return false;
-    try {
-        return await approachTacticalMeleeRange(bot, entity);
-    } catch (error) {
-        log(bot, `Could not close melee distance: ${error?.message || error}.`);
-        return false;
-    }
-}
-
 function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_MS) {
     return new Promise(resolve => {
         let settled = false;
@@ -3756,43 +3489,24 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
                 attack = await fireTacticalBow(bot, entity, selected.desiredRange);
                 if (attack.confirmed) rangedShots += 1;
             } else {
-                let approached = false;
-                let approachFailure = 'melee_approach_blocked';
                 if (decision.response === 'shield_melee') {
-                    approachFailure = 'shielded_approach_blocked';
-                    approached = await closeWithShield(bot, entity);
-                    if (approached) shieldWindows += 1;
-                } else {
-                    approached = await closeForMelee(bot, entity);
-                }
-                if (!approached) {
-                    const approach = bot.lastActionEvidence;
-                    // Entity removal can arrive one or two server ticks after
-                    // the final verified hit. Do not turn a physically defeated
-                    // target into a retryable approach failure merely because
-                    // that packet crossed this function boundary. This window
-                    // verifies the same attempt; it does not launch another one.
-                    await waitCombatWindow(bot, 150);
-                    if (bot.interrupt_code) {
-                        return finish(false, 'interrupted', { steps, retryable: false });
+                    if (!await equipCombatShield(bot)) {
+                        return finish(false, 'shield_equipment_failed', { steps });
                     }
-                    if (!bot.entities?.[selected.id]) {
-                        steps += 1;
-                        continue;
-                    }
-                    return finish(false, approachFailure, {
-                        steps,
-                        approach,
-                    });
+                    shieldWindows += 1;
                 }
-                const attacked = await attackEntity(bot, entity, false);
+                // mineflayer-pvp is the ordinary moving-melee primitive. It
+                // owns live GoalFollow pursuit, vanilla jumps, shield cadence,
+                // and repeated swings for this entire engagement. Tactical
+                // code chooses the target and policy; it must not reimplement
+                // the package by alternating one route with one manual swing.
+                const attacked = await attackEntity(bot, entity, true);
+                const combat = bot.lastActionEvidence;
                 attack = {
                     confirmed: attacked,
-                    outcome: bot.lastActionEvidence?.outcome || (attacked ? 'hit_observed' : 'melee_blocked'),
+                    outcome: combat?.outcome || (attacked ? 'killed' : 'melee_blocked'),
+                    evidence: combat,
                 };
-                if (attacked && decision.response === 'shield_melee' && bot.entities?.[entity.id]) {
-                    if (await holdShield(bot, TACTICAL_SHIELD_WINDOW_MS)) shieldWindows += 1;
-                }
             }
 
             if (!attack.confirmed) {
@@ -3813,7 +3527,7 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
                 log(bot, `Tactical ${decision.response} against ${selected.name} was not verified (${attack.outcome}).`);
                 return finish(false, attack.outcome || 'attack_unverified', { steps });
             }
-            verifiedHits += 1;
+            verifiedHits += Math.max(1, Number(attack.evidence?.botAttributedHits) || 0);
             steps += 1;
             if (bot.entities?.[selected.id]) {
                 await waitCombatWindow(bot, DEFENSE_SWING_INTERVAL_MS);
@@ -3829,7 +3543,7 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
         return finish(false, 'combat_limit_reached', { steps });
     } finally {
         try { bot.deactivateItem(); } catch { /* best-effort combat cleanup */ }
-        try { bot.pvp?.stop?.(); } catch { /* best-effort combat cleanup */ }
+        await stopPvpCombatAndSettle(bot);
     }
 }
 
@@ -4062,9 +3776,15 @@ export async function attackEntity(bot, entity, kill=true) {
         bot.on('entityDead', onEntityDead);
 
         try {
-            bot.pvp.attack(entity);
-            while (!targetDied && Date.now() - startedAt < MAX_PVP_ENGAGEMENT_MS) {
-                await interruptibleDelay(bot, 1_000);
+            const movements = safeMovements(bot);
+            // Combat may traverse normal block geometry, including native
+            // jumps, but target pursuit never authorizes excavation.
+            movements.canDig = false;
+            bot.pvp.movements = movements;
+            await bot.pvp.attack(entity);
+            const deadlineAt = startedAt + remainingActionTimeMs(MAX_PVP_ENGAGEMENT_MS);
+            while (!targetDied && Date.now() < deadlineAt) {
+                await interruptibleDelay(bot, 100);
                 if (bot.interrupt_code) {
                     setActionEvidence(bot, { kind: 'combat', outcome: 'interrupted', target, retryable: false });
                     return false;
@@ -4073,7 +3793,7 @@ export async function attackEntity(bot, entity, kill=true) {
             }
 
             if (!targetDied) {
-                const timedOut = Date.now() - startedAt >= MAX_PVP_ENGAGEMENT_MS;
+                const timedOut = Date.now() >= deadlineAt;
                 setActionEvidence(bot, {
                     kind: 'combat',
                     outcome: timedOut ? 'combat_timeout' : 'target_lost',
@@ -4106,6 +3826,7 @@ export async function attackEntity(bot, entity, kill=true) {
             }
 
             log(bot, `Successfully defeated ${target.name}.`);
+            await stopPvpCombatAndSettle(bot);
             try {
                 await pickupNearbyItems(bot);
             } catch (error) {
@@ -4131,7 +3852,7 @@ export async function attackEntity(bot, entity, kill=true) {
         } finally {
             try { bot.removeListener?.('entityHurt', onEntityHurt); } catch { /* best-effort listener cleanup */ }
             try { bot.removeListener?.('entityDead', onEntityDead); } catch { /* best-effort listener cleanup */ }
-            try { bot.pvp.stop(); } catch { /* best-effort combat cleanup */ }
+            await stopPvpCombatAndSettle(bot);
         }
     }
 }

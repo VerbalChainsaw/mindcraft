@@ -559,6 +559,7 @@ export function getGoalDirectorState(agent) {
         detail: String(status.detail || '').slice(0, 280),
         retryable: status.retryable === true,
         inFlight: status.inFlight === true,
+        protectedGoalId: status.protectedGoalId ? String(status.protectedGoalId).slice(0, 96) : null,
         nextAttemptAt: Number.isFinite(status.nextAttemptAt) ? status.nextAttemptAt : null,
         plan: plan && typeof plan === 'object' && !Array.isArray(plan)
             ? {
