@@ -3464,9 +3464,17 @@ async function approachTacticalMeleeRange(bot, entity) {
         const plannedPosition = liveEntity.position.clone();
         const routeStart = bot.entity.position.clone();
         const lineOfSightBefore = world.hasLineOfSightToEntity(bot, liveEntity);
-        const stances = findTacticalMeleeStances(bot, liveEntity);
+        // GoalFollow is Pathfinder's native moving-entity primitive. An exposed
+        // hostile must stay live-bound while it moves; freezing its current
+        // position into a composite of static stance goals makes a successful
+        // hit look like a failed approach as soon as knockback moves it.
+        // Exact stance binding remains authoritative when geometry blocks line
+        // of sight, where "near the entity" is not yet an attackable position.
+        const followsMovingTarget = lineOfSightBefore !== false;
+        const stances = followsMovingTarget ? [] : findTacticalMeleeStances(bot, liveEntity);
         const attempt = {
             replan,
+            strategy: followsMovingTarget ? 'native_goal_follow' : 'safe_line_of_sight_stance',
             targetPosition: {
                 x: plannedPosition.x,
                 y: plannedPosition.y,
@@ -3475,7 +3483,9 @@ async function approachTacticalMeleeRange(bot, entity) {
             stanceCount: stances.length,
         };
         attempts.push(attempt);
-        const goal = tacticalMeleeApproachGoal(stances);
+        const goal = followsMovingTarget
+            ? new pf.goals.GoalFollow(liveEntity, MAX_MELEE_REACH - 0.4)
+            : tacticalMeleeApproachGoal(stances);
         if (!goal) return finish(false, 'no_safe_melee_stance', { replanCount: replan });
 
         const navigated = await goToGoal(bot, goal);
@@ -3494,6 +3504,14 @@ async function approachTacticalMeleeRange(bot, entity) {
         attempt.physicalProgress = Math.round(physicalProgress * 100) / 100;
         attempt.lineOfSightBefore = lineOfSightBefore;
         attempt.lineOfSightAfter = lineOfSightAfter;
+        if (
+            followsMovingTarget
+            && lineOfSightAfter === false
+            && replan < MAX_TACTICAL_MELEE_REPLANS
+        ) {
+            attempt.strategyTransition = 'safe_line_of_sight_stance';
+            continue;
+        }
         if (shouldReplanTacticalMeleeApproach({
             replan,
             navigated,
@@ -3738,18 +3756,33 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
                 attack = await fireTacticalBow(bot, entity, selected.desiredRange);
                 if (attack.confirmed) rangedShots += 1;
             } else {
+                let approached = false;
+                let approachFailure = 'melee_approach_blocked';
                 if (decision.response === 'shield_melee') {
-                    if (!await closeWithShield(bot, entity)) {
-                        return finish(false, 'shielded_approach_blocked', {
-                            steps,
-                            approach: bot.lastActionEvidence,
-                        });
+                    approachFailure = 'shielded_approach_blocked';
+                    approached = await closeWithShield(bot, entity);
+                    if (approached) shieldWindows += 1;
+                } else {
+                    approached = await closeForMelee(bot, entity);
+                }
+                if (!approached) {
+                    const approach = bot.lastActionEvidence;
+                    // Entity removal can arrive one or two server ticks after
+                    // the final verified hit. Do not turn a physically defeated
+                    // target into a retryable approach failure merely because
+                    // that packet crossed this function boundary. This window
+                    // verifies the same attempt; it does not launch another one.
+                    await waitCombatWindow(bot, 150);
+                    if (bot.interrupt_code) {
+                        return finish(false, 'interrupted', { steps, retryable: false });
                     }
-                    shieldWindows += 1;
-                } else if (!await closeForMelee(bot, entity)) {
-                    return finish(false, 'melee_approach_blocked', {
+                    if (!bot.entities?.[selected.id]) {
+                        steps += 1;
+                        continue;
+                    }
+                    return finish(false, approachFailure, {
                         steps,
-                        approach: bot.lastActionEvidence,
+                        approach,
                     });
                 }
                 const attacked = await attackEntity(bot, entity, false);
