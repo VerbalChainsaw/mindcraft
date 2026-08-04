@@ -32,6 +32,8 @@ function inject (bot) {
   let lastNodeTime = performance.now()
   let returningPos = null
   let stopPathing = false
+  let lastStuckState = null
+  let verticalTransition = null
   const physics = new Physics(bot)
   const lockPlaceBlock = new Lock()
   const lockEquipItem = new Lock()
@@ -88,7 +90,7 @@ function inject (bot) {
       const dy = startPos.y - p.y
       const b = bot.blockAt(p) // The block we are standing in
       // Offset the floored bot position by one if we are standing on a block that has not the full height but is solid
-      const offset = (b && dy > 0.001 && bot.entity.onGround && !stateMovements.emptyBlocks.has(b.type)) ? 1 : 0
+      const offset = (b && dy > 0.001 && bot.entity.onGround && !movements.emptyBlocks.has(b.type)) ? 1 : 0
       start = new Move(p.x, p.y + offset, p.z, movements.countScaffoldingItems(), 0)
     }
     if (movements.allowEntityDetection) {
@@ -121,6 +123,18 @@ function inject (bot) {
     }
   })
 
+  bot.pathfinder.getLastStuckState = () => {
+    if (!lastStuckState) return null
+    return {
+      ...lastStuckState,
+      position: { ...lastStuckState.position },
+      nextPoint: { ...lastStuckState.nextPoint },
+      delta: { ...lastStuckState.delta },
+      controls: { ...lastStuckState.controls },
+      blocks: { ...lastStuckState.blocks }
+    }
+  }
+
   function detectDiggingStopped () {
     digging = false
     bot.removeAllListeners('diggingAborted', detectDiggingStopped)
@@ -136,6 +150,7 @@ function inject (bot) {
       bot.stopDigging()
     }
     placing = false
+    verticalTransition = null
     pathUpdated = false
     astarContext = null
     lockEquipItem.release()
@@ -147,6 +162,9 @@ function inject (bot) {
   }
 
   bot.pathfinder.setGoal = (goal, dynamic = false) => {
+    if (goal) {
+      lastStuckState = null
+    }
     stateGoal = goal
     dynamicGoal = dynamic
     bot.emit('goal_updated', goal, dynamic)
@@ -404,6 +422,62 @@ function inject (bot) {
     return true
   }
 
+  function prepareVerticalTransition (nextPoint, position) {
+    const locomotion = nextPoint.locomotion
+    if (!locomotion?.source || !['step_up', 'drop_down'].includes(locomotion.type)) {
+      verticalTransition = null
+      return false
+    }
+
+    const key = `${locomotion.type}:${locomotion.source.x},${locomotion.source.y},${locomotion.source.z}->${nextPoint.x},${nextPoint.y},${nextPoint.z}`
+    if (!verticalTransition || verticalTransition.key !== key) {
+      verticalTransition = {
+        key,
+        type: locomotion.type,
+        phase: 'recenter',
+        startedAt: performance.now(),
+        source: locomotion.source
+      }
+    }
+    if (verticalTransition.phase === 'execute') return false
+
+    const verticalProgress = locomotion.type === 'step_up'
+      ? position.y > locomotion.source.y + 0.25
+      : position.y < locomotion.source.y - 0.25
+    if (verticalProgress) {
+      verticalTransition.phase = 'execute'
+      return false
+    }
+    if (!bot.entity.onGround) {
+      bot.clearControlStates()
+      return true
+    }
+
+    const centerX = locomotion.source.x + 0.5
+    const centerZ = locomotion.source.z + 0.5
+    const dx = centerX - position.x
+    const dz = centerZ - position.z
+    if (Math.hypot(dx, dz) <= 0.12) {
+      bot.clearControlStates()
+      const targetDx = nextPoint.x - position.x
+      const targetDz = nextPoint.z - position.z
+      bot.look(Math.atan2(-targetDx, -targetDz), 0, true)
+      verticalTransition.phase = 'execute'
+      lastNodeTime = performance.now()
+      return true
+    }
+    if (performance.now() - verticalTransition.startedAt > 1200) {
+      resetPath('stuck')
+      return true
+    }
+
+    bot.look(Math.atan2(-dx, -dz), 0, true)
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', false)
+    bot.setControlState('sprint', false)
+    return true
+  }
+
   function stop () {
     stopPathing = false
     stateGoal = null
@@ -596,10 +670,11 @@ function inject (bot) {
     }
 
     let dx = nextPoint.x - p.x
-    const dy = nextPoint.y - p.y
+    let dy = nextPoint.y - p.y
     let dz = nextPoint.z - p.z
     if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
       // arrived at next point
+      verticalTransition = null
       lastNodeTime = performance.now()
       if (stopPathing) {
         stop()
@@ -623,32 +698,78 @@ function inject (bot) {
         return
       }
       dx = nextPoint.x - p.x
+      dy = nextPoint.y - p.y
       dz = nextPoint.z - p.z
     }
 
-    bot.look(Math.atan2(-dx, -dz), 0)
+    if (prepareVerticalTransition(nextPoint, p)) return
+
+    const locomotionType = nextPoint.locomotion?.type || 'legacy'
+    bot.look(
+      Math.atan2(-dx, -dz),
+      0,
+      locomotionType !== 'legacy'
+    )
     bot.setControlState('forward', true)
     bot.setControlState('jump', false)
 
+    let executionMode
     if (bot.entity.isInWater) {
+      executionMode = 'water_ascent'
       bot.setControlState('jump', true)
       bot.setControlState('sprint', false)
     } else if (bot.entity.isInLava) {
+      executionMode = 'lava_ascent'
       bot.setControlState('jump', true)
       bot.setControlState('sprint', false)
-    } else if (stateMovements.allowSprinting && physics.canStraightLine(path, true)) {
+    } else if (locomotionType === 'step_up') {
+      executionMode = 'step_up'
+      bot.setControlState('jump', true)
+      bot.setControlState('sprint', false)
+    } else if (locomotionType === 'drop_down') {
+      executionMode = 'drop_down'
+      bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
+    } else if (locomotionType === 'fall_down') {
+      executionMode = 'fall_down'
+      bot.setControlState('forward', false)
+      bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
+    } else if (locomotionType === 'vertical_up') {
+      executionMode = 'vertical_up'
+      bot.setControlState('forward', false)
+      bot.setControlState('jump', true)
+      bot.setControlState('sprint', false)
+    } else if (locomotionType === 'parkour') {
+      executionMode = 'parkour'
+      bot.setControlState('jump', true)
+      bot.setControlState('sprint', stateMovements.allowSprinting)
+    } else if (locomotionType === 'walk' && stateMovements.allowSprinting && physics.canStraightLine(path, true)) {
+      executionMode = 'sprint_straight'
       bot.setControlState('jump', false)
       bot.setControlState('sprint', true)
+    } else if (locomotionType === 'walk') {
+      executionMode = 'walk'
+      bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
+    } else if (locomotionType === 'climb_up') {
+      executionMode = 'climb_up'
+      bot.setControlState('jump', true)
+      bot.setControlState('sprint', false)
     } else if (stateMovements.allowSprinting && physics.canSprintJump(path)) {
+      executionMode = 'sprint_jump'
       bot.setControlState('jump', true)
       bot.setControlState('sprint', true)
     } else if (physics.canStraightLine(path)) {
+      executionMode = 'walk_straight'
       bot.setControlState('jump', false)
       bot.setControlState('sprint', false)
     } else if (physics.canWalkJump(path)) {
+      executionMode = 'walk_jump'
       bot.setControlState('jump', true)
       bot.setControlState('sprint', false)
     } else {
+      executionMode = 'physics_declined'
       bot.setControlState('forward', false)
       bot.setControlState('sprint', false)
     }
@@ -656,6 +777,30 @@ function inject (bot) {
     // check for futility
     if (performance.now() - lastNodeTime > 3500) {
       // should never take this long to go to the next node
+      const feet = bot.blockAt(p.floored())
+      const support = bot.blockAt(p.floored().offset(0, -1, 0))
+      const head = bot.blockAt(p.floored().offset(0, 1, 0))
+      lastStuckState = {
+        recordedAt: Date.now(),
+        executionMode,
+        locomotion: nextPoint.locomotion || null,
+        pathLength: path.length,
+        position: { x: p.x, y: p.y, z: p.z },
+        nextPoint: { x: nextPoint.x, y: nextPoint.y, z: nextPoint.z },
+        delta: { x: dx, y: dy, z: dz },
+        controls: {
+          forward: bot.controlState.forward,
+          jump: bot.controlState.jump,
+          sprint: bot.controlState.sprint
+        },
+        onGround: bot.entity.onGround,
+        isInWater: bot.entity.isInWater,
+        blocks: {
+          feet: feet?.name || null,
+          head: head?.name || null,
+          support: support?.name || null
+        }
+      }
       resetPath('stuck')
     }
   }

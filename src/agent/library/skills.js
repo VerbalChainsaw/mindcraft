@@ -472,6 +472,16 @@ async function placeLocalCraftingTable(bot) {
     return { ok: true, block, position, inventoryBeforePlacement };
 }
 
+function directlyUsableWorkstation(bot, block, range = 4.5) {
+    if (!block?.position || !bot.entity?.position) return false;
+    if (bot.entity.position.distanceTo(block.position) > range) return false;
+    try {
+        return typeof bot.canSeeBlock !== 'function' || bot.canSeeBlock(block);
+    } catch {
+        return false;
+    }
+}
+
 async function recoverLocalCraftingTable(bot, temporaryTable) {
     const { position, inventoryBeforePlacement } = temporaryTable;
     const target = { name: 'crafting_table', x: position.x, y: position.y, z: position.z };
@@ -1660,6 +1670,14 @@ export async function craftRecipe(bot, itemName, num=1) {
 
             craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
             let worldTableRouteFailed = false;
+            // A carried table is a deterministic local capability. Do not
+            // tunnel toward a merely loaded remote workstation before using
+            // the one already owned by this action.
+            if (
+                craftingTable
+                && !directlyUsableWorkstation(bot, craftingTable)
+                && inventoryCount(bot, 'crafting_table') > 0
+            ) craftingTable = null;
             if (craftingTable && bot.entity.position.distanceTo(craftingTable.position) > 4) {
                 const reached = await goToPosition(bot, craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 4);
                 if (!reached || bot.entity.position.distanceTo(craftingTable.position) > 4.5) {
@@ -2675,6 +2693,14 @@ export async function smeltItem(bot, itemName, num=1) {
 
     try {
         furnaceBlock = world.getNearestBlock(bot, 'furnace', 64);
+        // Prefer a carried furnace over excavating toward a merely loaded
+        // remote one. The carried block can be bound to verified local space
+        // and remains under the current action's placement/cleanup contract.
+        if (
+            furnaceBlock
+            && !directlyUsableWorkstation(bot, furnaceBlock)
+            && inventoryCount(bot, 'furnace') > 0
+        ) furnaceBlock = null;
         if (!furnaceBlock && inventoryCount(bot, 'furnace') > 0) {
             const position = world.getNearestFreeSpace(bot, 1, 8);
             if (!position) {
@@ -2723,7 +2749,13 @@ export async function smeltItem(bot, itemName, num=1) {
                     const at = bot.entity?.position?.floored?.();
                     const step = access.step;
                     log(bot, `Exact furnace approach stopped: ${String(access.outcome).replace(/_/g, ' ')}${Number.isInteger(access.stepIndex) ? ` on step ${access.stepIndex + 1}` : ''}${step ? ` toward (${step.x}, ${step.y}, ${step.z})` : ''}${at ? ` from (${at.x}, ${at.y}, ${at.z})` : ''}.`);
-                    return finish(false, 'furnace_unreachable', { access });
+                    return finish(false, 'furnace_unreachable', {
+                        access,
+                        workstationRequirement: {
+                            name: 'furnace',
+                            carried: true,
+                        },
+                    });
                 }
                 furnaceBlock = bot.blockAt(furnaceBlock.position);
                 if (furnaceBlock?.name !== 'furnace') {
@@ -8315,6 +8347,8 @@ async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIG
         );
     try {
         const outcome = await Promise.race([navigation, progressWatchdog.stalled]);
+        const pathfinderState = bot.pathfinder.getLastStuckState?.();
+        if (pathfinderState) outcome.pathfinder = pathfinderState;
         if (outcome.state === 'stalled') {
             stopNavigationGoal(bot);
             // Do not release ActionManager while the cancelled path promise is
@@ -8517,6 +8551,7 @@ function navigationProgressEvidence(outcome) {
             y: outcome.lastPosition.y,
             z: outcome.lastPosition.z,
         },
+        ...(outcome.pathfinder ? { pathfinder: outcome.pathfinder } : {}),
     };
 }
 
@@ -8651,6 +8686,10 @@ export async function goToGoal(bot, goal, options = {}) {
                 ...(recovery ? { recovery } : {}),
                 retryable: true,
             });
+            if (outcome.pathfinder) {
+                const stuck = outcome.pathfinder;
+                log(bot, `Pathfinder stalled in ${stuck.executionMode} at ${stuck.position.x.toFixed(2)}, ${stuck.position.y.toFixed(2)}, ${stuck.position.z.toFixed(2)} toward ${stuck.nextPoint.x}, ${stuck.nextPoint.y}, ${stuck.nextPoint.z}.`);
+            }
             log(bot, `Navigation stopped after ${Math.round(outcome.stalledMs / 1000)} seconds without physical progress.`);
             return false;
         }
@@ -9300,6 +9339,11 @@ function assessMiningRouteStep(bot, step, targetBlock) {
             feet.offset(-step.heading.x, 1, -step.heading.z),
             ceiling,
         );
+    } else if (step.yOffset < 0) {
+        // The body crosses the destination column at the source elevation
+        // before gravity lowers it onto the next stair. Pathfinder's native
+        // drop edge requires this upper swept-volume cell to be clear too.
+        clearancePositions.push(ceiling);
     }
     if (miningRouteTouchesLiquid(bot, clearancePositions)) {
         return { ok: false, outcome: 'liquid_ingress_risk', blocks: [] };
@@ -9991,7 +10035,10 @@ export async function mineSearchTunnel(
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
-            log(bot, `Stopped the exact route to ${stagedTarget.name}: ${String(access.outcome).replace(/_/g, ' ')} after ${access.excavated} block${access.excavated === 1 ? '' : 's'}.`);
+            const failedStep = access.step
+                ? ` at step ${Number(access.stepIndex) + 1} (${access.step.x}, ${access.step.y}, ${access.step.z}) from (${bot.entity.position.x.toFixed(2)}, ${bot.entity.position.y.toFixed(2)}, ${bot.entity.position.z.toFixed(2)})`
+                : '';
+            log(bot, `Stopped the exact route to ${stagedTarget.name}: ${String(access.outcome).replace(/_/g, ' ')}${failedStep} after ${access.excavated} block${access.excavated === 1 ? '' : 's'}.`);
             return false;
         }
 

@@ -322,6 +322,10 @@ declare module 'mineflayer-pathfinder' {
 		toBreak: Move[];
 		toPlace: Move[];
 		parkour: boolean;
+		locomotion: {
+			type: 'walk' | 'step_up' | 'drop_down' | 'fall_down' | 'vertical_up' | 'climb_up' | 'parkour';
+			source: XYZCoordinates;
+		} | null;
 		hash: string;
 	}
 

@@ -123,6 +123,13 @@ class Movements {
     this.entityIntersections = {}
   }
 
+  makeMove (node, x, y, z, remainingBlocks, cost, toBreak = [], toPlace = [], type = 'walk', parkour = false) {
+    return new Move(x, y, z, remainingBlocks, cost, toBreak, toPlace, parkour, {
+      type,
+      source: { x: node.x, y: node.y, z: node.z }
+    })
+  }
+
   exclusionPlace (block) {
     if (this.exclusionAreasPlace.length === 0) return 0
     let weight = 0
@@ -385,7 +392,7 @@ class Movements {
     cost += this.safeOrBreak(blockB, toBreak)
     if (cost > 100) return
 
-    neighbors.push(new Move(blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'step_up'))
   }
 
   getMoveForward (node, dir, neighbors) {
@@ -427,7 +434,7 @@ class Movements {
 
     if (this.getBlock(node, 0, 0, 0).liquid) cost += this.liquidCost
 
-    neighbors.push(new Move(blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'walk'))
   }
 
   getMoveDiagonal (node, dir, neighbors) {
@@ -479,13 +486,13 @@ class Movements {
       cost += this.safeOrBreak(this.getBlock(node, 0, 2, 0), toBreak)
       if (cost > 100) return
       cost += 1
-      neighbors.push(new Move(blockC.position.x, blockC.position.y + 1, blockC.position.z, node.remainingBlocks, cost, toBreak))
+      neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y + 1, blockC.position.z, node.remainingBlocks, cost, toBreak, [], 'step_up'))
     } else if (blockD.physical || blockC.liquid) {
-      neighbors.push(new Move(blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, toBreak))
+      neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, toBreak, [], 'walk'))
     } else if (this.getBlock(node, dir.x, -2, dir.z).physical || blockD.liquid) {
       if (!blockD.safe) return // don't self-immolate
       cost += this.getNumEntitiesAt(blockC.position, 0, -1, 0) * this.entityCost
-      neighbors.push(new Move(blockC.position.x, blockC.position.y - 1, blockC.position.z, node.remainingBlocks, cost, toBreak))
+      neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y - 1, blockC.position.z, node.remainingBlocks, cost, toBreak, [], 'drop_down'))
     }
   }
 
@@ -527,7 +534,7 @@ class Movements {
 
     cost += this.getNumEntitiesAt(blockLand.position, 0, 0, 0) * this.entityCost // add cost for entities
 
-    neighbors.push(new Move(blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'drop_down'))
   }
 
   getMoveDown (node, neighbors) {
@@ -547,7 +554,7 @@ class Movements {
 
     cost += this.getNumEntitiesAt(blockLand.position, 0, 0, 0) * this.entityCost // add cost for entities
 
-    neighbors.push(new Move(blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'fall_down'))
   }
 
   getMoveUp (node, neighbors) {
@@ -581,7 +588,7 @@ class Movements {
 
     if (cost > 100) return
 
-    neighbors.push(new Move(node.x, node.y + 1, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, node.x, node.y + 1, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'vertical_up'))
   }
 
   getMoveClimbUpThroughTrapdoor (node, neighbors) {
@@ -606,7 +613,7 @@ class Movements {
     // Add cost for opening the trapdoor
     toPlace.push({ x: node.x, y: node.y + 2, z: node.z, dx: 0, dy: 0, dz: 0, useOne: true })
 
-    neighbors.push(new Move(node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'climb_up'))
   }
 
   // Enhanced ladder/vine climbing that can handle stepping on top and jumping
@@ -629,7 +636,7 @@ class Movements {
     cost += this.safeOrBreak(blockJumpTarget, toBreak)
     if (cost > 100) return
 
-    neighbors.push(new Move(node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace))
+    neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'climb_up'))
   }
 
   // Jump up, down or forward over a 1 block gap
@@ -667,7 +674,7 @@ class Movements {
       if (ceilingClear && blockB.safe && blockC.safe && blockD.physical) {
         cost += this.exclusionStep(blockB)
         // Forward
-        neighbors.push(new Move(blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, [], [], true))
+        neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
         break
       } else if (ceilingClear && blockB.safe && blockC.physical) {
         // Up
@@ -675,7 +682,7 @@ class Movements {
           cost += this.exclusionStep(blockA)
           if (blockC.height - block0.height > 1.2) break // Too high to jump
           cost += this.getNumEntitiesAt(blockB.position, 0, 0, 0) * this.entityCost
-          neighbors.push(new Move(blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks, cost, [], [], true))
+          neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
           break
         }
       } else if ((ceilingClear || d === 2) && blockB.safe && blockC.safe && blockD.safe && floorCleared) {
@@ -684,7 +691,7 @@ class Movements {
         if (blockE.physical) {
           cost += this.exclusionStep(blockD)
           cost += this.getNumEntitiesAt(blockD.position, 0, 0, 0) * this.entityCost
-          neighbors.push(new Move(blockD.position.x, blockD.position.y, blockD.position.z, node.remainingBlocks, cost, [], [], true))
+          neighbors.push(this.makeMove(node, blockD.position.x, blockD.position.y, blockD.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
         }
         floorCleared = floorCleared && !blockE.physical
       } else if (!blockB.safe || !blockC.safe) {

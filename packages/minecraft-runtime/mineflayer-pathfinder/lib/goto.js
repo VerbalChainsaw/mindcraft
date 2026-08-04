@@ -20,12 +20,20 @@ function goto (bot, goal) {
     }
 
     function noPathListener (results) {
-      if (results.path.length === 0) {
-        cleanup()
-      } else if (results.status === 'noPath') {
+      if (results.status === 'noPath') {
         cleanup(error('NoPath', 'No path to the goal!'))
       } else if (results.status === 'timeout') {
         cleanup(error('Timeout', 'Took to long to decide path to goal!'))
+      } else if (results.status === 'partial') {
+        // An empty partial result only means this A* compute slice has not
+        // reached a useful node yet. The same search context continues on the
+        // next physics tick; resolving here falsely reports arrival without
+        // moving and abandons the in-progress route.
+        return
+      } else if (results.path.length === 0) {
+        const position = bot.entity?.position?.floored?.()
+        if (position && goal.isEnd(position)) cleanup()
+        else cleanup(error('NoPath', 'Pathfinder returned an empty path before reaching the goal!'))
       }
     }
 

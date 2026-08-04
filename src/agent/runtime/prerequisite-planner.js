@@ -227,6 +227,17 @@ function nearbyBlock(bot, name, range = 16) {
   }
 }
 
+function directlyUsableWorkstation(bot, name) {
+  const block = nearbyBlock(bot, name, 4.5);
+  if (!block || blockDistance(bot, block) > 4.5) return null;
+  try {
+    if (typeof bot.canSeeBlock === 'function' && !bot.canSeeBlock(block)) return null;
+  } catch {
+    return null;
+  }
+  return block;
+}
+
 function sourceBlocks(bot, target) {
   const item = bot.registry?.itemsByName?.[target];
   if (!item) return [];
@@ -419,7 +430,7 @@ function ensurePersistentItem(bot, context, name, trail) {
     && context.workstationRequirement.name === name;
   if (
     ledgerCount(context, name) > 0
-    || (!carriedRequired && nearbyBlock(bot, name, context.range))
+    || (!carriedRequired && directlyUsableWorkstation(bot, name))
   ) return null;
   return ensureItem(bot, context, name, 1, trail);
 }
