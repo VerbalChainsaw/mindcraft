@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source commit: 9f97ff3
-Milestone: generic equipped-tool progression; iron-pickaxe tranche physically complete
+Functional source commit: 570fbfc (pushed)
+Milestone: shield offhand and bucket inventory generalization physically complete
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: GoalDirector, causal prerequisite planning, deterministic collection/smelting/equipment seams
-Live blocker: none for the iron-pickaxe acceptance scenario
-Last physical result: natural request acquired, smelted, crafted, equipped, and verified iron_pickaxe
-Next campaign: prove shield offhand and bucket inventory generalization without item-specific routes
-Jordan review: requested as C2J-20260803-1900-iron-engine
+Owned subsystem: deterministic mining access, native Pathfinder locomotion boundary, GoalDirector lifecycle
+Live blocker: none for bucket acceptance; fifth post-restart productive attempt requires lifecycle review
+Last physical result: natural request smelted 3 iron, crafted bucket, and Paper verified bucket count 1
+Next campaign: correct confirmed lifecycle/durability gaps, then consolidate ordinary custom locomotion behind Pathfinder
+Jordan review: requested as C2J-20260803-2205-bucket-pathfinder
