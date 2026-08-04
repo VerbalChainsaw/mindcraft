@@ -7,4 +7,4 @@ Owned subsystem: deterministic capability binding and V2-owned Pathfinder locomo
 Live blocker: none for bucket repeatability
 Last physical result: natural request mined/smelted iron, crafted a second bucket, and Paper verified bucket count 2
 Next campaign: smallest capability-catalogue tranche around the proven collect/craft/smelt/equip operations
-Jordan review: pending C2J-20260804-0050-bucket-owned-pathfinder
+Jordan review: requested as C2J-20260804-0050-bucket-owned-pathfinder
