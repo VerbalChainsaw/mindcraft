@@ -572,6 +572,10 @@ export class GoalDirector {
     const code = String(result?.code || '');
     if (!/(?:path_stalled|path_timeout|unreachable|no_path|timeout|action_deadline)/.test(code)) return this.activeGoal;
     const skill = actionResultEvidence(result);
+    // A worn tool is a capability prerequisite, not evidence that the selected
+    // world target is bad. Preserve the target and let the causal planner
+    // replace the tool before retrying the same physical source.
+    if (skill?.toolRequirement || skill?.workstationRequirement) return this.activeGoal;
     const target = result?.target || skill?.target;
     if (
       !target?.name
@@ -621,6 +625,50 @@ export class GoalDirector {
         failedTargets: [...retained, failedTarget].slice(-MAX_FAILED_TARGETS),
       },
       updatedAt: now,
+    });
+  }
+
+  rememberToolRequirement(result) {
+    if (!this.activeGoal || result?.phase === 'succeeded') return this.activeGoal;
+    const requirement = actionResultEvidence(result)?.toolRequirement;
+    const name = boundedText(requirement?.name, 80);
+    const minimumUsableDurability = Math.max(
+      1,
+      Math.min(10_000, Math.floor(Number(requirement?.minimumUsableDurability) || 0)),
+    );
+    if (!name || !/^[a-z0-9_]+$/.test(name)) return this.activeGoal;
+    return this.persist({
+      ...this.activeGoal,
+      memory: {
+        ...this.activeGoal.memory,
+        toolRequirement: {
+          name,
+          minimumUsableDurability,
+          observedAt: this.now(),
+        },
+      },
+      updatedAt: this.now(),
+    });
+  }
+
+  rememberWorkstationRequirement(result) {
+    if (!this.activeGoal || result?.phase === 'succeeded') return this.activeGoal;
+    const requirement = actionResultEvidence(result)?.workstationRequirement;
+    const name = boundedText(requirement?.name, 80);
+    if (!name || !/^[a-z0-9_]+$/.test(name) || requirement?.carried !== true) {
+      return this.activeGoal;
+    }
+    return this.persist({
+      ...this.activeGoal,
+      memory: {
+        ...this.activeGoal.memory,
+        workstationRequirement: {
+          name,
+          carried: true,
+          observedAt: this.now(),
+        },
+      },
+      updatedAt: this.now(),
     });
   }
 
@@ -694,12 +742,17 @@ export class GoalDirector {
       && transferredBeforeFinish > 0
     );
     this.finishLatestSubgoal(effectiveResult);
+    this.rememberToolRequirement(effectiveResult);
+    this.rememberWorkstationRequirement(effectiveResult);
     // A bounded multi-item action may make verified material progress before
     // its remaining work times out. Replan from that real inventory delta
     // instead of blacklisting the productive target and walking away from it.
     if (!verifiedStepProgress) this.rememberFailedTarget(effectiveResult);
     const goal = this.activeGoal;
     const skill = actionResultEvidence(effectiveResult);
+    const prerequisiteBlocked = Boolean(
+      skill?.toolRequirement || skill?.workstationRequirement,
+    );
     let checkpoint = goal.checkpoint;
 
     if (kind === 'deliver') {
@@ -750,9 +803,33 @@ export class GoalDirector {
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
     // unreachable target does, and the goal gave up on work that was fine.
-    const attempts = (preemptionRecovery || relocationFailure)
+    const attempts = (preemptionRecovery || relocationFailure || prerequisiteBlocked)
       ? goal.attempts
       : goal.attempts + 1;
+    if (
+      prerequisiteBlocked
+      && budgetedSubgoalCount(goal) < goal.maxSubgoals
+    ) {
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        phase: 'assess',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus(
+        'planning',
+        skill.workstationRequirement
+          ? 'carried_workstation_required'
+          : 'tool_replacement_required',
+        skill.workstationRequirement
+          ? `The unreachable ${skill.workstationRequirement.name} must be replaced by a carried local workstation.`
+          : `Mining requires a replacement ${skill.toolRequirement.name} with at least ${skill.toolRequirement.minimumUsableDurability} usable durability.`,
+        true,
+      );
+      return;
+    }
     if (
       preemptionRecovery
       && budgetedSubgoalCount(goal) < goal.maxSubgoals
@@ -775,7 +852,7 @@ export class GoalDirector {
     }
     if (
       relocationFailure
-      && attempts <= goal.maxAttempts
+      && attempts < goal.maxAttempts
       && budgetedSubgoalCount(goal) < goal.maxSubgoals
     ) {
       // Relocation is the one bounded response to an acquisition failure; it
@@ -802,7 +879,7 @@ export class GoalDirector {
       && /(?:lost_target|not_received|delivery_unverified)/.test(String(effectiveResult.code || ''));
     if (
       (effectiveResult.retryable === true || deliveryRecovery || preemptionRecovery)
-      && attempts <= goal.maxAttempts
+      && attempts < goal.maxAttempts
       && budgetedSubgoalCount(goal) < goal.maxSubgoals
     ) {
       this.persist({
@@ -936,6 +1013,17 @@ export class GoalDirector {
         ? remainingDelivery
         : goal.checkpoint.targetInventory;
 
+      if (
+        goal.attempts >= goal.maxAttempts
+        && ['acquire', 'recover'].includes(goal.phase)
+      ) {
+        this.fail(
+          'goal_attempts_exhausted',
+          `Goal exhausted its ${goal.maxAttempts} productive-action attempts without verified completion.`,
+        );
+        return;
+      }
+
       if (goal.phase === 'assess' || goal.phase === 'verify_acquired') {
         if (goal.kind === 'deliver' && current >= remainingDelivery) {
           this.persist({ ...goal, phase: 'deliver', updatedAt: this.now() });
@@ -1008,6 +1096,8 @@ export class GoalDirector {
             completion: goal.completion,
             range: 64,
             experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
+            toolRequirement: goal.memory?.toolRequirement,
+            workstationRequirement: goal.memory?.workstationRequirement,
           });
           const planSignature = JSON.stringify(
             (plan.actions || []).map(action => [action.command, action.learningKey]),

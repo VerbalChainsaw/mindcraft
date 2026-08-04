@@ -21,6 +21,10 @@ function createDirector() {
     name: 'BudgetBot',
     bot: { inventory: { slots: [] } },
     blocked_actions: [],
+    isIdle: () => true,
+    isOperatorHeld: () => false,
+    self_prompter: { isStopped: () => true },
+    job_director: { activeOrder: null },
     publishBehaviorEvent() {},
     openChat() {},
   };
@@ -104,6 +108,30 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 2);
   assert.equal(director.status.code, 'relocation_failed_replan');
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([subgoal('recover', 1, 'acting')]),
+    attempts: 4,
+  });
+  director.handleResult('recover', {
+    actionId: 'failed-final-relocation',
+    phase: 'failed',
+    code: 'skill_path_stalled',
+    detail: 'Recovery failed after the productive ceiling was already exhausted.',
+    retryable: true,
+  });
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.phase, 'failed');
+  assert.equal(director.lastGoal.attempts, 4);
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    attempts: 4,
+    phase: 'acquire',
+  });
+  director.update();
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.evidence.code, 'goal_attempts_exhausted');
 
   director.activeGoal = normalizeGoalContract({
     ...boundaryGoal([{

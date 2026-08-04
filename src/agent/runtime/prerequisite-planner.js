@@ -44,6 +44,27 @@ function itemName(bot, id) {
   return bot.registry?.items?.[Number(id)]?.name || mc.getItemName(Number(id)) || null;
 }
 
+function usableDurability(bot, item) {
+  const max = Number(
+    item?.maxDurability
+    ?? bot.registry?.items?.[item?.type]?.maxDurability
+    ?? bot.registry?.itemsByName?.[item?.name]?.maxDurability,
+  );
+  if (!Number.isFinite(max) || max <= 0) return Number.POSITIVE_INFINITY;
+  const used = Math.max(0, Number(item?.durabilityUsed) || 0);
+  const reserve = Math.max(16, Math.ceil(max * 0.1));
+  return Math.max(0, max - used - reserve);
+}
+
+function usableDurableItemCount(bot, name, minimumUsableDurability) {
+  const minimum = Math.max(1, Math.floor(Number(minimumUsableDurability) || 1));
+  return (bot.inventory?.items?.() || []).reduce((total, item) => (
+    item?.name === name && usableDurability(bot, item) >= minimum
+      ? total + Math.max(0, Number(item.count) || 0)
+      : total
+  ), 0);
+}
+
 function inventoryLedger(bot) {
   const ledger = new Map();
   for (const item of bot.inventory?.items?.() || []) {
@@ -376,7 +397,12 @@ function reserveFuel(context, amount, trail) {
 }
 
 function ensurePersistentItem(bot, context, name, trail) {
-  if (ledgerCount(context, name) > 0 || nearbyBlock(bot, name, context.range)) return null;
+  const carriedRequired = context.workstationRequirement?.carried === true
+    && context.workstationRequirement.name === name;
+  if (
+    ledgerCount(context, name) > 0
+    || (!carriedRequired && nearbyBlock(bot, name, context.range))
+  ) return null;
   return ensureItem(bot, context, name, 1, trail);
 }
 
@@ -591,6 +617,8 @@ export function buildPrerequisitePlan(bot, {
   maxNodes = DEFAULT_MAX_NODES,
   maxActions = DEFAULT_MAX_ACTIONS,
   experience = null,
+  toolRequirement = null,
+  workstationRequirement = null,
 } = {}) {
   const canonicalTarget = canonicalName(target);
   const desired = boundedInteger(quantity, 1, 1, 100_000);
@@ -664,8 +692,43 @@ export function buildPrerequisitePlan(bot, {
     maxActions: boundedInteger(maxActions, DEFAULT_MAX_ACTIONS, 4, 128),
     experience: typeof experience === 'function' ? experience : null,
     proximityCache: new Map(),
+    workstationRequirement: {
+      name: canonicalName(workstationRequirement?.name),
+      carried: workstationRequirement?.carried === true,
+    },
   };
-  const failure = ensureItem(bot, context, canonicalTarget, desired, []);
+  const requiredTool = canonicalName(toolRequirement?.name);
+  const minimumUsableDurability = boundedInteger(
+    toolRequirement?.minimumUsableDurability,
+    1,
+    1,
+    10_000,
+  );
+  let failure = null;
+  if (requiredTool) {
+    if (!bot.registry?.itemsByName?.[requiredTool]) {
+      failure = blocked(
+        'unknown_tool_requirement',
+        `The mining preflight requested an unknown replacement tool: ${requiredTool}.`,
+        requiredTool,
+        [canonicalTarget, 'tool_durability'],
+      );
+    } else {
+      setLedgerCount(
+        context,
+        requiredTool,
+        usableDurableItemCount(bot, requiredTool, minimumUsableDurability),
+      );
+      failure = ensureItem(
+        bot,
+        context,
+        requiredTool,
+        1,
+        [canonicalTarget, 'tool_durability'],
+      );
+    }
+  }
+  if (!failure) failure = ensureItem(bot, context, canonicalTarget, desired, []);
   if (failure) {
     return {
       status: 'blocked',

@@ -352,6 +352,33 @@ function normalizeFailedTarget(raw) {
   });
 }
 
+function normalizeToolRequirement(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const name = canonicalName(raw.name);
+  if (!name) return null;
+  return Object.freeze({
+    name,
+    minimumUsableDurability: finiteInteger(
+      raw.minimumUsableDurability,
+      1,
+      1,
+      10_000,
+    ),
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
+function normalizeWorkstationRequirement(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const name = canonicalName(raw.name);
+  if (!name) return null;
+  return Object.freeze({
+    name,
+    carried: raw.carried === true,
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
 function normalizeOperationalMemory(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const failedTargets = Array.isArray(source.failedTargets)
@@ -362,6 +389,8 @@ function normalizeOperationalMemory(raw) {
     : [];
   return Object.freeze({
     failedTargets: Object.freeze(failedTargets),
+    toolRequirement: normalizeToolRequirement(source.toolRequirement),
+    workstationRequirement: normalizeWorkstationRequirement(source.workstationRequirement),
   });
 }
 
