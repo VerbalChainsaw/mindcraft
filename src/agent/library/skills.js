@@ -62,6 +62,10 @@ const COLLECTION_DROP_TIMEOUT_MS = 4_000;
 const COLLECTION_OPERATION_TIMEOUT_MS = 15_000;
 const COLLECTION_SETTLEMENT_TIMEOUT_MS = 2_000;
 const PICKUP_NAVIGATION_STALL_TIMEOUT_MS = 4_000;
+const PICKUP_TARGET_TIMEOUT_MS = 6_000;
+const PICKUP_TARGET_STALL_TIMEOUT_MS = 2_500;
+const MAX_PICKUP_QUEUE_TARGETS = 16;
+const MAX_PICKUP_TARGET_FAILURES = 1;
 const DOOR_SEARCH_RADIUS = 16;
 const DOOR_INTERACTION_REACH = 4.5;
 const DOOR_STATE_SETTLE_MS = 150;
@@ -301,6 +305,7 @@ function setActionEvidence(bot, evidence) {
 function collectionErrorOutcome(error) {
     const name = String(error?.name || '').toLowerCase();
     const message = String(error?.message || error || '').toLowerCase();
+    if (name.includes('stalled') || message.includes('stalled')) return 'path_stalled';
     if (
         name.includes('nopath')
         || name.includes('pathstopped')
@@ -4982,6 +4987,153 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     return collected > 0;
 }
 
+function droppedItemCandidates(bot, range, itemFilter = () => true) {
+    const candidates = [];
+    for (const entity of Object.values(bot.entities || {})) {
+        if (entity?.name !== 'item' || !entity.position || !bot.entity?.position) continue;
+        const distance = bot.entity.position.distanceTo(entity.position);
+        if (distance > range) continue;
+        let item;
+        try {
+            item = entity.getDroppedItem?.();
+        } catch {
+            continue;
+        }
+        if (!item?.name || !itemFilter(item, entity)) continue;
+        candidates.push({
+            entity,
+            item,
+            distance,
+            target: {
+                name: item.name,
+                id: entity.id,
+                x: entity.position.x,
+                y: entity.position.y,
+                z: entity.position.z,
+            },
+        });
+    }
+    return candidates
+        .sort((left, right) => left.distance - right.distance)
+        .slice(0, MAX_PICKUP_QUEUE_TARGETS);
+}
+
+async function collectDroppedItemQueue(bot, candidates, {
+    kind,
+    requireAll = false,
+    successMessage,
+}) {
+    const beforeCounts = new Map();
+    let requestedCount = 0;
+    for (const candidate of candidates) {
+        if (!beforeCounts.has(candidate.item.name)) {
+            beforeCounts.set(candidate.item.name, inventoryCount(bot, candidate.item.name));
+        }
+        requestedCount += Math.max(1, Number(candidate.item.count) || 1);
+    }
+
+    let firstFailure = null;
+    const onTargetFailed = (entity, error) => {
+        if (firstFailure) return;
+        const candidate = candidates.find(entry => entry.entity?.id === entity?.id);
+        firstFailure = {
+            outcome: collectionErrorOutcome(error),
+            target: candidate?.target || {
+                name: entity?.displayName || entity?.name || 'item',
+                id: entity?.id,
+                x: entity?.position?.x,
+                y: entity?.position?.y,
+                z: entity?.position?.z,
+            },
+            error: String(error?.message || error).slice(0, 240),
+        };
+    };
+
+    bot.on('collectBlock_targetFailed', onTargetFailed);
+    try {
+        const movements = safeMovements(bot);
+        movements.canDig = false;
+        movements.allow1by1towers = false;
+        bot.collectBlock.movements = movements;
+        await runBoundedCollectionOperation(
+            bot,
+            () => bot.collectBlock.collect(
+                candidates.map(candidate => candidate.entity),
+                {
+                    ignoreNoPath: true,
+                    maxTargetFailures: MAX_PICKUP_TARGET_FAILURES,
+                    targetTimeoutMs: PICKUP_TARGET_TIMEOUT_MS,
+                    targetStallTimeoutMs: PICKUP_TARGET_STALL_TIMEOUT_MS,
+                    isSatisfied: () => Boolean(bot.interrupt_code),
+                },
+            ),
+            () => bot.collectBlock.cancelTask(),
+        );
+    } catch (error) {
+        if (!firstFailure) {
+            firstFailure = {
+                outcome: collectionErrorOutcome(error),
+                target: candidates[0]?.target || null,
+                error: String(error?.message || error).slice(0, 240),
+            };
+        }
+    } finally {
+        bot.removeListener('collectBlock_targetFailed', onTargetFailed);
+        const movements = safeMovements(bot);
+        bot.collectBlock.movements = movements;
+        bot.pathfinder.setMovements(movements);
+    }
+
+    let pickedUp = 0;
+    for (const [itemName, before] of beforeCounts) {
+        pickedUp += Math.max(0, inventoryCount(bot, itemName) - before);
+    }
+    if (bot.interrupt_code || actionCancellationSignal()?.aborted) {
+        setActionEvidence(bot, {
+            kind,
+            outcome: 'interrupted',
+            target: firstFailure?.target || candidates[0]?.target || null,
+            count: pickedUp,
+            requested: requestedCount,
+            retryable: false,
+        });
+        return false;
+    }
+
+    const complete = pickedUp >= requestedCount;
+    if (pickedUp > 0 && (!requireAll || complete)) {
+        setActionEvidence(bot, {
+            kind,
+            outcome: complete ? 'picked_up' : 'partially_picked_up',
+            count: pickedUp,
+            requested: requestedCount,
+            targets: candidates.length,
+            ...(firstFailure ? { targetFailure: firstFailure } : {}),
+            retryable: false,
+        });
+        log(bot, successMessage(pickedUp));
+        return true;
+    }
+
+    const outcome = pickedUp > 0
+        ? 'partial_pickup'
+        : firstFailure?.outcome || 'not_collected';
+    setActionEvidence(bot, {
+        kind,
+        outcome,
+        target: firstFailure?.target || candidates[0]?.target || null,
+        count: pickedUp,
+        requested: requestedCount,
+        targets: candidates.length,
+        ...(firstFailure?.error ? { error: firstFailure.error } : {}),
+        retryable: true,
+    });
+    log(bot, pickedUp > 0
+        ? `Picked up ${pickedUp} of ${requestedCount} nearby item units before the queue stopped.`
+        : `Could not pick up the nearby ${firstFailure?.target?.name || 'item'} queue.`);
+    return false;
+}
+
 export async function pickupNearbyItems(bot) {
     /**
      * Pick up all nearby items.
@@ -4990,39 +5142,17 @@ export async function pickupNearbyItems(bot) {
      * @example
      * await skills.pickupNearbyItems(bot);
      **/
-    const distance = 8;
-    const getNearestItem = bot => bot.nearestEntity(entity => entity.name === 'item' && bot.entity.position.distanceTo(entity.position) < distance);
-    let nearestItem = getNearestItem(bot);
-    let pickedUp = 0;
-    if (!nearestItem) {
+    const candidates = droppedItemCandidates(bot, 8);
+    if (candidates.length === 0) {
         setActionEvidence(bot, { kind: 'pickup', outcome: 'no_items', retryable: false });
         log(bot, 'No nearby items to pick up.');
         return true;
     }
-    while (nearestItem) {
-        const target = { name: nearestItem.displayName || nearestItem.name || 'item', id: nearestItem.id };
-        const reached = await approachDroppedItem(bot, nearestItem);
-        if (!reached) {
-            const outcome = bot.lastActionEvidence?.outcome || 'unreachable';
-            setActionEvidence(bot, { kind: 'pickup', outcome, target, count: pickedUp, retryable: true });
-            return false;
-        }
-        let prev = nearestItem;
-        const pickupDeadline = Date.now() + 1_200;
-        while (bot.entities?.[prev.id] === prev && Date.now() < pickupDeadline) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        nearestItem = getNearestItem(bot);
-        if (bot.entities?.[prev.id] === prev) {
-            setActionEvidence(bot, { kind: 'pickup', outcome: 'not_collected', target, count: pickedUp, retryable: true });
-            log(bot, `Could not pick up ${target.name}.`);
-            return false;
-        }
-        pickedUp++;
-    }
-    setActionEvidence(bot, { kind: 'pickup', outcome: 'picked_up', count: pickedUp, retryable: false });
-    log(bot, `Picked up ${pickedUp} items.`);
-    return true;
+    return await collectDroppedItemQueue(bot, candidates, {
+        kind: 'pickup',
+        requireAll: true,
+        successMessage: count => `Picked up ${count} nearby item${count === 1 ? '' : 's'}.`,
+    });
 }
 
 function usefulDroppedItem(bot, item) {
@@ -5057,66 +5187,38 @@ function usefulDroppedItem(bot, item) {
 
 export async function pickupUsefulItems(bot, range=12) {
     const distance = Math.max(4, Math.min(32, Number(range) || 12));
-    const nearestUseful = () => {
-        const candidates = [];
-        for (const entity of Object.values(bot.entities || {})) {
-            if (entity?.name !== 'item' || !entity.position) continue;
-            const itemDistance = bot.entity.position.distanceTo(entity.position);
-            if (itemDistance > distance) continue;
-            let item;
-            try {
-                item = entity.getDroppedItem?.();
-            } catch {
-                continue;
-            }
-            if (!usefulDroppedItem(bot, item) || !hasInventoryRoomFor(bot, item.name)) continue;
-            candidates.push({ entity, item, distance: itemDistance });
-        }
-        return candidates.sort((left, right) => left.distance - right.distance)[0] || null;
-    };
-    let pickedUp = 0;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-        if (bot.interrupt_code) {
-            setActionEvidence(bot, {
-                kind: 'useful_pickup',
-                outcome: 'interrupted',
-                count: pickedUp,
-                retryable: false,
-            });
-            return false;
-        }
-        const hostile = bot.nearestEntity?.(entity => (
-            mc.isHostile(entity)
-            && entity?.position
-            && bot.entity.position.distanceTo(entity.position) <= 10
-        ));
-        if (hostile) break;
-        const candidate = nearestUseful();
-        if (!candidate) break;
-        const before = inventoryCount(bot, candidate.item.name);
-        const reached = await approachDroppedItem(bot, candidate.entity);
-        if (!reached) break;
-        const deadline = Date.now() + 1_500;
-        while (
-            inventoryCount(bot, candidate.item.name) <= before
-            && bot.entities?.[candidate.entity.id]
-            && Date.now() < deadline
-            && !bot.interrupt_code
-        ) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        if (inventoryCount(bot, candidate.item.name) <= before) break;
-        pickedUp += inventoryCount(bot, candidate.item.name) - before;
+    const hostile = bot.nearestEntity?.(entity => (
+        mc.isHostile(entity)
+        && entity?.position
+        && bot.entity.position.distanceTo(entity.position) <= 10
+    ));
+    if (hostile) {
+        setActionEvidence(bot, {
+            kind: 'useful_pickup',
+            outcome: 'hostile_nearby',
+            target: { name: hostile.username || hostile.name || 'hostile', id: hostile.id },
+            retryable: true,
+        });
+        return false;
     }
-    const success = pickedUp > 0;
-    setActionEvidence(bot, {
+    const candidates = droppedItemCandidates(
+        bot,
+        distance,
+        item => usefulDroppedItem(bot, item) && hasInventoryRoomFor(bot, item.name),
+    );
+    if (candidates.length === 0) {
+        setActionEvidence(bot, {
+            kind: 'useful_pickup',
+            outcome: 'no_reachable_items',
+            count: 0,
+            retryable: false,
+        });
+        return false;
+    }
+    return await collectDroppedItemQueue(bot, candidates, {
         kind: 'useful_pickup',
-        outcome: success ? 'picked_up' : 'no_reachable_items',
-        count: pickedUp,
-        retryable: false,
+        successMessage: count => `Picked up ${count} useful nearby item${count === 1 ? '' : 's'}.`,
     });
-    if (success) log(bot, `Picked up ${pickedUp} useful nearby items.`);
-    return success;
 }
 
 
