@@ -174,3 +174,80 @@ test('recovery history does not spend the productive-step ceiling, which still f
     { x: 4, y: 12, z: 8, radius: 4 },
   ]);
 });
+
+test('two concrete failures for one planned material relocate before spending the remaining attempts locally', async () => {
+  const director = createDirector();
+  const now = Date.now();
+  const commands = [];
+  director.executeGoalCommand = async (agent, command) => {
+    commands.push(command);
+    agent.last_action_result = {
+      actionId: 'verified-region-relocation',
+      phase: 'succeeded',
+      code: 'skill_retreated',
+      detail: 'Moved 32 blocks to a different search region.',
+      retryable: false,
+    };
+    return true;
+  };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'recover',
+    attempts: 2,
+    evidence: {
+      actionId: 'second-local-failure',
+      phase: 'failed',
+      code: 'skill_unreachable',
+      detail: 'The second concrete target in this region had no safe stance.',
+      verified: false,
+      at: now,
+    },
+    subgoals: [
+      {
+        ...subgoal('plan', 1, 'failed'),
+        targetName: 'raw_iron',
+        startedAt: now - 200,
+        finishedAt: now - 150,
+      },
+      {
+        ...subgoal('plan', 2, 'failed'),
+        targetName: 'raw_iron',
+        startedAt: now - 100,
+        finishedAt: now - 50,
+      },
+    ],
+    memory: {
+      failedTargets: [
+        {
+          kind: 'collect',
+          name: 'iron_ore',
+          position: { x: 4, y: 12, z: 8 },
+          code: 'skill_unreachable',
+          failures: 1,
+          firstFailedAt: now - 145,
+          lastFailedAt: now - 145,
+          avoidUntil: now + 90_000,
+        },
+        {
+          kind: 'collect',
+          name: 'iron_ore',
+          position: { x: 16, y: 14, z: 8 },
+          code: 'skill_unreachable',
+          failures: 1,
+          firstFailedAt: now - 45,
+          lastFailedAt: now - 45,
+          avoidUntil: now + 90_000,
+        },
+      ],
+    },
+  });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(commands, ['!moveAway(32)']);
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.activeGoal.subgoals.at(-1).kind, 'recover');
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
+});

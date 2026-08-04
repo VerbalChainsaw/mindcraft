@@ -80,6 +80,20 @@ declare module 'mineflayer-pathfinder' {
 			public hasChanged(): boolean;
 		}
 
+		export class GoalOutsideRadius extends Goal {
+			public constructor(x: number, y: number, z: number, range: number);
+
+			public x: number;
+			public y: number;
+			public z: number;
+			public range: number;
+			public rangeSq: number;
+
+			public heuristic(node: Move): number;
+			public isEnd(node: Move): boolean;
+			public hasChanged(): boolean;
+		}
+
 		export class GoalXZ extends Goal {
 			public constructor(x: number, z: number);
 
@@ -211,6 +225,7 @@ declare module 'mineflayer-pathfinder' {
 		public allow1by1towers: boolean;
 		public allowFreeMotion: boolean;
 		public allowParkour: boolean;
+		public allowParkourAscend: boolean;
 		public allowSprinting: boolean;
 		/**
 		 * Test for entities that may obstruct path or prevent block placement. Grabs updated entities every new path

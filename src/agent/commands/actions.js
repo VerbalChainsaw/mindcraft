@@ -442,7 +442,7 @@ export const actionsList = [
         params: {'distance': { type: 'float', description: 'The distance to move away.', domain: [0, Infinity] }},
         perform: runAsAction(async (agent, distance) => {
             return await skills.moveAway(agent.bot, distance);
-        })
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!rememberHere',

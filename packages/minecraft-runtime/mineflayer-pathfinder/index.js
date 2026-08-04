@@ -13,6 +13,7 @@ const Vec3 = require('vec3').Vec3
 const Physics = require('./lib/physics')
 const nbt = require('prismarine-nbt')
 const interactableBlocks = require('./lib/interactable.json')
+const NODE_EXECUTION_STALL_MS = 2500
 
 function inject (bot) {
   const waterType = bot.registry.blocksByName.water.id
@@ -89,8 +90,14 @@ function inject (bot) {
       const p = startPos.floored()
       const dy = startPos.y - p.y
       const b = bot.blockAt(p) // The block we are standing in
-      // Offset the floored bot position by one if we are standing on a block that has not the full height but is solid
-      const offset = (b && dy > 0.001 && bot.entity.onGround && !movements.emptyBlocks.has(b.type)) ? 1 : 0
+      // Offset only for an actual collision surface such as a slab or carpet.
+      // Water is replaceable but intentionally absent from emptyBlocks; using
+      // that set here promoted a wading bot to the block above and mislabeled
+      // a shore step-up as a flat walk.
+      const hasStandingSurface = Boolean(
+        b?.shapes?.length > 0 && !movements.liquids.has(b.type)
+      )
+      const offset = (dy > 0.001 && bot.entity.onGround && hasStandingSurface) ? 1 : 0
       start = new Move(p.x, p.y + offset, p.z, movements.countScaffoldingItems(), 0)
     }
     if (movements.allowEntityDetection) {
@@ -425,6 +432,26 @@ function inject (bot) {
   function prepareVerticalTransition (nextPoint, position) {
     const locomotion = nextPoint.locomotion
     if (!locomotion?.source || !['step_up', 'drop_down'].includes(locomotion.type)) {
+      verticalTransition = null
+      return false
+    }
+
+    // A liquid-origin step cannot be recentered as if the bot were standing
+    // on dry ground. While swimming, onGround is normally false, so the dry
+    // preflight below would clear jump and forward forever. The executor
+    // already owns water/lava ascent and step-up controls; let it perform the
+    // planned transition directly.
+    const sourceBlock = bot.blockAt(new Vec3(
+      locomotion.source.x,
+      locomotion.source.y,
+      locomotion.source.z
+    ))
+    const sourceIsLiquid = sourceBlock && (
+      sourceBlock.type === waterType || sourceBlock.type === lavaType
+    )
+    if (locomotion.type === 'step_up' && (
+      sourceIsLiquid || bot.entity.isInWater || bot.entity.isInLava
+    )) {
       verticalTransition = null
       return false
     }
@@ -775,7 +802,7 @@ function inject (bot) {
     }
 
     // check for futility
-    if (performance.now() - lastNodeTime > 3500) {
+    if (performance.now() - lastNodeTime > NODE_EXECUTION_STALL_MS) {
       // should never take this long to go to the next node
       const feet = bot.blockAt(p.floored())
       const support = bot.blockAt(p.floored().offset(0, -1, 0))

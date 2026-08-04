@@ -75,7 +75,7 @@ const MIN_DOOR_TRAVERSE_PROGRESS = 0.75;
 const INTERACTION_CONFIRM_TIMEOUT_MS = 750;
 const INTERACTION_CONFIRM_POLL_MS = 50;
 const NAVIGATION_PROGRESS_POLL_MS = 500;
-const NAVIGATION_STALL_TIMEOUT_MS = 3_000;
+const NAVIGATION_STALL_TIMEOUT_MS = 3_700;
 const NAVIGATION_RECOVERY_STALL_TIMEOUT_MS = 1_500;
 const NAVIGATION_PROGRESS_DISTANCE = 0.75;
 const NAVIGATION_GOAL_PROGRESS_DELTA = 0.25;
@@ -570,21 +570,48 @@ function inventoryCountByTypes(bot, itemTypes) {
     );
 }
 
-async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=COLLECTION_DROP_TIMEOUT_MS) {
+function droppedItemEntityIds(bot) {
+    return new Set(Object.values(bot.entities || {})
+        .filter(entity => entity?.name === 'item' && Number.isFinite(entity.id))
+        .map(entity => entity.id));
+}
+
+async function waitForExpectedDropPickup(
+    bot,
+    itemTypes,
+    beforeCount,
+    {
+        timeoutMs = COLLECTION_DROP_TIMEOUT_MS,
+        targetPosition = null,
+        priorEntityIds = null,
+    } = {},
+) {
     const deadline = Date.now() + remainingActionTimeMs(timeoutMs);
     const signal = actionCancellationSignal();
+    const attemptedEntities = new Set();
     while (Date.now() < deadline && !bot.interrupt_code && !signal?.aborted) {
         if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
         const expectedDrop = Object.values(bot.entities || {}).find(entity => {
             if (entity?.name !== 'item' || !entity.position) return false;
             if (bot.entity.position.distanceTo(entity.position) > 8) return false;
+            if (attemptedEntities.has(entity.id)) return false;
+            let droppedItem = null;
             try {
-                return itemTypes.has(entity.getDroppedItem?.()?.type);
+                droppedItem = entity.getDroppedItem?.() || null;
             } catch {
-                return false;
+                // A just-spawned item may not have its metadata yet. Exact
+                // spawn identity and proximity to the block bind that case.
             }
+            if (droppedItem) return itemTypes.has(droppedItem.type);
+            return Boolean(
+                targetPosition
+                && priorEntityIds instanceof Set
+                && !priorEntityIds.has(entity.id)
+                && entity.position.distanceTo(targetPosition.offset(0.5, 0.5, 0.5)) <= 3,
+            );
         });
         if (expectedDrop) {
+            attemptedEntities.add(expectedDrop.id);
             const remaining = Math.max(100, deadline - Date.now());
             await approachDroppedItem(bot, expectedDrop, remaining);
             if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
@@ -4220,9 +4247,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             return false;
         }
         let beforeTargetDropCount = null;
+        let priorDropEntityIds = null;
         try {
             if (!isLiquid) {
                 beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                priorDropEntityIds = droppedItemEntityIds(bot);
             }
             let success = false;
             if (isLiquid) {
@@ -4255,7 +4284,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     log(bot, `Could not verify that ${block.name} was collected.`);
                     return false;
                 }
-                if (!await waitForExpectedDropPickup(bot, expectedDropTypes, beforeTargetDropCount)) {
+                if (!await waitForExpectedDropPickup(
+                    bot,
+                    expectedDropTypes,
+                    beforeTargetDropCount,
+                    { targetPosition: block.position, priorEntityIds: priorDropEntityIds },
+                )) {
                     setActionEvidence(bot, { kind: 'collect', outcome: 'not_collected', target, retryable: true });
                     return false;
                 }
@@ -4431,7 +4465,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 }
                 let afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
                 if (expectedDropTypes.size > 0 && afterDropCount <= beforeTargetDropCount) {
-                    await waitForExpectedDropPickup(bot, expectedDropTypes, beforeTargetDropCount);
+                    await waitForExpectedDropPickup(
+                        bot,
+                        expectedDropTypes,
+                        beforeTargetDropCount,
+                        { targetPosition: block.position, priorEntityIds: priorDropEntityIds },
+                    );
                     afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
                 }
                 if (expectedDropTypes.size > 0 && afterDropCount <= beforeTargetDropCount) {
@@ -6073,9 +6112,13 @@ export async function placeBlock(
         'powered_rail', 'activator_rail', 'tripwire_hook', 'tripwire', 'water_bucket', 'string'];
     if (!dont_move_for.includes(item_name) && (pos.distanceTo(targetBlock.position) < 1.1 || pos_above.distanceTo(targetBlock.position) < 1.1)) {
         // too close
-        let goal = new pf.goals.GoalNear(targetBlock.position.x, targetBlock.position.y, targetBlock.position.z, 2);
-        let inverted_goal = new pf.goals.GoalInvert(goal);
-        const moved = await goToGoal(bot, inverted_goal);
+        const clearanceGoal = new pf.goals.GoalOutsideRadius(
+            targetBlock.position.x,
+            targetBlock.position.y,
+            targetBlock.position.z,
+            2,
+        );
+        const moved = await goToGoal(bot, clearanceGoal);
         if (!moved || bot.entity.position.distanceTo(targetBlock.position) < 1.1) {
             setActionEvidence(bot, { kind: 'place', outcome: 'no_clearance', target, retryable: true });
             log(bot, `Cannot make safe clearance to place ${blockType}.`);
@@ -8405,12 +8448,12 @@ async function attemptLocalNavigationEscape(bot) {
     const start = bot.entity.position.clone();
     const origin = start.floored();
     const recovery = localNavigationRecoveryMovements(bot, origin);
-    const escapeGoal = new pf.goals.GoalInvert(new pf.goals.GoalNear(
+    const escapeGoal = new pf.goals.GoalOutsideRadius(
         origin.x,
         origin.y,
         origin.z,
         NAVIGATION_RECOVERY_DISTANCE,
-    ));
+    );
     const outcome = await runNavigationAttempt(
         bot,
         escapeGoal,
@@ -9430,17 +9473,23 @@ function assessMiningAccessPlan(
         (total, block) => total + Math.max(50, collectionBreakTime(bot, block)),
         0,
     );
-    const estimatedDurationMs = Math.ceil(
-        estimatedDigMs + (route.length * MINING_ROUTE_STEP_ESTIMATE_MS),
-    );
-    if (estimatedDurationMs + MINING_ROUTE_DEADLINE_RESERVE_MS > remainingActionTimeMs()) {
+    const estimatedReturnMs = Math.ceil(route.length * MINING_ROUTE_STEP_ESTIMATE_MS);
+    const estimatedDurationMs = Math.ceil(estimatedDigMs + estimatedReturnMs);
+    if (
+        estimatedDurationMs
+        + estimatedReturnMs
+        + MINING_ROUTE_DEADLINE_RESERVE_MS
+        > remainingActionTimeMs()
+    ) {
         return {
             ok: false,
             outcome: 'route_deadline_insufficient',
             route,
             stance,
+            origin,
             blockBudget,
             estimatedDurationMs,
+            estimatedReturnMs,
             durability,
         };
     }
@@ -9449,11 +9498,13 @@ function assessMiningAccessPlan(
         outcome: 'route_ready',
         route,
         stance,
+        origin,
         excavationBlocks,
         excavationBudget,
         blockBudget,
         breakTarget,
         estimatedDurationMs,
+        estimatedReturnMs,
         durability,
     };
 }
@@ -9528,8 +9579,7 @@ function clearedMiningMovements(bot) {
     return movements;
 }
 
-async function traverseClearedMiningStep(bot, route, stepIndex) {
-    const step = route[stepIndex]?.position;
+async function traverseClearedMiningCell(bot, step) {
     if (!step) return { success: false, outcome: 'route_step_unavailable' };
     const reached = await goToGoal(
         bot,
@@ -9555,100 +9605,180 @@ async function traverseClearedMiningStep(bot, route, stepIndex) {
     return {
         success: arrived,
         outcome: arrived ? 'route_step_reached' : 'route_step_not_reached',
-        landedIndex: arrived ? stepIndex : stepIndex - 1,
         observed,
         reached,
         onGround: bot.entity?.onGround === true,
     };
 }
 
+async function traverseClearedMiningStep(bot, route, stepIndex) {
+    const traversal = await traverseClearedMiningCell(bot, route[stepIndex]?.position);
+    return {
+        ...traversal,
+        landedIndex: traversal.success ? stepIndex : stepIndex - 1,
+    };
+}
+
+async function retreatMiningAccessRoute(bot, plan, lastReachedIndex) {
+    const origin = plan?.origin;
+    if (!origin) return { attempted: false, success: false, outcome: 'return_origin_unavailable' };
+    if (bot.interrupt_code) {
+        return { attempted: false, success: false, outcome: 'return_interrupted' };
+    }
+
+    const targets = [];
+    for (let index = lastReachedIndex; index >= 0; index -= 1) {
+        targets.push({ position: plan.route[index].position, routeIndex: index });
+    }
+    targets.push({ position: origin, routeIndex: -1 });
+
+    let retreatedSteps = 0;
+    for (const target of targets) {
+        if (physicallyOccupiesStandingCell(bot, target.position)) continue;
+        if (remainingActionTimeMs() <= GROUND_SETTLE_TIMEOUT_MS + 250) {
+            return {
+                attempted: true,
+                success: false,
+                outcome: 'return_deadline',
+                retreatedSteps,
+                failedRouteIndex: target.routeIndex,
+                target: target.position,
+            };
+        }
+        if (!isMiningRouteCellReturnable(bot, target.position)) {
+            return {
+                attempted: true,
+                success: false,
+                outcome: 'return_cell_unsafe',
+                retreatedSteps,
+                failedRouteIndex: target.routeIndex,
+                target: target.position,
+            };
+        }
+        const traversal = await traverseClearedMiningCell(bot, target.position);
+        if (!traversal.success) {
+            return {
+                attempted: true,
+                success: false,
+                outcome: traversal.outcome,
+                retreatedSteps,
+                failedRouteIndex: target.routeIndex,
+                target: target.position,
+                observed: traversal.observed,
+                reached: traversal.reached,
+                onGround: traversal.onGround,
+            };
+        }
+        retreatedSteps += 1;
+    }
+    return {
+        attempted: true,
+        success: physicallyOccupiesStandingCell(bot, origin),
+        outcome: physicallyOccupiesStandingCell(bot, origin)
+            ? 'return_origin_reached'
+            : 'return_origin_unverified',
+        retreatedSteps,
+        target: origin,
+        observed: bot.entity?.position?.clone?.() || null,
+    };
+}
+
 async function executeMiningAccessPlan(bot, targetBlock, plan) {
     let excavated = 0;
     let nextIndex = 0;
+    let lastReachedIndex = -1;
+    const fail = async (outcome, extra = {}) => {
+        const retreat = await retreatMiningAccessRoute(bot, plan, lastReachedIndex);
+        return {
+            success: false,
+            outcome: retreat.attempted && !retreat.success
+                ? 'return_route_failed'
+                : outcome,
+            failureOutcome: outcome,
+            excavated,
+            retreat,
+            ...extra,
+        };
+    };
     while (nextIndex < plan.route.length) {
-        if (bot.interrupt_code || remainingActionTimeMs() <= 0) {
-            return { success: false, outcome: bot.interrupt_code ? 'interrupted' : 'deadline', excavated };
+        const returnReserveMs = (
+            (lastReachedIndex + 2) * MINING_ROUTE_STEP_ESTIMATE_MS
+        ) + GROUND_SETTLE_TIMEOUT_MS;
+        if (bot.interrupt_code) {
+            return await fail('interrupted');
+        }
+        if (remainingActionTimeMs() <= returnReserveMs) {
+            return await fail('deadline');
         }
         const liveTarget = bot.blockAt(targetBlock.position);
         if (!liveTarget || liveTarget.name !== targetBlock.name) {
-            return { success: false, outcome: 'target_changed', excavated };
+            return await fail('target_changed');
         }
         const step = plan.route[nextIndex];
         const assessment = assessMiningRouteStep(bot, step, liveTarget);
         if (!assessment.ok) {
-            return {
-                success: false,
-                outcome: assessment.outcome,
-                excavated,
+            return await fail(assessment.outcome, {
                 stepIndex: nextIndex,
                 step: step.position,
-            };
+            });
         }
         const liveBlocks = assessment.blocks
             .map(block => bot.blockAt(block.position))
             .filter(block => !isCollectionStandingCellClear(block));
         if (liveBlocks.some(block => !block || bot.entity.position.distanceTo(block.position) > 4.5)) {
-            return {
-                success: false,
-                outcome: 'route_step_out_of_reach',
-                excavated,
+            return await fail('route_step_out_of_reach', {
                 stepIndex: nextIndex,
                 step: step.position,
-            };
+            });
         }
         for (const liveBlock of liveBlocks) {
             if (
                 isFallingGameplayBlock(liveBlock)
                 || !isNaturalFillBlock(bot, liveBlock)
-            ) return { success: false, outcome: 'route_changed_unsafe', excavated };
+            ) return await fail('route_changed_unsafe');
             if (excavated >= plan.excavationBudget) {
-                return { success: false, outcome: 'excavation_budget_exceeded', excavated };
+                return await fail('excavation_budget_exceeded');
             }
             if (!await breakBlockAt(
                 bot,
                 liveBlock.position.x,
                 liveBlock.position.y,
                 liveBlock.position.z,
-            )) return { success: false, outcome: 'route_block_not_broken', excavated };
+            )) return await fail('route_block_not_broken');
             excavated += 1;
         }
 
         const traversal = await traverseClearedMiningStep(bot, plan.route, nextIndex);
         if (!traversal.success) {
-            return {
-                success: false,
-                outcome: traversal.outcome,
-                excavated,
+            return await fail(traversal.outcome, {
                 stepIndex: nextIndex,
                 step: step.position,
                 observed: traversal.observed,
                 reached: traversal.reached,
                 onGround: traversal.onGround,
-            };
+            });
         }
+        lastReachedIndex = traversal.landedIndex;
         for (let index = 0; index <= traversal.landedIndex; index += 1) {
             if (!isMiningRouteCellReturnable(bot, plan.route[index].position)) {
-                return {
-                    success: false,
-                    outcome: 'return_route_changed',
-                    excavated,
+                return await fail('return_route_changed', {
                     stepIndex: index,
                     step: plan.route[index].position,
-                };
+                });
             }
         }
         const previousIndex = nextIndex;
         nextIndex += 1;
         if (nextIndex <= previousIndex) {
-            return { success: false, outcome: 'non_convergent_step', excavated };
+            return await fail('non_convergent_step');
         }
     }
     const finalTarget = bot.blockAt(targetBlock.position);
     if (!finalTarget || finalTarget.name !== targetBlock.name) {
-        return { success: false, outcome: 'target_changed', excavated };
+        return await fail('target_changed');
     }
     if (!isMiningTargetExposed(bot, finalTarget)) {
-        return { success: false, outcome: 'target_not_exposed', excavated };
+        return await fail('target_not_exposed');
     }
     return { success: true, outcome: 'target_exposed', excavated, target: finalTarget };
 }
@@ -9921,9 +10051,12 @@ export async function mineSearchTunnel(
                 excavated: access.excavated,
                 blockBudget: plan.blockBudget,
                 estimatedDurationMs: plan.estimatedDurationMs,
+                estimatedReturnMs: plan.estimatedReturnMs,
                 durability: plan.durability,
                 failedStepIndex: Number.isFinite(access.stepIndex) ? access.stepIndex : null,
                 failedStep: access.step || null,
+                accessFailureOutcome: access.failureOutcome || access.outcome,
+                retreat: access.retreat || null,
                 observedPosition: access.observed || null,
                 pathfinderReached: access.reached ?? null,
                 onGround: access.onGround ?? null,
@@ -9933,7 +10066,12 @@ export async function mineSearchTunnel(
             const failedStep = access.step
                 ? ` at step ${Number(access.stepIndex) + 1} (${access.step.x}, ${access.step.y}, ${access.step.z}) from (${bot.entity.position.x.toFixed(2)}, ${bot.entity.position.y.toFixed(2)}, ${bot.entity.position.z.toFixed(2)})`
                 : '';
-            log(bot, `Stopped the exact route to ${stagedTarget.name}: ${String(access.outcome).replace(/_/g, ' ')}${failedStep} after ${access.excavated} block${access.excavated === 1 ? '' : 's'}.`);
+            const returnDetail = access.retreat?.attempted
+                ? access.retreat.success
+                    ? ` Returned to the route origin in ${access.retreat.retreatedSteps} reverse step${access.retreat.retreatedSteps === 1 ? '' : 's'}.`
+                    : ` Return to the route origin failed (${String(access.retreat.outcome).replace(/_/g, ' ')}).`
+                : '';
+            log(bot, `Stopped the exact route to ${stagedTarget.name}: ${String(access.failureOutcome || access.outcome).replace(/_/g, ' ')}${failedStep} after ${access.excavated} block${access.excavated === 1 ? '' : 's'}.${returnDetail}`);
             return false;
         }
 
@@ -11098,16 +11236,26 @@ export async function moveAway(bot, distance, options = {}) {
     const pos = bot.entity.position.clone();
     const signal = options?.signal;
     if (signal?.aborted) return false;
+    const startingFeet = bot.blockAt(pos.floored());
+    const startedInLiquid = Boolean(
+        bot.entity?.isInWater
+        || bot.entity?.isInLava
+        || isLiquidGameplayBlock(startingFeet)
+    );
     const requestedDistance = Math.max(0, Number(distance) || 0);
     const target = { x: pos.x, y: pos.y, z: pos.z };
-    let goal = new pf.goals.GoalNear(pos.x, pos.y, pos.z, requestedDistance);
-    let inverted_goal = new pf.goals.GoalInvert(goal);
+    const retreatGoal = new pf.goals.GoalOutsideRadius(
+        pos.x,
+        pos.y,
+        pos.z,
+        requestedDistance,
+    );
     bot.pathfinder.setMovements(safeMovements(bot));
 
     if (bot.modes.isOn('cheat')) {
         let path;
         try {
-            path = await bot.pathfinder.getPathTo(safeMovements(bot), inverted_goal, 10000);
+            path = await bot.pathfinder.getPathTo(safeMovements(bot), retreatGoal, 10000);
             if (signal?.aborted) return false;
         } catch (err) {
             setActionEvidence(bot, { kind: 'movement', outcome: 'probe_error', target, error: err.message, retryable: true });
@@ -11131,7 +11279,33 @@ export async function moveAway(bot, distance, options = {}) {
 
     let routed;
     try {
-        routed = await goToGoal(bot, inverted_goal, options);
+        const retreatOptions = {
+            ...options,
+            // moveAway is itself a recovery primitive. Its native route may
+            // replan, but nesting a second local sidestep recovery merely
+            // repeats the same blocked region inside one action.
+            allowLocalRecovery: options?.allowLocalRecovery ?? false,
+        };
+        const movementOptions = retreatOptions.movements
+            ? retreatOptions
+            : {
+                ...retreatOptions,
+                movements: () => {
+                    const movements = safeMovements(bot);
+                    const feet = bot.entity?.position
+                        ? bot.blockAt(bot.entity.position.floored())
+                        : null;
+                    // goToGoal owns the initial water-to-shore route. Once
+                    // that route reaches land, the actual relocation must not
+                    // choose an equally short path back through water.
+                    if (!bot.entity?.isInWater && !isLiquidGameplayBlock(feet)) {
+                        const waterType = bot.registry?.blocksByName?.water?.id;
+                        if (Number.isFinite(waterType)) movements.blocksToAvoid.add(waterType);
+                    }
+                    return movements;
+                },
+            };
+        routed = await goToGoal(bot, retreatGoal, movementOptions);
     } catch (err) {
         setActionEvidence(bot, {
             kind: 'movement',
@@ -11151,6 +11325,24 @@ export async function moveAway(bot, distance, options = {}) {
     if (signal?.aborted) return false;
     let new_pos = bot.entity.position;
     const moved = new_pos.distanceTo(pos);
+    const finalFeet = bot.blockAt(new_pos.floored());
+    if (startedInLiquid && (
+        bot.entity?.isInWater
+        || bot.entity?.isInLava
+        || isLiquidGameplayBlock(finalFeet)
+    )) {
+        setActionEvidence(bot, {
+            kind: 'movement',
+            outcome: 'unsafe_medium',
+            target,
+            requestedDistance,
+            distance: moved,
+            medium: finalFeet?.name || 'liquid',
+            retryable: true,
+        });
+        log(bot, `Retreat moved ${moved.toFixed(1)} blocks but did not reach a dry stance.`);
+        return false;
+    }
     if (requestedDistance > 0 && moved + 0.5 < requestedDistance) {
         setActionEvidence(bot, { kind: 'movement', outcome: 'no_progress', target, requestedDistance, distance: moved, retryable: true });
         log(bot, `Retreat stopped after ${moved.toFixed(1)} blocks; ${requestedDistance.toFixed(1)} were requested.`);

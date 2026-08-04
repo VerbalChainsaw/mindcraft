@@ -29,6 +29,7 @@ const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
 const FAILED_TARGET_EXCLUSION_RADIUS = 4;
+const MAX_LOCAL_CONCRETE_TARGET_FAILURES = 2;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 function boundedText(value, maximum = 280, fallback = '') {
@@ -211,6 +212,25 @@ function latestPlanFailureHasConcreteTarget(goal) {
     target.kind === 'collect'
     && target.lastFailedAt >= Math.max(0, Number(subgoal.finishedAt) || 0)
   ));
+}
+
+function consecutiveLocalPlanFailures(goal) {
+  const subgoals = goal?.subgoals || [];
+  const latest = subgoals.at(-1);
+  if (latest?.kind !== 'plan' || latest.state !== 'failed' || !latest.targetName) return 0;
+
+  let failures = 0;
+  for (let index = subgoals.length - 1; index >= 0; index -= 1) {
+    const subgoal = subgoals[index];
+    // Any bounded relocation is the boundary between search regions. A failed
+    // relocation is also a boundary so the same movement cannot be issued
+    // repeatedly without fresh productive evidence.
+    if (subgoal.kind === 'recover') break;
+    if (subgoal.kind !== 'plan' || subgoal.targetName !== latest.targetName) break;
+    if (subgoal.state !== 'failed') break;
+    failures += 1;
+  }
+  return failures;
 }
 
 export class GoalDirector {
@@ -1130,12 +1150,21 @@ export class GoalDirector {
       if (goal.phase === 'recover') {
         if (goal.subgoals.at(-1)?.kind === 'plan') {
           if (latestPlanFailureHasConcreteTarget(goal)) {
+            const localFailures = consecutiveLocalPlanFailures(goal);
+            const disengagement = localFailures >= MAX_LOCAL_CONCRETE_TARGET_FAILURES
+              ? plannedDisengagementCommand(goal)
+              : null;
+            if (disengagement) {
+              this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
+              this.dispatch('recover', disengagement);
+              return;
+            }
             this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
             this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
             this.setStatus(
               'planning',
               'concrete_target_excluded',
-              'The failed physical source is excluded; selecting a different target without blind relocation.',
+              `The failed physical source is excluded; selecting another target in this region (${localFailures}/${MAX_LOCAL_CONCRETE_TARGET_FAILURES}) before bounded relocation.`,
               true,
             );
             return;

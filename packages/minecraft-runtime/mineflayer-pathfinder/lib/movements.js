@@ -31,6 +31,10 @@ class Movements {
     this.allow1by1towers = true
     this.allowFreeMotion = false
     this.allowParkour = true
+    // Flat and descending parkour use predictable ballistic paths. An
+    // ascending gap jump currently has no reliable execution settlement and
+    // must not be advertised to A* as an executable edge.
+    this.allowParkourAscend = false
     this.allowSprinting = true
     this.allowEntityDetection = true
 
@@ -676,7 +680,7 @@ class Movements {
         // Forward
         neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
         break
-      } else if (ceilingClear && blockB.safe && blockC.physical) {
+      } else if (this.allowParkourAscend && ceilingClear && blockB.safe && blockC.physical) {
         // Up
         if (blockA.safe && d !== 4) { // 4 Blocks forward 1 block up is very difficult and fails often
           cost += this.exclusionStep(blockA)

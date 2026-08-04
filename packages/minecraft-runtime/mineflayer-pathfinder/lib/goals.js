@@ -72,6 +72,35 @@ class GoalNear extends Goal {
   }
 }
 
+// Reach any block at or beyond a radius from a fixed origin. Unlike
+// GoalInvert(GoalNear), this keeps a non-negative lower-bound heuristic, so
+// A* converges on the cheapest boundary exit instead of preferring arbitrarily
+// distant nodes.
+class GoalOutsideRadius extends Goal {
+  constructor (x, y, z, range) {
+    super()
+    this.x = Math.floor(x)
+    this.y = Math.floor(y)
+    this.z = Math.floor(z)
+    this.range = Math.max(0, Number(range) || 0)
+    this.rangeSq = this.range * this.range
+  }
+
+  heuristic (node) {
+    const dx = this.x - node.x
+    const dy = this.y - node.y
+    const dz = this.z - node.z
+    return Math.max(0, this.range - Math.sqrt(dx * dx + dy * dy + dz * dz))
+  }
+
+  isEnd (node) {
+    const dx = this.x - node.x
+    const dy = this.y - node.y
+    const dz = this.z - node.z
+    return (dx * dx + dy * dy + dz * dz) >= this.rangeSq
+  }
+}
+
 // Useful for long-range goals that don't have a specific Y level
 class GoalXZ extends Goal {
   constructor (x, z) {
@@ -478,6 +507,7 @@ module.exports = {
   Goal,
   GoalBlock,
   GoalNear,
+  GoalOutsideRadius,
   GoalXZ,
   GoalNearXZ,
   GoalY,
