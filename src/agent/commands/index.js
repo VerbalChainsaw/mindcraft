@@ -230,8 +230,8 @@ export function parseCommandMessage(message) {
 function parseCommandArguments(command, commandName, args) {
     const params = commandParams(command);
     const paramNames = commandParamNames(command);
-    if (args.length !== params.length)
-        return `Command ${command.name} was given ${args.length} args, but requires ${params.length} args.`;
+    if (!acceptsArgumentCount(command, args.length))
+        return argumentCountError(command, args.length);
 
     for (let i = 0; i < args.length; i++) {
         const param = params[i];
@@ -345,6 +345,21 @@ function numParams(command) {
     return commandParams(command).length;
 }
 
+function minParams(command) {
+    return commandParams(command).filter(param => param.optional !== true).length;
+}
+
+function acceptsArgumentCount(command, count) {
+    return count >= minParams(command) && count <= numParams(command);
+}
+
+function argumentCountError(command, count) {
+    const minimum = minParams(command);
+    const maximum = numParams(command);
+    const requirement = minimum === maximum ? `${minimum}` : `${minimum} to ${maximum}`;
+    return `Command ${command.name} was given ${count} args, but requires ${requirement} args.`;
+}
+
 export async function executeCommand(agent, message, { owner = 'player', routeOrigin = 'internal' } = {}) {
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
@@ -356,8 +371,8 @@ export async function executeCommand(agent, message, { owner = 'player', routeOr
         if (parsed.args) {
             numArgs = parsed.args.length;
         }
-        if (numArgs !== numParams(command))
-            return `Command ${command.name} was given ${numArgs} args, but requires ${numParams(command)} args.`;
+        if (!acceptsArgumentCount(command, numArgs))
+            return argumentCountError(command, numArgs);
         else {
             const requestContext = createCommandRequestContext({
                 routeOrigin,

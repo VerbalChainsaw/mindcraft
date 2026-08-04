@@ -5,9 +5,9 @@ function commandString(value) {
 }
 
 export function routeCompoundToolGoal(playerName, command) {
-    const match = /^!prepareTool\(\s*(["'])((?:stone|iron)_pickaxe)\1\s*\)\s*$/.exec(String(command || ''));
+    const match = /^!prepareTool\(\s*(["'])([a-z0-9_]{1,80})\1\s*\)\s*$/.exec(String(command || ''));
     if (!match) return command;
-    return `!requestItemGoal("acquire", ${commandString(match[2])}, 1, ${commandString(playerName)})`;
+    return `!requestItemGoal("acquire", ${commandString(match[2])}, 1, ${commandString(playerName)}, "main_hand")`;
 }
 
 function normalizedMessage(message) {
@@ -332,7 +332,9 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     }
 
     const equipped = objectOf(text, 'equip|wield|put on|wear|hold');
-    if (equipped) {
+    const compoundEquipmentAcquisition = /\b(?:make|craft|prepare|get|build)\b/.test(text)
+        && /\b(?:equip|wield|hold)\b/.test(text);
+    if (equipped && !compoundEquipmentAcquisition) {
         const item = canonicalItem(equipped, context.bot);
         if (item) {
             return {
@@ -630,10 +632,12 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     if (typedGoal) {
         const target = typedGoal.target.family || typedGoal.target.requestedName;
         return {
-            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)})`,
+            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)}, ${commandString(typedGoal.completion.kind)})`,
             response: typedGoal.kind === 'deliver'
                 ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
-                : `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`,
+                : typedGoal.completion.kind === 'inventory'
+                    ? `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`
+                    : `I will acquire ${target.replaceAll('_', ' ')} and verify it in my ${typedGoal.completion.kind.replace('_', ' ')}.`,
             releasesHold: true,
         };
     }

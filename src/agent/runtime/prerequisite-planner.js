@@ -1,4 +1,5 @@
 import * as mc from '../../utils/mcdata.js';
+import { completionRequirementSatisfied } from './goal-contract.js';
 
 const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
@@ -205,6 +206,63 @@ function sourceBlocks(bot, target) {
   return sources;
 }
 
+function blockDistance(bot, block) {
+  if (!block) return null;
+  const origin = bot.entity?.position;
+  const position = block?.position;
+  if (!position) return 0;
+  if (typeof origin?.distanceTo === 'function') {
+    const distance = Number(origin.distanceTo(position));
+    return Number.isFinite(distance) ? Math.max(0, distance) : null;
+  }
+  const coordinates = [origin?.x, origin?.y, origin?.z, position.x, position.y, position.z]
+    .map(Number);
+  if (!coordinates.every(Number.isFinite)) return null;
+  const [originX, originY, originZ, targetX, targetY, targetZ] = coordinates;
+  return Math.hypot(targetX - originX, targetY - originY, targetZ - originZ);
+}
+
+function nearestBlockDistance(bot, names, range) {
+  let nearest = null;
+  for (const name of new Set(names)) {
+    const distance = blockDistance(bot, nearbyBlock(bot, name, range));
+    if (!Number.isFinite(distance)) continue;
+    nearest = nearest === null ? distance : Math.min(nearest, distance);
+  }
+  return nearest;
+}
+
+// Recipe alternatives often differ one level below their visible ingredient:
+// sticks consume planks, while the physical choice is the log that can produce
+// those planks. Rank that connected-registry source instead of hardcoding one
+// wood species. The shallow bound keeps this a cheap hint; the real recursive
+// planner still proves every prerequisite before accepting a candidate.
+function acquisitionSourceDistance(bot, target, range, depth = 0, trail = []) {
+  if (depth > 2 || trail.includes(target)) return null;
+  const nextTrail = [...trail, target];
+  let nearest = nearestBlockDistance(bot, [
+    target,
+    ...sourceBlocks(bot, target).map(block => block.name),
+  ], range);
+  if (depth === 2) return nearest;
+
+  const consider = distance => {
+    if (!Number.isFinite(distance)) return;
+    nearest = nearest === null ? distance : Math.min(nearest, distance);
+  };
+  const smeltingInput = mc.getItemSmeltingIngredient(target);
+  if (smeltingInput) {
+    consider(acquisitionSourceDistance(bot, smeltingInput, range, depth + 1, nextTrail));
+  }
+  const itemId = bot.registry?.itemsByName?.[target]?.id;
+  for (const recipe of (bot.registry?.recipes?.[itemId] || []).slice(0, 32)) {
+    for (const ingredient of recipeIngredientEntries(bot, recipe)) {
+      consider(acquisitionSourceDistance(bot, ingredient.name, range, depth + 1, nextTrail));
+    }
+  }
+  return nearest;
+}
+
 function sourceLearningKey(blockName, target) {
   return `collect:${canonicalName(blockName)}->${canonicalName(target)}`;
 }
@@ -253,12 +311,23 @@ function recipeScore(bot, context, target, recipe) {
   for (const ingredient of ingredients) {
     const available = ledgerCount(context, ingredient.name);
     score += Math.min(ingredient.count, available) * 100;
-    if (nearbyBlock(bot, ingredient.name, context.range)) score += 40;
+    if (available < ingredient.count) {
+      const cacheKey = `${ingredient.name}:${context.range}`;
+      if (!context.proximityCache.has(cacheKey)) {
+        context.proximityCache.set(
+          cacheKey,
+          acquisitionSourceDistance(bot, ingredient.name, context.range),
+        );
+      }
+      const distance = context.proximityCache.get(cacheKey);
+      if (Number.isFinite(distance) && distance <= context.range) {
+        score += Math.max(1, Math.round(100 * (1 - (distance / context.range))));
+      }
+    }
     // What the bot still has to go and get is what actually costs it time.
     score -= Math.max(0, ingredient.count - available) * acquisitionCost(ingredient.name);
     if (ingredient.name === 'cobblestone') score += 12;
     if (ingredient.name.endsWith('_planks')) score += 8;
-    if (ingredient.name === 'oak_planks') score += 20;
   }
   return score - ingredients.length + learnedPreference(
     context,
@@ -517,6 +586,7 @@ function publicAction(action) {
 export function buildPrerequisitePlan(bot, {
   target,
   quantity = 1,
+  completion = 'inventory',
   range = DEFAULT_RANGE,
   maxDepth = DEFAULT_MAX_DEPTH,
   maxNodes = DEFAULT_MAX_NODES,
@@ -540,7 +610,38 @@ export function buildPrerequisitePlan(bot, {
   }
 
   const current = plannedInventoryCount(bot, canonicalTarget);
+  const completionKind = completion?.kind || completion || 'inventory';
   if (current >= desired) {
+    if (
+      ['main_hand', 'off_hand'].includes(completionKind)
+      && !completionRequirementSatisfied(bot, { inventoryName: canonicalTarget }, { kind: completionKind })
+    ) {
+      const destination = completionKind === 'main_hand' ? 'main_hand' : 'off_hand';
+      const action = publicAction({
+        kind: 'equip',
+        command: `!equip(${commandString(canonicalTarget)}, ${commandString(destination)})`,
+        target: canonicalTarget,
+        expectedName: null,
+        expectedFamily: null,
+        expectedIncrease: 0,
+        reason: `${canonicalTarget} is available and must be verified in the ${completionKind === 'main_hand' ? 'main hand' : 'offhand'}.`,
+        trail: [canonicalTarget, completionKind],
+        learningKey: `equip:${canonicalTarget}->${completionKind}`,
+        learnedPreference: 0,
+      });
+      return {
+        status: 'ready',
+        code: 'equipment_completion_ready',
+        detail: `Inventory contains ${current} ${canonicalTarget}; equipment verification is still required.`,
+        target: canonicalTarget,
+        quantity: desired,
+        actions: [action],
+        nextStep: action,
+        blocker: null,
+        trail: [...action.trail],
+        exploredNodes: 0,
+      };
+    }
     return {
       status: 'complete',
       code: 'target_already_satisfied',
@@ -563,6 +664,7 @@ export function buildPrerequisitePlan(bot, {
     maxNodes: boundedInteger(maxNodes, DEFAULT_MAX_NODES, 32, 2_048),
     maxActions: boundedInteger(maxActions, DEFAULT_MAX_ACTIONS, 4, 128),
     experience: typeof experience === 'function' ? experience : null,
+    proximityCache: new Map(),
   };
   const failure = ensureItem(bot, context, canonicalTarget, desired, []);
   if (failure) {

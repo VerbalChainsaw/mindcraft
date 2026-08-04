@@ -606,6 +606,7 @@ export function getGoalDirectorState(agent) {
                 requester: String(goal.requester || '').slice(0, 64),
                 target: boundedDirectorTarget(goal.target),
                 quantity: Math.max(0, Number(goal.quantity) || 0),
+                completion: { kind: String(goal.completion?.kind || 'inventory').slice(0, 24) },
                 destination: goal.destination?.kind === 'player'
                     ? { kind: 'player', player: String(goal.destination.player || '').slice(0, 64) }
                     : { kind: 'inventory', player: null },

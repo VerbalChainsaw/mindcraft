@@ -19,13 +19,17 @@ export function getNearestFreeSpace(bot, size=1, distance=8) {
         maxDistance: distance,
         count: 1000
     });
+    const occupiedFeet = bot.entity.position.floored();
+    const occupiedHead = occupiedFeet.offset(0, 1, 0);
     for (let i = 0; i < empty_pos.length; i++) {
         let empty = true;
         for (let x = 0; x < size; x++) {
             for (let z = 0; z < size; z++) {
                 let top = bot.blockAt(empty_pos[i].offset(x, 0, z));
                 let bottom = bot.blockAt(empty_pos[i].offset(x, -1, z));
-                if (!top || !top.name == 'air' || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
+                const cell = empty_pos[i].offset(x, 0, z);
+                const occupiedByBot = cell.equals(occupiedFeet) || cell.equals(occupiedHead);
+                if (!top || top.name !== 'air' || occupiedByBot || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
                     empty = false;
                     break;
                 }

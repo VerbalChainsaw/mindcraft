@@ -257,6 +257,7 @@ export class AgendaDirector {
           destinationPlayer: entry.kind === 'deliver' ? entry.recipient : null,
           request: describeAgendaEntry(entry),
           baselineInventory,
+          completion: entry.completion || (entry.kind === 'deliver' ? 'delivery' : 'inventory'),
         });
       } catch (error) {
         return { accepted: false, code: 'invalid_goal', detail: boundedText(error?.message || error) };

@@ -156,6 +156,9 @@ export function directiveToAgendaEntry(command, { requester = '' } = {}) {
         target: unquote(args[1]),
         quantity: asQuantity(args[2]) ?? 1,
         recipient: kind === 'deliver' ? unquote(args[3]) : '',
+        ...(kind === 'acquire' && unquote(args[4])
+          ? { completion: unquote(args[4]) }
+          : {}),
       });
     }
     default:

@@ -39,6 +39,55 @@ function plannerBot() {
   };
 }
 
+function nearbyRecipeBot() {
+  const items = {
+    1: { id: 1, name: 'test_tool' },
+    2: { id: 2, name: 'oak_planks' },
+    3: { id: 3, name: 'birch_planks' },
+    4: { id: 4, name: 'oak_log' },
+    5: { id: 5, name: 'birch_log' },
+  };
+  const blocks = {
+    10: { id: 10, name: 'oak_log', diggable: true, drops: [4], harvestTools: {} },
+    11: { id: 11, name: 'birch_log', diggable: true, drops: [5], harvestTools: {} },
+  };
+  return {
+    entity: {
+      position: {
+        x: 0,
+        y: 64,
+        z: 0,
+        distanceTo(position) {
+          return Math.hypot(position.x - this.x, position.y - this.y, position.z - this.z);
+        },
+      },
+    },
+    inventory: {
+      slots: [],
+      items: () => [],
+    },
+    findBlock({ matching }) {
+      if (matching === 10) return { position: { x: 56, y: 64, z: 0 } };
+      if (matching === 11) return { position: { x: 4, y: 64, z: 0 } };
+      return null;
+    },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks,
+      blocksByName: Object.fromEntries(Object.values(blocks).map(block => [block.name, block])),
+      recipes: {
+        1: [
+          { ingredients: [{ id: 2, count: 1 }], result: { id: 1, count: 1 } },
+          { ingredients: [{ id: 3, count: 1 }], result: { id: 1, count: 1 } },
+        ],
+        2: [{ ingredients: [{ id: 4, count: 1 }], result: { id: 2, count: 4 } }],
+        3: [{ ingredients: [{ id: 5, count: 1 }], result: { id: 3, count: 4 } }],
+      },
+    },
+  };
+}
+
 test('Perception classifies closing motion and prioritizes visible approaching explosive threats', () => {
   const bot = {
     entity: {
@@ -140,6 +189,41 @@ test('The causal planner uses learned outcomes only to rank otherwise viable met
   assert.match(learned.nextStep.command, /beta_ore/);
   assert.equal(learned.nextStep.learningKey, 'collect:beta_ore->test_gem');
   assert.equal(learned.nextStep.learnedPreference, 8);
+});
+
+test('The causal planner prefers the nearest physical source behind equivalent recipe ingredients', () => {
+  const plan = buildPrerequisitePlan(nearbyRecipeBot(), {
+    target: 'test_tool',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.command, '!collectBlocksInRange("birch_log", 1, 64)');
+});
+
+test('The causal planner keeps a hand-equipment completion open until Minecraft reports the item equipped', () => {
+  const bot = plannerBot();
+  bot.inventory.slots = Array(46).fill(null);
+  bot.inventory.slots[9] = { name: 'test_gem', count: 1 };
+  bot.getEquipmentDestSlot = destination => destination === 'hand' ? 36 : 45;
+
+  const pending = buildPrerequisitePlan(bot, {
+    target: 'test_gem',
+    quantity: 1,
+    completion: { kind: 'main_hand' },
+  });
+  assert.equal(pending.status, 'ready');
+  assert.equal(pending.nextStep.command, '!equip("test_gem", "main_hand")');
+
+  bot.inventory.slots[9] = null;
+  bot.inventory.slots[36] = { name: 'test_gem', count: 1 };
+  const complete = buildPrerequisitePlan(bot, {
+    target: 'test_gem',
+    quantity: 1,
+    completion: { kind: 'main_hand' },
+  });
+  assert.equal(complete.status, 'complete');
 });
 
 test('A persisted goal preserves the learning identity of its active plan step', () => {

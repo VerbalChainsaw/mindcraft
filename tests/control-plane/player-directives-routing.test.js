@@ -49,11 +49,15 @@ test('new branches do not shadow existing follow/come/stay/stop directives', () 
 test('compound pickaxe upgrade requests route through the resumable typed goal', () => {
   assert.equal(
     commandFor('Please upgrade to a stone pickaxe.'),
-    '!requestItemGoal("acquire", "stone_pickaxe", 1, "Gabriel")',
+    '!requestItemGoal("acquire", "stone_pickaxe", 1, "Gabriel", "main_hand")',
   );
   assert.equal(
     commandFor('Please upgrade to an iron pickaxe.'),
-    '!requestItemGoal("acquire", "iron_pickaxe", 1, "Gabriel")',
+    '!requestItemGoal("acquire", "iron_pickaxe", 1, "Gabriel", "main_hand")',
+  );
+  assert.equal(
+    commandFor('Please upgrade to a diamond axe.'),
+    '!requestItemGoal("acquire", "diamond_axe", 1, "Gabriel", "main_hand")',
   );
 });
 

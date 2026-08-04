@@ -64,6 +64,8 @@ const TABLE_DROP_APPEAR_TIMEOUT_MS = 1_500;
 const TABLE_PICKUP_TIMEOUT_MS = 1_500;
 const INVENTORY_POLL_MS = 100;
 const COLLECTION_DROP_TIMEOUT_MS = 4_000;
+const COLLECTION_OPERATION_TIMEOUT_MS = 15_000;
+const COLLECTION_CANCEL_SETTLE_MS = 1_000;
 const PICKUP_NAVIGATION_STALL_TIMEOUT_MS = 4_000;
 const DIRECT_PICKUP_RANGE = 3;
 const DIRECT_PICKUP_TIMEOUT_MS = 1_200;
@@ -621,6 +623,31 @@ async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=
         await interruptibleDelay(bot, INVENTORY_POLL_MS);
     }
     return inventoryCountByTypes(bot, itemTypes) > beforeCount;
+}
+
+async function runBoundedCollectionOperation(operation, cancel) {
+    const timedOut = Symbol('collection-timeout');
+    let timeout = null;
+    const operationPromise = Promise.resolve().then(operation);
+    const result = await Promise.race([
+        operationPromise,
+        new Promise(resolve => {
+            timeout = setTimeout(() => resolve(timedOut), COLLECTION_OPERATION_TIMEOUT_MS);
+        }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (result !== timedOut) return result;
+
+    const cancellation = Promise.resolve()
+        .then(() => cancel?.())
+        .catch(() => null);
+    await Promise.race([
+        cancellation,
+        new Promise(resolve => setTimeout(resolve, COLLECTION_CANCEL_SETTLE_MS)),
+    ]);
+    const error = new Error(`Collection operation timed out after ${COLLECTION_OPERATION_TIMEOUT_MS}ms.`);
+    error.name = 'Timeout';
+    throw error;
 }
 
 function hasInventoryRoomFor(bot, itemName) {
@@ -1318,18 +1345,27 @@ function collectionSearchEvidence(bot, search) {
     };
 }
 
-async function recoverCollectionAccess(bot, resourceName, selection, search) {
+async function recoverCollectionAccess(bot, resourceName, selection, search, {
+    allowNaturalRouteDigging = false,
+} = {}) {
     if (bot.interrupt_code || !bot.entity?.position) return false;
     const attemptedTargets = new Set(search.accessRecoveryTargets || []);
 
     while (search.accessRecoveryAttempts < MAX_COLLECTION_ACCESS_RECOVERIES) {
         const candidateEntry = selection?.ranked
             ?.find(entry => {
-                if (['unsafe_drop_support', 'no_safe_stance', 'target_unloaded'].includes(entry?.routeStatus)) {
+                if (['unsafe_drop_support', 'target_unloaded'].includes(entry?.routeStatus)) {
+                    return false;
+                }
+                if (entry?.routeStatus === 'no_safe_stance' && !allowNaturalRouteDigging) {
                     return false;
                 }
                 const block = entry?.block;
                 const position = block?.position;
+                if (
+                    entry?.routeStatus === 'no_safe_stance'
+                    && prospectiveMiningStandingPositions(bot, block).length === 0
+                ) return false;
                 return position && !attemptedTargets.has(`${position.x}:${position.y}:${position.z}`);
             });
         const candidate = candidateEntry?.block;
@@ -1341,6 +1377,30 @@ async function recoverCollectionAccess(bot, resourceName, selection, search) {
         search.accessRecoveryAttempts += 1;
         const start = bot.entity.position.clone();
         const startDistance = start.distanceTo(candidate.position);
+
+        // Buried registry targets have no pre-existing standing cell by
+        // definition. Reuse the bounded supported mining route to create one;
+        // ordinary resources still use the non-digging local recovery below.
+        if (candidateEntry.routeStatus === 'no_safe_stance' && allowNaturalRouteDigging) {
+            const opened = await mineSearchTunnel(
+                bot,
+                candidate.name,
+                MINING_TUNNEL_LENGTH,
+                candidate,
+            );
+            const end = bot.entity?.position;
+            const moved = end?.distanceTo(start) || 0;
+            search.distanceMoved += moved;
+            search.lastMovementOutcome = bot.lastActionEvidence?.outcome || (opened ? 'mining_route_opened' : 'mining_route_blocked');
+            // Preserve a causal prerequisite blocker discovered inside the
+            // mining route. Replacing it with generic "unreachable" makes the
+            // goal walk away instead of planning a usable replacement tool.
+            if (!opened && bot.lastActionEvidence?.outcome === 'missing_tool') return false;
+            if (!opened || bot.interrupt_code) continue;
+            search.accessRecoveries += 1;
+            return true;
+        }
+
         const origin = start.floored();
         const local = localNavigationRecoveryMovements(bot, origin);
         // Access recovery may clear nearby leaves, but it must not turn a
@@ -4129,9 +4189,18 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 { stableMiningStance: allowNaturalRouteDigging },
             );
         if (!selection.selected) {
-            if (await recoverCollectionAccess(bot, blockType, selection, search)) {
+            const recoveredAccess = (
+                searchOptions?.allowAccessRecovery !== false
+                && await recoverCollectionAccess(bot, blockType, selection, search, {
+                    allowNaturalRouteDigging,
+                })
+            );
+            if (recoveredAccess) {
                 i -= 1;
                 continue;
+            }
+            if (bot.lastActionEvidence?.kind === 'collect' && bot.lastActionEvidence.outcome === 'missing_tool') {
+                return false;
             }
             setActionEvidence(bot, {
                 kind: 'collect',
@@ -4245,7 +4314,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     log(bot, `Cannot reach ${block.name} to collect it.`);
                     return false;
                 }
-                await bot.dig(block);
+                await runBoundedCollectionOperation(
+                    () => bot.dig(block),
+                    () => bot.stopDigging(),
+                );
                 const remaining = bot.blockAt(block.position);
                 if (!remaining || remaining.name === block.name) {
                     setActionEvidence(bot, { kind: 'collect', outcome: 'not_broken', target, retryable: true });
@@ -4367,7 +4439,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             && bot.canSeeBlock?.(liveTarget);
                     }
                     if (directReach) {
-                        await bot.dig(liveTarget);
+                        await runBoundedCollectionOperation(
+                            () => bot.dig(liveTarget),
+                            () => bot.stopDigging(),
+                        );
                         await waitForExpectedDropPickup(bot, expectedDropTypes, beforeTargetDropCount);
                     } else {
                         // The plugin requires canDig=true even for its explicit
@@ -4379,7 +4454,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             allowNaturalRouteDigging,
                         });
                         try {
-                            await bot.collectBlock.collect(block);
+                            await runBoundedCollectionOperation(
+                                () => bot.collectBlock.collect(block),
+                                () => bot.collectBlock.cancelTask(),
+                            );
                         } finally {
                             const routeMovements = safeMovements(bot);
                             bot.collectBlock.movements = routeMovements;
@@ -9089,10 +9167,28 @@ export async function digTunnel(bot, direction = 'forward', length = 16, torchIn
     return finish(true, 'tunnel_complete');
 }
 
-export async function mineSearchTunnel(bot, resourceName, length = MINING_TUNNEL_LENGTH) {
+export async function mineSearchTunnel(
+    bot,
+    resourceName,
+    length = MINING_TUNNEL_LENGTH,
+    preferredTarget = null,
+) {
     const requested = String(resourceName || '').trim().toLowerCase();
     const requestedLength = Math.max(4, Math.min(32, Math.floor(Number(length) || MINING_TUNNEL_LENGTH)));
-    const knownTarget = nearestKnownMiningTarget(bot, requested);
+    const requestedBlocks = miningTargetBlockNames(requested);
+    const livePreferredTarget = preferredTarget?.position
+        ? bot.blockAt(preferredTarget.position)
+        : null;
+    // Collection recovery has already ranked one concrete target. Preserve
+    // that identity so the mining route cannot open a different nearby vein
+    // and then rescan the still-buried original candidate.
+    const knownTarget = (
+        livePreferredTarget?.position
+        && requestedBlocks.has(livePreferredTarget.name)
+        && prospectiveMiningStandingPositions(bot, livePreferredTarget).length > 0
+    )
+        ? livePreferredTarget
+        : nearestKnownMiningTarget(bot, requested);
     const headings = orderedMiningHeadings(bot, requested, knownTarget);
     const tunnelHeadings = knownTarget
         ? headings.slice(0, 1)
@@ -9166,6 +9262,7 @@ export async function mineSearchTunnel(bot, resourceName, length = MINING_TUNNEL
                         relocate: false,
                         preferredPosition: liveTarget.position,
                         allowNaturalRouteDigging: true,
+                        allowAccessRecovery: false,
                     });
                     if (!collected) return false;
                 }

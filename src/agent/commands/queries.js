@@ -105,7 +105,7 @@ export const queryList = [
                 const progress = goal.kind === 'deliver'
                     ? `${goal.checkpoint?.delivered || 0}/${goal.quantity} delivered`
                     : `${Math.max(0, (goal.checkpoint?.targetInventory || 0) - (goal.checkpoint?.baselineInventory || 0))} requested`;
-                res += `\n- Typed goal: ${goal.phase}; ${goal.kind} ${goal.quantity} ${target}; ${progress}; attempts ${goal.attempts}/${goal.maxAttempts}`;
+                res += `\n- Typed goal: ${goal.phase}; ${goal.kind} ${goal.quantity} ${target}; completion=${goal.completion?.kind || goal.destination?.kind || 'inventory'}; ${progress}; attempts ${goal.attempts}/${goal.maxAttempts}`;
                 const plan = action.goalDirector.plan;
                 if (plan?.nextStep) {
                     res += `\n- Causal plan: revision ${plan.revision}; ${plan.remainingActions} remaining action(s); learned ranking applied=${plan.experienceApplied}`;

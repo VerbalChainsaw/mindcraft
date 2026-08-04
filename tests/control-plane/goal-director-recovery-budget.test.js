@@ -75,4 +75,40 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.dispatch('recover', '!moveAway(4)'), false);
   assert.equal(director.lastGoal.phase, 'failed');
   assert.equal(director.lastGoal.evidence.code, 'subgoal_budget_exhausted');
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([subgoal('recover', 1, 'acting')]),
+    attempts: 2,
+  });
+  director.handleResult('recover', {
+    actionId: 'successful-relocation',
+    phase: 'succeeded',
+    code: 'skill_retreated',
+    detail: 'Moved to a fresh search area.',
+    retryable: false,
+  });
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 2);
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([{
+      ...subgoal('plan', 1, 'acting'),
+      targetName: 'raw_iron',
+      expectedIncrease: 3,
+      targetInventoryBefore: 0,
+    }]),
+    attempts: 2,
+  });
+  director.agent.bot.inventory.slots = [{ name: 'raw_iron', count: 1 }];
+  director.handleResult('plan', {
+    actionId: 'partial-ore-progress',
+    phase: 'failed',
+    code: 'skill_path_timeout',
+    detail: 'Collected one ore before the remaining route timed out.',
+    retryable: true,
+    target: { name: 'iron_ore', x: 4, y: 12, z: 8 },
+  });
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.deepEqual(director.activeGoal.memory.failedTargets, []);
 });

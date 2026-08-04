@@ -536,10 +536,13 @@ export const actionsList = [
     },
     {
         name: '!equip',
-        description: 'Equip the given item.',
-        params: {'item_name': { type: 'ItemName', description: 'The name of the item to equip.' }},
-        perform: runAsAction(async (agent, item_name) => {
-            return await skills.equip(agent.bot, item_name);
+        description: 'Equip the given item and verify it in its natural or explicitly requested hand.',
+        params: {
+            'item_name': { type: 'ItemName', description: 'The name of the item to equip.' },
+            'destination': { type: 'string', description: 'Optional equipment destination: main_hand or off_hand.', optional: true, default: '' },
+        },
+        perform: runAsAction(async (agent, item_name, destination = '') => {
+            return await skills.equip(agent.bot, item_name, destination || null);
         })
     },
     {
@@ -773,14 +776,15 @@ export const actionsList = [
     },
     {
         name: '!requestItemGoal',
-        description: 'Start one typed, resumable physical goal that acquires an exact quantity or delivers it to a canonical player. Use kind "acquire" or "deliver"; all subgoals use existing deterministic commands and overall completion is verified from Minecraft state.',
+        description: 'Start one typed, resumable physical goal that acquires an exact quantity, equips one item in a requested hand, or delivers it to a canonical player. All subgoals use existing deterministic commands and overall completion is verified from Minecraft state.',
         params: {
             'kind': { type: 'string', description: 'Goal kind: acquire or deliver.' },
             'target': { type: 'string', description: 'Canonical item/block name or supported family: logs or planks.' },
             'quantity': { type: 'int', description: 'Exact requested quantity.', domain: [1, 2304, '[]'] },
             'requester_or_recipient': { type: 'string', description: 'Canonical requesting player name. For deliver goals this is also the recipient.' },
+            'completion': { type: 'string', description: 'Optional completion requirement: inventory, main_hand, or off_hand. Delivery goals always verify delivery.', optional: true, default: 'inventory' },
         },
-        perform: persistentGoalCommand(function (agent, kind, targetName, quantity, requesterOrRecipient) {
+        perform: persistentGoalCommand(function (agent, kind, targetName, quantity, requesterOrRecipient, completion = 'inventory') {
             const normalizedKind = String(kind || '').trim().toLowerCase();
             if (!['acquire', 'deliver'].includes(normalizedKind)) {
                 return 'Typed item goal was not accepted: kind must be acquire or deliver.';
@@ -791,6 +795,12 @@ export const actionsList = [
             }
             if (target.acquisitionKind === 'unsupported') {
                 return `Typed item goal was not accepted: ${target.requestedName} has no safe deterministic acquisition path.`;
+            }
+            const completionKind = normalizedKind === 'deliver'
+                ? 'delivery'
+                : String(completion || 'inventory').trim().toLowerCase().replace(/[\s-]+/g, '_');
+            if (!['inventory', 'main_hand', 'off_hand'].includes(completionKind)) {
+                return 'Typed item goal was not accepted: completion must be inventory, main_hand, or off_hand.';
             }
             const canonicalRequester = String(requesterOrRecipient || '').trim();
             if (!canonicalRequester) {
@@ -817,6 +827,7 @@ export const actionsList = [
                     : `acquire ${quantity} ${target.requestedName}`,
                 source: 'player',
                 baselineInventory,
+                completion: completionKind,
             });
             const accepted = agent.goal_director?.submit?.(goal);
             if (!accepted?.accepted) {
@@ -825,7 +836,12 @@ export const actionsList = [
             const reused = accepted.procedureId
                 ? ` Reusing proven procedure ${accepted.procedureId}.`
                 : '';
-            return `Accepted typed goal ${accepted.id}: ${goal.kind} ${goal.quantity} ${goal.target.family || goal.target.canonicalName}${goal.kind === 'deliver' ? ` to ${goal.destination.player}` : ''}.${reused}`;
+            const completionText = goal.kind === 'deliver'
+                ? ` to ${goal.destination.player}`
+                : goal.completion.kind === 'inventory'
+                    ? ''
+                    : ` and verify ${goal.completion.kind.replace('_', ' ')}`;
+            return `Accepted typed goal ${accepted.id}: ${goal.kind} ${goal.quantity} ${goal.target.family || goal.target.canonicalName}${completionText}.${reused}`;
         }),
     },
     {

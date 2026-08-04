@@ -4,6 +4,7 @@ import { inspectGameObject } from '../library/game_knowledge.js';
 import * as mc from '../../utils/mcdata.js';
 
 const GOAL_KINDS = new Set(['acquire', 'deliver']);
+const COMPLETION_KINDS = new Set(['inventory', 'main_hand', 'off_hand', 'delivery']);
 const GOAL_PHASES = new Set([
   'assess',
   'acquire',
@@ -88,6 +89,29 @@ function canonicalName(value) {
     .toLowerCase()
     .replace(/[\s-]+/g, '_')
     .replace(/[^a-z0-9_]/g, '');
+}
+
+function normalizeCompletion(raw, kind, quantity) {
+  const fallback = kind === 'deliver' ? 'delivery' : 'inventory';
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw.kind
+    : raw;
+  const completionKind = source == null || source === ''
+    ? fallback
+    : canonicalName(source);
+  if (!COMPLETION_KINDS.has(completionKind)) {
+    throw new TypeError('Goal completion must be inventory, main_hand, off_hand, or delivery.');
+  }
+  if (kind === 'deliver' && completionKind !== 'delivery') {
+    throw new TypeError('Delivery goals require verified delivery completion.');
+  }
+  if (kind === 'acquire' && completionKind === 'delivery') {
+    throw new TypeError('Acquire goals cannot use delivery completion.');
+  }
+  if (['main_hand', 'off_hand'].includes(completionKind) && quantity !== 1) {
+    throw new TypeError('A hand-equipment goal must request exactly one item.');
+  }
+  return Object.freeze({ kind: completionKind });
 }
 
 function hasBlockDropSource(bot, name) {
@@ -395,6 +419,7 @@ export function normalizeGoalContract(raw) {
     throw new TypeError('Delivery goal requires a canonical player destination.');
   }
   const quantity = finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY);
+  const completion = normalizeCompletion(raw.completion, kind, quantity);
   const attempts = finiteInteger(raw.attempts, 0, 0, 32);
   const maxAttempts = finiteInteger(raw.maxAttempts, 4, 1, 8);
   const maxSubgoals = finiteInteger(raw.maxSubgoals, 16, 4, MAX_SUBGOALS);
@@ -418,6 +443,7 @@ export function normalizeGoalContract(raw) {
     request: boundedText(raw.request, 500),
     target: normalizeTarget(raw.target),
     quantity,
+    completion,
     destination: Object.freeze(kind === 'deliver'
       ? { kind: 'player', player: destinationPlayer }
       : { kind: 'inventory', player: null }),
@@ -444,8 +470,10 @@ export function createItemGoalContract({
   request = '',
   source = 'player',
   baselineInventory = 0,
+  completion = 'inventory',
 } = {}) {
   const numericQuantity = finiteInteger(quantity, 1, 1, MAX_QUANTITY);
+  const completionKind = normalizeCompletion(completion, kind, numericQuantity).kind;
   return normalizeGoalContract({
     id: `goal-${randomUUID()}`,
     kind,
@@ -454,6 +482,7 @@ export function createItemGoalContract({
     request,
     target,
     quantity: numericQuantity,
+    completion: { kind: completionKind },
     destination: kind === 'deliver'
       ? { kind: 'player', player: destinationPlayer || requester }
       : { kind: 'inventory' },
@@ -465,7 +494,11 @@ export function createItemGoalContract({
     memory: { failedTargets: [] },
     checkpoint: {
       baselineInventory,
-      targetInventory: kind === 'acquire' ? baselineInventory + numericQuantity : baselineInventory,
+      targetInventory: kind === 'acquire'
+        ? ['main_hand', 'off_hand'].includes(completionKind)
+          ? numericQuantity
+          : baselineInventory + numericQuantity
+        : baselineInventory,
       delivered: 0,
     },
     createdAt: Date.now(),
@@ -500,8 +533,29 @@ export function parseItemGoalRequest(requester, message, bot) {
     destinationPlayer: delivery ? boundedText(requester, 64) : null,
     target,
     quantity,
+    completion: Object.freeze({
+      kind: delivery
+        ? 'delivery'
+        : /\b(?:equip|wield|hold)\b/.test(normalized)
+          ? ['shield', 'totem_of_undying'].includes(target.canonicalName) ? 'off_hand' : 'main_hand'
+          : 'inventory',
+    }),
     request: boundedText(message, 500),
   });
+}
+
+export function completionRequirementSatisfied(bot, target, completion) {
+  const kind = completion?.kind || completion || 'inventory';
+  if (kind === 'inventory') return true;
+  if (!['main_hand', 'off_hand'].includes(kind)) return false;
+  const destination = kind === 'main_hand' ? 'hand' : 'off-hand';
+  try {
+    const slot = bot?.getEquipmentDestSlot?.(destination);
+    return Number.isInteger(slot)
+      && bot?.inventory?.slots?.[slot]?.name === target?.inventoryName;
+  } catch {
+    return false;
+  }
 }
 
 export function inventoryCountForGoalTarget(bot, target) {
@@ -531,7 +585,10 @@ export function inventoryCountForGoalTarget(bot, target) {
 
 export function goalContractDescription(goal) {
   const target = goal.target.family || goal.target.canonicalName;
-  return goal.kind === 'deliver'
-    ? `deliver ${goal.quantity} ${target} to ${goal.destination.player}`
-    : `acquire ${goal.quantity} additional ${target}`;
+  if (goal.kind === 'deliver') {
+    return `deliver ${goal.quantity} ${target} to ${goal.destination.player}`;
+  }
+  if (goal.completion.kind === 'main_hand') return `acquire and equip ${target} in the main hand`;
+  if (goal.completion.kind === 'off_hand') return `acquire and equip ${target} in the offhand`;
+  return `acquire ${goal.quantity} additional ${target}`;
 }

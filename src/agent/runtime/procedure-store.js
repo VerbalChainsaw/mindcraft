@@ -17,6 +17,7 @@ const SAFE_COMMANDS = new Set([
   '!prepareTool',
   '!craftRecipe',
   '!smeltItem',
+  '!equip',
   '!giveFamilyToPlayer',
   '!givePlayer',
   '!moveAway',
@@ -61,6 +62,13 @@ function normalizeProcedure(raw) {
   if (!['inventory', 'player'].includes(destinationKind)) {
     throw new TypeError('Procedure destination is invalid.');
   }
+  const completionKind = boundedText(
+    raw.completionKind || (destinationKind === 'player' ? 'delivery' : 'inventory'),
+    24,
+  );
+  if (!['inventory', 'main_hand', 'off_hand', 'delivery'].includes(completionKind)) {
+    throw new TypeError('Procedure completion is invalid.');
+  }
   if (!Array.isArray(raw.steps) || raw.steps.length < 1 || raw.steps.length > MAX_STEPS) {
     throw new TypeError('Procedure steps are missing or excessive.');
   }
@@ -69,6 +77,7 @@ function normalizeProcedure(raw) {
     kind,
     targetKey,
     destinationKind,
+    completionKind,
     description: boundedText(raw.description, 240),
     steps: Object.freeze(raw.steps.map(normalizeStep)),
     successfulRuns: Math.max(1, Math.min(1_000_000, Math.floor(Number(raw.successfulRuns) || 1))),
@@ -82,6 +91,7 @@ function procedureKey(goal) {
     goal.kind,
     goal.target.family || goal.target.canonicalName,
     goal.destination.kind,
+    goal.completion.kind,
   ].join(':');
 }
 
@@ -103,6 +113,7 @@ function procedureFromGoal(goal) {
     kind: goal.kind,
     targetKey: goal.target.family || goal.target.canonicalName,
     destinationKind: goal.destination.kind,
+    completionKind: goal.completion.kind,
     description: goalContractDescription(goal),
     steps,
     successfulRuns: 1,
@@ -165,6 +176,7 @@ export class ProcedureStore {
         procedure.kind === goal.kind
         && procedure.targetKey === targetKey
         && procedure.destinationKind === goal.destination.kind
+        && procedure.completionKind === goal.completion.kind
       ))
       .map(procedure => ({
         procedure,

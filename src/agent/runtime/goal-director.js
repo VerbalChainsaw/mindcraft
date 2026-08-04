@@ -6,6 +6,7 @@ import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
 import { classifyMethodOutcome, isPreemption } from './action-result.js';
 import {
+  completionRequirementSatisfied,
   goalContractDescription,
   inventoryCountForGoalTarget,
   normalizeGoalContract,
@@ -248,6 +249,7 @@ export class GoalDirector {
         requester: goal.requester,
         target: goal.target,
         quantity: goal.quantity,
+        completion: goal.completion,
         destination: goal.destination,
         phase: goal.phase,
         attempts: goal.attempts,
@@ -353,13 +355,31 @@ export class GoalDirector {
       };
     }
     const current = this.currentInventory(goal);
-    const complete = current >= goal.checkpoint.targetInventory;
+    const inventoryComplete = current >= goal.checkpoint.targetInventory;
+    const equipmentComplete = completionRequirementSatisfied(
+      this.agent.bot,
+      goal.target,
+      goal.completion,
+    );
+    const complete = inventoryComplete && equipmentComplete;
+    const completionLabel = goal.completion.kind === 'main_hand'
+      ? 'main hand'
+      : goal.completion.kind === 'off_hand'
+        ? 'offhand'
+        : 'inventory';
+    const codePrefix = goal.completion.kind === 'inventory'
+      ? 'inventory_goal'
+      : `${goal.completion.kind}_goal`;
     return {
       complete,
-      code: complete ? 'inventory_goal_verified' : 'inventory_goal_incomplete',
+      code: complete ? `${codePrefix}_verified` : `${codePrefix}_incomplete`,
       detail: complete
-        ? `Inventory contains ${current}; required post-goal count was ${goal.checkpoint.targetInventory}.`
-        : `Inventory contains ${current}; required post-goal count is ${goal.checkpoint.targetInventory}.`,
+        ? goal.completion.kind === 'inventory'
+          ? `Inventory contains ${current}; required post-goal count was ${goal.checkpoint.targetInventory}.`
+          : `Minecraft confirms ${goal.target.inventoryName} in the ${completionLabel}.`
+        : !inventoryComplete
+          ? `Inventory contains ${current}; required count is ${goal.checkpoint.targetInventory} before ${completionLabel} completion.`
+          : `Inventory contains ${current}, but Minecraft does not confirm ${goal.target.inventoryName} in the ${completionLabel}.`,
     };
   }
 
@@ -658,8 +678,22 @@ export class GoalDirector {
         retryable: true,
       };
     }
+    const verifiedStepProgress = (
+      kind === 'acquire'
+      && inventoryAfter > Math.max(0, Number(actingSubgoal?.inventoryBefore) || 0)
+    ) || (
+      kind === 'plan'
+      && actingSubgoal?.targetName
+      && plannedTargetAfter > Math.max(0, Number(actingSubgoal.targetInventoryBefore) || 0)
+    ) || (
+      kind === 'deliver'
+      && transferredBeforeFinish > 0
+    );
     this.finishLatestSubgoal(effectiveResult);
-    this.rememberFailedTarget(effectiveResult);
+    // A bounded multi-item action may make verified material progress before
+    // its remaining work times out. Replan from that real inventory delta
+    // instead of blacklisting the productive target and walking away from it.
+    if (!verifiedStepProgress) this.rememberFailedTarget(effectiveResult);
     const goal = this.activeGoal;
     const skill = actionResultEvidence(effectiveResult);
     let checkpoint = goal.checkpoint;
@@ -679,8 +713,12 @@ export class GoalDirector {
       ? currentInventory >= Math.max(0, goal.quantity - checkpoint.delivered)
       : currentInventory >= checkpoint.targetInventory;
     const delivered = goal.kind === 'deliver' && checkpoint.delivered >= goal.quantity;
-    const madeProgress = transferredProgress(skill)
-      || (kind === 'acquire' && effectiveResult.phase === 'succeeded');
+    const madeProgress = verifiedStepProgress
+      || transferredProgress(skill)
+      || (
+        ['acquire', 'plan'].includes(kind)
+        && effectiveResult.phase === 'succeeded'
+      );
 
     if (delivered) {
       this.persist({ ...goal, checkpoint, phase: 'verify_complete', updatedAt: this.now() });
@@ -691,7 +729,10 @@ export class GoalDirector {
       this.persist({
         ...goal,
         checkpoint,
-        attempts: effectiveResult.phase === 'succeeded' ? 0 : goal.attempts,
+        // A successful relocation changes the search area, not the goal's
+        // material state. Preserve the failure budget until acquisition or
+        // delivery makes verified progress, otherwise recovery can loop forever.
+        attempts: madeProgress ? 0 : goal.attempts,
         phase: acquired ? (goal.kind === 'deliver' ? 'deliver' : 'verify_complete') : 'assess',
         updatedAt: this.now(),
       });
@@ -866,8 +907,12 @@ export class GoalDirector {
       if (goal.phase === 'assess' || goal.phase === 'verify_acquired') {
         if (goal.kind === 'deliver' && current >= remainingDelivery) {
           this.persist({ ...goal, phase: 'deliver', updatedAt: this.now() });
-        } else if (goal.kind === 'acquire' && current >= goal.checkpoint.targetInventory) {
-          this.persist({ ...goal, phase: 'verify_complete', updatedAt: this.now() });
+        } else if (goal.kind === 'acquire') {
+          this.persist({
+            ...goal,
+            phase: this.verify(goal).complete ? 'verify_complete' : 'acquire',
+            updatedAt: this.now(),
+          });
         } else {
           this.persist({ ...goal, phase: 'acquire', updatedAt: this.now() });
         }
@@ -928,6 +973,7 @@ export class GoalDirector {
           const plan = buildPrerequisitePlan(this.agent.bot, {
             target: goal.target.inventoryName,
             quantity: required,
+            completion: goal.completion,
             range: 64,
             experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
           });

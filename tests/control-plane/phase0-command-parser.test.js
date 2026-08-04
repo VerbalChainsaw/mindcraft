@@ -13,3 +13,20 @@ test('Phase 0 parser accepts equivalent single-quoted and double-quoted follow c
     args: ['PlayerName', 4],
   });
 });
+
+test('Command parsing preserves existing callers when a trailing parameter is optional', () => {
+  assert.deepEqual(
+    parseCommandMessage('!requestItemGoal("acquire", "iron_pickaxe", 1, "ADMIN")'),
+    {
+      commandName: '!requestItemGoal',
+      args: ['acquire', 'iron_pickaxe', 1, 'ADMIN'],
+    },
+  );
+  assert.deepEqual(
+    parseCommandMessage('!requestItemGoal("acquire", "iron_pickaxe", 1, "ADMIN", "main_hand")'),
+    {
+      commandName: '!requestItemGoal',
+      args: ['acquire', 'iron_pickaxe', 1, 'ADMIN', 'main_hand'],
+    },
+  );
+});
