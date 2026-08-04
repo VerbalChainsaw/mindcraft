@@ -414,6 +414,15 @@ export class SurvivalDirector extends BehaviorDirector {
       return;
     }
     if (!intent) return;
+    const typedPlayerGoalActive = Boolean(this.agent.goal_director?.activeGoal);
+    const criticalSurvivalNeed = Number(situation.health) <= 8
+      || Number(situation.hunger) <= Number(policy.criticalFood ?? 6);
+    if (typedPlayerGoalActive && intent.preempt !== true && !criticalSurvivalNeed) {
+      // The arbiter evaluates survival before player goals so genuine bodily
+      // emergencies can preempt them. Routine upkeep must not exploit the
+      // brief idle gaps while a durable player goal reassesses or verifies.
+      return;
+    }
     const allowBusy = intent.preempt === true;
     if (situation.idle !== true && !allowBusy) return;
     if (intent.kind === 'wait') {

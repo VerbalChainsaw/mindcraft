@@ -102,6 +102,35 @@ test('Given operator hold, SurvivalDirector does not schedule hunger, sleep, or 
   assert.equal(director.snapshot().phase, 'waiting');
 });
 
+test('Given an active typed player goal, routine survival upkeep cannot seize its idle transition gaps', async () => {
+  const agent = createAgent();
+  agent.goal_director = { activeGoal: { id: 'goal-player-1', phase: 'verify_complete' } };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 20,
+      hunger: 20,
+      urgentDanger: false,
+      food: [],
+      armor: [],
+      timeOfDay: 14000,
+      dimension: 'overworld',
+      weather: 'Clear',
+      sheltered: true,
+      beds: [{ name: 'red_bed', x: 1, y: 64, z: 1, distance: 2, reachable: true, safe: true }],
+    }),
+    executeCommand: (_agent, command) => commands.push(command),
+  });
+
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, []);
+  assert.equal(director.snapshot().phase, 'waiting');
+});
+
 test('Given an unresolved critical bodily need, SurvivalDirector acquires food and blocks lower-priority jobs', () => {
   const agent = createAgent();
   const director = new SurvivalDirector(agent, {

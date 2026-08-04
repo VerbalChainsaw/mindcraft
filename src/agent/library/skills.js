@@ -1054,28 +1054,25 @@ function collectionApproachMovements(bot) {
     return clearedMiningMovements(bot);
 }
 
-function targetScopedCollectionMovements(bot, targetBlock, {
+function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
     allowPillars = false,
     allowNaturalRouteDigging = false,
 } = {}) {
-    const target = {
-        type: targetBlock?.type,
-        x: targetBlock?.position?.x,
-        y: targetBlock?.position?.y,
-        z: targetBlock?.position?.z,
-    };
+    const targetBlocks = Array.isArray(targetBlockOrBlocks)
+        ? targetBlockOrBlocks
+        : [targetBlockOrBlocks];
+    const targets = new Set(targetBlocks
+        .filter(block => block?.position && Number.isInteger(block.type))
+        .map(block => `${block.type}:${block.position.x}:${block.position.y}:${block.position.z}`));
     const safetyGuard = collectionSafetyMovements(bot);
     const movements = collectionSafetyMovements(bot);
     // collectblock mutates its Movements instance before starting. Keep the
     // authoritative safety checks on a separate instance and expose only the
-    // exact selected block to pathfinder; every incidental route block stays
-    // unbreakable.
+    // exact bounded target set to pathfinder; every incidental route block
+    // stays unbreakable.
     movements.safeToBreak = (candidate) => {
         const selectedTarget = (
-            candidate?.type === target.type
-            && candidate?.position?.x === target.x
-            && candidate?.position?.y === target.y
-            && candidate?.position?.z === target.z
+            targets.has(`${candidate?.type}:${candidate?.position?.x}:${candidate?.position?.y}:${candidate?.position?.z}`)
             && safetyGuard.safeToBreak(candidate)
         );
         return selectedTarget || (
@@ -4722,41 +4719,63 @@ export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=n
         .selection.selected?.block || null;
 }
 
-/**
- * Fell an already-discovered connected tree from one standing position.
- *
- * The slow path re-runs a full search-and-navigate for every single log. But
- * the whole trunk is already known, and from the base most of it sits inside
- * the 4.5-block reach, so `breakBlockAt` digs it in place and only re-paths for
- * a log genuinely out of reach. Logs it cannot reach come back in `remaining`
- * for the caller's per-log path, so nothing is lost -- this is purely faster.
- */
-async function fellDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.POSITIVE_INFINITY) {
+async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.POSITIVE_INFINITY) {
     const before = carriedLogCount(bot, woodTypes);
-    const remaining = [];
-    let broken = 0;
-    if (tree?.base) {
-        // One navigation to the trunk instead of one per log.
-        try { await goToPosition(bot, tree.base.x, tree.base.y, tree.base.z, 2); } catch { /* dig from wherever we landed */ }
+    const ordered = [...(tree?.logs || [])]
+        .sort((left, right) => left.position.y - right.position.y);
+    const limit = Number.isFinite(maximumLogs)
+        ? Math.max(0, Math.floor(maximumLogs))
+        : ordered.length;
+    const targets = ordered
+        .map(block => bot.blockAt(block.position))
+        .filter(block => block?.position && woodTypes.has(block.name));
+    if (targets.length === 0) {
+        return { count: 0, remaining: [], error: null };
     }
-    // Bottom-up: clearing the low logs first keeps the bot on the ground with
-    // the rest of the trunk overhead and within reach.
-    const ordered = [...(tree?.logs || [])].sort((left, right) => left.position.y - right.position.y);
-    for (const logBlock of ordered) {
-        if (bot.interrupt_code) break;
-        if (broken >= maximumLogs) {
-            remaining.push(logBlock);
-            continue;
-        }
-        const position = logBlock.position;
-        const live = bot.blockAt(position);
-        if (!live || !woodTypes.has(live.name)) continue; // already felled or changed
-        const broke = await breakBlockAt(bot, position.x, position.y, position.z);
-        if (!broke) remaining.push(logBlock);
-        else broken += 1;
+
+    let operationError = null;
+    bot.modes.pause('unstuck');
+    bot.modes.pause('elbow_room');
+    try {
+        // CollectBlock natively owns a dynamically distance-sorted target
+        // queue. Supplying the already-discovered, quantity-bounded tree once
+        // avoids rebuilding navigation and pickup state for every single log.
+        bot.collectBlock.movements = targetScopedCollectionMovements(bot, targets, {
+            // Target selection proved an ordinary no-pillar Pathfinder route.
+            // Execution must use the same policy; enabling towers here changes
+            // the chosen route and can strand a collection on a vertical plan.
+            allowPillars: false,
+        });
+        await runBoundedCollectionOperation(
+            bot,
+            () => bot.collectBlock.collect(targets, {
+                ignoreNoPath: true,
+                targetTimeoutMs: 8_000,
+                targetStallTimeoutMs: 3_000,
+                isSatisfied: () => carriedLogCount(bot, woodTypes) - before >= limit,
+                maxTargetFailures: 1,
+            }),
+            () => bot.collectBlock.cancelTask(),
+        );
+    } catch (error) {
+        operationError = error;
+    } finally {
+        const routeMovements = safeMovements(bot);
+        bot.collectBlock.movements = routeMovements;
+        bot.pathfinder.setMovements(routeMovements);
+        bot.modes.unpause('unstuck');
+        bot.modes.unpause('elbow_room');
     }
-    try { await pickupNearbyItems(bot); } catch { /* drops get swept on the next pass */ }
-    return { count: Math.max(0, carriedLogCount(bot, woodTypes) - before), remaining };
+
+    const remaining = ordered.filter(block => {
+        const live = bot.blockAt(block.position);
+        return live?.position && woodTypes.has(live.name);
+    });
+    return {
+        count: Math.max(0, carriedLogCount(bot, woodTypes) - before),
+        remaining,
+        error: operationError,
+    };
 }
 
 export async function collectWood(bot, num=1, range=64, exclude=null, searchOptions={}) {
@@ -4780,9 +4799,6 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
         : [];
     let collected = 0;
     let stumpTarget = null;
-    let treeQueue = [];
-    let naturalTreeActive = false;
-    let currentTreeFailures = 0;
     let completeTrees = 0;
 
     // `num` is the action's physical bound. Exact work-order collection used
@@ -4791,11 +4807,6 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     // out after already making sufficient inventory progress.
     while (collected < target && !bot.interrupt_code) {
         let nearest = null;
-        while (treeQueue.length > 0 && !nearest) {
-            const planned = treeQueue.shift();
-            const live = bot.blockAt(planned);
-            if (live?.position && woodTypes.has(live.name)) nearest = live;
-        }
 
         let candidates = null;
         if (!nearest) {
@@ -4810,8 +4821,6 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             nearest = candidates.selection.selected?.block || null;
             if (nearest) {
                 const tree = discoverNaturalTree(bot, nearest);
-                naturalTreeActive = tree.natural;
-                currentTreeFailures = 0;
                 if (tree.natural) {
                     stumpTarget = {
                         name: nearest.name,
@@ -4819,47 +4828,61 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                         y: tree.base.y,
                         z: tree.base.z,
                     };
-                    log(bot, `Felling one connected ${tree.logs[0].name.replace('_log', '').replace('_stem', '')} tree with ${tree.logs.length} loaded logs.`);
-                    if (requestedWoodType) {
-                        // Exact work orders need per-block pickup verification;
-                        // the family collector's fast fell only counts its haul
-                        // after the entire connected tree has been processed.
-                        treeQueue = tree.logs.map(block => block.position.clone());
-                    } else {
-                        // Fast path: fell the reachable trunk from one standing spot.
-                        const felled = await fellDiscoveredTree(
-                            bot,
-                            tree,
-                            woodTypes,
-                            Math.max(1, target - collected),
-                        );
-                        collected += felled.count;
-                        if (collected >= target) {
-                            naturalTreeActive = false;
-                            treeQueue = [];
-                            nearest = null;
-                            continue;
-                        }
-                        if (felled.count > 0 && felled.remaining.length === 0) {
-                            // Whole tree down in place. Record it and move on to the
-                            // next one rather than re-pathing to logs already gone.
-                            // Clear the seed: it has been felled, so the next pass
-                            // must search fresh instead of collecting a gone block.
-                            completeTrees += 1;
-                            naturalTreeActive = false;
-                            nearest = null;
-                            continue;
-                        }
-                        // Only logs it could not reach fall back to the per-log path.
-                        treeQueue = felled.remaining.map(block => block.position.clone());
+                    log(bot, `Collecting a bounded ${tree.logs[0].name.replace('_log', '').replace('_stem', '')} tree queue with ${tree.logs.length} loaded logs.`);
+                    const harvested = await collectDiscoveredTree(
+                        bot,
+                        tree,
+                        woodTypes,
+                        Math.max(1, target - collected),
+                    );
+                    collected += harvested.count;
+                    if (harvested.count > 0 && harvested.remaining.length === 0) {
+                        completeTrees += 1;
                     }
-                    naturalTreeActive = treeQueue.length > 0;
-                    nearest = null;
-                    while (treeQueue.length > 0 && !nearest) {
-                        const planned = treeQueue.shift();
-                        const live = bot.blockAt(planned);
-                        if (live?.position && woodTypes.has(live.name)) nearest = live;
+                    if (collected >= target) continue;
+                    if (bot.interrupt_code) break;
+                    if (harvested.count > 0) {
+                        // The requested collection action owns the whole
+                        // quantity, not merely one tree. Preserve real partial
+                        // progress, exclude any uncollected remainder from
+                        // this candidate, and continue with another tree in
+                        // the same ActionManager lease.
+                        failedTargets.push(...harvested.remaining.map(block => ({
+                            x: block.position.x,
+                            y: block.position.y,
+                            z: block.position.z,
+                        })));
+                        search.candidateFailures = 0;
+                        continue;
                     }
+
+                    const failureTarget = {
+                        name: nearest.name,
+                        x: tree.base.x,
+                        y: tree.base.y,
+                        z: tree.base.z,
+                    };
+                    const outcome = harvested.error
+                        ? collectionErrorOutcome(harvested.error)
+                        : 'not_collected';
+                    setActionEvidence(bot, {
+                        kind: 'collect',
+                        outcome,
+                        target: failureTarget,
+                        ...(harvested.error ? {
+                            error: String(harvested.error?.message || harvested.error).slice(0, 240),
+                        } : {}),
+                        retryable: true,
+                    });
+                    failedTargets.push(...tree.logs.map(block => ({
+                        x: block.position.x,
+                        y: block.position.y,
+                        z: block.position.z,
+                    })));
+                    search.candidateFailures = (search.candidateFailures || 0) + 1;
+                    log(bot, `The native tree queue made no inventory progress (${outcome}); selecting another tree.`);
+                    if (search.candidateFailures <= MAX_COLLECTION_TARGET_FAILURES) continue;
+                    break;
                 }
             }
         }
@@ -4898,7 +4921,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             {
                 relocate: false,
                 preferredPosition: nearest.position,
-                allowPillars: naturalTreeActive,
+                allowPillars: false,
             },
         );
         if (!success) {
@@ -4916,11 +4939,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                 && failure.retryable !== false
                 && RETRYABLE_COLLECTION_TARGET_OUTCOMES.has(failure.outcome)
                 && [failedTarget?.x, failedTarget?.y, failedTarget?.z].every(Number.isFinite)
-                && (
-                    naturalTreeActive
-                        ? currentTreeFailures < 6
-                        : (search.candidateFailures || 0) < MAX_COLLECTION_TARGET_FAILURES
-                )
+                && (search.candidateFailures || 0) < MAX_COLLECTION_TARGET_FAILURES
             );
             if (retryAnotherTarget) {
                 failedTargets.push({
@@ -4929,15 +4948,11 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                     z: failedTarget.z,
                 });
                 search.candidateFailures = (search.candidateFailures || 0) + 1;
-                if (naturalTreeActive) currentTreeFailures += 1;
                 log(
                     bot,
-                    naturalTreeActive
-                        ? `Skipping one blocked log at ${failedTarget.x}, ${failedTarget.y}, ${failedTarget.z}; continuing the same tree.`
-                        : `Skipping the blocked tree at ${failedTarget.x}, ${failedTarget.y}, ${failedTarget.z}; `
-                            + `trying another safe candidate (${search.candidateFailures}/${MAX_COLLECTION_TARGET_FAILURES}).`,
+                    `Skipping the blocked tree at ${failedTarget.x}, ${failedTarget.y}, ${failedTarget.z}; `
+                        + `trying another safe candidate (${search.candidateFailures}/${MAX_COLLECTION_TARGET_FAILURES}).`,
                 );
-                if (naturalTreeActive && treeQueue.length === 0) naturalTreeActive = false;
                 continue;
             }
             break;
@@ -4948,10 +4963,6 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             && (!stumpTarget || collectedTarget.y < stumpTarget.y)
         ) stumpTarget = collectedTarget;
         collected += Math.max(1, carriedLogCount(bot, woodTypes) - beforeLogs);
-        if (naturalTreeActive && treeQueue.length === 0) {
-            if (currentTreeFailures === 0) completeTrees += 1;
-            naturalTreeActive = false;
-        }
     }
 
     if (collected > 0) {
