@@ -128,11 +128,13 @@ const MIN_COLLECTION_RESCAN_PROGRESS = 4;
 const MAX_COLLECTION_TARGET_FAILURES = 1;
 const MAX_COLLECTION_ACCESS_RECOVERIES = 2;
 const COLLECTION_ACCESS_PROGRESS_DISTANCE = 1;
-const MINING_STAIR_LEG_HEIGHT = 6;
-const MINING_STAIR_TARGET_TOLERANCE = 1;
 const MINING_TUNNEL_LENGTH = 12;
 const MAX_MINING_ROUTE_HEADINGS = 3;
 const MINING_ROUTE_STALL_TIMEOUT_MS = 5_000;
+const MINING_ROUTE_STEP_TIMEOUT_MS = 2_000;
+const MINING_ROUTE_STEP_ESTIMATE_MS = 450;
+const MINING_ROUTE_DEADLINE_RESERVE_MS = 3_500;
+const MAX_MINING_EXCAVATION_BLOCKS = 96;
 const MINING_STAGING_SCAN_RADIUS = 12;
 const MAX_MINING_STAGING_ATTEMPTS = 2;
 const DEFAULT_MAX_DROP_DOWN = 4;
@@ -1655,8 +1657,17 @@ export async function craftRecipe(bot, itemName, num=1) {
                     if (bot.interrupt_code) {
                         return finish(false, { kind: 'craft', outcome: 'interrupted', target, retryable: false }, 'Crafting was interrupted while approaching the crafting table.');
                     }
-                    worldTableRouteFailed = true;
-                    craftingTable = null;
+                    const access = await reachKnownBlockByVoxelCorridor(
+                        bot,
+                        craftingTable,
+                        craftingTableRange,
+                    );
+                    if (!access.success || bot.entity.position.distanceTo(craftingTable.position) > 4.5) {
+                        worldTableRouteFailed = true;
+                        craftingTable = null;
+                    } else {
+                        craftingTable = bot.blockAt(craftingTable.position);
+                    }
                 }
             }
             if (!craftingTable) {
@@ -2657,7 +2668,15 @@ export async function smeltItem(bot, itemName, num=1) {
                 3,
             );
             if (!reached || bot.entity.position.distanceTo(furnaceBlock.position) > 4.5) {
-                return finish(false, 'furnace_unreachable');
+                if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
+                const access = await reachKnownBlockByVoxelCorridor(bot, furnaceBlock, 64);
+                if (!access.success || bot.entity.position.distanceTo(furnaceBlock.position) > 4.5) {
+                    return finish(false, 'furnace_unreachable', { access });
+                }
+                furnaceBlock = bot.blockAt(furnaceBlock.position);
+                if (furnaceBlock?.name !== 'furnace') {
+                    return finish(false, 'furnace_changed', { access });
+                }
             }
         }
         if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
@@ -9257,43 +9276,40 @@ async function stageMiningStaircase(bot) {
     return false;
 }
 
-async function carveMiningStaircase(bot, targetY) {
-    // The bot normally arrives here facing inland after shoreline recovery.
-    // Descend along that safe local heading first; the horizontal tunnel turns
-    // toward the concrete resource after reaching a stable mining level.
+// Depth relocation has no selected block coordinate to converge on. Preserve
+// its bounded exploratory fallback separately; exact buried targets never use
+// this dig-enabled route.
+async function carveExploratoryDepthRoute(bot, targetY) {
+    const legHeight = 6;
+    const targetTolerance = 1;
     const headings = orderedMiningHeadings(bot);
     let headingIndex = 0;
     let legs = 0;
     const maximumLegs = Math.max(
         1,
-        Math.ceil(Math.max(0, bot.entity.position.y - targetY) / MINING_STAIR_LEG_HEIGHT) + 2,
+        Math.ceil(Math.max(0, bot.entity.position.y - targetY) / legHeight) + 2,
     );
     while (
         !bot.interrupt_code
-        && bot.entity.position.y > targetY + MINING_STAIR_TARGET_TOLERANCE
+        && bot.entity.position.y > targetY + targetTolerance
         && legs < maximumLegs
     ) {
         let advanced = false;
         for (let attempt = 0; attempt < Math.min(MAX_MINING_ROUTE_HEADINGS, headings.length); attempt++) {
             const heading = headings[(headingIndex + attempt) % headings.length];
             const start = bot.entity.position.clone();
-            const drop = Math.min(
-                MINING_STAIR_LEG_HEIGHT,
-                Math.max(1, Math.floor(start.y) - targetY),
-            );
+            const drop = Math.min(legHeight, Math.max(1, Math.floor(start.y) - targetY));
             const run = drop + 2;
-            const target = {
-                x: Math.floor(start.x) + (heading.x * run),
-                y: Math.floor(start.y) - drop,
-                z: Math.floor(start.z) + (heading.z * run),
-            };
             const reached = await goToGoal(
                 bot,
-                new pf.goals.GoalNear(target.x, target.y, target.z, 1),
+                new pf.goals.GoalNear(
+                    Math.floor(start.x) + (heading.x * run),
+                    Math.floor(start.y) - drop,
+                    Math.floor(start.z) + (heading.z * run),
+                    1,
+                ),
                 {
                     movements: () => miningMovements(bot),
-                    // Dig-target changes reset the shared progress watchdog, so
-                    // five silent seconds means this route is not mining.
                     stallTimeoutMs: MINING_ROUTE_STALL_TIMEOUT_MS,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
@@ -9311,10 +9327,493 @@ async function carveMiningStaircase(bot, targetY) {
         if (!advanced) break;
     }
     return {
-        success: !bot.interrupt_code
-            && bot.entity.position.y <= targetY + MINING_STAIR_TARGET_TOLERANCE,
+        success: !bot.interrupt_code && bot.entity.position.y <= targetY + targetTolerance,
         legs,
         observedY: bot.entity.position.y,
+    };
+}
+
+const MINING_ROUTE_VARIANTS = Object.freeze([
+    Object.freeze({ axisPhase: 0, wiggleAxis: 'x', wiggleSign: 1 }),
+    Object.freeze({ axisPhase: 1, wiggleAxis: 'x', wiggleSign: 1 }),
+    Object.freeze({ axisPhase: 0, wiggleAxis: 'x', wiggleSign: -1 }),
+    Object.freeze({ axisPhase: 1, wiggleAxis: 'x', wiggleSign: -1 }),
+    Object.freeze({ axisPhase: 0, wiggleAxis: 'z', wiggleSign: 1 }),
+    Object.freeze({ axisPhase: 1, wiggleAxis: 'z', wiggleSign: 1 }),
+    Object.freeze({ axisPhase: 0, wiggleAxis: 'z', wiggleSign: -1 }),
+    Object.freeze({ axisPhase: 1, wiggleAxis: 'z', wiggleSign: -1 }),
+]);
+
+function sameMiningCell(left, right) {
+    return Boolean(
+        left
+        && right
+        && left.x === right.x
+        && left.y === right.y
+        && left.z === right.z
+    );
+}
+
+function miningCellKey(position) {
+    return `${position.x}:${position.y}:${position.z}`;
+}
+
+function miningRouteHeading(current, target, variant, stepIndex) {
+    const dx = target.x - current.x;
+    const dz = target.z - current.z;
+    const xHeading = dx === 0 ? null : { x: Math.sign(dx), z: 0 };
+    const zHeading = dz === 0 ? null : { x: 0, z: Math.sign(dz) };
+    if (xHeading && zHeading) {
+        return (stepIndex + variant.axisPhase) % 2 === 0 ? xHeading : zHeading;
+    }
+    if (xHeading) return xHeading;
+    if (zHeading) return zHeading;
+    return variant.wiggleAxis === 'x'
+        ? { x: variant.wiggleSign, z: 0 }
+        : { x: 0, z: variant.wiggleSign };
+}
+
+function planMiningVoxelCorridor(origin, stance, variant) {
+    const route = [];
+    let current = origin.clone();
+    const verticalDirection = Math.sign(stance.y - current.y);
+    const verticalSteps = Math.abs(stance.y - current.y);
+    for (let index = 0; index < verticalSteps; index += 1) {
+        const heading = miningRouteHeading(current, stance, variant, index);
+        current = current.offset(heading.x, verticalDirection, heading.z);
+        route.push({ position: current, heading, yOffset: verticalDirection });
+    }
+    let horizontalIndex = verticalSteps;
+    while (current.x !== stance.x || current.z !== stance.z) {
+        const heading = miningRouteHeading(current, stance, variant, horizontalIndex);
+        current = current.offset(heading.x, 0, heading.z);
+        route.push({ position: current, heading, yOffset: 0 });
+        horizontalIndex += 1;
+    }
+    return route;
+}
+
+function miningRouteTouchesLiquid(bot, positions) {
+    const offsets = [
+        [1, 0, 0], [-1, 0, 0], [0, 1, 0],
+        [0, -1, 0], [0, 0, 1], [0, 0, -1],
+    ];
+    return positions.some(position => offsets.some(([x, y, z]) => (
+        isLiquidGameplayBlock(bot.blockAt(position.offset(x, y, z)))
+    )));
+}
+
+function assessMiningRouteStep(bot, step, targetBlock) {
+    const feet = step.position;
+    const head = feet.offset(0, 1, 0);
+    const support = feet.offset(0, -1, 0);
+    const ceiling = head.offset(0, 1, 0);
+    const supportBlock = bot.blockAt(support);
+    const ceilingBlock = bot.blockAt(ceiling);
+    if (!supportBlock || !ceilingBlock) {
+        return { ok: false, outcome: 'route_chunk_unloaded', blocks: [] };
+    }
+    if (!isSafeGameplaySupport(supportBlock) || isFallingGameplayBlock(supportBlock)) {
+        return { ok: false, outcome: 'unsafe_route_support', blocks: [] };
+    }
+    if (isFallingGameplayBlock(ceilingBlock)) {
+        return { ok: false, outcome: 'falling_block_above_route', blocks: [] };
+    }
+    if (miningRouteTouchesLiquid(bot, [feet, head])) {
+        return { ok: false, outcome: 'liquid_ingress_risk', blocks: [] };
+    }
+
+    const blocks = [];
+    for (const position of [head, feet]) {
+        if (sameMiningCell(position, targetBlock?.position)) {
+            return { ok: false, outcome: 'target_inside_route', blocks: [] };
+        }
+        const block = bot.blockAt(position);
+        if (!block) return { ok: false, outcome: 'route_chunk_unloaded', blocks: [] };
+        if (isCollectionStandingCellClear(block)) continue;
+        if (isFallingGameplayBlock(block)) {
+            return { ok: false, outcome: 'falling_block_in_route', blocks: [] };
+        }
+        if (!isNaturalFillBlock(bot, block)) {
+            return {
+                ok: false,
+                outcome: isProtectedGameplayBlock(block)
+                    ? 'protected_block_in_route'
+                    : 'non_natural_block_in_route',
+                blocks: [],
+                blockedBy: block.name,
+            };
+        }
+        blocks.push(block);
+    }
+    return { ok: true, outcome: 'route_step_safe', blocks };
+}
+
+function toolDurabilityReserve(bot, item) {
+    const durability = toolDurability(bot, item);
+    if (!Number.isFinite(durability.max)) return 0;
+    return Math.max(16, Math.ceil(durability.max * 0.1));
+}
+
+function assessMiningRouteDurability(bot, blocks) {
+    const items = bot.inventory.items();
+    const capacities = new Map(items.map((item, index) => {
+        const durability = toolDurability(bot, item);
+        const capacity = Number.isFinite(durability.remaining)
+            ? Math.max(0, durability.remaining - toolDurabilityReserve(bot, item))
+            : Number.POSITIVE_INFINITY;
+        return [index, capacity];
+    }));
+    const requirements = blocks
+        .map(block => {
+            let harvestableByHand = false;
+            try { harvestableByHand = block.canHarvest(null); } catch { /* require a real tool */ }
+            const eligible = items
+                .map((item, index) => ({ item, index }))
+                .filter(({ item, index }) => {
+                    if (!(capacities.get(index) > 0)) return false;
+                    try { return block.canHarvest(item.type); } catch { return false; }
+                });
+            return { block, harvestableByHand, eligible };
+        })
+        .filter(requirement => !requirement.harvestableByHand)
+        .sort((left, right) => left.eligible.length - right.eligible.length);
+
+    const assigned = new Map();
+    for (const requirement of requirements) {
+        const eligible = requirement.eligible
+            .filter(({ index }) => capacities.get(index) > 0)
+            .sort((left, right) => (
+                capacities.get(right.index) - capacities.get(left.index)
+                || left.item.name.localeCompare(right.item.name)
+            ));
+        const selected = eligible[0];
+        if (!selected) {
+            return {
+                ok: false,
+                outcome: 'insufficient_tool_durability',
+                requiredFor: requirement.block.name,
+                requiredBreaks: requirements.length,
+            };
+        }
+        const remaining = capacities.get(selected.index);
+        if (Number.isFinite(remaining)) capacities.set(selected.index, remaining - 1);
+        assigned.set(selected.item.name, (assigned.get(selected.item.name) || 0) + 1);
+    }
+    return {
+        ok: true,
+        outcome: 'tool_capacity_sufficient',
+        requiredBreaks: requirements.length,
+        assigned: Object.fromEntries(assigned),
+    };
+}
+
+function assessMiningAccessPlan(
+    bot,
+    origin,
+    targetBlock,
+    stance,
+    route,
+    requestedLength,
+    { breakTarget = true } = {},
+) {
+    const maximumSteps = Math.max(
+        4,
+        Math.abs(stance.y - origin.y) + requestedLength + 2,
+    );
+    if (route.length === 0 || route.length > maximumSteps) {
+        return { ok: false, outcome: 'route_step_budget_exceeded', route, stance };
+    }
+    let previous = origin;
+    const excavation = new Map();
+    for (const step of route) {
+        const horizontalDelta = Math.abs(step.position.x - previous.x)
+            + Math.abs(step.position.z - previous.z);
+        const verticalDelta = Math.abs(step.position.y - previous.y);
+        if (horizontalDelta !== 1 || verticalDelta > 1) {
+            return { ok: false, outcome: 'invalid_route_geometry', route, stance };
+        }
+        const assessment = assessMiningRouteStep(bot, step, targetBlock);
+        if (!assessment.ok) return { ...assessment, route, stance };
+        for (const block of assessment.blocks) excavation.set(miningCellKey(block.position), block);
+        previous = step.position;
+    }
+    if (
+        previous.y !== targetBlock.position.y
+        || Math.abs(previous.x - targetBlock.position.x)
+            + Math.abs(previous.z - targetBlock.position.z) !== 1
+    ) {
+        return { ok: false, outcome: 'route_misses_target_stance', route, stance };
+    }
+    if (miningRouteTouchesLiquid(bot, [targetBlock.position])) {
+        return { ok: false, outcome: 'target_liquid_ingress_risk', route, stance };
+    }
+
+    const excavationBlocks = [...excavation.values()];
+    const excavationBudget = excavationBlocks.length;
+    const plannedBreaks = breakTarget
+        ? [...excavationBlocks, targetBlock]
+        : excavationBlocks;
+    const blockBudget = plannedBreaks.length;
+    if (blockBudget > MAX_MINING_EXCAVATION_BLOCKS) {
+        return {
+            ok: false,
+            outcome: 'excavation_budget_exceeded',
+            route,
+            stance,
+            blockBudget,
+        };
+    }
+    const durability = assessMiningRouteDurability(bot, plannedBreaks);
+    if (!durability.ok) return { ...durability, route, stance, blockBudget };
+
+    const estimatedDigMs = plannedBreaks.reduce(
+        (total, block) => total + Math.max(50, collectionBreakTime(bot, block)),
+        0,
+    );
+    const estimatedDurationMs = Math.ceil(
+        estimatedDigMs + (route.length * MINING_ROUTE_STEP_ESTIMATE_MS),
+    );
+    if (estimatedDurationMs + MINING_ROUTE_DEADLINE_RESERVE_MS > remainingActionTimeMs()) {
+        return {
+            ok: false,
+            outcome: 'route_deadline_insufficient',
+            route,
+            stance,
+            blockBudget,
+            estimatedDurationMs,
+            durability,
+        };
+    }
+    return {
+        ok: true,
+        outcome: 'route_ready',
+        route,
+        stance,
+        excavationBlocks,
+        excavationBudget,
+        blockBudget,
+        breakTarget,
+        estimatedDurationMs,
+        durability,
+    };
+}
+
+function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) {
+    const origin = bot.entity?.position?.floored?.();
+    if (!origin) return { ok: false, outcome: 'position_unavailable' };
+    const stances = prospectiveMiningStandingPositions(bot, targetBlock);
+    if (stances.length === 0) return { ok: false, outcome: 'no_safe_stance' };
+
+    const assessments = [];
+    const seenRoutes = new Set();
+    for (const stance of stances) {
+        for (const variant of MINING_ROUTE_VARIANTS) {
+            const route = planMiningVoxelCorridor(origin, stance, variant);
+            const routeKey = route.map(step => miningCellKey(step.position)).join('|');
+            if (seenRoutes.has(routeKey)) continue;
+            seenRoutes.add(routeKey);
+            assessments.push(assessMiningAccessPlan(
+                bot,
+                origin,
+                targetBlock,
+                stance,
+                route,
+                requestedLength,
+                options,
+            ));
+        }
+    }
+    const viable = assessments
+        .filter(assessment => assessment.ok)
+        .sort((left, right) => (
+            left.blockBudget - right.blockBudget
+            || left.route.length - right.route.length
+            || left.estimatedDurationMs - right.estimatedDurationMs
+        ));
+    if (viable.length > 0) return viable[0];
+    return assessments.find(assessment => assessment.outcome === 'insufficient_tool_durability')
+        || assessments.find(assessment => assessment.outcome === 'route_deadline_insufficient')
+        || assessments[0]
+        || { ok: false, outcome: 'no_safe_route' };
+}
+
+async function stepIntoPlannedMiningCell(bot, step) {
+    const start = bot.entity?.position?.clone?.();
+    if (!start || bot.interrupt_code || remainingActionTimeMs() <= 0) return false;
+    const stanceVerified = () => {
+        const current = bot.entity?.position?.floored?.();
+        if (!sameMiningCell(current, step.position) || !bot.entity?.onGround) return false;
+        return isCollectionStandingCellClear(bot.blockAt(current))
+            && isCollectionStandingCellClear(bot.blockAt(current.offset(0, 1, 0)))
+            && isSafeGameplaySupport(bot.blockAt(current.offset(0, -1, 0)));
+    };
+    stopNavigationGoal(bot);
+    try {
+        bot.clearControlStates?.();
+        let directReady = true;
+        if (step.yOffset > 0) {
+            const staged = await stageDirectNavigationAscent(bot, start, {
+                position: step.position,
+            });
+            if (bot.interrupt_code) return false;
+            directReady = staged;
+        }
+        if (directReady) {
+            const center = new Vec3(
+                step.position.x + 0.5,
+                step.position.y,
+                step.position.z + 0.5,
+            );
+            await bot.lookAt(center.offset(0, 0.7, 0), true);
+            bot.setControlState('forward', true);
+            if (step.yOffset > 0) bot.setControlState('jump', true);
+            const timeoutMs = Math.min(
+                MINING_ROUTE_STEP_TIMEOUT_MS,
+                remainingActionTimeMs(MINING_ROUTE_STEP_TIMEOUT_MS),
+            );
+            const entered = timeoutMs > 0 && await waitForWorldCondition(bot, () => {
+                const current = bot.entity?.position?.floored?.();
+                if (!current) return false;
+                if (step.yOffset > 0) {
+                    return current.x === step.position.x
+                        && current.z === step.position.z
+                        && bot.entity.position.y >= step.position.y - 0.2;
+                }
+                return sameMiningCell(current, step.position);
+            }, timeoutMs, 25);
+            bot.setControlState('forward', false);
+            bot.setControlState('jump', false);
+
+            // Holding jump while demanding onGround can never settle reliably:
+            // release controls on cell entry, then verify the grounded stance.
+            if (entered) {
+                const settleTimeoutMs = Math.min(
+                    DIRECT_NAVIGATION_ASCENT_SETTLE_TIMEOUT_MS,
+                    remainingActionTimeMs(DIRECT_NAVIGATION_ASCENT_SETTLE_TIMEOUT_MS),
+                );
+                if (
+                    settleTimeoutMs > 0
+                    && await waitForWorldCondition(bot, stanceVerified, settleTimeoutMs, 25)
+                ) return true;
+            }
+        }
+
+        // The corridor geometry remains fixed; Pathfinder may only execute the
+        // one already-cleared cell transition, with digging and local recovery
+        // disabled. This handles ordinary ledge alignment without surrendering
+        // excavation shape or target choice back to A*.
+        const reached = await goToGoal(
+            bot,
+            new pf.goals.GoalBlock(step.position.x, step.position.y, step.position.z),
+            {
+                movements: () => {
+                    const movements = safeMovements(bot);
+                    movements.canDig = false;
+                    movements.allow1by1towers = false;
+                    movements.allowParkour = false;
+                    return movements;
+                },
+                stallTimeoutMs: MINING_ROUTE_STEP_TIMEOUT_MS,
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        );
+        return reached && stanceVerified();
+    } finally {
+        try { bot.setControlState('forward', false); } catch { /* best-effort route cleanup */ }
+        try { bot.setControlState('jump', false); } catch { /* best-effort route cleanup */ }
+    }
+}
+
+async function executeMiningAccessPlan(bot, targetBlock, plan) {
+    let excavated = 0;
+    for (let index = 0; index < plan.route.length; index += 1) {
+        if (bot.interrupt_code || remainingActionTimeMs() <= 0) {
+            return { success: false, outcome: bot.interrupt_code ? 'interrupted' : 'deadline', excavated };
+        }
+        const liveTarget = bot.blockAt(targetBlock.position);
+        if (!liveTarget || liveTarget.name !== targetBlock.name) {
+            return { success: false, outcome: 'target_changed', excavated };
+        }
+        const step = plan.route[index];
+        const assessment = assessMiningRouteStep(bot, step, liveTarget);
+        if (!assessment.ok) return { success: false, outcome: assessment.outcome, excavated };
+
+        for (const block of assessment.blocks) {
+            const liveBlock = bot.blockAt(block.position);
+            if (isCollectionStandingCellClear(liveBlock)) continue;
+            if (
+                !liveBlock
+                || isFallingGameplayBlock(liveBlock)
+                || !isNaturalFillBlock(bot, liveBlock)
+            ) return { success: false, outcome: 'route_changed_unsafe', excavated };
+            if (excavated >= plan.excavationBudget) {
+                return { success: false, outcome: 'excavation_budget_exceeded', excavated };
+            }
+            if (!await breakBlockAt(
+                bot,
+                liveBlock.position.x,
+                liveBlock.position.y,
+                liveBlock.position.z,
+            )) return { success: false, outcome: 'route_block_not_broken', excavated };
+            excavated += 1;
+        }
+
+        const remainingBefore = plan.route.length - index;
+        if (!await stepIntoPlannedMiningCell(bot, step)) {
+            return { success: false, outcome: 'step_not_verified', excavated };
+        }
+        const remainingAfter = plan.route.length - index - 1;
+        if (remainingAfter >= remainingBefore) {
+            return { success: false, outcome: 'non_convergent_step', excavated };
+        }
+    }
+    const finalTarget = bot.blockAt(targetBlock.position);
+    if (!finalTarget || finalTarget.name !== targetBlock.name) {
+        return { success: false, outcome: 'target_changed', excavated };
+    }
+    if (!isMiningTargetExposed(bot, finalTarget)) {
+        return { success: false, outcome: 'target_not_exposed', excavated };
+    }
+    return { success: true, outcome: 'target_exposed', excavated, target: finalTarget };
+}
+
+async function reachKnownBlockByVoxelCorridor(bot, targetBlock, requestedLength = 64) {
+    const target = targetBlock?.position?.clone?.();
+    const targetName = targetBlock?.name;
+    if (!target || !targetName) return { success: false, outcome: 'target_unavailable' };
+    if (bot.entity.position.distanceTo(target) <= 4.5) {
+        return { success: true, outcome: 'already_in_range', excavated: 0 };
+    }
+    if (!await stageMiningStaircase(bot)) {
+        return {
+            success: false,
+            outcome: bot.interrupt_code ? 'interrupted' : 'no_stable_staging_cell',
+        };
+    }
+    const liveTarget = bot.blockAt(target);
+    if (!liveTarget || liveTarget.name !== targetName) {
+        return { success: false, outcome: 'target_changed' };
+    }
+    const plan = buildMiningAccessPlan(bot, liveTarget, requestedLength, {
+        breakTarget: false,
+    });
+    if (!plan.ok) {
+        return {
+            success: false,
+            outcome: plan.outcome,
+            blockBudget: plan.blockBudget,
+            estimatedDurationMs: plan.estimatedDurationMs,
+        };
+    }
+    const result = await executeMiningAccessPlan(bot, liveTarget, plan);
+    return {
+        ...result,
+        blockBudget: plan.blockBudget,
+        routeSteps: plan.route.length,
+        estimatedDurationMs: plan.estimatedDurationMs,
+        durability: plan.durability,
     };
 }
 
@@ -9457,11 +9956,7 @@ export async function mineSearchTunnel(
     )
         ? livePreferredTarget
         : nearestKnownMiningTarget(bot, requested);
-    if (
-        knownTarget
-        && bot.entity.position.y
-            > knownTarget.position.y + MINING_STAIR_TARGET_TOLERANCE
-    ) {
+    if (knownTarget) {
         const staged = await stageMiningStaircase(bot);
         if (!staged) {
             setActionEvidence(bot, {
@@ -9481,42 +9976,117 @@ export async function mineSearchTunnel(
                 : `Could not reach stable dry ground for the known ${knownTarget.name} target.`);
             return false;
         }
-        const descent = await carveMiningStaircase(bot, knownTarget.position.y);
-        if (!descent.success) {
+
+        const stagedTarget = bot.blockAt(knownTarget.position);
+        if (!stagedTarget || !requestedBlocks.has(stagedTarget.name)) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
-                outcome: bot.interrupt_code ? 'interrupted' : 'descent_blocked',
+                outcome: 'target_changed',
                 target: {
                     name: knownTarget.name,
                     x: knownTarget.position.x,
                     y: knownTarget.position.y,
                     z: knownTarget.position.z,
                 },
-                observedY: descent.observedY,
+                routeDigging: true,
+                retryable: true,
+            });
+            log(bot, `The selected ${knownTarget.name} target changed before excavation began.`);
+            return false;
+        }
+
+        const plan = buildMiningAccessPlan(bot, stagedTarget, requestedLength);
+        if (!plan.ok) {
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                outcome: plan.outcome || 'no_safe_route',
+                target: {
+                    name: stagedTarget.name,
+                    x: stagedTarget.position.x,
+                    y: stagedTarget.position.y,
+                    z: stagedTarget.position.z,
+                },
+                routeSteps: plan.route?.length || 0,
+                blockBudget: plan.blockBudget || 0,
+                estimatedDurationMs: plan.estimatedDurationMs || null,
+                durability: plan.durability || null,
+                blockedBy: plan.blockedBy || null,
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
-            log(bot, bot.interrupt_code
-                ? 'Stopped the mining staircase.'
-                : `Could not descend to a safe mining level for the known ${knownTarget.name} target.`);
+            log(bot, `Rejected the known ${stagedTarget.name} target before excavation: ${String(plan.outcome || 'no safe route').replace(/_/g, ' ')}.`);
             return false;
         }
+
+        const routeStart = bot.entity.position.clone();
+        const access = await executeMiningAccessPlan(bot, stagedTarget, plan);
+        if (!access.success) {
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                outcome: access.outcome,
+                target: {
+                    name: stagedTarget.name,
+                    x: stagedTarget.position.x,
+                    y: stagedTarget.position.y,
+                    z: stagedTarget.position.z,
+                },
+                stance: {
+                    x: plan.stance.x,
+                    y: plan.stance.y,
+                    z: plan.stance.z,
+                },
+                routeSteps: plan.route.length,
+                excavated: access.excavated,
+                blockBudget: plan.blockBudget,
+                estimatedDurationMs: plan.estimatedDurationMs,
+                durability: plan.durability,
+                routeDigging: true,
+                retryable: !bot.interrupt_code,
+            });
+            log(bot, `Stopped the exact route to ${stagedTarget.name}: ${String(access.outcome).replace(/_/g, ' ')} after ${access.excavated} block${access.excavated === 1 ? '' : 's'}.`);
+            return false;
+        }
+
+        const collected = await collectBlock(bot, access.target.name, 1, null, 8, {
+            relocate: false,
+            preferredPosition: access.target.position,
+            allowNaturalRouteDigging: true,
+            allowAccessRecovery: false,
+        });
+        if (!collected) return false;
+        setActionEvidence(bot, {
+            kind: 'mining_search',
+            outcome: 'resource_collected',
+            target: {
+                name: stagedTarget.name,
+                x: stagedTarget.position.x,
+                y: stagedTarget.position.y,
+                z: stagedTarget.position.z,
+            },
+            stance: {
+                x: plan.stance.x,
+                y: plan.stance.y,
+                z: plan.stance.z,
+            },
+            routeSteps: plan.route.length,
+            excavated: access.excavated,
+            blockBudget: plan.blockBudget,
+            estimatedDurationMs: plan.estimatedDurationMs,
+            durability: plan.durability,
+            distance: bot.entity.position.distanceTo(routeStart),
+            routeDigging: true,
+            retryable: false,
+        });
+        log(bot, `Reached and collected the known ${stagedTarget.name} target through an exact ${plan.route.length}-step mining route.`);
+        return true;
     }
-    const headings = orderedMiningHeadings(bot, requested, knownTarget);
-    const tunnelHeadings = knownTarget
-        ? headings.slice(0, 1)
-        : headings.slice(0, MAX_MINING_ROUTE_HEADINGS);
+
+    const tunnelHeadings = orderedMiningHeadings(bot, requested)
+        .slice(0, MAX_MINING_ROUTE_HEADINGS);
     for (const heading of tunnelHeadings) {
         if (bot.interrupt_code) break;
         const routeStart = bot.entity.position.clone();
-        const horizontalDistance = knownTarget
-            ? Math.hypot(knownTarget.position.x - routeStart.x, knownTarget.position.z - routeStart.z)
-            : null;
-        let remaining = Number.isFinite(horizontalDistance)
-            // A block target is reached from its adjacent cell, so allow one
-            // final grid step beyond the nominal search distance.
-            ? Math.max(1, Math.min(requestedLength + 1, Math.ceil(horizontalDistance)))
-            : requestedLength;
+        let remaining = requestedLength;
         let advanced = false;
         let lastTarget = null;
 
@@ -9526,34 +10096,17 @@ export async function mineSearchTunnel(
         while (remaining > 0 && !bot.interrupt_code) {
             const start = bot.entity.position.clone();
             const segmentLength = Math.min(3, remaining);
-            const finalKnownSegment = Boolean(knownTarget && remaining <= segmentLength);
-            lastTarget = finalKnownSegment
-                ? {
-                    name: knownTarget.name,
-                    x: knownTarget.position.x,
-                    y: knownTarget.position.y,
-                    z: knownTarget.position.z,
-                }
-                : {
-                    name: requested || 'resource',
-                    x: Math.floor(start.x) + (heading.x * segmentLength),
-                    y: Math.floor(start.y),
-                    z: Math.floor(start.z) + (heading.z * segmentLength),
-                };
-            // GoalNear accepts the cell directly above a buried block, but that
-            // is intentionally not a valid mining stance: breaking the target
-            // would remove the bot's floor. On the final segment, carve toward
-            // a stable horizontal cell from which the target can be collected.
-            const approachGoal = finalKnownSegment
-                ? collectionApproachGoal(prospectiveMiningStandingPositions(bot, knownTarget))
-                : null;
+            lastTarget = {
+                name: requested || 'resource',
+                x: Math.floor(start.x) + (heading.x * segmentLength),
+                y: Math.floor(start.y),
+                z: Math.floor(start.z) + (heading.z * segmentLength),
+            };
             const reached = await goToGoal(
                 bot,
-                approachGoal || new pf.goals.GoalNear(lastTarget.x, lastTarget.y, lastTarget.z, 1),
+                new pf.goals.GoalNear(lastTarget.x, lastTarget.y, lastTarget.z, 1),
                 {
-                    movements: () => approachGoal
-                        ? collectionApproachMovements(bot, knownTarget)
-                        : miningMovements(bot),
+                    movements: () => miningMovements(bot),
                     stallTimeoutMs: MINING_ROUTE_STALL_TIMEOUT_MS,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
@@ -9563,41 +10116,9 @@ export async function mineSearchTunnel(
             const segmentDistance = bot.entity.position.distanceTo(start);
             advanced ||= reached || segmentDistance >= NAVIGATION_PROGRESS_DISTANCE;
             remaining -= segmentLength;
-
-            const liveTarget = knownTarget ? bot.blockAt(knownTarget.position) : null;
-            const targetLoaded = Boolean(liveTarget?.position);
-            const targetStillPresent = targetLoaded && miningTargetBlockNames(requested).has(liveTarget.name);
-            const targetBroken = targetLoaded && !targetStillPresent;
-            const exposed = targetStillPresent && isMiningTargetExposed(bot, liveTarget);
-            if (knownTarget && (exposed || targetBroken)) {
-                if (targetStillPresent) {
-                    const collected = await collectBlock(bot, liveTarget.name, 1, null, 8, {
-                        relocate: false,
-                        preferredPosition: liveTarget.position,
-                        allowNaturalRouteDigging: true,
-                        allowAccessRecovery: false,
-                    });
-                    if (!collected) return false;
-                }
-                setActionEvidence(bot, {
-                    kind: 'mining_search',
-                    outcome: targetStillPresent ? 'resource_collected' : 'resource_already_broken',
-                    target: {
-                        name: knownTarget.name,
-                        x: knownTarget.position.x,
-                        y: knownTarget.position.y,
-                        z: knownTarget.position.z,
-                    },
-                    distance: bot.entity.position.distanceTo(routeStart),
-                    routeDigging: true,
-                    retryable: false,
-                });
-                log(bot, `Reached and collected the known ${knownTarget.name} target through a supported mining route.`);
-                return true;
-            }
             if (!reached && segmentDistance < NAVIGATION_PROGRESS_DISTANCE) break;
         }
-        if (!knownTarget && advanced) {
+        if (advanced) {
             const distance = bot.entity.position.distanceTo(routeStart);
             setActionEvidence(bot, {
                 kind: 'mining_search',
@@ -9613,21 +10134,14 @@ export async function mineSearchTunnel(
     }
     setActionEvidence(bot, {
         kind: 'mining_search',
-        outcome: bot.interrupt_code ? 'interrupted' : knownTarget ? 'resource_not_reached' : 'tunnel_blocked',
-        target: knownTarget ? {
-            name: knownTarget.name,
-            x: knownTarget.position.x,
-            y: knownTarget.position.y,
-            z: knownTarget.position.z,
-        } : { name: requested || 'resource' },
+        outcome: bot.interrupt_code ? 'interrupted' : 'tunnel_blocked',
+        target: { name: requested || 'resource' },
         routeDigging: true,
         retryable: !bot.interrupt_code,
     });
     log(bot, bot.interrupt_code
         ? 'Stopped the mining search tunnel.'
-        : knownTarget
-            ? `Could not expose the known ${knownTarget.name} target through a bounded safe mining route.`
-            : `No safe natural-fill tunnel could advance while searching for ${requested || 'the requested resource'}.`);
+        : `No safe natural-fill tunnel could advance while searching for ${requested || 'the requested resource'}.`);
     return false;
 }
 
@@ -9734,7 +10248,7 @@ export async function goToMiningDepth(bot, targetY, range=64) {
     }
 
     if (boundedY < bot.entity.position.y - 6) {
-        const staircase = await carveMiningStaircase(bot, boundedY);
+        const staircase = await carveExploratoryDepthRoute(bot, boundedY);
         if (staircase.success) {
             setActionEvidence(bot, {
                 kind: 'mining_relocation',
