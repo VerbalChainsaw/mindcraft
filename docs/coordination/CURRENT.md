@@ -1,6 +1,6 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source commit: deb1ce79e251 (push pending with this checkpoint)
+Functional source commit: deb1ce79e251 (pushed)
 Milestone: owned bounded CollectBlock queue plus typed-goal interruption/resumption physically complete
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: package-first collection, typed goal lifecycle, and deterministic resumption
