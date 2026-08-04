@@ -151,11 +151,16 @@ function preconditionReport(checks) {
   });
 }
 
-function executeBoundCommand(binding, { agent, executeCommand, owner = 'player' } = {}) {
+function executeBoundCommand(binding, {
+  agent,
+  executeCommand,
+  owner = 'player',
+  routeOrigin = 'internal',
+} = {}) {
   if (!agent || typeof executeCommand !== 'function') {
     throw new TypeError('Capability execution requires the active agent and deterministic command executor.');
   }
-  return executeCommand(agent, binding.command, { owner, routeOrigin: 'internal' });
+  return executeCommand(agent, binding.command, { owner, routeOrigin });
 }
 
 const DEFINITIONS = new Map();
@@ -359,6 +364,7 @@ export async function executeCapabilityAction(capability, {
   agent,
   executeCommand,
   owner = 'player',
+  routeOrigin = 'internal',
   signal = null,
 } = {}) {
   const definition = getCapabilityDefinition(capability?.id);
@@ -381,6 +387,7 @@ export async function executeCapabilityAction(capability, {
       agent,
       executeCommand,
       owner,
+      routeOrigin,
       signal,
     });
     const after = captureCapabilitySnapshot(agent?.bot);

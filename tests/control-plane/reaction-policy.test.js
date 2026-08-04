@@ -28,6 +28,11 @@ test('Reaction policy stays silent for low salience, active conversation, remote
     { speechInLastMinute: 4 },
     POLICY,
   ), null);
+  assert.equal(chooseReaction(
+    { id: 'goal-1', type: 'goal.completed', actor: 'Bot', salience: 5, timestamp: 1 },
+    {},
+    POLICY,
+  ), null);
 });
 
 test('Danger warnings outrank ambient observations and render only supplied facts', () => {

@@ -25,6 +25,9 @@ export function electSquadSpeaker(event, witnesses = []) {
 
 export function chooseReaction(event, context = {}, policy = {}) {
   if (!event || policy.mode === 'off') return null;
+  // GoalDirector reports typed-goal terminal outcomes itself. Lifecycle events
+  // still reach telemetry and memory, but never create a second speaker.
+  if (event.type === 'goal.changed' || event.type === 'goal.completed') return null;
   const occupied = context.actionBusy === true || context.jobActive === true || context.urgentDanger === true;
   const minimumSalience = policy.mode === 'minimal' ? 5 : occupied ? 4 : 2;
   if (event.salience < minimumSalience) return null;

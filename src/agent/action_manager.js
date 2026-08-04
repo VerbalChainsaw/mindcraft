@@ -62,6 +62,7 @@ const REQUEST_ROUTE_ORIGINS = new Set([
     'deterministic-nl',
     'model-selected',
     'directive-resume',
+    'goal-director',
     'internal',
 ]);
 

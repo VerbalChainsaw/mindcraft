@@ -68,7 +68,7 @@ class GoalStateStore {
 
   load() {
     this.lastError = null;
-    if (!existsSync(this.filePath)) return { activeGoal: null, lastGoal: null };
+    if (!existsSync(this.filePath)) return { activeGoal: null, lastGoal: null, protectedGoalId: null };
     try {
       if (statSync(this.filePath).size > MAX_STORE_BYTES) {
         throw new TypeError('Goal-state file exceeds the size limit.');
@@ -77,23 +77,34 @@ class GoalStateStore {
       if (document?.version !== STORE_VERSION) {
         throw new TypeError(`Unsupported goal-state version '${document?.version}'.`);
       }
+      const activeGoal = document.activeGoal ? normalizeGoalContract(document.activeGoal) : null;
+      const lastGoal = document.lastGoal ? normalizeGoalContract(document.lastGoal) : null;
+      const protectedGoalId = boundedText(document.protectedGoalId, 96) || null;
       return {
-        activeGoal: document.activeGoal ? normalizeGoalContract(document.activeGoal) : null,
-        lastGoal: document.lastGoal ? normalizeGoalContract(document.lastGoal) : null,
+        activeGoal,
+        lastGoal,
+        protectedGoalId: lastGoal?.phase === 'complete' && protectedGoalId === lastGoal.id
+          ? protectedGoalId
+          : null,
       };
     } catch (error) {
       this.lastError = boundedText(error?.message || error);
-      return { activeGoal: null, lastGoal: null };
+      return { activeGoal: null, lastGoal: null, protectedGoalId: null };
     }
   }
 
-  save(activeGoal, lastGoal) {
+  save(activeGoal, lastGoal, protectedGoalId = null) {
     const normalizedActive = activeGoal ? normalizeGoalContract(activeGoal) : null;
     const normalizedLast = lastGoal ? normalizeGoalContract(lastGoal) : null;
+    const normalizedProtectedGoalId = normalizedLast?.phase === 'complete'
+      && boundedText(protectedGoalId, 96) === normalizedLast.id
+      ? normalizedLast.id
+      : null;
     writeJsonAtomicSync(this.filePath, {
       version: STORE_VERSION,
       activeGoal: normalizedActive,
       lastGoal: normalizedLast,
+      protectedGoalId: normalizedProtectedGoalId,
       savedAt: Date.now(),
     });
     this.lastError = null;
@@ -216,6 +227,7 @@ export class GoalDirector {
     this.procedures = procedures || new ProcedureStore(agent.name);
     this.activeGoal = null;
     this.lastGoal = null;
+    this.protectedGoalId = null;
     this.lastPlan = null;
     this.planRevision = 0;
     this.lastPlanSignature = '';
@@ -232,8 +244,11 @@ export class GoalDirector {
     const persisted = this.store.load();
     this.activeGoal = restoredGoal(persisted.activeGoal);
     this.lastGoal = persisted.lastGoal;
+    this.protectedGoalId = persisted.protectedGoalId === this.lastGoal?.id
+      ? persisted.protectedGoalId
+      : null;
     if (this.activeGoal) {
-      this.store.save(this.activeGoal, this.lastGoal);
+      this.store.save(this.activeGoal, this.lastGoal, this.protectedGoalId);
       this.setStatus('assess', 'restart_revalidation', 'Restored typed goal is waiting for fresh Minecraft state.', true);
     } else if (this.store.lastError) {
       this.setStatus('failed', 'goal_state_load_failed', this.store.lastError, false);
@@ -255,6 +270,7 @@ export class GoalDirector {
     return {
       ...this.status,
       inFlight: this.inFlight,
+      protectedGoalId: this.protectedGoalId,
       nextAttemptAt: this.nextAttemptAt,
       plan: this.lastPlan,
       goal: goal ? {
@@ -279,8 +295,23 @@ export class GoalDirector {
 
   persist(raw) {
     this.activeGoal = normalizeGoalContract(raw);
-    this.store.save(this.activeGoal, this.lastGoal);
+    this.store.save(this.activeGoal, this.lastGoal, this.protectedGoalId);
     return this.activeGoal;
+  }
+
+  hasProtectedCompletion() {
+    return Boolean(
+      this.protectedGoalId
+      && this.lastGoal?.phase === 'complete'
+      && this.lastGoal.id === this.protectedGoalId
+    );
+  }
+
+  releaseProtectedCompletion(_reason = 'Released by later player-authorized work.') {
+    if (!this.hasProtectedCompletion()) return false;
+    this.protectedGoalId = null;
+    this.store.save(this.activeGoal, this.lastGoal, null);
+    return true;
   }
 
   submit(raw) {
@@ -300,11 +331,12 @@ export class GoalDirector {
       if (procedure) goal = normalizeGoalContract({ ...goal, procedureId: procedure.id });
       this.activeGoal = goal;
       this.lastGoal = null;
+      this.protectedGoalId = null;
       this.lastPlan = null;
       this.planRevision = 0;
       this.lastPlanSignature = '';
       this.nextAttemptAt = 0;
-      this.store.save(goal, null);
+      this.store.save(goal, null, null);
       this.setStatus('assess', 'goal_accepted', `Accepted typed goal: ${goalContractDescription(goal)}.`, true);
       this.agent.publishBehaviorEvent?.({
         type: 'goal.changed',
@@ -339,7 +371,8 @@ export class GoalDirector {
     });
     this.lastGoal = cancelled;
     this.activeGoal = null;
-    this.store.save(null, cancelled);
+    this.protectedGoalId = null;
+    this.store.save(null, cancelled, null);
     this.setStatus('cancelled', 'goal_cancelled', reason, false);
     return true;
   }
@@ -397,6 +430,13 @@ export class GoalDirector {
     };
   }
 
+  supersedeSubgoalFailureSpeech(goal) {
+    const actionIds = (goal?.subgoals || [])
+      .map(subgoal => subgoal.actionId)
+      .filter(Boolean);
+    return this.agent.behavior_events?.supersedeActionFailures?.(actionIds) || 0;
+  }
+
   complete(verification) {
     const goal = normalizeGoalContract({
       ...this.activeGoal,
@@ -422,8 +462,10 @@ export class GoalDirector {
       : goal;
     this.lastGoal = completed;
     this.activeGoal = null;
-    this.store.save(null, completed);
+    this.protectedGoalId = completed.id;
+    this.store.save(null, completed, this.protectedGoalId);
     this.setStatus('complete', verification.code, verification.detail, false);
+    this.supersedeSubgoalFailureSpeech(completed);
     this.agent.publishBehaviorEvent?.({
       type: 'goal.completed',
       target: { name: completed.target.family || completed.target.canonicalName },
@@ -456,8 +498,10 @@ export class GoalDirector {
     });
     this.lastGoal = failed;
     this.activeGoal = null;
-    this.store.save(null, failed);
+    this.protectedGoalId = null;
+    this.store.save(null, failed, null);
     this.setStatus('failed', code, detail, false);
+    this.supersedeSubgoalFailureSpeech(failed);
     this.agent.publishBehaviorEvent?.({
       type: 'goal.changed',
       target: { name: failed.target.family || failed.target.canonicalName },
@@ -940,8 +984,12 @@ export class GoalDirector {
         agent: this.agent,
         executeCommand: this.executeGoalCommand,
         owner: 'player',
+        routeOrigin: 'goal-director',
       })
-      : Promise.resolve(this.executeGoalCommand(this.agent, command, { owner: 'player' }))
+      : Promise.resolve(this.executeGoalCommand(this.agent, command, {
+        owner: 'player',
+        routeOrigin: 'goal-director',
+      }))
         .then(value => ({ value, verification: null, result: null }));
     void Promise.resolve(execution)
       .then(outcome => {

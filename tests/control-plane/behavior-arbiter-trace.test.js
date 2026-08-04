@@ -213,6 +213,51 @@ test('decision trace retention remains bounded and later short-circuited lanes s
   )), true);
 });
 
+test('a typed goal terminal transition retains the player-goal lane for the whole arbiter tick', async () => {
+  const { agent } = fakeAgent();
+  let progressionUpdates = 0;
+  let protectedCompletion = false;
+  agent.goal_director = {
+    activeGoal: { id: 'goal-terminal-handoff' },
+    inFlight: false,
+    status: { code: 'goal_acting' },
+    update() {
+      this.activeGoal = null;
+      this.status = { code: 'inventory_goal_verified' };
+      protectedCompletion = true;
+    },
+    hasProtectedCompletion: () => protectedCompletion,
+  };
+  agent.progression_director = {
+    permitted: () => true,
+    update() {
+      progressionUpdates += 1;
+      this.inFlight = true;
+    },
+    inFlight: false,
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.selectedLane, 'player_goal');
+  assert.equal(status.code, 'inventory_goal_verified');
+  assert.equal(progressionUpdates, 0);
+  const trace = arbiter.snapshot().decisionTrace.recent.at(-1);
+  assert.equal(trace.lanes.find(lane => lane.lane === 'player_goal').status, 'eligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'self_progression').status, 'not_evaluated');
+
+  const protectedStatus = await arbiter.update(25);
+  assert.equal(protectedStatus.selectedLane, 'player_goal');
+  assert.equal(protectedStatus.code, 'player_goal_output_reserved');
+  assert.equal(progressionUpdates, 0);
+
+  protectedCompletion = false;
+  const releasedStatus = await arbiter.update(25);
+  assert.equal(releasedStatus.selectedLane, 'self_progression');
+  assert.equal(progressionUpdates, 1);
+});
+
 test('scheduled wakes record prior-period overrun while event-driven early wakes do not', async () => {
   const { agent } = fakeAgent({ emergency: true });
   const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });

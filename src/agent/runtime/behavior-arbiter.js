@@ -687,15 +687,32 @@ export class BehaviorArbiter {
 
       const goal = this.agent.goal_director;
       this.traceRecorder.startLane('player_goal');
-      if (goal?.activeGoal) {
+      const goalActiveAtTickEntry = Boolean(goal?.activeGoal);
+      if (goalActiveAtTickEntry) {
         try {
           goal.update();
         } catch (error) {
           return this.select('player_goal', 'player_goal_update_failed', `Typed player goal failed safely: ${boundedText(error?.message || error)}`, true, perception);
         }
-        if (goal.inFlight || this.agent.actions?.executing || goal.activeGoal) {
-          return this.select('player_goal', goal.status?.code || 'player_goal_selected', 'A typed player goal selected the tick.', true, perception);
-        }
+        const terminalTransition = !goal.activeGoal && !goal.inFlight && !this.agent.actions?.executing;
+        return this.select(
+          'player_goal',
+          goal.status?.code || (terminalTransition ? 'player_goal_terminal_handoff' : 'player_goal_selected'),
+          terminalTransition
+            ? 'The typed player goal reached a terminal transition; lower-priority lanes remain suppressed for this tick.'
+            : 'A typed player goal selected the tick.',
+          true,
+          perception,
+        );
+      }
+      if (goal?.hasProtectedCompletion?.()) {
+        return this.select(
+          'player_goal',
+          'player_goal_output_reserved',
+          'A verified player-goal result remains reserved until later player-authorized work releases it.',
+          true,
+          perception,
+        );
       }
       this.traceRecorder.finishLane('player_goal', { status: 'ineligible', reasonCode: 'no_player_goal' });
       this.traceRecorder.startLane('player_job');

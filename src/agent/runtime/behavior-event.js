@@ -19,6 +19,8 @@ const EVENT_TYPES = new Set([
   'survival.changed',
   'job.changed',
   'job.completed',
+  'goal.changed',
+  'goal.completed',
   'time.sunrise',
   'time.sunset',
   'weather.changed',
@@ -32,7 +34,17 @@ const EVENT_TYPES = new Set([
 ]);
 const SAFE_IDENTIFIER = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_NAME = /^[A-Za-z0-9_. -]{0,64}$/;
-const EVIDENCE_FIELDS = new Set(['workOrderId', 'actionId', 'code', 'phase', 'amount', 'sourceName', 'sourceEntityId']);
+const EVIDENCE_FIELDS = new Set([
+  'workOrderId',
+  'goalId',
+  'procedureId',
+  'actionId',
+  'code',
+  'phase',
+  'amount',
+  'sourceName',
+  'sourceEntityId',
+]);
 
 function boundedName(value, label) {
   const text = String(value || '').trim();
@@ -67,7 +79,7 @@ function normalizeEvidence(raw) {
     if (!EVIDENCE_FIELDS.has(key)) throw new TypeError(`Event evidence field '${key}' is not allowed.`);
   }
   const evidence = {};
-  for (const key of ['workOrderId', 'actionId', 'code', 'phase']) {
+  for (const key of ['workOrderId', 'goalId', 'procedureId', 'actionId', 'code', 'phase']) {
     if (raw[key] !== undefined) {
       const value = String(raw[key] || '').trim().slice(0, 96);
       if (value && !SAFE_IDENTIFIER.test(value)) throw new TypeError(`Event evidence '${key}' is invalid.`);
@@ -150,5 +162,21 @@ export class BehaviorEventBus extends EventEmitter {
   drain(limit = 16) {
     const count = Math.max(0, Math.min(this.queue.length, Math.floor(limit)));
     return this.queue.splice(0, count);
+  }
+
+  supersedeActionFailures(actionIds = []) {
+    const ids = new Set(
+      (Array.isArray(actionIds) ? actionIds : [])
+        .slice(0, 64)
+        .map(value => String(value || '').trim())
+        .filter(value => SAFE_IDENTIFIER.test(value)),
+    );
+    if (ids.size === 0) return 0;
+    const before = this.queue.length;
+    this.queue = this.queue.filter(event => !(
+      event.type === 'action.failed'
+      && ids.has(event.evidence?.actionId)
+    ));
+    return before - this.queue.length;
   }
 }

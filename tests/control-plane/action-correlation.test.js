@@ -108,6 +108,7 @@ test('route origins remain distinct and unknown values fall back to internal', (
     'deterministic-nl',
     'model-selected',
     'directive-resume',
+    'goal-director',
     'internal',
   ];
   for (const route of allowed) assert.equal(normalizeCommandRouteOrigin(route), route);

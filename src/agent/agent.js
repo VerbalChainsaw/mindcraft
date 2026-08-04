@@ -623,6 +623,10 @@ export class Agent {
         // Flush it immediately so observers can correlate the exact action ID.
         serverProxy.requestStatePush?.({ force: true, immediate: true, authoritative: true });
         if (!result) return;
+        // GoalDirector owns the player-facing lifecycle for typed goals. Their
+        // physical sub-actions remain fully visible in ActionResult and decision
+        // telemetry, but must not become delayed standalone reaction speech.
+        if (result.evidence?.request?.routeOrigin === 'goal-director') return;
         this.publishBehaviorEvent({
             id: result.actionId,
             type: result.phase === 'succeeded' ? 'action.completed' : 'action.failed',
@@ -727,6 +731,7 @@ export class Agent {
         if (takeover) {
             this.releaseOperatorHold('player agenda');
             this.actions.cancelResume();
+            this.goal_director?.releaseProtectedCompletion?.('Released by a later player agenda.');
             this.goal_director?.cancel?.('Superseded by a player plan.');
             this.job_director?.cancel?.('Superseded by a player plan.');
             this.companion_context?.setDirective?.(null);
@@ -810,6 +815,7 @@ export class Agent {
                     }
                     if (commandTakesManualAutonomy(user_command_name)) {
                         this.actions.cancelResume();
+                        this.goal_director?.releaseProtectedCompletion?.('Released by a later direct player command.');
                         if (!assignsTypedGoal) {
                             this.goal_director?.cancel?.('Superseded by a direct player command.');
                         }
@@ -880,6 +886,7 @@ export class Agent {
                 }
                 if (directiveCommand && commandTakesManualAutonomy(directiveCommand)) {
                     this.actions.cancelResume();
+                    this.goal_director?.releaseProtectedCompletion?.('Released by a later deterministic player order.');
                     if (!assignsTypedGoal) {
                         this.goal_director?.cancel?.('Superseded by a direct player order.');
                     }
@@ -968,6 +975,7 @@ export class Agent {
                     this.releaseOperatorHold('player command');
                     if (commandTakesManualAutonomy(command_name)) {
                         this.actions.cancelResume();
+                        this.goal_director?.releaseProtectedCompletion?.('Released by later player-authorized model work.');
                         if (!assignsTypedGoal) {
                             this.goal_director?.cancel?.('Superseded by a player-requested command.');
                         }
