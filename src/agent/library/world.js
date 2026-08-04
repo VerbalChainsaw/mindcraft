@@ -1,4 +1,4 @@
-import pf from 'mineflayer-pathfinder';
+import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.js';
 import * as mc from '../../utils/mcdata.js';
 
 

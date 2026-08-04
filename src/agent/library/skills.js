@@ -1,6 +1,6 @@
 import * as mc from "../../utils/mcdata.js";
 import * as world from "./world.js";
-import pf from 'mineflayer-pathfinder';
+import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.js';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
 import { currentActionExecutionContext } from '../action_manager.js';
@@ -87,8 +87,6 @@ const MAX_NAVIGATION_RECOVERY_ATTEMPTS = 1;
 const GROUND_SETTLE_TIMEOUT_MS = 800;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
 const SHALLOW_WATER_SHORE_SCAN_RADIUS = 32;
-const SHALLOW_WATER_INLAND_DISTANCE = 2.5;
-const SHALLOW_WATER_INLAND_TIMEOUT_MS = 1_500;
 const DROWNING_RECOVERY_OXYGEN = 20;
 const DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE = 1.6;
 const DELIVERY_MAX_DROP_HORIZONTAL_DISTANCE = 2.6;
@@ -8388,125 +8386,64 @@ async function attemptShallowWaterExit(bot) {
         return { success: false, strategy: 'shallow_water_exit', outcome: 'not_in_water' };
     }
     const candidates = shallowWaterExitCandidates(bot);
-    for (const candidate of candidates.filter(entry => entry.horizontalDistance <= 1.5).slice(0, 2)) {
+    // Ordinary water-to-shore locomotion belongs to Pathfinder. Bind it to an
+    // exact loaded landing cell so probing and execution use the same movement
+    // policy, and prefer stable inland support over a merely traversable sand
+    // or gravel lip. The old direct-control loop kept aiming at the bank cell
+    // after climbing onto it and could report success even when the requested
+    // inland movement never happened.
+    const stable = candidates.filter(candidate => {
+        const support = bot.blockAt(candidate.position.offset(0, -1, 0));
+        return isSafeGameplaySupport(support);
+    });
+    const ordered = [...stable, ...candidates.filter(candidate => !stable.includes(candidate))]
+        .slice(0, 4);
+    let lastOutcome = null;
+    for (const candidate of ordered) {
+        if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
+        const goal = new pf.goals.GoalBlock(
+            candidate.position.x,
+            candidate.position.y,
+            candidate.position.z,
+        );
         try {
-            bot.clearControlStates?.();
-            // In water, forward movement follows the look pitch. Aim above the
-            // bank instead of at its feet so forward+jump climbs the collision
-            // face rather than swimming down into its lower edge.
-            await bot.lookAt(new Vec3(
-                candidate.position.x + 0.5,
-                Math.max(candidate.position.y + 1.6, start.y + 1.8),
-                candidate.position.z + 0.5,
-            ), true);
-            bot.setControlState('forward', true);
-            bot.setControlState('sprint', true);
-            bot.setControlState('jump', true);
-            const exited = await waitForWorldCondition(bot, () => {
-                const position = bot.entity?.position?.floored?.();
-                if (!position) return false;
-                const currentFeet = bot.blockAt(position);
-                const support = bot.blockAt(position.offset(0, -1, 0));
-                return !isLiquidGameplayBlock(currentFeet) && isTraversableShoreSupport(support);
-            }, SHALLOW_WATER_EXIT_TIMEOUT_MS, 50);
-            if (exited) {
-                bot.setControlState('jump', false);
-                await waitForWorldCondition(bot, () => {
-                    const current = bot.entity?.position;
-                    const position = current?.floored?.();
-                    if (!current || !position) return false;
-                    const currentFeet = bot.blockAt(position);
-                    const support = bot.blockAt(position.offset(0, -1, 0));
-                    return Math.hypot(current.x - start.x, current.z - start.z)
-                            >= SHALLOW_WATER_INLAND_DISTANCE
-                        && !isLiquidGameplayBlock(currentFeet)
-                        && isSafeGameplaySupport(support);
-                }, SHALLOW_WATER_INLAND_TIMEOUT_MS, 50);
-                return {
-                    success: true,
-                    strategy: 'shallow_water_exit',
-                    outcome: 'shore_reached',
-                    target: {
-                        x: candidate.position.x,
-                        y: candidate.position.y,
-                        z: candidate.position.z,
-                        support: candidate.support,
-                    },
-                    distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
-                };
-            }
+            lastOutcome = await runNavigationAttempt(
+                bot,
+                goal,
+                safeMovements(bot),
+                Math.min(SHALLOW_WATER_EXIT_TIMEOUT_MS, remainingActionTimeMs(SHALLOW_WATER_EXIT_TIMEOUT_MS)),
+            );
         } catch (error) {
             if (bot.interrupt_code) break;
-            console.warn(`[movement] Shallow-water exit failed: ${String(error?.message || error).slice(0, 240)}`);
-        } finally {
-            try { bot.setControlState('forward', false); } catch { /* best-effort control cleanup */ }
-            try { bot.setControlState('sprint', false); } catch { /* best-effort control cleanup */ }
-            try { bot.setControlState('jump', false); } catch { /* best-effort control cleanup */ }
+            lastOutcome = { state: 'rejected', error };
         }
-    }
-    // An above-water bot may be several cells from a bank and therefore not
-    // drowning, but it still cannot begin a ground-only collection route.
-    // Swim directly toward a verified loaded shore before declaring the
-    // original ground-only goal stalled.
-    for (const candidate of candidates.filter(entry => entry.horizontalDistance > 1.5).slice(0, 2)) {
-        try {
-            bot.clearControlStates?.();
-            await bot.lookAt(new Vec3(
-                candidate.position.x + 0.5,
-                Math.max(candidate.position.y + 1.6, start.y + 1.8),
-                candidate.position.z + 0.5,
-            ), true);
-            bot.setControlState('forward', true);
-            bot.setControlState('sprint', true);
-            bot.setControlState('jump', true);
-            const exited = await waitForWorldCondition(bot, () => {
-                const position = bot.entity?.position?.floored?.();
-                if (!position) return false;
-                const currentFeet = bot.blockAt(position);
-                const support = bot.blockAt(position.offset(0, -1, 0));
-                return !isLiquidGameplayBlock(currentFeet) && isTraversableShoreSupport(support);
-            }, 5_000, 50);
-            if (exited && !bot.interrupt_code) {
-                bot.setControlState('jump', false);
-                await waitForWorldCondition(bot, () => {
-                    const current = bot.entity?.position;
-                    const position = current?.floored?.();
-                    if (!current || !position) return false;
-                    const currentFeet = bot.blockAt(position);
-                    const support = bot.blockAt(position.offset(0, -1, 0));
-                    return Math.hypot(current.x - start.x, current.z - start.z)
-                            >= SHALLOW_WATER_INLAND_DISTANCE
-                        && !isLiquidGameplayBlock(currentFeet)
-                        && isSafeGameplaySupport(support);
-                }, SHALLOW_WATER_INLAND_TIMEOUT_MS, 50);
-                return {
-                    success: true,
-                    strategy: 'direct_shore_swim',
-                    outcome: 'shore_reached',
-                    target: {
-                        x: candidate.position.x,
-                        y: candidate.position.y,
-                        z: candidate.position.z,
-                        support: candidate.support,
-                    },
-                    distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
-                };
-            }
-        } catch (error) {
-            if (bot.interrupt_code) break;
-            console.warn(`[movement] Direct shore swim failed: ${String(error?.message || error).slice(0, 240)}`);
-        } finally {
-            try { bot.setControlState('forward', false); } catch { /* best-effort swim cleanup */ }
-            try { bot.setControlState('sprint', false); } catch { /* best-effort swim cleanup */ }
-            try { bot.setControlState('jump', false); } catch { /* best-effort swim cleanup */ }
+        const position = bot.entity?.position?.floored?.();
+        const currentFeet = position ? bot.blockAt(position) : null;
+        const support = position ? bot.blockAt(position.offset(0, -1, 0)) : null;
+        const exited = lastOutcome?.state === 'resolved'
+            && !isLiquidGameplayBlock(currentFeet)
+            && isTraversableShoreSupport(support);
+        if (exited) {
+            return {
+                success: true,
+                strategy: 'pathfinder_shore_exit',
+                outcome: isSafeGameplaySupport(support) ? 'stable_shore_reached' : 'shore_reached',
+                target: {
+                    x: candidate.position.x,
+                    y: candidate.position.y,
+                    z: candidate.position.z,
+                    support: support.name,
+                },
+                distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
+            };
         }
-        if (bot.interrupt_code) break;
     }
     return {
         success: false,
-        strategy: 'shallow_water_exit',
+        strategy: 'pathfinder_shore_exit',
         outcome: candidates.length > 0 ? 'shore_unreached' : 'no_safe_shore',
         candidates: candidates.length,
+        pathOutcome: navigationOutcomeName(lastOutcome, bot),
     };
 }
 
