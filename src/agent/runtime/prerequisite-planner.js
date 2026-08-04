@@ -5,7 +5,6 @@ const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
 const DEFAULT_MAX_NODES = 384;
 const DEFAULT_MAX_ACTIONS = 64;
-const WORKSTATION_RANGE = 16;
 const TOOL_TIER = Object.freeze({
   wooden: 1,
   golden: 2,
@@ -377,7 +376,7 @@ function reserveFuel(context, amount, trail) {
 }
 
 function ensurePersistentItem(bot, context, name, trail) {
-  if (ledgerCount(context, name) > 0 || nearbyBlock(bot, name, WORKSTATION_RANGE)) return null;
+  if (ledgerCount(context, name) > 0 || nearbyBlock(bot, name, context.range)) return null;
   return ensureItem(bot, context, name, 1, trail);
 }
 

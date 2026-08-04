@@ -24,6 +24,7 @@ const PLAYER_WAIT_MS = 5_000;
 const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
+const FAILED_TARGET_EXCLUSION_RADIUS = 4;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 function boundedText(value, maximum = 280, fallback = '') {
@@ -183,8 +184,8 @@ function plannedDisengagementCommand(goal) {
   ) return '!moveAway(32)';
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
-    && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken)/.test(code)
-  ) return '!moveAway(4)';
+    && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken|timeout|action_deadline)/.test(code)
+  ) return '!moveAway(32)';
   return null;
 }
 
@@ -569,7 +570,7 @@ export class GoalDirector {
   rememberFailedTarget(result) {
     if (!this.activeGoal || result?.phase === 'succeeded') return this.activeGoal;
     const code = String(result?.code || '');
-    if (!/(?:path_stalled|path_timeout|unreachable|no_path)/.test(code)) return this.activeGoal;
+    if (!/(?:path_stalled|path_timeout|unreachable|no_path|timeout|action_deadline)/.test(code)) return this.activeGoal;
     const skill = actionResultEvidence(result);
     const target = result?.target || skill?.target;
     if (
@@ -627,7 +628,10 @@ export class GoalDirector {
     const now = this.now();
     return (this.activeGoal?.memory?.failedTargets || [])
       .filter(entry => entry.kind === 'collect' && entry.avoidUntil > now)
-      .map(entry => ({ ...entry.position }));
+      // A failed block inside a vein or tree is evidence about that local
+      // source, not merely one coordinate. Exclude the compact source region
+      // so replanning cannot select an adjacent block in the same candidate.
+      .map(entry => ({ ...entry.position, radius: FAILED_TARGET_EXCLUSION_RADIUS }));
   }
 
   handleResult(kind, result) {
@@ -742,10 +746,13 @@ export class GoalDirector {
     }
 
     const preemptionRecovery = isPreemption(effectiveResult);
+    const relocationFailure = kind === 'recover';
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
     // unreachable target does, and the goal gave up on work that was fine.
-    const attempts = preemptionRecovery ? goal.attempts : goal.attempts + 1;
+    const attempts = (preemptionRecovery || relocationFailure)
+      ? goal.attempts
+      : goal.attempts + 1;
     if (
       preemptionRecovery
       && budgetedSubgoalCount(goal) < goal.maxSubgoals
@@ -762,6 +769,31 @@ export class GoalDirector {
         'waiting',
         'preemption_cleared',
         'The higher-priority action released control; reassessing the same goal immediately.',
+        true,
+      );
+      return;
+    }
+    if (
+      relocationFailure
+      && attempts <= goal.maxAttempts
+      && budgetedSubgoalCount(goal) < goal.maxSubgoals
+    ) {
+      // Relocation is the one bounded response to an acquisition failure; it
+      // is not another acquisition attempt. If it also stalls, immediately
+      // rebuild the plan from failed-target memory instead of issuing the same
+      // movement again until the whole goal budget is gone.
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        phase: 'assess',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus(
+        'waiting',
+        'relocation_failed_replan',
+        'The bounded relocation made no verified progress; changing target or strategy from live state now.',
         true,
       );
       return;

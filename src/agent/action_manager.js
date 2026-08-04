@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { actionResultFromError, createActionResult } from './runtime/action-result.js';
 
+const ACTION_EXECUTION_CONTEXT = new AsyncLocalStorage();
+
+export function currentActionExecutionContext() {
+    return ACTION_EXECUTION_CONTEXT.getStore() || null;
+}
+
 const STOP_WAIT_TIMEOUT_MS = 10_000;
 // Escalating stop poll. A cooperative skill checks `interrupt_code` within a
 // few milliseconds, so waiting a flat 300ms before re-testing put a hard floor
@@ -133,6 +139,7 @@ export class ActionManager {
         this.currentActionOwner = '';
         this.currentActionId = '';
         this.currentActionFn = null;
+        this.currentActionController = null;
         this.timedout = false;
         this.resume_func = null;
         this.resume_name = '';
@@ -276,6 +283,7 @@ export class ActionManager {
             return { stopped: true, timedOut: false };
         }
         if (this.stopTimedOutAt) {
+            try { this.currentActionController?.abort(); } catch { /* already aborted */ }
             try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
             return { stopped: false, timedOut: true, requestedAt: this.stopRequestedAt };
         }
@@ -295,6 +303,7 @@ export class ActionManager {
             const now = Date.now();
             if (attempt === 0 || now - lastInterruptAt >= INTERRUPT_REISSUE_MS) {
                 lastInterruptAt = now;
+                try { this.currentActionController?.abort(); } catch { /* already aborted */ }
                 try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
             }
             const remaining = deadline - Date.now();
@@ -455,6 +464,7 @@ export class ActionManager {
             this.currentActionLabel = actionLabel;
             this.currentActionOwner = actionOwner;
             this.currentActionFn = actionFn;
+            this.currentActionController = new AbortController();
             this.currentActionStartedAt = this.last_action_time;
             this.agent.behavior_arbiter?.recordActionStart?.({
                 actionId,
@@ -469,7 +479,11 @@ export class ActionManager {
 
             // timeout in minutes
             if (timeout > 0) {
-                TIMEOUT = this._startTimeout(timeout);
+                TIMEOUT = this._startTimeout(
+                    timeout,
+                    actionId,
+                    this.currentActionController,
+                );
             }
 
             // Start the action. A large portion of the skill library uses an
@@ -477,7 +491,13 @@ export class ActionManager {
             // tool, unreachable target, interrupted path, and so on). Preserve
             // that signal instead of converting every resolved Promise into a
             // false success.
-            const actionValue = await actionFn();
+            const actionValue = await ACTION_EXECUTION_CONTEXT.run({
+                actionId,
+                signal: this.currentActionController.signal,
+                deadlineAt: timeout > 0
+                    ? this.currentActionStartedAt + (timeout * 60 * 1000)
+                    : null,
+            }, actionFn);
 
             // mark action as finished + cleanup
             this.agent.behavior_arbiter?.recordActionRelease?.({
@@ -491,6 +511,7 @@ export class ActionManager {
             this.currentActionLabel = '';
             this.currentActionOwner = '';
             this.currentActionFn = null;
+            this.currentActionController = null;
             this.currentActionStartedAt = 0;
             this.stopRequestedAt = null;
             this.stopTimedOutAt = null;
@@ -498,8 +519,12 @@ export class ActionManager {
 
             // get bot activity summary
             let output = this.getBotOutputSummary();
-            let interrupted = this.agent.bot.interrupt_code;
             let timedout = this.timedout;
+            // The timeout path uses the same physical interrupt as an external
+            // preemption, but it remains a productive action failure. Keeping
+            // these distinct lets GoalDirector charge the acquisition once and
+            // preserve its concrete target for replanning.
+            let interrupted = this.agent.bot.interrupt_code && !timedout;
             this.agent.clearBotLogs();
 
             // if not interrupted and not generating, emit idle event
@@ -560,6 +585,7 @@ export class ActionManager {
             this.currentActionLabel = '';
             this.currentActionOwner = '';
             this.currentActionFn = null;
+            this.currentActionController = null;
             this.currentActionStartedAt = 0;
             this.stopRequestedAt = null;
             this.stopTimedOutAt = null;
@@ -617,11 +643,13 @@ export class ActionManager {
         return output;
     }
 
-    _startTimeout(TIMEOUT_MINS = 10) {
+    _startTimeout(TIMEOUT_MINS = 10, actionId = null, controller = null) {
         return setTimeout(async () => {
+            if (!this.executing || (actionId && this.currentActionId !== actionId)) return;
             console.warn(`Code execution timed out after ${TIMEOUT_MINS} minutes. Attempting force stop.`);
             this.timedout = true;
             this.agent.history.add('system', `Code execution timed out after ${TIMEOUT_MINS} minutes. Attempting force stop.`);
+            try { controller?.abort(); } catch { /* already aborted */ }
             await this.stop(); // last attempt to stop
         }, TIMEOUT_MINS * 60 * 1000);
     }

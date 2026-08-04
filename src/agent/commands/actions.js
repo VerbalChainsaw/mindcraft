@@ -28,6 +28,8 @@ import {
 } from '../runtime/goal-contract.js';
 
 
+const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
+
 function runAsAction (actionFn, resume = false, timeout = -1) {
     let actionLabel = null;  // Will be set on first use
     
@@ -421,7 +423,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, resource_name, length) => {
             return await skills.mineSearchTunnel(agent.bot, resource_name, length);
-        }, false, 10)
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!searchForEntity',
@@ -656,7 +658,7 @@ export const actionsList = [
                 64,
                 { relocate: true },
             );
-        }, false, 10) // 10 minute timeout
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!pickupUsefulItems',
@@ -677,6 +679,15 @@ export const actionsList = [
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
         },
         perform: runAsAction(async (agent, type, num, range) => {
+            if (skills.isWoodBlockType(type)) {
+                return await skills.collectWood(
+                    agent.bot,
+                    num,
+                    range,
+                    agent.goal_director?.collectionExclusions?.() || null,
+                    { relocate: false, woodType: type },
+                );
+            }
             return await skills.collectBlock(
                 agent.bot,
                 type,
@@ -685,7 +696,7 @@ export const actionsList = [
                 range,
                 { relocate: false },
             );
-        }, false, 10)
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!prepareMaterial',
@@ -697,7 +708,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, material_name, num, range) => {
             return await skills.prepareMaterial(agent.bot, material_name, num, range);
-        }, false, 10)
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!prepareFood',
@@ -744,7 +755,7 @@ export const actionsList = [
                 agent.goal_director?.collectionExclusions?.() || null,
                 { relocate: true },
             );
-        }, false, 10)
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!collectWoodInRange',
@@ -761,7 +772,7 @@ export const actionsList = [
                 agent.goal_director?.collectionExclusions?.() || null,
                 { relocate: false },
             );
-        }, false, 10)
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!craftRecipe',
@@ -1758,7 +1769,7 @@ export const actionsList = [
                 64,
                 { relocate: true },
             );
-        })
+        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!give',

@@ -3,6 +3,7 @@ import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
+import { currentActionExecutionContext } from '../action_manager.js';
 import {
     isFallingGameplayBlock,
     isHazardousGameplayBlock,
@@ -65,7 +66,6 @@ const TABLE_PICKUP_TIMEOUT_MS = 1_500;
 const INVENTORY_POLL_MS = 100;
 const COLLECTION_DROP_TIMEOUT_MS = 4_000;
 const COLLECTION_OPERATION_TIMEOUT_MS = 15_000;
-const COLLECTION_CANCEL_SETTLE_MS = 1_000;
 const PICKUP_NAVIGATION_STALL_TIMEOUT_MS = 4_000;
 const DIRECT_PICKUP_RANGE = 3;
 const DIRECT_PICKUP_TIMEOUT_MS = 1_200;
@@ -85,7 +85,6 @@ const NAVIGATION_GOAL_PROGRESS_DELTA = 0.25;
 const NAVIGATION_RECOVERY_DISTANCE = 1;
 const NAVIGATION_RECOVERY_RADIUS = 4;
 const MAX_NAVIGATION_RECOVERY_ATTEMPTS = 1;
-const NAVIGATION_CANCEL_SETTLE_MS = 250;
 const DIRECT_NAVIGATION_STEP_TIMEOUT_MS = 1_400;
 const DIRECT_NAVIGATION_STEP_PROGRESS = 0.65;
 const DIRECT_NAVIGATION_ASCENT_STAGE_TIMEOUT_MS = 1_000;
@@ -95,6 +94,10 @@ const DIRECT_NAVIGATION_ASCENT_STAGE_TOLERANCE = 0.1;
 const DIRECT_NAVIGATION_APPROACH_RANGE = 4.5;
 const DIRECT_NAVIGATION_APPROACH_STEPS = 4;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
+const SHALLOW_WATER_SHORE_SCAN_RADIUS = 32;
+const SHALLOW_WATER_INLAND_DISTANCE = 2.5;
+const SHALLOW_WATER_INLAND_TIMEOUT_MS = 1_500;
+const DROWNING_RECOVERY_OXYGEN = 20;
 const DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE = 1.6;
 const DELIVERY_MAX_DROP_HORIZONTAL_DISTANCE = 2.6;
 const DELIVERY_MAX_DROP_LATERAL_OFFSET = 0.65;
@@ -126,8 +129,12 @@ const MAX_COLLECTION_TARGET_FAILURES = 1;
 const MAX_COLLECTION_ACCESS_RECOVERIES = 2;
 const COLLECTION_ACCESS_PROGRESS_DISTANCE = 1;
 const MINING_STAIR_LEG_HEIGHT = 6;
+const MINING_STAIR_TARGET_TOLERANCE = 1;
 const MINING_TUNNEL_LENGTH = 12;
 const MAX_MINING_ROUTE_HEADINGS = 3;
+const MINING_ROUTE_STALL_TIMEOUT_MS = 5_000;
+const MINING_STAGING_SCAN_RADIUS = 12;
+const MAX_MINING_STAGING_ATTEMPTS = 2;
 const DEFAULT_MAX_DROP_DOWN = 4;
 const MAX_SURVIVABLE_DROP_DOWN = 12;
 const SAFE_DROP_HEALTH_RESERVE = 10;
@@ -178,6 +185,18 @@ const EXPLORATION_LANDMARK_BLOCKS = Object.freeze([
     'lodestone',
 ]);
 const EXPLORATION_CONTAINER_BLOCKS = Object.freeze(['chest', 'trapped_chest', 'barrel']);
+
+function actionCancellationSignal() {
+    return currentActionExecutionContext()?.signal || null;
+}
+
+function remainingActionTimeMs(fallbackMs = Number.POSITIVE_INFINITY) {
+    const rawDeadline = currentActionExecutionContext()?.deadlineAt;
+    if (rawDeadline === null || rawDeadline === undefined) return fallbackMs;
+    const deadlineAt = Number(rawDeadline);
+    if (!Number.isFinite(deadlineAt)) return fallbackMs;
+    return Math.max(0, Math.min(fallbackMs, deadlineAt - Date.now()));
+}
 
 function playerTargetEvidence(resolution, extras = {}) {
     return {
@@ -460,33 +479,23 @@ async function approachDroppedItem(bot, entity, range=1, timeoutMs=PICKUP_NAVIGA
         NAVIGATION_PROGRESS_POLL_MS,
         Math.min(PICKUP_NAVIGATION_STALL_TIMEOUT_MS, Number(timeoutMs) || PICKUP_NAVIGATION_STALL_TIMEOUT_MS),
     );
-    let outcome;
+    let arrived = false;
     try {
-        outcome = await runNavigationAttempt(bot, goal, safeMovements(bot), stallTimeout);
+        // Item pickup is ordinary navigation with a short-lived target. Reuse
+        // the managed movement seam so nearby ledges and canopy cells receive
+        // the same bounded local-step recovery as every other safe route.
+        arrived = await goToGoal(bot, goal, {
+            stallTimeoutMs: stallTimeout,
+            allowHealthBoundedDescent: false,
+        });
     } finally {
         bot.pathfinder.setMovements(safeMovements(bot));
     }
-    const arrived = !bot.interrupt_code
-        && outcome?.state === 'resolved'
-        && Boolean(goal.isEnd?.(bot.entity.position.floored()));
-    if (!arrived) {
-        if (await attemptDirectDroppedItemPickup(bot, entity)) return true;
-        const failure = outcome?.state === 'rejected'
-            ? pathfinderErrorOutcome(outcome.error, Boolean(bot.interrupt_code))
-            : outcome?.state === 'stalled'
-                ? 'path_stalled'
-                : bot.interrupt_code
-                    ? 'interrupted'
-                    : 'goal_not_reached';
-        setActionEvidence(bot, {
-            kind: 'movement',
-            outcome: failure,
-            target,
-            ...(outcome?.state === 'stalled' ? { progress: navigationProgressEvidence(outcome) } : {}),
-            retryable: failure !== 'interrupted',
-        });
+    if (!bot.entities?.[entity.id] || await attemptDirectDroppedItemPickup(bot, entity)) return true;
+    if (!arrived && bot.lastActionEvidence?.kind === 'movement') {
+        setActionEvidence(bot, { ...bot.lastActionEvidence, target });
     }
-    return arrived;
+    return arrived && !bot.interrupt_code;
 }
 
 async function placeLocalCraftingTable(bot) {
@@ -603,8 +612,9 @@ function inventoryCountByTypes(bot, itemTypes) {
 }
 
 async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=COLLECTION_DROP_TIMEOUT_MS) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline && !bot.interrupt_code) {
+    const deadline = Date.now() + remainingActionTimeMs(timeoutMs);
+    const signal = actionCancellationSignal();
+    while (Date.now() < deadline && !bot.interrupt_code && !signal?.aborted) {
         if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
         const expectedDrop = Object.values(bot.entities || {}).find(entity => {
             if (entity?.name !== 'item' || !entity.position) return false;
@@ -615,8 +625,8 @@ async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=
                 return false;
             }
         });
-        if (expectedDrop && Math.abs(expectedDrop.position.y - bot.entity.position.y) <= 2.5) {
-            const remaining = Math.max(100, Math.min(1_500, deadline - Date.now()));
+        if (expectedDrop) {
+            const remaining = Math.max(100, deadline - Date.now());
             await approachDroppedItem(bot, expectedDrop, 1, remaining);
             if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
         }
@@ -627,25 +637,49 @@ async function waitForExpectedDropPickup(bot, itemTypes, beforeCount, timeoutMs=
 
 async function runBoundedCollectionOperation(operation, cancel) {
     const timedOut = Symbol('collection-timeout');
+    const signal = actionCancellationSignal();
+    const actionContext = currentActionExecutionContext();
+    const timeoutMs = actionContext?.deadlineAt !== null
+        && actionContext?.deadlineAt !== undefined
+        && Number.isFinite(Number(actionContext.deadlineAt))
+        ? remainingActionTimeMs()
+        : COLLECTION_OPERATION_TIMEOUT_MS;
     let timeout = null;
+    let onAbort = null;
     const operationPromise = Promise.resolve().then(operation);
+    const settledOperation = operationPromise.then(
+        value => ({ kind: 'resolved', value }),
+        error => ({ kind: 'rejected', error }),
+    );
+    const deadline = new Promise(resolve => {
+        const finish = () => resolve(timedOut);
+        if (signal?.aborted || timeoutMs <= 0) {
+            finish();
+            return;
+        }
+        timeout = setTimeout(finish, timeoutMs);
+        if (signal?.addEventListener) {
+            onAbort = finish;
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+    });
     const result = await Promise.race([
-        operationPromise,
-        new Promise(resolve => {
-            timeout = setTimeout(() => resolve(timedOut), COLLECTION_OPERATION_TIMEOUT_MS);
-        }),
+        settledOperation,
+        deadline,
     ]);
     if (timeout) clearTimeout(timeout);
-    if (result !== timedOut) return result;
+    if (onAbort) signal?.removeEventListener?.('abort', onAbort);
+    if (result !== timedOut) {
+        if (result.kind === 'rejected') throw result.error;
+        return result.value;
+    }
 
-    const cancellation = Promise.resolve()
-        .then(() => cancel?.())
-        .catch(() => null);
-    await Promise.race([
-        cancellation,
-        new Promise(resolve => setTimeout(resolve, COLLECTION_CANCEL_SETTLE_MS)),
-    ]);
-    const error = new Error(`Collection operation timed out after ${COLLECTION_OPERATION_TIMEOUT_MS}ms.`);
+    // Cancellation returning is not enough: collectblock and dig promises can
+    // otherwise keep moving after ActionManager appears idle. Keep ownership
+    // until both the cancellation request and the original operation settle.
+    try { await Promise.resolve().then(() => cancel?.()); } catch { /* operation settlement carries the result */ }
+    await settledOperation;
+    const error = new Error(`Collection operation exceeded its action deadline after ${Math.round(timeoutMs)}ms.`);
     error.name = 'Timeout';
     throw error;
 }
@@ -1099,6 +1133,16 @@ function collectionBreakTime(bot, block) {
 
 function probeCollectionRoute(bot, block, movements, targetAssessment = null) {
     const distance = bot.entity.position.distanceTo(block.position);
+    const signal = actionCancellationSignal();
+    const remainingMs = remainingActionTimeMs(COLLECTION_ROUTE_PROBE_TIMEOUT_MS);
+    if (signal?.aborted || remainingMs <= 0) {
+        return {
+            routeStatus: 'action_deadline',
+            routeCost: 0,
+            routeLength: 0,
+            routeTimeMs: 0,
+        };
+    }
     if (
         distance <= 4.5
         && bot.canSeeBlock?.(block)
@@ -1134,13 +1178,14 @@ function probeCollectionRoute(bot, block, movements, targetAssessment = null) {
             bot.entity.position,
             goal,
             {
-                timeout: COLLECTION_ROUTE_PROBE_TIMEOUT_MS,
-                tickTimeout: COLLECTION_ROUTE_PROBE_TICK_MS,
+                timeout: Math.max(1, remainingMs),
+                tickTimeout: Math.max(1, Math.min(COLLECTION_ROUTE_PROBE_TICK_MS, remainingMs)),
                 searchRadius: Math.max(8, Math.ceil(distance) + 8),
             },
         );
         let result = null;
         for (let slice = 0; slice < MAX_COLLECTION_ROUTE_SLICES; slice++) {
+            if (signal?.aborted || remainingActionTimeMs() <= 0) break;
             const next = generator.next();
             result = next?.value?.result || result;
             if (next.done || result?.status !== 'partial') break;
@@ -1396,7 +1441,11 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
             // mining route. Replacing it with generic "unreachable" makes the
             // goal walk away instead of planning a usable replacement tool.
             if (!opened && bot.lastActionEvidence?.outcome === 'missing_tool') return false;
-            if (!opened || bot.interrupt_code) continue;
+            // One bounded tunnel owns one concrete target. Return its failure
+            // so GoalDirector can exclude that coordinate before trying a
+            // different vein instead of spending this action on another long
+            // tunnel whose identity would overwrite the first.
+            if (!opened || bot.interrupt_code) return false;
             search.accessRecoveries += 1;
             return true;
         }
@@ -1589,7 +1638,7 @@ export async function craftRecipe(bot, itemName, num=1) {
         }
         let recipes = bot.recipesFor(itemId, null, 1, null);
         let craftingTable = null;
-        const craftingTableRange = 16;
+        const craftingTableRange = 64;
 
         if (!recipes?.length) {
             recipes = bot.recipesFor(itemId, null, 1, true);
@@ -2565,7 +2614,7 @@ export async function smeltItem(bot, itemName, num=1) {
     }
 
     try {
-        furnaceBlock = world.getNearestBlock(bot, 'furnace', 16);
+        furnaceBlock = world.getNearestBlock(bot, 'furnace', 64);
         if (!furnaceBlock && inventoryCount(bot, 'furnace') > 0) {
             const position = world.getNearestFreeSpace(bot, 1, 8);
             if (!position) {
@@ -4117,11 +4166,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         const targetMatches = block => {
             if (!blocktypes.includes(block?.name)) return false;
             if (!block.position) return true;
-            if (excludedPositions.some(position => (
-                block.position.x === position.x
-                && block.position.y === position.y
-                && block.position.z === position.z
-            ))) return false;
+            if (collectionPositionExcluded(block.position, excludedPositions)) return false;
             if (isLiquid) return block.metadata === 0;
             return selectionMovements.safeToBreak(block);
         };
@@ -4164,10 +4209,14 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         }
         const selection = preferredPosition
             ? (() => {
+                const routeMovements = targetScopedCollectionMovements(bot, preferredBlock, {
+                    allowPillars: searchOptions?.allowPillars === true,
+                    allowNaturalRouteDigging,
+                });
                 const ranked = rankCollectionCandidates(collectionCandidateObservations(
                     bot,
                     blocks,
-                    collectionSafetyMovements(bot),
+                    routeMovements,
                     false,
                     { stableMiningStance: allowNaturalRouteDigging },
                 ).map(candidate => ({
@@ -4202,13 +4251,25 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             if (bot.lastActionEvidence?.kind === 'collect' && bot.lastActionEvidence.outcome === 'missing_tool') {
                 return false;
             }
+            const miningFailure = (
+                bot.lastActionEvidence?.kind === 'mining_search'
+                && [
+                    bot.lastActionEvidence?.target?.x,
+                    bot.lastActionEvidence?.target?.y,
+                    bot.lastActionEvidence?.target?.z,
+                ].every(Number.isFinite)
+            ) ? bot.lastActionEvidence : null;
             setActionEvidence(bot, {
                 kind: 'collect',
                 outcome: 'unreachable',
-                target: {
+                target: miningFailure ? {
+                    ...miningFailure.target,
+                    decision: collectionDecisionEvidence(selection),
+                } : {
                     name: blockType,
                     decision: collectionDecisionEvidence(selection),
                 },
+                ...(miningFailure ? { accessOutcome: miningFailure.outcome } : {}),
                 retryable: true,
             });
             const rejectionSummary = collectionRejectionSummary(selection);
@@ -4620,6 +4681,11 @@ const WOOD_BLOCK_TYPES = Object.freeze([
         'crimson_stem',
         'warped_stem',
 ]);
+
+export function isWoodBlockType(blockType) {
+    return WOOD_BLOCK_TYPES.includes(String(blockType || '').trim());
+}
+
 const NATURAL_TREE_SUPPORTS = new Set([
     'grass_block', 'dirt', 'coarse_dirt', 'podzol', 'mycelium', 'rooted_dirt',
     'mud', 'muddy_mangrove_roots', 'mangrove_roots', 'moss_block', 'sand', 'red_sand',
@@ -4711,9 +4777,10 @@ function discoverNaturalTree(bot, seedBlock) {
     return { natural: true, logs, base };
 }
 
-function carriedLogCount(bot) {
+function carriedLogCount(bot, woodTypes=null) {
     return bot.inventory.items().reduce((total, item) => (
         /_(?:log|stem)$/.test(String(item?.name || ''))
+            && (!(woodTypes instanceof Set) || woodTypes.has(item.name))
             ? total + Math.max(0, Number(item.count) || 0)
             : total
     ), 0);
@@ -4756,6 +4823,19 @@ function collectionCandidateShortlist(bot, blocks, collapseVerticalColumns = fal
     return selected;
 }
 
+function collectionPositionExcluded(position, exclusions) {
+    if (!position) return false;
+    return (exclusions || []).some(exclusion => {
+        if (!exclusion || ![exclusion.x, exclusion.y, exclusion.z].every(Number.isFinite)) return false;
+        const radius = Math.max(0, Math.min(16, Math.floor(Number(exclusion.radius) || 0)));
+        return Math.max(
+            Math.abs(position.x - exclusion.x),
+            Math.abs(position.y - exclusion.y),
+            Math.abs(position.z - exclusion.z),
+        ) <= radius;
+    });
+}
+
 function findCollectibleBlockSelection(bot, blockTypes, range=64, exclude=null, collapseVerticalColumns=false) {
     const allowed = blockTypes instanceof Set ? blockTypes : new Set(blockTypes);
     const movements = collectionSafetyMovements(bot);
@@ -4766,12 +4846,7 @@ function findCollectibleBlockSelection(bot, blockTypes, range=64, exclude=null, 
             if (!block.position) return true;
             return (
                 movements.safeToBreak(block)
-                && !(exclude || []).some(position => (
-                    position
-                    && block.position.x === position.x
-                    && block.position.y === position.y
-                    && block.position.z === position.z
-                ))
+                && !collectionPositionExcluded(block.position, exclude)
             );
         },
         Math.max(1, Math.min(512, Number(range) || 64)),
@@ -4796,7 +4871,7 @@ export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=n
  * for the caller's per-log path, so nothing is lost -- this is purely faster.
  */
 async function fellDiscoveredTree(bot, tree, woodTypes) {
-    const before = carriedLogCount(bot);
+    const before = carriedLogCount(bot, woodTypes);
     const remaining = [];
     if (tree?.base) {
         // One navigation to the trunk instead of one per log.
@@ -4814,11 +4889,22 @@ async function fellDiscoveredTree(bot, tree, woodTypes) {
         if (!broke) remaining.push(logBlock);
     }
     try { await pickupNearbyItems(bot); } catch { /* drops get swept on the next pass */ }
-    return { count: Math.max(0, carriedLogCount(bot) - before), remaining };
+    return { count: Math.max(0, carriedLogCount(bot, woodTypes) - before), remaining };
 }
 
 export async function collectWood(bot, num=1, range=64, exclude=null, searchOptions={}) {
-    const woodTypes = new Set(WOOD_BLOCK_TYPES);
+    const requestedWoodType = String(searchOptions?.woodType || '').trim();
+    if (requestedWoodType && !isWoodBlockType(requestedWoodType)) {
+        setActionEvidence(bot, {
+            kind: 'collect',
+            outcome: 'invalid_request',
+            target: { name: requestedWoodType },
+            retryable: false,
+        });
+        log(bot, `${requestedWoodType} is not a supported log or stem block.`);
+        return false;
+    }
+    const woodTypes = new Set(requestedWoodType ? [requestedWoodType] : WOOD_BLOCK_TYPES);
     const target = Math.max(1, Math.min(64, Number(num) || 1));
     const searchRange = Math.max(1, Math.min(512, Math.floor(Number(range) || 64)));
     const search = createCollectionSearch(bot, searchRange, searchOptions);
@@ -4863,21 +4949,28 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                         z: tree.base.z,
                     };
                     log(bot, `Felling one connected ${tree.logs[0].name.replace('_log', '').replace('_stem', '')} tree with ${tree.logs.length} loaded logs.`);
-                    // Fast path: fell the reachable trunk from one standing spot.
-                    const felled = await fellDiscoveredTree(bot, tree, woodTypes);
-                    collected += felled.count;
-                    if (felled.count > 0 && felled.remaining.length === 0) {
-                        // Whole tree down in place. Record it and move on to the
-                        // next one rather than re-pathing to logs already gone.
-                        // Clear the seed: it has been felled, so the next pass
-                        // must search fresh instead of collecting a gone block.
-                        completeTrees += 1;
-                        naturalTreeActive = false;
-                        nearest = null;
-                        continue;
+                    if (requestedWoodType) {
+                        // Exact work orders need per-block pickup verification;
+                        // the family collector's fast fell only counts its haul
+                        // after the entire connected tree has been processed.
+                        treeQueue = tree.logs.map(block => block.position.clone());
+                    } else {
+                        // Fast path: fell the reachable trunk from one standing spot.
+                        const felled = await fellDiscoveredTree(bot, tree, woodTypes);
+                        collected += felled.count;
+                        if (felled.count > 0 && felled.remaining.length === 0) {
+                            // Whole tree down in place. Record it and move on to the
+                            // next one rather than re-pathing to logs already gone.
+                            // Clear the seed: it has been felled, so the next pass
+                            // must search fresh instead of collecting a gone block.
+                            completeTrees += 1;
+                            naturalTreeActive = false;
+                            nearest = null;
+                            continue;
+                        }
+                        // Only logs it could not reach fall back to the per-log path.
+                        treeQueue = felled.remaining.map(block => block.position.clone());
                     }
-                    // Only logs it could not reach fall back to the per-log path.
-                    treeQueue = felled.remaining.map(block => block.position.clone());
                     naturalTreeActive = treeQueue.length > 0;
                     nearest = null;
                     while (treeQueue.length > 0 && !nearest) {
@@ -4913,7 +5006,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                     : `No safely collectible trees found within ${searchRange} blocks.`);
             break;
         }
-        const beforeLogs = carriedLogCount(bot);
+        const beforeLogs = carriedLogCount(bot, woodTypes);
         const success = await collectBlock(
             bot,
             nearest.name,
@@ -4972,7 +5065,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             [collectedTarget?.x, collectedTarget?.y, collectedTarget?.z].every(Number.isFinite)
             && (!stumpTarget || collectedTarget.y < stumpTarget.y)
         ) stumpTarget = collectedTarget;
-        collected += Math.max(1, carriedLogCount(bot) - beforeLogs);
+        collected += Math.max(1, carriedLogCount(bot, woodTypes) - beforeLogs);
         if (naturalTreeActive && treeQueue.length === 0) {
             if (currentTreeFailures === 0) completeTrees += 1;
             naturalTreeActive = false;
@@ -8152,13 +8245,10 @@ async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIG
         const outcome = await Promise.race([navigation, progressWatchdog.stalled]);
         if (outcome.state === 'stalled') {
             stopNavigationGoal(bot);
-            // Do not race a replacement path against the promise from the path
-            // we just cancelled. Pathfinder normally settles immediately; the
-            // bound keeps a broken plugin callback from freezing recovery.
-            await Promise.race([
-                navigation,
-                new Promise(resolve => setTimeout(resolve, NAVIGATION_CANCEL_SETTLE_MS)),
-            ]);
+            // Do not release ActionManager while the cancelled path promise is
+            // still alive. A new route must never race stale movement from the
+            // operation that just timed out.
+            await navigation;
         }
         return outcome;
     } finally {
@@ -8461,22 +8551,28 @@ function shallowWaterExitCandidates(bot) {
         && !isHazardousGameplayBlock(block)
     );
     const candidates = [];
-    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-        // From a water cell, the bot's feet land two Y levels higher on top of
-        // a one-block bank. Scanning only +1 found the bank itself as occupied
-        // and missed the actual standing cell above it.
-        for (const yOffset of [2, 1, 0]) {
-            const feetPosition = origin.offset(dx, yOffset, dz);
-            const feet = bot.blockAt(feetPosition);
-            const head = bot.blockAt(feetPosition.offset(0, 1, 0));
-            const support = bot.blockAt(feetPosition.offset(0, -1, 0));
-            if (!clear(feet) || !clear(head) || !isSafeGameplaySupport(support)) continue;
-            candidates.push({
-                position: feetPosition,
-                support: support.name,
-                distance: bot.entity.position.distanceTo(feetPosition),
-            });
-            break;
+    for (let radius = 1; radius <= SHALLOW_WATER_SHORE_SCAN_RADIUS; radius += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+            for (let dz = -radius; dz <= radius; dz += 1) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+                // From a water cell, the bot's feet often land two Y levels
+                // higher on top of a one-block bank. Wider water needs the
+                // same check beyond the eight adjacent cells.
+                for (const yOffset of [2, 1, 0, 3, -1]) {
+                    const feetPosition = origin.offset(dx, yOffset, dz);
+                    const feet = bot.blockAt(feetPosition);
+                    const head = bot.blockAt(feetPosition.offset(0, 1, 0));
+                    const support = bot.blockAt(feetPosition.offset(0, -1, 0));
+                    if (!clear(feet) || !clear(head) || !isSafeGameplaySupport(support)) continue;
+                    candidates.push({
+                        position: feetPosition,
+                        support: support.name,
+                        distance: bot.entity.position.distanceTo(feetPosition),
+                        horizontalDistance: Math.hypot(dx, dz),
+                    });
+                    break;
+                }
+            }
         }
     }
     return candidates.sort((left, right) => left.distance - right.distance);
@@ -8489,11 +8585,19 @@ async function attemptShallowWaterExit(bot) {
         return { success: false, strategy: 'shallow_water_exit', outcome: 'not_in_water' };
     }
     const candidates = shallowWaterExitCandidates(bot);
-    for (const candidate of candidates.slice(0, 2)) {
+    for (const candidate of candidates.filter(entry => entry.horizontalDistance <= 1.5).slice(0, 2)) {
         try {
             bot.clearControlStates?.();
-            await bot.lookAt(candidate.position.offset(0.5, 0.5, 0.5), true);
+            // In water, forward movement follows the look pitch. Aim above the
+            // bank instead of at its feet so forward+jump climbs the collision
+            // face rather than swimming down into its lower edge.
+            await bot.lookAt(new Vec3(
+                candidate.position.x + 0.5,
+                Math.max(candidate.position.y + 1.6, start.y + 1.8),
+                candidate.position.z + 0.5,
+            ), true);
             bot.setControlState('forward', true);
+            bot.setControlState('sprint', true);
             bot.setControlState('jump', true);
             const exited = await waitForWorldCondition(bot, () => {
                 const position = bot.entity?.position?.floored?.();
@@ -8503,6 +8607,18 @@ async function attemptShallowWaterExit(bot) {
                 return !isLiquidGameplayBlock(currentFeet) && isSafeGameplaySupport(support);
             }, SHALLOW_WATER_EXIT_TIMEOUT_MS, 50);
             if (exited) {
+                bot.setControlState('jump', false);
+                await waitForWorldCondition(bot, () => {
+                    const current = bot.entity?.position;
+                    const position = current?.floored?.();
+                    if (!current || !position) return false;
+                    const currentFeet = bot.blockAt(position);
+                    const support = bot.blockAt(position.offset(0, -1, 0));
+                    return Math.hypot(current.x - start.x, current.z - start.z)
+                            >= SHALLOW_WATER_INLAND_DISTANCE
+                        && !isLiquidGameplayBlock(currentFeet)
+                        && isSafeGameplaySupport(support);
+                }, SHALLOW_WATER_INLAND_TIMEOUT_MS, 50);
                 return {
                     success: true,
                     strategy: 'shallow_water_exit',
@@ -8521,8 +8637,67 @@ async function attemptShallowWaterExit(bot) {
             console.warn(`[movement] Shallow-water exit failed: ${String(error?.message || error).slice(0, 240)}`);
         } finally {
             try { bot.setControlState('forward', false); } catch { /* best-effort control cleanup */ }
+            try { bot.setControlState('sprint', false); } catch { /* best-effort control cleanup */ }
             try { bot.setControlState('jump', false); } catch { /* best-effort control cleanup */ }
         }
+    }
+    // An above-water bot may be several cells from a bank and therefore not
+    // drowning, but it still cannot begin a ground-only collection route.
+    // Swim directly toward a verified loaded shore before declaring the
+    // original ground-only goal stalled.
+    for (const candidate of candidates.filter(entry => entry.horizontalDistance > 1.5).slice(0, 2)) {
+        try {
+            bot.clearControlStates?.();
+            await bot.lookAt(new Vec3(
+                candidate.position.x + 0.5,
+                Math.max(candidate.position.y + 1.6, start.y + 1.8),
+                candidate.position.z + 0.5,
+            ), true);
+            bot.setControlState('forward', true);
+            bot.setControlState('sprint', true);
+            bot.setControlState('jump', true);
+            const exited = await waitForWorldCondition(bot, () => {
+                const position = bot.entity?.position?.floored?.();
+                if (!position) return false;
+                const currentFeet = bot.blockAt(position);
+                const support = bot.blockAt(position.offset(0, -1, 0));
+                return !isLiquidGameplayBlock(currentFeet) && isSafeGameplaySupport(support);
+            }, 5_000, 50);
+            if (exited && !bot.interrupt_code) {
+                bot.setControlState('jump', false);
+                await waitForWorldCondition(bot, () => {
+                    const current = bot.entity?.position;
+                    const position = current?.floored?.();
+                    if (!current || !position) return false;
+                    const currentFeet = bot.blockAt(position);
+                    const support = bot.blockAt(position.offset(0, -1, 0));
+                    return Math.hypot(current.x - start.x, current.z - start.z)
+                            >= SHALLOW_WATER_INLAND_DISTANCE
+                        && !isLiquidGameplayBlock(currentFeet)
+                        && isSafeGameplaySupport(support);
+                }, SHALLOW_WATER_INLAND_TIMEOUT_MS, 50);
+                return {
+                    success: true,
+                    strategy: 'direct_shore_swim',
+                    outcome: 'shore_reached',
+                    target: {
+                        x: candidate.position.x,
+                        y: candidate.position.y,
+                        z: candidate.position.z,
+                        support: candidate.support,
+                    },
+                    distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
+                };
+            }
+        } catch (error) {
+            if (bot.interrupt_code) break;
+            console.warn(`[movement] Direct shore swim failed: ${String(error?.message || error).slice(0, 240)}`);
+        } finally {
+            try { bot.setControlState('forward', false); } catch { /* best-effort swim cleanup */ }
+            try { bot.setControlState('sprint', false); } catch { /* best-effort swim cleanup */ }
+            try { bot.setControlState('jump', false); } catch { /* best-effort swim cleanup */ }
+        }
+        if (bot.interrupt_code) break;
     }
     return {
         success: false,
@@ -8590,22 +8765,26 @@ export async function goToGoal(bot, goal, options = {}) {
      * @param {pf.goals.Goal} goal, the goal to navigate to.
      * @param {object} options, optional movement policy factory and recovery controls.
      **/
-    const signal = options?.signal;
+    const signal = options?.signal || actionCancellationSignal();
     const aborted = () => signal?.aborted === true;
     const stopForAbort = () => {
         stopNavigationGoal(bot);
         try { bot.clearControlStates?.(); } catch { /* best-effort abort cleanup */ }
     };
-    if (aborted()) return false;
+    if (aborted() || remainingActionTimeMs() <= 0) return false;
     signal?.addEventListener?.('abort', stopForAbort, { once: true });
     const movementFactory = typeof options?.movements === 'function'
         ? options.movements
         : options?.movements
             ? () => options.movements
             : () => safeMovements(bot);
-    const navigationStallTimeoutMs = Math.max(
+    const requestedStallTimeoutMs = Math.max(
         NAVIGATION_STALL_TIMEOUT_MS,
         Math.min(30_000, Number(options?.stallTimeoutMs) || NAVIGATION_STALL_TIMEOUT_MS),
+    );
+    const navigationStallTimeoutMs = Math.max(
+        250,
+        Math.min(requestedStallTimeoutMs, remainingActionTimeMs(requestedStallTimeoutMs)),
     );
     bot.mindcraftManagedNavigationDepth = Math.max(
         0,
@@ -8993,7 +9172,95 @@ function prospectiveMiningStandingPositions(bot, targetBlock) {
     return positions;
 }
 
+function isStableMiningStagingCell(bot, feet) {
+    const standing = bot.blockAt(feet);
+    const head = bot.blockAt(feet.offset(0, 1, 0));
+    const support = bot.blockAt(feet.offset(0, -1, 0));
+    if (
+        !isCollectionStandingCellClear(standing)
+        || !isCollectionStandingCellClear(head)
+        || !isSafeGameplaySupport(support)
+        || isFallingGameplayBlock(support)
+    ) return false;
+
+    // Keep the staircase mouth one full cell away from liquid. Natural-fill
+    // safety deliberately rejects blocks beside water, so staging on the
+    // waterline can never produce a legal first stair.
+    for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+            for (const yOffset of [-1, 0]) {
+                if (isLiquidGameplayBlock(bot.blockAt(feet.offset(dx, yOffset, dz)))) return false;
+            }
+        }
+    }
+    return true;
+}
+
+function stableMiningStagingCandidates(bot) {
+    const origin = bot.entity?.position?.floored?.();
+    if (!origin) return [];
+    const candidates = [];
+    for (let radius = 0; radius <= MINING_STAGING_SCAN_RADIUS; radius += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+            for (let dz = -radius; dz <= radius; dz += 1) {
+                if (radius > 0 && Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+                for (const yOffset of [0, 1, -1, 2]) {
+                    const feet = origin.offset(dx, yOffset, dz);
+                    if (!isStableMiningStagingCell(bot, feet)) continue;
+                    candidates.push({
+                        position: feet,
+                        distance: bot.entity.position.distanceTo(feet),
+                    });
+                    break;
+                }
+            }
+        }
+        if (candidates.length >= MAX_MINING_STAGING_ATTEMPTS) break;
+    }
+    return candidates.sort((left, right) => left.distance - right.distance);
+}
+
+async function stageMiningStaircase(bot) {
+    const current = bot.entity?.position?.floored?.();
+    if (!current) return false;
+    if (isStableMiningStagingCell(bot, current)) return true;
+
+    const candidates = stableMiningStagingCandidates(bot);
+    for (const candidate of candidates.slice(0, MAX_MINING_STAGING_ATTEMPTS)) {
+        const reached = await goToGoal(
+            bot,
+            new pf.goals.GoalBlock(
+                candidate.position.x,
+                candidate.position.y,
+                candidate.position.z,
+            ),
+            {
+                movements: () => {
+                    const movements = safeMovements(bot);
+                    movements.canDig = false;
+                    movements.allow1by1towers = false;
+                    movements.allowParkour = false;
+                    return movements;
+                },
+                stallTimeoutMs: NAVIGATION_STALL_TIMEOUT_MS,
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        );
+        if (bot.interrupt_code) return false;
+        const standing = bot.entity?.position?.floored?.();
+        if (reached && standing && isStableMiningStagingCell(bot, standing)) {
+            log(bot, 'Reached stable dry ground before opening the mining staircase.');
+            return true;
+        }
+    }
+    return false;
+}
+
 async function carveMiningStaircase(bot, targetY) {
+    // The bot normally arrives here facing inland after shoreline recovery.
+    // Descend along that safe local heading first; the horizontal tunnel turns
+    // toward the concrete resource after reaching a stable mining level.
     const headings = orderedMiningHeadings(bot);
     let headingIndex = 0;
     let legs = 0;
@@ -9003,7 +9270,7 @@ async function carveMiningStaircase(bot, targetY) {
     );
     while (
         !bot.interrupt_code
-        && bot.entity.position.y > targetY + 6
+        && bot.entity.position.y > targetY + MINING_STAIR_TARGET_TOLERANCE
         && legs < maximumLegs
     ) {
         let advanced = false;
@@ -9025,9 +9292,9 @@ async function carveMiningStaircase(bot, targetY) {
                 new pf.goals.GoalNear(target.x, target.y, target.z, 1),
                 {
                     movements: () => miningMovements(bot),
-                    // Digging a two-block tunnel can legitimately spend several
-                    // seconds breaking the next face without changing position.
-                    stallTimeoutMs: 12_000,
+                    // Dig-target changes reset the shared progress watchdog, so
+                    // five silent seconds means this route is not mining.
+                    stallTimeoutMs: MINING_ROUTE_STALL_TIMEOUT_MS,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
                 },
@@ -9044,7 +9311,8 @@ async function carveMiningStaircase(bot, targetY) {
         if (!advanced) break;
     }
     return {
-        success: !bot.interrupt_code && bot.entity.position.y <= targetY + 6,
+        success: !bot.interrupt_code
+            && bot.entity.position.y <= targetY + MINING_STAIR_TARGET_TOLERANCE,
         legs,
         observedY: bot.entity.position.y,
     };
@@ -9189,6 +9457,51 @@ export async function mineSearchTunnel(
     )
         ? livePreferredTarget
         : nearestKnownMiningTarget(bot, requested);
+    if (
+        knownTarget
+        && bot.entity.position.y
+            > knownTarget.position.y + MINING_STAIR_TARGET_TOLERANCE
+    ) {
+        const staged = await stageMiningStaircase(bot);
+        if (!staged) {
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                outcome: bot.interrupt_code ? 'interrupted' : 'staging_unreachable',
+                target: {
+                    name: knownTarget.name,
+                    x: knownTarget.position.x,
+                    y: knownTarget.position.y,
+                    z: knownTarget.position.z,
+                },
+                routeDigging: true,
+                retryable: !bot.interrupt_code,
+            });
+            log(bot, bot.interrupt_code
+                ? 'Stopped before reaching a stable mining site.'
+                : `Could not reach stable dry ground for the known ${knownTarget.name} target.`);
+            return false;
+        }
+        const descent = await carveMiningStaircase(bot, knownTarget.position.y);
+        if (!descent.success) {
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                outcome: bot.interrupt_code ? 'interrupted' : 'descent_blocked',
+                target: {
+                    name: knownTarget.name,
+                    x: knownTarget.position.x,
+                    y: knownTarget.position.y,
+                    z: knownTarget.position.z,
+                },
+                observedY: descent.observedY,
+                routeDigging: true,
+                retryable: !bot.interrupt_code,
+            });
+            log(bot, bot.interrupt_code
+                ? 'Stopped the mining staircase.'
+                : `Could not descend to a safe mining level for the known ${knownTarget.name} target.`);
+            return false;
+        }
+    }
     const headings = orderedMiningHeadings(bot, requested, knownTarget);
     const tunnelHeadings = knownTarget
         ? headings.slice(0, 1)
@@ -9241,7 +9554,7 @@ export async function mineSearchTunnel(
                     movements: () => approachGoal
                         ? collectionApproachMovements(bot, knownTarget)
                         : miningMovements(bot),
-                    stallTimeoutMs: 12_000,
+                    stallTimeoutMs: MINING_ROUTE_STALL_TIMEOUT_MS,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
                 },
@@ -11788,7 +12101,11 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
         bot.setControlState('jump', true);
         const surfaced = await waitForWorldCondition(bot, () => {
             const head = bot.blockAt(bot.entity.position.offset(0, 1, 0));
-            return head && head.name !== 'water' && !bot.entity?.isInLava;
+            const oxygen = Number(bot.oxygenLevel);
+            return head
+                && head.name !== 'water'
+                && !bot.entity?.isInLava
+                && (!Number.isFinite(oxygen) || oxygen >= DROWNING_RECOVERY_OXYGEN);
         }, Math.max(1_000, Math.min(12_000, Number(timeoutMs) || 8_000)), 100);
         if (!surfaced) {
             setActionEvidence(bot, {

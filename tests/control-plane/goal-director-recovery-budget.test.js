@@ -91,6 +91,21 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.activeGoal.attempts, 2);
 
   director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([subgoal('recover', 1, 'acting')]),
+    attempts: 2,
+  });
+  director.handleResult('recover', {
+    actionId: 'failed-relocation',
+    phase: 'failed',
+    code: 'skill_path_stalled',
+    detail: 'The bounded relocation made no physical progress.',
+    retryable: true,
+  });
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.status.code, 'relocation_failed_replan');
+
+  director.activeGoal = normalizeGoalContract({
     ...boundaryGoal([{
       ...subgoal('plan', 1, 'acting'),
       targetName: 'raw_iron',
@@ -111,4 +126,23 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 0);
   assert.deepEqual(director.activeGoal.memory.failedTargets, []);
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([subgoal('plan', 1, 'acting')]),
+    memory: {
+      failedTargets: [{
+        kind: 'collect',
+        name: 'iron_ore',
+        position: { x: 4, y: 12, z: 8 },
+        code: 'skill_unreachable',
+        failures: 1,
+        firstFailedAt: Date.now(),
+        lastFailedAt: Date.now(),
+        avoidUntil: Date.now() + 90_000,
+      }],
+    },
+  });
+  assert.deepEqual(director.collectionExclusions(), [
+    { x: 4, y: 12, z: 8, radius: 4 },
+  ]);
 });

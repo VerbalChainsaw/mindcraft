@@ -424,6 +424,7 @@ export class Agent {
 
     async _setupEventHandlers(save_data, init_message) {
         const startupDialogue = { initMessage: null, greet: false };
+        const resumeTypedGoal = Boolean(this.goal_director?.activeGoal);
         const ignore_messages = [
             "Set own game mode to",
             "Set the time to",
@@ -481,10 +482,21 @@ export class Agent {
             if (init_message) {
                 this.history.add('system', init_message);
             }
-            await this.self_prompter.handleLoad(save_data.self_prompt, save_data.self_prompting_state);
+            // A persisted player goal is already a complete deterministic work
+            // contract. Keep any lower-priority saved self-prompt stopped until
+            // that contract reaches a truthful terminal state.
+            await this.self_prompter.handleLoad(
+                save_data.self_prompt,
+                resumeTypedGoal ? 0 : save_data.self_prompting_state,
+            );
         }
         if (save_data?.last_sender) {
             this.last_sender = save_data.last_sender;
+        }
+        if (resumeTypedGoal) {
+            console.log('[goal] Persisted typed goal will resume without model restoration.');
+        }
+        else if (save_data?.last_sender) {
             if (convoManager.otherAgentInGame(this.last_sender)) {
                 const msg_package = {
                     message: `You have restarted and this message is auto-generated. Continue the conversation with me.`,
