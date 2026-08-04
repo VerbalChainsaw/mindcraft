@@ -1380,6 +1380,7 @@ function createCollectionSearch(bot, scanRange, options = {}) {
         accessRecoveryAttempts: 0,
         accessRecoveries: 0,
         accessRecoveryTargets: [],
+        lastAccessRecoveryTarget: null,
         origin: origin
             ? { x: origin.x, y: origin.y, z: origin.z }
             : null,
@@ -1436,6 +1437,12 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
         const targetKey = `${candidate.position.x}:${candidate.position.y}:${candidate.position.z}`;
         attemptedTargets.add(targetKey);
         search.accessRecoveryTargets = [...attemptedTargets];
+        search.lastAccessRecoveryTarget = {
+            name: candidate.name,
+            x: candidate.position.x,
+            y: candidate.position.y,
+            z: candidate.position.z,
+        };
         search.accessRecoveryAttempts += 1;
         const start = bot.entity.position.clone();
         const startDistance = start.distanceTo(candidate.position);
@@ -4970,9 +4977,10 @@ export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=n
  * a log genuinely out of reach. Logs it cannot reach come back in `remaining`
  * for the caller's per-log path, so nothing is lost -- this is purely faster.
  */
-async function fellDiscoveredTree(bot, tree, woodTypes) {
+async function fellDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.POSITIVE_INFINITY) {
     const before = carriedLogCount(bot, woodTypes);
     const remaining = [];
+    let broken = 0;
     if (tree?.base) {
         // One navigation to the trunk instead of one per log.
         try { await goToPosition(bot, tree.base.x, tree.base.y, tree.base.z, 2); } catch { /* dig from wherever we landed */ }
@@ -4982,11 +4990,16 @@ async function fellDiscoveredTree(bot, tree, woodTypes) {
     const ordered = [...(tree?.logs || [])].sort((left, right) => left.position.y - right.position.y);
     for (const logBlock of ordered) {
         if (bot.interrupt_code) break;
+        if (broken >= maximumLogs) {
+            remaining.push(logBlock);
+            continue;
+        }
         const position = logBlock.position;
         const live = bot.blockAt(position);
         if (!live || !woodTypes.has(live.name)) continue; // already felled or changed
         const broke = await breakBlockAt(bot, position.x, position.y, position.z);
         if (!broke) remaining.push(logBlock);
+        else broken += 1;
     }
     try { await pickupNearbyItems(bot); } catch { /* drops get swept on the next pass */ }
     return { count: Math.max(0, carriedLogCount(bot, woodTypes) - before), remaining };
@@ -5018,7 +5031,11 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     let currentTreeFailures = 0;
     let completeTrees = 0;
 
-    while ((collected < target || treeQueue.length > 0) && !bot.interrupt_code) {
+    // `num` is the action's physical bound. Exact work-order collection used
+    // to keep draining the discovered tree queue after satisfying that bound,
+    // turning a one-log prerequisite into a whole-tree action that could time
+    // out after already making sufficient inventory progress.
+    while (collected < target && !bot.interrupt_code) {
         let nearest = null;
         while (treeQueue.length > 0 && !nearest) {
             const planned = treeQueue.shift();
@@ -5056,8 +5073,19 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                         treeQueue = tree.logs.map(block => block.position.clone());
                     } else {
                         // Fast path: fell the reachable trunk from one standing spot.
-                        const felled = await fellDiscoveredTree(bot, tree, woodTypes);
+                        const felled = await fellDiscoveredTree(
+                            bot,
+                            tree,
+                            woodTypes,
+                            Math.max(1, target - collected),
+                        );
                         collected += felled.count;
+                        if (collected >= target) {
+                            naturalTreeActive = false;
+                            treeQueue = [];
+                            nearest = null;
+                            continue;
+                        }
                         if (felled.count > 0 && felled.remaining.length === 0) {
                             // Whole tree down in place. Record it and move on to the
                             // next one rather than re-pathing to logs already gone.
@@ -5091,7 +5119,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                 setActionEvidence(bot, {
                     kind: 'collect',
                     outcome: candidates?.blocks.length > 0 ? 'unreachable' : 'resource_not_found',
-                    target: { name: 'wood' },
+                    target: search.lastAccessRecoveryTarget || { name: 'wood' },
                     count: 0,
                     search: collectionSearchEvidence(bot, search),
                     retryable: true,
