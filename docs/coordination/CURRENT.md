@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source commit: 1668fbd (pushed)
-Milestone: generic raw-iron acquisition through smelt, craft, and main-hand equip physically complete
+Functional source commit: a3d3427 (pushed)
+Milestone: native moving-target combat plus typed-goal interruption/resumption physically complete
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: primitive-first capability binding and V2-owned Pathfinder locomotion
-Live blocker: none for the completed iron-axe tranche; rare locomotion edge types remain unproven
-Last physical result: natural request completed iron axe; Paper verified inventory count 1 and SelectedItem iron_axe
-Next campaign: generalize only proven collect/craft/smelt/equip primitives; repair failed primitives before orchestration workarounds
-Jordan review: requested as C2J-20260804-1100-iron-axe-primitives
+Owned subsystem: package-first gameplay primitives, typed goal lifecycle, and deterministic resumption
+Live blocker: stale autonomous shield continuation consumed goal output; wood candidates can still time out at 30 seconds
+Last physical result: one reflex preemption, native husk defeat, resumed four-log goal complete; delayed Paper count was 1 after stale shield work consumed 3 logs
+Next campaign: repair stale goal-owned reporting/continuation, then rerun the same interrupted goal with immediate Paper verification
+Jordan review: requested as C2J-20260804-1245-interruption-native-pursuit
