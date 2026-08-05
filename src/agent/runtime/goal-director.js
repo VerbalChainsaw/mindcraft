@@ -658,6 +658,14 @@ export class GoalDirector {
     this.store.save(null, failed, null);
     this.setStatus('failed', code, detail, false);
     this.supersedeSubgoalFailureSpeech(failed);
+    // A failed player-owned goal returns control to the player, not to the
+    // autonomous agenda. Persist the existing operator-hold gate before the
+    // next arbiter tick can select old or newly generated background work.
+    // The next explicit player command releases this hold through the normal
+    // command/directive path.
+    if (failed.source === 'player') {
+      this.agent.holdPosition?.('Player goal failed; awaiting explicit player direction.');
+    }
     this.agent.publishBehaviorEvent?.({
       type: 'goal.changed',
       target: { name: failed.target.family || failed.target.canonicalName },

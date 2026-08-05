@@ -25,6 +25,7 @@ function createDirector() {
     isOperatorHeld: () => false,
     self_prompter: { isStopped: () => true },
     job_director: { activeOrder: null },
+    holdPosition(reason) { this.operator_hold_reason = reason; },
     publishBehaviorEvent() {},
     openChat() {},
   };
@@ -79,6 +80,7 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.dispatch('recover', '!moveAway(4)'), false);
   assert.equal(director.lastGoal.phase, 'failed');
   assert.equal(director.lastGoal.evidence.code, 'subgoal_budget_exhausted');
+  assert.equal(director.agent.operator_hold_reason, 'Player goal failed; awaiting explicit player direction.');
 
   director.activeGoal = boundaryGoal([subgoal('plan', 1, 'acting')]);
   assert.equal(director.cancel('Operator Stop.'), true);

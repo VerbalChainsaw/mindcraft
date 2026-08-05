@@ -2230,7 +2230,43 @@ export function selectMiningRouteTool(
     })[0];
 }
 
-async function equipBestToolForBlock(bot, block, options = {}) {
+/**
+ * Prefer an empty hand or a non-wearing inventory item when it breaks a block
+ * just as quickly as every carried tool. mineflayer-tool intentionally keeps
+ * an already-held item on equal dig time, which can make a pickaxe mine sand
+ * or dirt even though that gains no speed and needlessly spends durability.
+ *
+ * Return null when a carried item is materially faster so the native tool
+ * plugin still owns ordinary tool selection.
+ */
+export function selectNonWearingBlockTool(bot, block) {
+    let harvestableByHand = false;
+    try { harvestableByHand = block?.canHarvest?.(null) === true; } catch { /* native selector owns unknown blocks */ }
+    if (!harvestableByHand || typeof bot?.tool?.getDigTime !== 'function') return null;
+
+    const inventoryItems = bot.inventory.items();
+    const digTime = item => {
+        try { return Number(bot.tool.getDigTime(block, item)); } catch { return Number.POSITIVE_INFINITY; }
+    };
+    const bareHandTime = digTime(undefined);
+    const fastestCarriedTime = inventoryItems.reduce(
+        (fastest, item) => Math.min(fastest, digTime(item)),
+        Number.POSITIVE_INFINITY,
+    );
+    if (!Number.isFinite(bareHandTime) || fastestCarriedTime < bareHandTime) return null;
+
+    if (bot.inventory.emptySlotCount() > 0) {
+        return { kind: 'empty_hand', item: null, digTime: bareHandTime };
+    }
+    const item = inventoryItems
+        .filter(candidate => toolDurability(bot, candidate).max === Infinity)
+        .sort((left, right) => digTime(left) - digTime(right) || left.slot - right.slot)[0] || null;
+    return item && digTime(item) <= bareHandTime
+        ? { kind: 'item', item, digTime: digTime(item) }
+        : null;
+}
+
+export async function equipBestToolForBlock(bot, block, options = {}) {
     const family = toolFamilyForBlock(block);
     const routeTool = options?.preserveTargetToolFor
         ? selectMiningRouteTool(bot, block, options.preserveTargetToolFor)
@@ -2241,6 +2277,15 @@ async function equipBestToolForBlock(bot, block, options = {}) {
     if (preferred && block.canHarvest(preferred.type)) {
         await bot.equip(preferred, 'hand');
         return preferred;
+    }
+    const nonWearing = selectNonWearingBlockTool(bot, block);
+    if (nonWearing?.kind === 'empty_hand') {
+        await bot.unequip('hand');
+        return null;
+    }
+    if (nonWearing?.item) {
+        await bot.equip(nonWearing.item, 'hand');
+        return nonWearing.item;
     }
     await bot.tool.equipForBlock(block);
     if (family && bot.heldItem?.name?.endsWith(`_${family}`)) {
@@ -8331,13 +8376,19 @@ function deliveryDropStances(bot, player) {
 
 async function reachDeliveryDropStance(bot, player) {
     for (let replan = 0; replan < 2 && !bot.interrupt_code; replan += 1) {
-        if (deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) return true;
-        const stances = deliveryDropStances(bot, player);
-        if (stances.length === 0) return false;
-        const routed = await goToGoal(bot, new pf.goals.GoalCompositeAny(
-            stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
-        ));
-        if (!routed) return false;
+        if (!deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) {
+            const stances = deliveryDropStances(bot, player);
+            if (stances.length === 0) return false;
+            const routed = await goToGoal(bot, new pf.goals.GoalCompositeAny(
+                stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+            ));
+            if (!routed) return false;
+        }
+        if (!deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) continue;
+        // Aim through the recipient's pickup volume, not at their feet. A
+        // downward inventory toss can land back inside the thrower's pickup
+        // radius even from an otherwise exclusive cardinal stance.
+        await bot.lookAt(player.position.offset(0, 1, 0));
         if (deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) return true;
     }
     return false;
@@ -8504,7 +8555,6 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     bot._client?.on?.('collect', onCollectPacket);
     try {
         while (deliveryAttempts < MAX_DELIVERY_DROP_ATTEMPTS && !bot.interrupt_code) {
-            deliveryAttempts += 1;
             droppedEntityId = null;
             reclaimed = false;
             resolution = resolvePhysicalPlayer(bot, username);
@@ -8515,15 +8565,14 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
                 return false;
             }
 
-            if (deliveryAttempts > 1) {
-                if (!await reachDeliveryDropStance(bot, player)) return false;
-                resolution = resolvePhysicalPlayer(bot, username);
-                target = playerTargetEvidence(resolution);
-                player = resolution.entity;
-                if (!player) return false;
-            }
-
-            await bot.lookAt(player.position);
+            // Re-bind the moving recipient before every physical drop. Stance
+            // recovery is not a drop attempt and cannot consume that budget.
+            if (!await reachDeliveryDropStance(bot, player)) return false;
+            resolution = resolvePhysicalPlayer(bot, username);
+            target = playerTargetEvidence(resolution);
+            player = resolution.entity;
+            if (!player || !deliveryDropStanceIsExclusive(bot.entity.position, player.position)) return false;
+            deliveryAttempts += 1;
             const inventoryBeforeDrop = inventoryCount(bot, itemType);
             if (!await discard(bot, itemType, transferCount)) return false;
             if (droppedEntityId === null) {

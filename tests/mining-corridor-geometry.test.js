@@ -4,6 +4,7 @@ import test from 'node:test';
 import { Vec3 } from 'vec3';
 
 import {
+    equipBestToolForBlock,
     selectMiningDeadlinePrefix,
     selectMiningRouteTool,
 } from '../src/agent/library/skills.js';
@@ -53,6 +54,49 @@ test('corridor binding preserves the ore-tier pick when a capable stone pick is 
         selectMiningRouteTool(bot, corridorStone, redstoneOre),
         stonePick,
     );
+});
+
+test('ordinary hand-harvestable blocks do not consume a tied durable tool', async () => {
+    const ironPick = {
+        name: 'iron_pickaxe',
+        type: 1,
+        slot: 10,
+        maxDurability: 250,
+        durabilityUsed: 12,
+    };
+    const dirt = { name: 'dirt', type: 2, slot: 11 };
+    const equipped = [];
+    let nativeSelections = 0;
+    const bot = {
+        inventory: {
+            items: () => [ironPick, dirt],
+            emptySlotCount: () => 0,
+        },
+        registry: { items: {}, itemsByName: {} },
+        tool: {
+            getDigTime: () => 10,
+            equipForBlock: () => {
+                nativeSelections += 1;
+                return Promise.resolve();
+            },
+        },
+        equip: item => {
+            equipped.push(item);
+            return Promise.resolve();
+        },
+        unequip: () => {
+            equipped.push(null);
+            return Promise.resolve();
+        },
+    };
+    const sand = {
+        name: 'sand',
+        canHarvest: () => true,
+    };
+
+    assert.equal(await equipBestToolForBlock(bot, sand), dirt);
+    assert.deepEqual(equipped, [dirt]);
+    assert.equal(nativeSelections, 0);
 });
 
 test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {
