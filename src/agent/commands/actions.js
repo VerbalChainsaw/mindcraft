@@ -657,7 +657,10 @@ export const actionsList = [
                 num,
                 agent.goal_director?.collectionExclusions?.() || null,
                 64,
-                { relocate: true },
+                {
+                    relocate: true,
+                    preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
+                },
             );
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
@@ -695,7 +698,10 @@ export const actionsList = [
                 num,
                 agent.goal_director?.collectionExclusions?.() || null,
                 range,
-                { relocate: false },
+                {
+                    relocate: false,
+                    preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
+                },
             );
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },

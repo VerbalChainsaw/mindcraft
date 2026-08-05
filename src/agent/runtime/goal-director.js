@@ -88,6 +88,28 @@ function verifiedMiningRouteProgress(kind, skill) {
   );
 }
 
+function collectionSourceMatches(requestedName, targetName) {
+  const normalized = value => String(value || '').trim().toLowerCase();
+  const base = value => normalized(value).replace(/^deepslate_/, '');
+  const requested = normalized(requestedName);
+  const target = normalized(targetName);
+  return Boolean(requested && target && (
+    requested === target
+    || base(requested) === base(target)
+  ));
+}
+
+function concreteCollectionTargetsMatch(left, right) {
+  if (!left || !right || !collectionSourceMatches(left.name, right.name)) return false;
+  const leftPosition = left.position || left;
+  const rightPosition = right.position || right;
+  return ['x', 'y', 'z'].every(axis => (
+    Number.isFinite(leftPosition?.[axis])
+    && Number.isFinite(rightPosition?.[axis])
+    && Math.floor(leftPosition[axis]) === Math.floor(rightPosition[axis])
+  ));
+}
+
 class GoalStateStore {
   constructor(agentName, { root = './bots' } = {}) {
     if (!SAFE_AGENT_NAME.test(String(agentName || ''))) {
@@ -802,13 +824,26 @@ export class GoalDirector {
 
   rememberToolRequirement(result) {
     if (!this.activeGoal || result?.phase === 'succeeded') return this.activeGoal;
-    const requirement = actionResultEvidence(result)?.toolRequirement;
+    const skill = actionResultEvidence(result);
+    const requirement = skill?.toolRequirement;
     const name = boundedText(requirement?.name, 80);
     const minimumUsableDurability = Math.max(
       1,
       Math.min(10_000, Math.floor(Number(requirement?.minimumUsableDurability) || 0)),
     );
     if (!name || !/^[a-z0-9_]+$/.test(name)) return this.activeGoal;
+    const exactTarget = skill?.target
+      && skill.target.name
+      && [skill.target.x, skill.target.y, skill.target.z].every(Number.isFinite)
+      ? {
+          name: boundedText(skill.target.name, 80),
+          position: {
+            x: Math.floor(skill.target.x),
+            y: Math.floor(skill.target.y),
+            z: Math.floor(skill.target.z),
+          },
+        }
+      : null;
     return this.persist({
       ...this.activeGoal,
       memory: {
@@ -817,7 +852,18 @@ export class GoalDirector {
           name,
           minimumUsableDurability,
           observedAt: this.now(),
+          target: exactTarget,
         },
+        ...(exactTarget ? {
+          activeCollectionTarget: {
+            ...exactTarget,
+            remainingRouteLowerBound: Math.max(
+              0,
+              Math.floor(Number(skill?.boundary?.remainingRouteLowerBound) || 0),
+            ),
+            observedAt: this.now(),
+          },
+        } : {}),
       },
       updatedAt: this.now(),
     });
@@ -842,6 +888,84 @@ export class GoalDirector {
       },
       updatedAt: this.now(),
     });
+  }
+
+  rememberOperationalProgress(result, miningRouteProgress = false) {
+    if (!this.activeGoal) return this.activeGoal;
+    const skill = actionResultEvidence(result);
+    const memory = this.activeGoal.memory || {};
+    const activeTarget = memory.activeCollectionTarget || null;
+    const exactTarget = skill?.target
+      && skill.target.name
+      && [skill.target.x, skill.target.y, skill.target.z].every(Number.isFinite)
+      ? {
+          name: boundedText(skill.target.name, 80),
+          position: {
+            x: Math.floor(skill.target.x),
+            y: Math.floor(skill.target.y),
+            z: Math.floor(skill.target.z),
+          },
+        }
+      : null;
+    let nextActiveTarget = activeTarget;
+    let nextToolRequirement = memory.toolRequirement || null;
+
+    if (miningRouteProgress && exactTarget) {
+      const advancesActiveTarget = !activeTarget
+        || concreteCollectionTargetsMatch(exactTarget, activeTarget);
+      if (advancesActiveTarget) {
+        nextActiveTarget = {
+          ...exactTarget,
+          remainingRouteLowerBound: Math.max(
+            0,
+            Math.floor(Number(skill?.boundary?.remainingRouteLowerBound) || 0),
+          ),
+          observedAt: this.now(),
+        };
+      }
+      const paysToolRequirement = !nextToolRequirement?.target
+        || concreteCollectionTargetsMatch(exactTarget, nextToolRequirement.target);
+      if (paysToolRequirement) {
+        // Only progress on the source that raised the requirement pays it.
+        // A nested iron or wood acquisition may use a different tool without
+        // satisfying the retained redstone/diamond target's causal preflight.
+        nextToolRequirement = null;
+      }
+    } else if (
+      activeTarget
+      && collectionSourceMatches(skill?.target?.name, activeTarget.name)
+      && !skill?.toolRequirement
+      && !skill?.workstationRequirement
+      && ['collect', 'mining_search'].includes(String(skill?.kind || ''))
+    ) {
+      // A terminal result about the retained source either collected it or
+      // invalidated it. Do not carry that coordinate into another strategy.
+      nextActiveTarget = null;
+      if (
+        nextToolRequirement?.target
+        && concreteCollectionTargetsMatch(activeTarget, nextToolRequirement.target)
+      ) nextToolRequirement = null;
+    }
+
+    if (
+      nextActiveTarget === activeTarget
+      && nextToolRequirement === memory.toolRequirement
+    ) return this.activeGoal;
+    return this.persist({
+      ...this.activeGoal,
+      memory: {
+        ...memory,
+        activeCollectionTarget: nextActiveTarget,
+        toolRequirement: nextToolRequirement,
+      },
+      updatedAt: this.now(),
+    });
+  }
+
+  collectionPreferredTarget(requestedName) {
+    const target = this.activeGoal?.memory?.activeCollectionTarget;
+    if (!target || !collectionSourceMatches(requestedName, target.name)) return null;
+    return { ...target.position };
   }
 
   collectionExclusions() {
@@ -937,6 +1061,7 @@ export class GoalDirector {
       };
     }
     this.finishLatestSubgoal(effectiveResult);
+    this.rememberOperationalProgress(effectiveResult, miningRouteProgress);
     this.rememberToolRequirement(effectiveResult);
     this.rememberWorkstationRequirement(effectiveResult);
     // A bounded multi-item action may make verified material progress before

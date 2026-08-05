@@ -92,6 +92,43 @@ function nearbyRecipeBot() {
   };
 }
 
+function remoteTableRecipeBot() {
+  const items = {
+    1: { id: 1, name: 'test_machine' },
+    2: { id: 2, name: 'test_gem' },
+    3: { id: 3, name: 'crafting_table' },
+    4: { id: 4, name: 'oak_planks' },
+    5: { id: 5, name: 'oak_log' },
+  };
+  const blocks = {
+    10: { id: 10, name: 'test_gem_ore', diggable: true, drops: [2], harvestTools: {} },
+    11: { id: 11, name: 'oak_log', diggable: true, drops: [5], harvestTools: {} },
+    12: { id: 12, name: 'crafting_table', diggable: true, drops: [3], harvestTools: {} },
+  };
+  return {
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    inventory: { slots: [], items: () => [] },
+    findBlock() { return null; },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks,
+      blocksByName: Object.fromEntries(Object.values(blocks).map(block => [block.name, block])),
+      recipes: {
+        1: [{
+          ingredients: Array.from({ length: 5 }, () => ({ id: 2, count: 1 })),
+          result: { id: 1, count: 1 },
+        }],
+        3: [{
+          inShape: [[{ id: 4, count: 1 }, { id: 4, count: 1 }], [{ id: 4, count: 1 }, { id: 4, count: 1 }]],
+          result: { id: 3, count: 1 },
+        }],
+        4: [{ ingredients: [{ id: 5, count: 1 }], result: { id: 4, count: 4 } }],
+      },
+    },
+  };
+}
+
 test('Perception classifies closing motion and prioritizes visible approaching explosive threats', () => {
   const bot = {
     entity: {
@@ -204,6 +241,32 @@ test('The causal planner prefers the nearest physical source behind equivalent r
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64)');
+});
+
+test('The causal planner acquires remote recipe ingredients before provisioning the final workstation', () => {
+  const plan = buildPrerequisitePlan(remoteTableRecipeBot(), {
+    target: 'test_machine',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'collect_block');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("test_gem_ore", 5, 64)');
+
+  const staged = remoteTableRecipeBot();
+  staged.inventory.items = () => [{ name: 'test_gem', type: 2, count: 5 }];
+  staged.findBlock = ({ matching }) => matching === 12
+    ? { name: 'crafting_table', position: { x: 6, y: 64, z: 0 } }
+    : null;
+  const readyToCraft = buildPrerequisitePlan(staged, {
+    target: 'test_machine',
+    quantity: 1,
+    range: 64,
+  });
+  assert.equal(readyToCraft.status, 'ready');
+  assert.equal(readyToCraft.nextStep.capability.id, 'craft');
+  assert.equal(readyToCraft.nextStep.capability.binding.command, '!craftRecipe("test_machine", 1)');
 });
 
 test('The causal planner keeps a hand-equipment completion open until Minecraft reports the item equipped', () => {

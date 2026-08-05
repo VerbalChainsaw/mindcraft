@@ -165,6 +165,14 @@ test('recovery history does not spend the productive-step ceiling, which still f
       targetInventoryBefore: 1,
     }]),
     attempts: 2,
+    memory: {
+      failedTargets: [],
+      toolRequirement: {
+        name: 'wooden_pickaxe',
+        minimumUsableDurability: 17,
+        observedAt: Date.now(),
+      },
+    },
   });
   director.handleResult('plan', {
     actionId: 'verified-corridor-prefix',
@@ -184,6 +192,7 @@ test('recovery history does not spend the productive-step ceiling, which still f
         routeSteps: 7,
         routeDigging: true,
         returnable: true,
+        boundary: { remainingRouteLowerBound: 19 },
       },
     },
   });
@@ -192,6 +201,100 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
   assert.equal(director.activeGoal.evidence.phase, 'succeeded');
   assert.deepEqual(director.activeGoal.memory.failedTargets, []);
+  assert.deepEqual(director.activeGoal.memory.activeCollectionTarget, {
+    name: 'iron_ore',
+    position: { x: 4, y: 12, z: 8 },
+    remainingRouteLowerBound: 19,
+    observedAt: director.activeGoal.memory.activeCollectionTarget.observedAt,
+  });
+  assert.equal(director.activeGoal.memory.toolRequirement, null);
+  assert.deepEqual(director.collectionPreferredTarget('deepslate_iron_ore'), {
+    x: 4,
+    y: 12,
+    z: 8,
+  });
+
+  const redstoneTarget = {
+    name: 'redstone_ore',
+    position: { x: 40, y: -22, z: 18 },
+  };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([{
+      ...subgoal('plan', 1, 'acting'),
+      targetName: 'raw_iron',
+      expectedIncrease: 2,
+      targetInventoryBefore: 1,
+    }]),
+    memory: {
+      failedTargets: [],
+      toolRequirement: {
+        name: 'iron_pickaxe',
+        minimumUsableDurability: 37,
+        observedAt: Date.now(),
+        target: redstoneTarget,
+      },
+      activeCollectionTarget: {
+        ...redstoneTarget,
+        remainingRouteLowerBound: 24,
+        observedAt: Date.now(),
+      },
+    },
+  });
+  director.handleResult('plan', {
+    actionId: 'nested-iron-corridor-prefix',
+    phase: 'failed',
+    code: 'skill_search_advanced',
+    detail: 'Advanced toward prerequisite iron while replacing the redstone tool.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'mining_search',
+        outcome: 'search_advanced',
+        target: { name: 'iron_ore', x: 7, y: 8, z: 9 },
+        distance: 1,
+        routeSteps: 5,
+        routeDigging: true,
+        returnable: true,
+        boundary: { remainingRouteLowerBound: 6 },
+      },
+    },
+  });
+  assert.equal(director.activeGoal.memory.toolRequirement.name, 'iron_pickaxe');
+  assert.deepEqual(director.activeGoal.memory.toolRequirement.target, redstoneTarget);
+  assert.deepEqual(director.activeGoal.memory.activeCollectionTarget.position, redstoneTarget.position);
+  assert.deepEqual(director.collectionPreferredTarget('redstone_ore'), redstoneTarget.position);
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([{
+      ...subgoal('plan', 1, 'acting'),
+      targetName: 'redstone',
+      expectedIncrease: 1,
+      targetInventoryBefore: 0,
+    }]),
+    memory: director.activeGoal.memory,
+  });
+  director.handleResult('plan', {
+    actionId: 'causal-redstone-corridor-prefix',
+    phase: 'failed',
+    code: 'skill_search_advanced',
+    detail: 'The replacement tool admitted the retained redstone corridor.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'mining_search',
+        outcome: 'search_advanced',
+        target: { name: 'deepslate_redstone_ore', x: 40, y: -22, z: 18 },
+        observedPosition: { x: 35, y: -12, z: 18 },
+        distance: 1,
+        routeSteps: 5,
+        routeDigging: true,
+        returnable: true,
+        boundary: { remainingRouteLowerBound: 19 },
+      },
+    },
+  });
+  assert.equal(director.activeGoal.memory.toolRequirement, null);
+  assert.equal(director.activeGoal.memory.activeCollectionTarget.remainingRouteLowerBound, 19);
 
   director.activeGoal = normalizeGoalContract({
     ...boundaryGoal([{

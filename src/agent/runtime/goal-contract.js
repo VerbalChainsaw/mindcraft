@@ -362,6 +362,23 @@ function normalizeToolRequirement(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const name = canonicalName(raw.name);
   if (!name) return null;
+  const targetPosition = raw.target?.position && typeof raw.target.position === 'object'
+    ? raw.target.position
+    : raw.target;
+  const targetName = canonicalName(raw.target?.name);
+  const targetCoordinates = targetPosition
+    ? ['x', 'y', 'z'].map(axis => Number(targetPosition[axis]))
+    : [];
+  const target = targetName && targetCoordinates.every(Number.isFinite)
+    ? Object.freeze({
+        name: targetName,
+        position: Object.freeze({
+          x: Math.floor(targetCoordinates[0]),
+          y: Math.floor(targetCoordinates[1]),
+          z: Math.floor(targetCoordinates[2]),
+        }),
+      })
+    : null;
   return Object.freeze({
     name,
     minimumUsableDurability: finiteInteger(
@@ -371,6 +388,7 @@ function normalizeToolRequirement(raw) {
       10_000,
     ),
     observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+    target,
   });
 }
 
@@ -381,6 +399,36 @@ function normalizeWorkstationRequirement(raw) {
   return Object.freeze({
     name,
     carried: raw.carried === true,
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
+function normalizeActiveCollectionTarget(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const name = canonicalName(raw.name);
+  const position = raw.position && typeof raw.position === 'object'
+    ? {
+        x: Number(raw.position.x),
+        y: Number(raw.position.y),
+        z: Number(raw.position.z),
+      }
+    : null;
+  if (!name || !position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+    return null;
+  }
+  return Object.freeze({
+    name,
+    position: Object.freeze({
+      x: Math.floor(position.x),
+      y: Math.floor(position.y),
+      z: Math.floor(position.z),
+    }),
+    remainingRouteLowerBound: finiteInteger(
+      raw.remainingRouteLowerBound,
+      0,
+      0,
+      10_000,
+    ),
     observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
   });
 }
@@ -397,6 +445,7 @@ function normalizeOperationalMemory(raw) {
     failedTargets: Object.freeze(failedTargets),
     toolRequirement: normalizeToolRequirement(source.toolRequirement),
     workstationRequirement: normalizeWorkstationRequirement(source.workstationRequirement),
+    activeCollectionTarget: normalizeActiveCollectionTarget(source.activeCollectionTarget),
   });
 }
 

@@ -125,6 +125,8 @@ const MIN_COLLECTION_RESCAN_PROGRESS = 4;
 const MAX_COLLECTION_TARGET_FAILURES = 1;
 const MAX_COLLECTION_ACCESS_RECOVERIES = 2;
 const COLLECTION_ACCESS_PROGRESS_DISTANCE = 1;
+const MINING_COLLECTION_SLOT_RESERVE = 3;
+const MAX_COLLECTION_SLOT_RELEASE_ACTIONS = 4;
 const MINING_TUNNEL_LENGTH = 12;
 const MAX_MINING_ROUTE_HEADINGS = 3;
 const MINING_ROUTE_STALL_TIMEOUT_MS = 5_000;
@@ -139,6 +141,7 @@ const MAX_MINING_PROGRESS_ROUTE_STEPS = 12;
 const MAX_MINING_PROGRESS_VERTICAL = 6;
 const MIN_MINING_PROGRESS_STEPS = 2;
 const MAX_MINING_PROGRESS_STANCES = 12;
+const MAX_MINING_TRANCHE_BREAKS_PER_STEP = 3;
 const MAX_MINING_FALLING_COLUMN = 3;
 const FALLING_BLOCK_SETTLE_MS = 250;
 const MIN_SURFACE_ROUTE_PROGRESS = 2;
@@ -365,6 +368,49 @@ function inventoryCount(bot, itemName) {
     return Number.isFinite(count) ? count : 0;
 }
 
+export function selectSmeltingFuelPlan(items, requiredSmelts) {
+    const required = Math.max(0, Number(requiredSmelts) || 0);
+    let remaining = required;
+    const entries = [];
+    const candidates = (Array.isArray(items) ? items : [])
+        .map(item => ({
+            item,
+            output: mc.getFuelSmeltOutput(item?.name || ''),
+            count: Math.max(0, Math.floor(Number(item?.count) || 0)),
+        }))
+        .filter(candidate => (
+            candidate.item
+            && Number.isInteger(candidate.item.type)
+            && candidate.output > 0
+            && candidate.count > 0
+        ))
+        .sort((left, right) => (
+            right.output - left.output
+            || left.item.name.localeCompare(right.item.name)
+            || (left.item.slot || 0) - (right.item.slot || 0)
+        ));
+    for (const candidate of candidates) {
+        if (remaining <= 0) break;
+        const count = Math.min(
+            candidate.count,
+            Math.max(1, Math.ceil(remaining / candidate.output)),
+        );
+        entries.push({
+            name: candidate.item.name,
+            type: candidate.item.type,
+            count,
+            outputPerItem: candidate.output,
+        });
+        remaining -= count * candidate.output;
+    }
+    return {
+        ok: remaining <= 0,
+        requiredSmelts: required,
+        availableSmelts: Math.max(0, required - Math.max(0, remaining)),
+        entries,
+    };
+}
+
 function safeFoodPoints(bot) {
     const foods = bot.registry?.foodsByName || {};
     return bot.inventory.items().reduce((total, item) => {
@@ -498,6 +544,7 @@ async function placeLocalWorkstation(bot, itemName, range = 8) {
             return {
                 ok: true,
                 outcome: 'workstation_placed',
+                itemName,
                 block,
                 position,
                 inventoryBeforePlacement,
@@ -537,37 +584,56 @@ function directlyUsableWorkstation(bot, block, range = 4.5) {
     }
 }
 
-async function recoverLocalCraftingTable(bot, temporaryTable) {
-    const { position, inventoryBeforePlacement } = temporaryTable;
-    const target = { name: 'crafting_table', x: position.x, y: position.y, z: position.z };
-    if (inventoryCount(bot, 'crafting_table') >= inventoryBeforePlacement) {
+async function recoverLocalWorkstation(bot, temporaryWorkstation) {
+    const {
+        position,
+        inventoryBeforePlacement,
+        itemName = 'crafting_table',
+    } = temporaryWorkstation;
+    const target = { name: itemName, x: position.x, y: position.y, z: position.z };
+    if (inventoryCount(bot, itemName) >= inventoryBeforePlacement) {
         return { outcome: 'already_recovered', target, retryable: false };
     }
 
-    const placedTable = bot.blockAt(position);
-    if (placedTable?.name === 'crafting_table') {
-        const distance = bot.entity.position.distanceTo(placedTable.position);
+    const placedWorkstation = bot.blockAt(position);
+    if (placedWorkstation?.name === itemName) {
+        const distance = bot.entity.position.distanceTo(placedWorkstation.position);
         if (distance > 4.5) {
-            return { outcome: 'table_left_in_world', target, distance, retryable: true };
+            return { outcome: 'workstation_left_in_world', target, distance, retryable: true };
         }
         try {
-            await bot.dig(placedTable);
+            // The placement receipt is the authorization boundary. Generic
+            // protection remains locked for every other block and coordinate.
+            if (bot.interrupt_code || actionCancellationSignal()?.aborted) {
+                return { outcome: 'recovery_interrupted', target, retryable: false };
+            }
+            await equipBestToolForBlock(bot, placedWorkstation);
+            const cleanupTimeoutMs = Math.min(
+                COLLECTION_OPERATION_TIMEOUT_MS,
+                Math.max(5_000, collectionBreakTime(bot, placedWorkstation) + 1_000),
+            );
+            await runBoundedCollectionOperation(
+                bot,
+                () => bot.dig(placedWorkstation),
+                () => bot.stopDigging?.(),
+                cleanupTimeoutMs,
+            );
         } catch (error) {
             return {
-                outcome: 'table_cleanup_blocked',
+                outcome: 'workstation_cleanup_blocked',
                 target,
                 error: String(error?.message || error).slice(0, 240),
                 retryable: true,
             };
         }
-        if (bot.blockAt(position)?.name === 'crafting_table') {
-            return { outcome: 'table_not_broken', target, retryable: true };
+        if (bot.blockAt(position)?.name === itemName) {
+            return { outcome: 'workstation_not_broken', target, retryable: true };
         }
     }
 
     if (await waitForInventoryCount(
         bot,
-        'crafting_table',
+        itemName,
         inventoryBeforePlacement,
         INVENTORY_POLL_MS * 2,
     )) {
@@ -578,32 +644,32 @@ async function recoverLocalCraftingTable(bot, temporaryTable) {
     }
 
     const dropDeadline = Date.now() + TABLE_DROP_APPEAR_TIMEOUT_MS;
-    let droppedTable = null;
-    while (!droppedTable && Date.now() < dropDeadline && !bot.interrupt_code) {
-        droppedTable = findDroppedItemNear(bot, 'crafting_table', position);
-        if (!droppedTable) {
+    let droppedWorkstation = null;
+    while (!droppedWorkstation && Date.now() < dropDeadline && !bot.interrupt_code) {
+        droppedWorkstation = findDroppedItemNear(bot, itemName, position);
+        if (!droppedWorkstation) {
             await interruptibleDelay(bot, INVENTORY_POLL_MS);
         }
     }
-    if (!droppedTable) {
+    if (!droppedWorkstation) {
         return {
-            outcome: bot.interrupt_code ? 'recovery_interrupted' : 'table_drop_unobserved',
+            outcome: bot.interrupt_code ? 'recovery_interrupted' : 'workstation_drop_unobserved',
             target,
             retryable: !bot.interrupt_code,
         };
     }
 
-    const reached = await approachDroppedItem(bot, droppedTable, TABLE_PICKUP_TIMEOUT_MS);
+    const reached = await approachDroppedItem(bot, droppedWorkstation, TABLE_PICKUP_TIMEOUT_MS);
     if (!reached) {
         return {
-            outcome: bot.interrupt_code ? 'recovery_interrupted' : 'table_drop_unreachable',
-            target: { ...target, entityId: droppedTable.id },
+            outcome: bot.interrupt_code ? 'recovery_interrupted' : 'workstation_drop_unreachable',
+            target: { ...target, entityId: droppedWorkstation.id },
             retryable: !bot.interrupt_code,
         };
     }
     const recovered = await waitForInventoryCount(
         bot,
-        'crafting_table',
+        itemName,
         inventoryBeforePlacement,
         TABLE_PICKUP_TIMEOUT_MS,
     );
@@ -612,8 +678,8 @@ async function recoverLocalCraftingTable(bot, temporaryTable) {
             ? 'recovered'
             : bot.interrupt_code
                 ? 'recovery_interrupted'
-                : 'table_drop_not_collected',
-        target: { ...target, entityId: droppedTable.id },
+                : 'workstation_drop_not_collected',
+        target: { ...target, entityId: droppedWorkstation.id },
         retryable: !recovered && !bot.interrupt_code,
     };
 }
@@ -1881,34 +1947,23 @@ export async function craftRecipe(bot, itemName, num=1) {
     } finally {
         if (temporaryTable) {
             let cleanup;
-            const target = {
-                name: 'crafting_table',
-                x: temporaryTable.position.x,
-                y: temporaryTable.position.y,
-                z: temporaryTable.position.z,
-            };
-            if (bot.blockAt(temporaryTable.position)?.name === 'crafting_table') {
+            try {
+                cleanup = await recoverLocalWorkstation(bot, temporaryTable);
+            } catch (error) {
                 cleanup = {
-                    outcome: 'retained_as_workstation',
-                    target,
-                    retryable: false,
+                    outcome: 'workstation_cleanup_failed',
+                    target: {
+                        name: 'crafting_table',
+                        x: temporaryTable.position.x,
+                        y: temporaryTable.position.y,
+                        z: temporaryTable.position.z,
+                    },
+                    error: String(error?.message || error).slice(0, 240),
+                    retryable: true,
                 };
-                log(bot, `Retained crafting_table at (${target.x}, ${target.y}, ${target.z}) for later crafting steps.`);
-            } else {
-                try {
-                    cleanup = await recoverLocalCraftingTable(bot, temporaryTable);
-                } catch (error) {
-                    cleanup = {
-                        outcome: 'table_cleanup_failed',
-                        target,
-                        error: String(error?.message || error).slice(0, 240),
-                        retryable: true,
-                    };
-                }
             }
             if (
-                cleanup.outcome !== 'retained_as_workstation'
-                && cleanup.outcome !== 'recovered'
+                cleanup.outcome !== 'recovered'
                 && cleanup.outcome !== 'already_recovered'
             ) {
                 console.warn(`[craft] Temporary crafting table cleanup ended as ${cleanup.outcome}.`);
@@ -2806,6 +2861,7 @@ export async function smeltItem(bot, itemName, num=1) {
                 });
             }
             temporaryFurnace = {
+                itemName: 'furnace',
                 position: localFurnace.position,
                 inventoryBeforePlacement: localFurnace.inventoryBeforePlacement,
             };
@@ -2867,24 +2923,36 @@ export async function smeltItem(bot, itemName, num=1) {
             return finish(false, 'furnace_output_occupied', { observed: existingOutput.name });
         }
 
-        if (!furnace.fuelItem()) {
-            const fuel = mc.getSmeltingFuel(bot);
-            if (!fuel) {
-                log(bot, `No furnace fuel is available for ${itemName}.`);
-                return finish(false, 'missing_fuel');
-            }
-            const fuelOutput = mc.getFuelSmeltOutput(fuel.name);
-            const fuelCount = Math.max(1, Math.ceil(amount / Math.max(1, fuelOutput)));
-            if (fuel.count < fuelCount) {
-                log(bot, `There is not enough ${fuel.name} to cook ${amount} ${itemName}.`);
-                return finish(false, 'insufficient_fuel', {
-                    fuel: fuel.name,
-                    requiredFuel: fuelCount,
-                    availableFuel: fuel.count,
-                });
-            }
-            await furnace.putFuel(fuel.type, null, fuelCount);
+        const existingFuel = furnace.fuelItem();
+        const existingFuelCapacity = existingFuel
+            ? Math.max(0, Number(existingFuel.count) || 0)
+                * mc.getFuelSmeltOutput(existingFuel.name || mc.getItemName(existingFuel.type) || '')
+            : 0;
+        const fuelPlan = selectSmeltingFuelPlan(
+            bot.inventory.items(),
+            Math.max(0, amount - existingFuelCapacity),
+        );
+        if (!fuelPlan.ok) {
+            const availableSmelts = existingFuelCapacity + fuelPlan.availableSmelts;
+            log(bot, `Available furnace fuel can cook ${availableSmelts} of ${amount} ${itemName}.`);
+            return finish(false, availableSmelts > 0 ? 'insufficient_fuel' : 'missing_fuel', {
+                requiredSmelts: amount,
+                availableSmelts,
+                fuels: fuelPlan.entries.map(entry => ({
+                    name: entry.name,
+                    count: entry.count,
+                    outputPerItem: entry.outputPerItem,
+                })),
+            });
         }
+        let nextFuelEntry = 0;
+        const refuelIfEmpty = async () => {
+            if (furnace.fuelItem() || nextFuelEntry >= fuelPlan.entries.length) return;
+            const entry = fuelPlan.entries[nextFuelEntry];
+            await furnace.putFuel(entry.type, null, entry.count);
+            nextFuelEntry += 1;
+        };
+        await refuelIfEmpty();
 
         await furnace.putInput(mc.getItemId(itemName), null, amount);
         let total = 0;
@@ -2894,6 +2962,10 @@ export async function smeltItem(bot, itemName, num=1) {
         while (total < amount && Date.now() < deadline) {
             if (bot.interrupt_code) break;
             await new Promise(resolve => setTimeout(resolve, 500));
+            // Furnace slots consume the active fuel stack before its burn
+            // time expires. That empty interval is the legal point to load a
+            // different planned fuel type without resetting smelt progress.
+            await refuelIfEmpty();
             const output = furnace.outputItem();
             if (output) {
                 const collected = await furnace.takeOutput();
@@ -2925,21 +2997,21 @@ export async function smeltItem(bot, itemName, num=1) {
     } finally {
         await closeContainerQuietly(furnace);
         if (temporaryFurnace) {
-            const { position, inventoryBeforePlacement } = temporaryFurnace;
-            let cleanup = { outcome: 'already_recovered', retryable: false };
-            if (inventoryCount(bot, 'furnace') < inventoryBeforePlacement) {
-                const block = bot.blockAt(position);
-                if (block?.name === 'furnace' && await breakBlockAt(bot, position.x, position.y, position.z)) {
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                    try {
-                        await pickupNearbyItems(bot);
-                    } catch {
-                        // Inventory verification below is authoritative.
-                    }
-                }
-                cleanup = inventoryCount(bot, 'furnace') >= inventoryBeforePlacement
-                    ? { outcome: 'recovered', retryable: false }
-                    : { outcome: 'furnace_left_in_world', retryable: true };
+            let cleanup;
+            try {
+                cleanup = await recoverLocalWorkstation(bot, temporaryFurnace);
+            } catch (error) {
+                cleanup = {
+                    outcome: 'workstation_cleanup_failed',
+                    target: {
+                        name: 'furnace',
+                        x: temporaryFurnace.position.x,
+                        y: temporaryFurnace.position.y,
+                        z: temporaryFurnace.position.z,
+                    },
+                    error: String(error?.message || error).slice(0, 240),
+                    retryable: true,
+                };
             }
             if (finalEvidence) setActionEvidence(bot, { ...finalEvidence, cleanup });
         }
@@ -3039,6 +3111,7 @@ export async function brewPotion(bot, requestedTarget, num=1) {
                 return finish(false, 'brewing_stand_not_confirmed');
             }
             temporaryStand = {
+                itemName: 'brewing_stand',
                 position: standBlock.position.clone(),
                 inventoryBeforePlacement: localStand.inventoryBeforePlacement,
             };
@@ -3187,18 +3260,25 @@ export async function brewPotion(bot, requestedTarget, num=1) {
         if (contentsOwned) await returnBrewingContents(bot, stand);
         await closeContainerQuietly(stand);
         bot.modes.unpause('unstuck');
+        let cleanup = null;
         if (temporaryStand?.position) {
-            const block = bot.blockAt(temporaryStand.position);
-            if (block?.name === 'brewing_stand') {
-                await breakBlockAt(
-                    bot,
-                    temporaryStand.position.x,
-                    temporaryStand.position.y,
-                    temporaryStand.position.z,
-                );
+            try {
+                cleanup = await recoverLocalWorkstation(bot, temporaryStand);
+            } catch (error) {
+                cleanup = {
+                    outcome: 'workstation_cleanup_failed',
+                    target: {
+                        name: 'brewing_stand',
+                        x: temporaryStand.position.x,
+                        y: temporaryStand.position.y,
+                        z: temporaryStand.position.z,
+                    },
+                    error: String(error?.message || error).slice(0, 240),
+                    retryable: true,
+                };
             }
         }
-        if (finalEvidence) setActionEvidence(bot, finalEvidence);
+        if (finalEvidence) setActionEvidence(bot, cleanup ? { ...finalEvidence, cleanup } : finalEvidence);
     }
 }
 
@@ -4046,78 +4126,117 @@ export async function defendPlayer(bot, username, range=10) {
     return await followPlayer(bot, username, normalizePlayerDistance(Math.min(3, Number(range) || 3), 3));
 }
 
-async function freeCollectionWorkingSlot(bot, protectedNames) {
-    if (bot.inventory.emptySlotCount() > 0) return true;
-    const inventoryItems = bot.inventory.items();
-    let candidate = inventoryItems
-        .filter(item => (
-            item.count > 0
-            && item.count <= 8
-            && Number.isInteger(item.slot)
-            && NATURAL_FILL_BLOCKS.has(item.name)
-            && !protectedNames.has(item.name)
-        ))
-        .map(item => ({
-            name: item.name,
-            count: item.count,
-            slot: item.slot,
-            kind: 'natural_fill',
-        }))
-        .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))[0];
-    if (!candidate) {
-        // A carried one-block workstation is already durable world state, not
-        // disposable inventory. Placing it in a verified local cell frees the
-        // working slot while preserving the capability for the smelt/craft
-        // step that requested the material. Prefer the crafting table because
-        // furnace inventory may contain state when one already exists nearby.
-        candidate = inventoryItems.find(item => (
-            ['crafting_table', 'furnace'].includes(item.name)
-            && !protectedNames.has(item.name)
-            && item.count === 1
-            && Number.isInteger(item.slot)
-        ));
-        if (candidate) candidate = {
-            name: candidate.name,
-            count: candidate.count,
-            slot: candidate.slot,
-            kind: 'workstation',
-        };
-    }
-    if (!candidate) return false;
-
-    let placed = 0;
+async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1) {
+    const desiredSlots = Math.max(1, Math.min(
+        MINING_COLLECTION_SLOT_RESERVE,
+        Math.floor(Number(requestedSlots) || 1),
+    ));
+    let releaseActions = 0;
     while (
         !bot.interrupt_code
-        && inventoryCount(bot, candidate.name) > 0
-        && placed < candidate.count
+        && bot.inventory.emptySlotCount() < desiredSlots
+        && releaseActions < MAX_COLLECTION_SLOT_RELEASE_ACTIONS
     ) {
-        const selectedSlotItem = bot.inventory.slots[candidate.slot];
-        if (
-            selectedSlotItem?.name !== candidate.name
-            && bot.heldItem?.name === candidate.name
-            && Number.isInteger(bot.heldItem.slot)
-        ) candidate.slot = bot.heldItem.slot;
-        const position = world.getNearestFreeSpace(bot, 1, 8);
-        if (!position || !await placeBlock(
-            bot,
-            candidate.name,
-            position.x,
-            position.y,
-            position.z,
-            'bottom',
-            true,
-            false,
-            candidate.slot,
-        )) return false;
-        placed += 1;
+        const inventoryItems = bot.inventory.items();
+        let candidate = inventoryItems
+            .filter(item => (
+                item.count > 0
+                && item.count <= 8
+                && Number.isInteger(item.slot)
+                && NATURAL_FILL_BLOCKS.has(item.name)
+                && !protectedNames.has(item.name)
+            ))
+            .map(item => ({ ...item, kind: 'natural_fill' }))
+            .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))[0];
+
+        if (candidate) {
+            let placed = 0;
+            while (
+                !bot.interrupt_code
+                && inventoryCount(bot, candidate.name) > 0
+                && placed < candidate.count
+            ) {
+                const selectedSlotItem = bot.inventory.slots[candidate.slot];
+                if (
+                    selectedSlotItem?.name !== candidate.name
+                    && bot.heldItem?.name === candidate.name
+                    && Number.isInteger(bot.heldItem.slot)
+                ) candidate.slot = bot.heldItem.slot;
+                const position = world.getNearestFreeSpace(bot, 1, 8);
+                if (!position || !await placeBlock(
+                    bot,
+                    candidate.name,
+                    position.x,
+                    position.y,
+                    position.z,
+                    'bottom',
+                    true,
+                    false,
+                    candidate.slot,
+                )) break;
+                placed += 1;
+            }
+            if (placed > 0) {
+                releaseActions += 1;
+                log(bot, `Cached ${placed} expendable ${candidate.name} block${placed === 1 ? '' : 's'} in verified local cells.`);
+                continue;
+            }
+        }
+
+        const toolGroups = new Map();
+        for (const item of inventoryItems) {
+            if (!TOOL_PREPARATION_SPECS[item.name] || protectedNames.has(item.name)) continue;
+            const group = toolGroups.get(item.name) || [];
+            group.push(item);
+            toolGroups.set(item.name, group);
+        }
+        const duplicateTool = [...toolGroups.values()]
+            .flatMap(group => group
+                .sort((left, right) => (
+                    toolDurability(bot, right).usable - toolDurability(bot, left).usable
+                    || left.slot - right.slot
+                ))
+                .slice(2))
+            .sort((left, right) => (
+                toolDurability(bot, left).usable - toolDurability(bot, right).usable
+                || left.name.localeCompare(right.name)
+                || left.slot - right.slot
+            ))[0];
+        if (duplicateTool) {
+            // Drop the exact worn stack selected above. toss(type, count)
+            // may transfer a healthier same-type tool from an earlier slot.
+            await bot.tossStack(duplicateTool);
+            releaseActions += 1;
+            log(bot, `Retired one superseded ${duplicateTool.name} while preserving the two healthiest carried copies.`);
+            await interruptibleDelay(bot, 100);
+            continue;
+        }
+
+        const totals = new Map();
+        for (const item of inventoryItems) {
+            totals.set(item.name, (totals.get(item.name) || 0) + item.count);
+        }
+        const bulkDebris = inventoryItems
+            .filter(item => (
+                Number.isInteger(item.slot)
+                && item.count >= 32
+                && NATURAL_FILL_BLOCKS.has(item.name)
+                && !protectedNames.has(item.name)
+                && (totals.get(item.name) - item.count) >= Math.min(64, item.stackSize || 64)
+            ))
+            .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))[0];
+        if (bulkDebris) {
+            // Releasing the bound stack guarantees that this action actually
+            // opens a slot instead of draining equivalent blocks elsewhere.
+            await bot.tossStack(bulkDebris);
+            releaseActions += 1;
+            log(bot, `Released one redundant ${bulkDebris.count}-block ${bulkDebris.name} excavation stack while preserving another full stack.`);
+            await interruptibleDelay(bot, 100);
+            continue;
+        }
+        break;
     }
-    const freed = bot.inventory.emptySlotCount() > 0;
-    if (freed) {
-        log(bot, candidate.kind === 'workstation'
-            ? `Placed carried ${candidate.name} in a verified local cell to preserve it and free one working slot.`
-            : `Cached ${placed} expendable ${candidate.name} block${placed === 1 ? '' : 's'} in verified local cells to free one working slot.`);
-    }
-    return freed;
+    return bot.inventory.emptySlotCount() >= desiredSlots;
 }
 
 
@@ -4206,7 +4325,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 );
 
         if (blocks.length === 0) {
-            if (await relocateCollectionSearch(bot, blockType, search)) {
+            // A persisted coordinate is an exact binding, not a new regional
+            // search. If it changed or was excluded, fail it cheaply so the
+            // Director can clear or replace that binding immediately.
+            if (!preferredPosition && await relocateCollectionSearch(bot, blockType, search)) {
                 i -= 1;
                 continue;
             }
@@ -4371,24 +4493,46 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         if (
             !isLiquid
             && expectedDropTypes.size > 0
-            && !hasFreeSlot
-            && !hasPotentialStackSpace
+            && (
+                (!hasFreeSlot && !hasPotentialStackSpace)
+                || (
+                    allowNaturalRouteDigging
+                    && bot.inventory.emptySlotCount() < MINING_COLLECTION_SLOT_RESERVE
+                )
+            )
         ) {
             const protectedNames = new Set([
                 blockType,
                 ...blocktypes,
                 ...[...expectedDropTypes].map(type => mc.getItemName(type)).filter(Boolean),
             ]);
-            const cleared = await freeCollectionWorkingSlot(bot, protectedNames);
+            const desiredSlots = allowNaturalRouteDigging
+                ? MINING_COLLECTION_SLOT_RESERVE
+                : 1;
+            const cleared = await freeCollectionWorkingSlots(bot, protectedNames, desiredSlots);
             hasFreeSlot = bot.inventory.emptySlotCount() > 0;
             hasPotentialStackSpace = bot.inventory.items().some(item => (
                 expectedDropTypes.has(item.type)
                 && Number.isFinite(item.stackSize)
                 && item.count < item.stackSize
             ));
-            if (!cleared || (!hasFreeSlot && !hasPotentialStackSpace)) {
-                setActionEvidence(bot, { kind: 'collect', outcome: 'inventory_full', target, retryable: true });
-                log(bot, `Cannot collect ${block.name}: inventory has no slot or matching stack space for its drop.`);
+            if (
+                !cleared
+                || (!hasFreeSlot && !hasPotentialStackSpace)
+                || (
+                    allowNaturalRouteDigging
+                    && bot.inventory.emptySlotCount() < desiredSlots
+                )
+            ) {
+                setActionEvidence(bot, {
+                    kind: 'collect',
+                    outcome: 'inventory_full',
+                    target,
+                    requiredFreeSlots: desiredSlots,
+                    observedFreeSlots: bot.inventory.emptySlotCount(),
+                    retryable: true,
+                });
+                log(bot, `Cannot collect ${block.name}: inventory cannot reserve ${desiredSlots} working slot${desiredSlots === 1 ? '' : 's'} safely.`);
                 return false;
             }
         }
@@ -9555,6 +9699,8 @@ function assessMiningRouteDurability(
     {
         allowReplacementBootstrapReserve = false,
         allowUnharvestedBreaks = false,
+        minimumTrancheUsableDurability = 0,
+        replacementCapabilityBlocks = [],
     } = {},
 ) {
     const items = bot.inventory.items();
@@ -9586,6 +9732,60 @@ function assessMiningRouteDurability(
         })
         .filter(requirement => !requirement.harvestableByHand)
         .sort((left, right) => left.eligible.length - right.eligible.length);
+
+    const trancheMinimum = Math.max(
+        0,
+        Math.floor(Number(minimumTrancheUsableDurability) || 0),
+    );
+    if (trancheMinimum > 0) {
+        const capabilityBlocks = [...new Map([
+            ...requirements.map(requirement => requirement.block),
+            ...(replacementCapabilityBlocks || []),
+        ].filter(block => block?.position).map(block => [miningCellKey(block.position), block])).values()];
+        const canHarvestTranche = item => capabilityBlocks.every(block => {
+            try { return block.canHarvest(item.type); } catch { return false; }
+        });
+        const carried = items.find((item, index) => (
+            capacities.get(index) >= trancheMinimum
+            && canHarvestTranche(item)
+        ));
+        if (!carried) {
+            // Select from the supported capability catalogue, not only from
+            // tool names that happen to remain in inventory. A fully spent or
+            // broken tool must still yield a concrete generic replacement.
+            const replacement = Object.keys(TOOL_PREPARATION_SPECS)
+                .map(name => {
+                    const type = bot.registry?.itemsByName?.[name]?.id;
+                    if (!Number.isInteger(type)) return null;
+                    const item = { name, type };
+                    const durability = toolDurability(bot, item);
+                    return {
+                        ...item,
+                        freshUsable: Number.isFinite(durability.max)
+                            ? durability.max - toolDurabilityReserve(bot, item)
+                            : Number.POSITIVE_INFINITY,
+                    };
+                })
+                .filter(item => (
+                    item
+                    && canHarvestTranche(item)
+                    && item.freshUsable >= trancheMinimum
+                ))
+                .sort((left, right) => (
+                    TOOL_PREPARATION_SPECS[left.name].tier - TOOL_PREPARATION_SPECS[right.name].tier
+                    || left.name.localeCompare(right.name)
+                ))[0] || null;
+            return {
+                ok: false,
+                outcome: 'insufficient_tool_durability',
+                requiredFor: capabilityBlocks.at(-1)?.name || requirements[0]?.block?.name || null,
+                requiredBreaks: requirements.length,
+                replacementTool: replacement?.name || null,
+                minimumUsableDurability: trancheMinimum,
+                trancheSized: true,
+            };
+        }
+    }
 
     const assigned = new Map();
     let unharvestedBreaks = 0;
@@ -9653,6 +9853,7 @@ function assessMiningAccessPlan(
         allowNaturalFoliageExcavation = false,
         stageFallingDebris = false,
         maxRouteSteps = null,
+        minimumTrancheUsableDurability = 0,
     } = {},
 ) {
     const maximumSteps = maxRouteSteps !== null && Number.isFinite(Number(maxRouteSteps))
@@ -9801,6 +10002,8 @@ function assessMiningAccessPlan(
     const durability = assessMiningRouteDurability(bot, plannedBreaks, {
         allowReplacementBootstrapReserve,
         allowUnharvestedBreaks,
+        minimumTrancheUsableDurability,
+        replacementCapabilityBlocks: targetBlock ? [targetBlock] : [],
     });
     if (!durability.ok) return { ...durability, route, stance, blockBudget };
 
@@ -10583,11 +10786,21 @@ export async function mineSearchTunnel(
         const progressStances = fullRouteLowerBound > MAX_MINING_PROGRESS_ROUTE_STEPS
             ? boundedMiningProgressStances(bot, stagedTarget, finalStances)
             : [];
+        const minimumTrancheUsableDurability = Number.isFinite(fullRouteLowerBound)
+            ? Math.min(
+                10_000,
+                (
+                    Math.min(fullRouteLowerBound, MAX_MINING_PROGRESS_ROUTE_STEPS)
+                    * MAX_MINING_TRANCHE_BREAKS_PER_STEP
+                ) + 1,
+            )
+            : 0;
         let plan = progressStances.length > 0
             ? buildMiningAccessPlan(bot, stagedTarget, 4, {
                 breakTarget: false,
                 stances: progressStances,
                 maxRouteSteps: MAX_MINING_PROGRESS_ROUTE_STEPS,
+                minimumTrancheUsableDurability,
             })
             : buildMiningAccessPlan(bot, stagedTarget, requestedLength);
         if (progressStances.length > 0 && plan.ok) {
@@ -10719,6 +10932,12 @@ export async function mineSearchTunnel(
 
         if (partialAdvance) {
             const observed = bot.entity?.position?.clone?.() || null;
+            const remainingRouteLowerBound = observed
+                ? minimumMiningCorridorSteps(
+                    observed.floored(),
+                    prospectiveMiningStandingPositions(bot, stagedTarget),
+                )
+                : Number.POSITIVE_INFINITY;
             const returnable = Boolean(
                 observed
                 && isMiningRouteCellReturnable(bot, plan.route.at(-1)?.position)
@@ -10738,7 +10957,14 @@ export async function mineSearchTunnel(
                 distance: observed ? observed.distanceTo(routeStart) : 0,
                 observedPosition: observed,
                 returnable,
-                ...(plan.boundary ? { boundary: plan.boundary } : {}),
+                ...(plan.boundary ? {
+                    boundary: {
+                        ...plan.boundary,
+                        remainingRouteLowerBound: Number.isFinite(remainingRouteLowerBound)
+                            ? remainingRouteLowerBound
+                            : null,
+                    },
+                } : {}),
                 routeDigging: true,
                 retryable: false,
             });

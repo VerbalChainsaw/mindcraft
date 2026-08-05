@@ -227,17 +227,6 @@ function nearbyBlock(bot, name, range = 16) {
   }
 }
 
-function directlyUsableWorkstation(bot, name) {
-  const block = nearbyBlock(bot, name, 4.5);
-  if (!block || blockDistance(bot, block) > 4.5) return null;
-  try {
-    if (typeof bot.canSeeBlock === 'function' && !bot.canSeeBlock(block)) return null;
-  } catch {
-    return null;
-  }
-  return block;
-}
-
 function sourceBlocks(bot, target) {
   const item = bot.registry?.itemsByName?.[target];
   if (!item) return [];
@@ -430,7 +419,11 @@ function ensurePersistentItem(bot, context, name, trail) {
     && context.workstationRequirement.name === name;
   if (
     ledgerCount(context, name) > 0
-    || (!carriedRequired && directlyUsableWorkstation(bot, name))
+    // The execution adapter owns approach binding and will return a carried
+    // workstation requirement if this loaded candidate is not actually
+    // reachable. Requiring interaction reach here duplicated that query and
+    // rebuilt tables/furnaces that native Pathfinder could reach in seconds.
+    || (!carriedRequired && nearbyBlock(bot, name, Math.min(64, context.range)))
   ) return null;
   return ensureItem(bot, context, name, 1, trail);
 }
@@ -443,16 +436,21 @@ function planFromRecipe(bot, context, target, amount, recipe, trail) {
     return blocked('recipe_without_ingredients', `The connected registry exposed an unusable recipe for ${target}.`, target, trail);
   }
 
-  if (recipeNeedsTable(recipe) && target !== 'crafting_table') {
-    const workstationFailure = ensurePersistentItem(bot, context, 'crafting_table', [...trail, `${target}:workstation`]);
-    if (workstationFailure) return workstationFailure;
-  }
-
   for (const ingredient of ingredients) {
     const required = ingredient.count * batches;
     const ingredientFailure = ensureItem(bot, context, ingredient.name, required, [...trail, target]);
     if (ingredientFailure) return ingredientFailure;
     setLedgerCount(context, ingredient.name, ledgerCount(context, ingredient.name) - required);
+  }
+
+  // A crafting table is required at execution time, not before remote
+  // ingredients are acquired. Binding it first made every ore relocation
+  // rebuild or carry a table before the ore existed, and regional recovery
+  // could then strand that capability. Replanning after each verified
+  // ingredient keeps the table adjacent to the actual craft action.
+  if (recipeNeedsTable(recipe) && target !== 'crafting_table') {
+    const workstationFailure = ensurePersistentItem(bot, context, 'crafting_table', [...trail, `${target}:workstation`]);
+    if (workstationFailure) return workstationFailure;
   }
 
   const produced = batches * outputCount;
