@@ -817,7 +817,10 @@ export const actionsList = [
             const completionKind = normalizedKind === 'deliver'
                 ? 'delivery'
                 : String(completion || 'inventory').trim().toLowerCase().replace(/[\s-]+/g, '_');
-            if (!['inventory', 'main_hand', 'off_hand'].includes(completionKind)) {
+            if (
+                normalizedKind === 'acquire'
+                && !['inventory', 'main_hand', 'off_hand'].includes(completionKind)
+            ) {
                 return 'Typed item goal was not accepted: completion must be inventory, main_hand, or off_hand.';
             }
             const canonicalRequester = String(requesterOrRecipient || '').trim();
