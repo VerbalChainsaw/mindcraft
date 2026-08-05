@@ -123,6 +123,41 @@ That gate is now preserved and pushed. Begin the incremental capability-catalogu
 
 This active gate and the immediate-next-move section control execution order. The numbered phases below remain capability milestones and may not be used to route around the repeatability gate or delay the initial catalogue tranche.
 
+## Active 2026-08-05 tranche: bounded buried-resource corridor binding
+
+The capability catalogue has now proved unrelated collect/craft/smelt/equip chains through an iron shovel, minecart, and two compasses. The next unrelated natural request, `Please make a clock.`, exposed one shared binding defect rather than an item recipe gap.
+
+At `0bb9385`, the exact buried-target binder:
+
+- evaluates every prospective cardinal stance beside the selected ore;
+- generates only fixed axis-ordered routes with at most one dogleg and six extra steps;
+- preflights each full route for support, headroom, liquids, falling blocks, protected blocks, tool durability, excavation count, deadline, and returnability;
+- delegates locomotion through each cleared cell to the V2-owned Pathfinder with digging disabled.
+
+The safety and execution boundaries are correct. The route generator is not complete enough for ordinary mixed geology. Two distinct gold regions rejected all 64 offered routes with different distributions: `unsafe_route_support:29, non_natural_block_in_route:20, liquid_ingress_risk:15` and `non_natural_block_in_route:48, unsafe_route_support:12, liquid_ingress_risk:4`. A later target admitted one verified prefix, showing that excavation and Pathfinder settlement can work when the offered geometry is viable. The same goal later reached Y6 while satisfying tool prerequisites and finally failed on underground wood reacquisition; that is downstream evidence, not a reason to bypass the corridor defect.
+
+The selected repair is one bounded deterministic voxel search at the existing binder boundary. It may choose exact supported standing cells and authorized excavation, but it may not execute movement. The search must:
+
+1. consider only cardinal one-cell moves and monotonic elevation toward the exact usable stance;
+2. reject a step immediately through the existing support, headroom, liquid, falling-block, protected-block, and target-preservation checks;
+3. carry required-support and excavation sets so a later step cannot destroy the return route;
+4. remain inside the existing route-length, excavation, durability, deadline, and finite-expansion ceilings;
+5. return a complete preflighted route or a typed bounded failure before breaking any block;
+6. leave `executeMiningAccessPlan()` and native Pathfinder traversal through already-cleared cells unchanged.
+
+Rejected alternatives:
+
+- Driving the current Pathfinder graph as a dig-enabled dry-run is lower effort, but its neighbor model admits diagonals, placements, drops, and movement shapes that the exact corridor executor deliberately forbids. Repeatedly post-rejecting those paths would recreate the current template-rejection loop.
+- Expanding the fixed dogleg table was physically tried with wider offsets and did not generalize. More templates would preserve the root defect.
+- Moving companion safety policy into the owned Pathfinder package would mix target authorization, durability, destruction budgets, and returnability into a locomotion dependency. No dependency change is required for this tranche.
+
+Acceptance remains the same natural clock request. The bot must acquire gold through the generic registry graph, smelt it, craft one clock, and have Paper verify the inventory result. A focused geometry regression may pin one obstacle layout that requires more than a fixed dogleg; it is not a substitute for the Paper run. If a later blocker appears after corridor progress, repair that first shared seam within the same clock campaign rather than starting another architecture project.
+
+```text
+[codeplan · buried-corridor-binding · IN · mode: constrained · profile: compact · confidence: high · candidates: V1=native-Pathfinder-dry-run/adapter/internal-reuse;V2=binder-owned-bounded-voxel-search/new-module/zero-dep · lean: V2 · conservative: V1]
+[codeplan · buried-corridor-binding · PLAN-OUT · mode: constrained · profile: compact · pick: V2 · baseline: V1 · confidence: high · beatBaseline: yes · scores: V1=0.62;V2=0.85 · reason: V2 searches only legal excavation geometry at the existing binder boundary while V1 cannot constrain Pathfinder's movement graph tightly enough without package surgery · planned-fingerprint: binder-owned/bounded-search/zero-dep/existing-executor]
+```
+
 ## Phase 1: Iron progression vertical slice
 
 **Status:** physically completed and verified; retained as the first generic progression proof.
@@ -264,4 +299,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Introduce the smallest coherent capability-catalogue tranche around the already-proven collect, craft, smelt, equip, workstation, and verification operations. Keep `GoalDirector`, `ActionManager`, the V2-owned Pathfinder, existing deterministic skills, safety policy, and Minecraft-state verification in their current ownership lanes. Prove the tranche by rerunning an existing multi-step request; do not add a new recipe-specific path or a second executor.
+Replace the fixed buried-target dogleg enumeration with the bounded corridor binder defined above. Keep `GoalDirector`, the capability catalogue, `ActionManager`, the V2-owned Pathfinder, existing execution/safety policy, and Minecraft-state verification in their current ownership lanes. Prove the tranche by rerunning `Please make a clock.` through Paper verification; do not add a clock-specific route, give Pathfinder excavation authority, or start a second executor.
