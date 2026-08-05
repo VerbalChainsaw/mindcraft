@@ -57,6 +57,95 @@ function settle() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function familyDeliveryAgent() {
+  const agent = createAgent('lumberjack');
+  const recipient = {
+    id: 42,
+    type: 'player',
+    username: 'Director',
+    position: { x: 2, y: 64, z: 0 },
+  };
+  agent.bot.inventory.slots = [
+    { name: 'oak_log', count: 2 },
+    { name: 'birch_log', count: 2 },
+  ];
+  agent.bot.inventory.items = () => agent.bot.inventory.slots;
+  agent.bot.players = { Director: { username: 'Director', entity: recipient } };
+  agent.bot.entities = { 42: recipient };
+  agent.getKnownAgentNames = () => ['TestMiner'];
+  return agent;
+}
+
+function familyDeliverySnapshot(agent) {
+  const inventory = Object.fromEntries(
+    agent.bot.inventory.items().map(item => [item.name, item.count]),
+  );
+  return {
+    inventory,
+    tools: { axeTier: 3 },
+    freeSlots: 20,
+    safeTrunks: true,
+    deposit: { mode: 'leader', leader: 'Director' },
+  };
+}
+
+function familyDeliveryResult({ actionId, complete = false }) {
+  const deliveries = [{
+    item: 'birch_log',
+    requested: 2,
+    transferred: 2,
+    outcome: 'delivered',
+    target: { canonicalName: 'Director', entityId: 42 },
+    droppedEntityId: 101,
+    deliveryAttempts: 1,
+  }];
+  if (complete) {
+    deliveries.push({
+      item: 'oak_log',
+      requested: 1,
+      transferred: 1,
+      outcome: 'delivered',
+      target: { canonicalName: 'Director', entityId: 42 },
+      droppedEntityId: 102,
+      deliveryAttempts: 1,
+    });
+  }
+  return {
+    actionId,
+    phase: complete ? 'succeeded' : 'interrupted',
+    code: complete ? 'skill_delivered' : 'stop_requested',
+    detail: complete
+      ? 'All concrete family transfers were verified.'
+      : 'Stop interrupted the family transfer after the first verified receipt.',
+    evidence: {
+      skill: {
+        kind: 'family_give',
+        outcome: complete ? 'delivered' : 'partial',
+        family: 'logs',
+        target: { canonicalName: 'Director', entityId: 42 },
+        requested: 3,
+        transferred: complete ? 3 : 2,
+        manifest: [
+          { item: 'birch_log', quantity: 2 },
+          { item: 'oak_log', quantity: 1 },
+        ],
+        deliveries,
+      },
+    },
+    retryable: !complete,
+  };
+}
+
 test('Given work-order submissions, JobDirector owns exactly one active order', () => {
   const director = new JobDirector(createAgent('builder'), {
     store: memoryStore(),
@@ -291,6 +380,132 @@ test('Given a partial mixed-family handoff, JobDirector checkpoints only verifie
   assert.equal(director.activeOrder.phase, 'recover');
   assert.equal(director.activeOrder.checkpoint.delivered, 2);
   assert.equal(director.activeOrder.attempts, 1);
+});
+
+test('Given Stop during an asynchronous family handoff, its late settlement cannot revive the cancelled order', async () => {
+  const agent = familyDeliveryAgent();
+  const store = memoryStore();
+  const execution = deferred();
+  const handoffs = [];
+  agent.behavior_arbiter = {
+    beginTerminalHandoff(value) {
+      handoffs.push(value);
+      return value;
+    },
+  };
+  const director = new JobDirector(agent, {
+    store,
+    getSnapshot: () => familyDeliverySnapshot(agent),
+    now: () => 10_000,
+    executeCommand: () => execution.promise,
+  });
+  director.submit(createWorkOrder({
+    id: 'family-cancelled-order',
+    role: 'lumberjack',
+    kind: 'harvest',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'logs' },
+    quota: 3,
+  }));
+  director.activeOrder = { ...director.activeOrder, phase: 'deliver' };
+
+  director.update();
+  await settle();
+  assert.equal(director.inFlight, true);
+
+  assert.equal(director.cancel('operator stop command'), true);
+  agent.bot.inventory.slots = [{ name: 'oak_log', count: 2 }];
+  agent.last_action_result = familyDeliveryResult({ actionId: 'family-cancelled-action' });
+  execution.resolve(false);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.lastOrder.phase, 'cancelled');
+  assert.equal(director.lastOrder.checkpoint.delivered, 2);
+  assert.equal(director.lastOrder.evidence.code, 'cancelled_after_verified_transfer');
+  assert.equal(director.snapshot().code, 'job_cancelled');
+  assert.equal(director.inFlight, false);
+  assert.equal(director.activeDispatch, null);
+  assert.equal(director.nextAttemptAt, 0);
+  assert.equal(store.saved.at(-1), null);
+  assert.deepEqual(handoffs, [{
+    outcomeId: 'family-cancelled-order',
+    owner: 'player_job',
+    phase: 'cancelled',
+    code: 'job_cancelled',
+  }]);
+});
+
+test('Given replacement order B, late settlement from cancelled order A cannot mutate or release B', async () => {
+  const agent = familyDeliveryAgent();
+  const store = memoryStore();
+  const executionA = deferred();
+  const executionB = deferred();
+  let dispatchCount = 0;
+  const director = new JobDirector(agent, {
+    store,
+    getSnapshot: () => familyDeliverySnapshot(agent),
+    now: () => 10_000,
+    executeCommand: () => {
+      dispatchCount += 1;
+      return dispatchCount === 1 ? executionA.promise : executionB.promise;
+    },
+  });
+  const submitDeliveryOrder = id => {
+    director.submit(createWorkOrder({
+      id,
+      role: 'lumberjack',
+      kind: 'harvest',
+      source: 'player',
+      requester: 'Director',
+      target: { name: 'logs' },
+      quota: 3,
+    }));
+    director.activeOrder = { ...director.activeOrder, phase: 'deliver' };
+  };
+
+  submitDeliveryOrder('family-order-a');
+  director.update();
+  await settle();
+  assert.equal(director.activeDispatch.orderId, 'family-order-a');
+
+  director.cancel('replace order A');
+  submitDeliveryOrder('family-order-b');
+  director.update();
+  await settle();
+  const dispatchB = director.activeDispatch;
+  assert.equal(dispatchB.orderId, 'family-order-b');
+  assert.equal(director.inFlight, true);
+
+  agent.bot.inventory.slots = [{ name: 'oak_log', count: 2 }];
+  agent.last_action_result = familyDeliveryResult({ actionId: 'family-order-a-action' });
+  executionA.resolve(false);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeOrder.id, 'family-order-b');
+  assert.equal(director.activeOrder.phase, 'deliver');
+  assert.equal(director.activeDispatch, dispatchB);
+  assert.equal(director.inFlight, true);
+  assert.equal(store.saved.at(-1).id, 'family-order-b');
+
+  agent.bot.inventory.slots = [{ name: 'oak_log', count: 1 }];
+  agent.last_action_result = familyDeliveryResult({
+    actionId: 'family-order-b-action',
+    complete: true,
+  });
+  executionB.resolve(true);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.lastOrder.id, 'family-order-b');
+  assert.equal(director.lastOrder.phase, 'complete');
+  assert.equal(store.saved.at(-1), null);
+  assert.equal(director.inFlight, false);
+  assert.equal(director.activeDispatch, null);
 });
 
 test('Given a terminal player work order, JobDirector retains the shared player handoff before autonomy', () => {

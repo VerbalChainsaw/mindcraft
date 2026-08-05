@@ -635,6 +635,8 @@ export class JobDirector extends RoleDirector {
     this.activeOrder = null;
     this.lastOrder = null;
     this.completedOrderIds = new Set();
+    this.dispatchGeneration = 0;
+    this.activeDispatch = null;
     try {
       const persisted = this.store.load();
       if (this.store.lastError) {
@@ -749,9 +751,62 @@ export class JobDirector extends RoleDirector {
     });
     this.lastOrder = cancelled;
     this.activeOrder = null;
+    this.invalidateDispatch();
     this.store.save(null);
     this.setStatus('cancelled', 'job_cancelled', cancelled.target?.name || null, reason, false);
     this.beginTerminalHandoff(cancelled, 'job_cancelled');
+    return true;
+  }
+
+  invalidateDispatch() {
+    this.dispatchGeneration += 1;
+    this.activeDispatch = null;
+    this.inFlight = false;
+  }
+
+  ownsDispatch(token) {
+    return Boolean(
+      token
+      && this.activeDispatch === token
+      && token.generation === this.dispatchGeneration
+    );
+  }
+
+  canSettleDispatch(token) {
+    return this.ownsDispatch(token) && this.activeOrder?.id === token.orderId;
+  }
+
+  retainCancelledTransfer(orderAtDispatch, step, outcome, result) {
+    const transferCheckpoint = step?.checkpointOnVerifiedTransfer;
+    const transferred = Math.max(0, Math.floor(Number(outcome?.verification?.transferred) || 0));
+    if (
+      transferred < 1
+      || !transferCheckpoint?.field
+      || this.lastOrder?.id !== orderAtDispatch?.id
+      || this.lastOrder.phase !== 'cancelled'
+    ) return false;
+    const maximum = Math.max(0, Number(transferCheckpoint.maximum) || 0);
+    const verifiedValue = Math.min(
+      maximum,
+      Math.max(0, Number(transferCheckpoint.baseline) || 0) + transferred,
+    );
+    const retainedValue = Math.max(
+      Math.max(0, Number(this.lastOrder.checkpoint?.[transferCheckpoint.field]) || 0),
+      verifiedValue,
+    );
+    this.lastOrder = normalizeWorkOrder({
+      ...this.lastOrder,
+      checkpoint: {
+        ...this.lastOrder.checkpoint,
+        [transferCheckpoint.field]: retainedValue,
+      },
+      evidence: {
+        code: 'cancelled_after_verified_transfer',
+        detail: `Cancellation remained terminal after ${transferred} transfer(s) were physically verified.`,
+        actionId: result?.actionId || this.lastOrder.evidence?.actionId || '',
+      },
+      updatedAt: this.now(),
+    });
     return true;
   }
 
@@ -798,6 +853,7 @@ export class JobDirector extends RoleDirector {
     this.lastOrder = terminal;
     if (phase === 'complete') this.completedOrderIds.add(terminal.id);
     this.activeOrder = null;
+    this.invalidateDispatch();
     this.store.save(null);
     this.nextAttemptAt = this.now() + JOB_RETRY_MS;
     this.setStatus(phase, code, terminal.target?.name || null, detail || code, retryable);
@@ -937,8 +993,14 @@ export class JobDirector extends RoleDirector {
           updatedAt: this.now(),
         });
       }
-      this.inFlight = true;
       const orderAtDispatch = this.activeOrder;
+      const dispatchToken = Object.freeze({
+        generation: this.dispatchGeneration + 1,
+        orderId: orderAtDispatch.id,
+      });
+      this.dispatchGeneration = dispatchToken.generation;
+      this.activeDispatch = dispatchToken;
+      this.inFlight = true;
       const previousActionId = this.agent.last_action_result?.actionId || null;
       const selectedCommand = step.capability ? capabilityCommand(step.capability) : step.command;
       this.setStatus(
@@ -968,6 +1030,10 @@ export class JobDirector extends RoleDirector {
               detail: 'Job command returned without a new structured action result.',
               retryable: true,
             };
+          }
+          if (!this.canSettleDispatch(dispatchToken)) {
+            this.retainCancelledTransfer(orderAtDispatch, step, outcome, result);
+            return;
           }
           const preempted = isPreemption(result);
           const transferred = Math.max(0, Math.floor(Number(outcome?.verification?.transferred) || 0));
@@ -1033,6 +1099,7 @@ export class JobDirector extends RoleDirector {
           );
         })
         .catch(error => {
+          if (!this.canSettleDispatch(dispatchToken)) return;
           const failed = advanceWorkOrder(orderAtDispatch, {
             actionId: `dispatch-${this.now()}`,
             phase: 'failed',
@@ -1057,6 +1124,8 @@ export class JobDirector extends RoleDirector {
           this.nextAttemptAt = this.now() + JOB_RETRY_MS;
         })
         .finally(() => {
+          if (!this.ownsDispatch(dispatchToken)) return;
+          this.activeDispatch = null;
           this.inFlight = false;
         });
       return;
