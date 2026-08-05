@@ -8,6 +8,8 @@
 
 **First implementation checkpoint (2026-08-04):** `b8f17d1` added the V2-owned `mineflayer-pathfinder` package, redirected the three production imports, removed the harmful global `0.175` arrival-tolerance patch, and physically completed the additional-bucket request. Paper verified the bucket count increased from one to two. The remaining owned packages stay staged; this checkpoint does not authorize a big-bang dependency migration.
 
+**Second implementation checkpoint (2026-08-05):** `096b5c6` repaired an observed collection-mechanics defect in the already imported V2-owned `mineflayer-collectblock` package. Hand-harvestable targets now use an empty hand or a non-wearing item when no carried tool is materially faster; faster real tools still delegate to `mineflayer-tool`. The ineffective project-side selector was removed. In Paper, the persisted broad glass goal resumed without model restoration, collected sand with no selected tool, gathered fuel, smelted 16 glass, and delivered all 16 to the moving underground player. This is one bounded mechanic correction, not authorization to switch the remaining shared dependency tree or start a broad package migration.
+
 This plan replaces the generic “patch, contribute, or fork” choice in the forward plan. External projects remain useful read-only sources and compatibility references. They are not the destination for our changes.
 
 ## Outcome
