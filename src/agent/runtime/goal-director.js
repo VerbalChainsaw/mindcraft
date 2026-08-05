@@ -436,6 +436,7 @@ export class GoalDirector {
   }
 
   releaseProtectedCompletion(_reason = 'Released by later player-authorized work.') {
+    this.agent.behavior_arbiter?.releaseTerminalHandoff?.(_reason);
     if (!this.hasProtectedCompletion()) return false;
     this.protectedGoalId = null;
     this.store.save(this.activeGoal, this.lastGoal, null);
@@ -605,8 +606,14 @@ export class GoalDirector {
       },
       salience: 4,
     });
-    void Promise.resolve(this.agent.openChat?.(`Completed: ${goalContractDescription(completed)}. ${verification.detail}`))
-      .catch(error => console.warn(`[goal] Could not report completion: ${boundedText(error?.message || error)}`));
+    const report = Promise.resolve(this.agent.openChat?.(`Completed: ${goalContractDescription(completed)}. ${verification.detail}`));
+    this.agent.behavior_arbiter?.beginTerminalHandoff?.({
+      goalId: completed.id,
+      phase: 'complete',
+      code: verification.code,
+      reportPromise: report,
+    });
+    void report.catch(error => console.warn(`[goal] Could not report completion: ${boundedText(error?.message || error)}`));
     return completed;
   }
 
@@ -636,8 +643,14 @@ export class GoalDirector {
       evidence: { goalId: failed.id, code, phase: 'failed' },
       salience: 3,
     });
-    void Promise.resolve(this.agent.openChat?.(`Goal stopped without completion: ${detail}`))
-      .catch(error => console.warn(`[goal] Could not report failure: ${boundedText(error?.message || error)}`));
+    const report = Promise.resolve(this.agent.openChat?.(`Goal stopped without completion: ${detail}`));
+    this.agent.behavior_arbiter?.beginTerminalHandoff?.({
+      goalId: failed.id,
+      phase: 'failed',
+      code,
+      reportPromise: report,
+    });
+    void report.catch(error => console.warn(`[goal] Could not report failure: ${boundedText(error?.message || error)}`));
     return failed;
   }
 

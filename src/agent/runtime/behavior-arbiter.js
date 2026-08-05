@@ -22,6 +22,12 @@ const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
 const ROLE_JOB_SOURCES = new Set(['role']);
 const EXPLICIT_GOAL_SOURCES = new Set(['explicit', 'restored']);
 const MAX_STATUS_TEXT = 240;
+// Terminal narration normally settles inside one chat-throttle interval. Keep
+// a short companion handoff after it settles, but fail the lease open after a
+// bounded ceiling so a broken translation/output promise cannot become an
+// idle lock.
+const TERMINAL_HANDOFF_MIN_MS = 1_000;
+const TERMINAL_HANDOFF_MAX_MS = 5_000;
 
 // Per-lane base tick period. Reflex lanes re-evaluate quickly so a threat is
 // answered in one frame rather than one third of a second; cosmetic and idle
@@ -106,6 +112,8 @@ export class BehaviorArbiter {
     this.stopped = false;
     this.updating = false;
     this.directiveResumeRequested = false;
+    this.terminalHandoff = null;
+    this.terminalHandoffGeneration = 0;
     this.tick = 0;
     this.lastObservedAt = null;
     this.nextTickDelayMs = DEFAULT_TICK_MS;
@@ -158,6 +166,7 @@ export class BehaviorArbiter {
     if (this.stopped) return false;
     this.stopped = true;
     this.directiveResumeRequested = false;
+    this.terminalHandoff = null;
     this.comportmentPauseUntil = 0;
     this.wasActing = false;
     this.pendingWake = null;
@@ -169,9 +178,77 @@ export class BehaviorArbiter {
 
   requestDirectiveResume() {
     if (this.stopped) return false;
+    this.releaseTerminalHandoff('An explicit companion directive resumed.', false);
     this.directiveResumeRequested = true;
     this.wake('directive_resume');
     return true;
+  }
+
+  beginTerminalHandoff({ goalId = '', phase = 'terminal', code = '', reportPromise = null } = {}) {
+    if (this.stopped) return null;
+    const now = this.now();
+    const normalizedGoalId = boundedText(goalId, 'unknown-goal');
+    const normalizedPhase = boundedText(phase, 'terminal');
+    const current = this.currentTerminalHandoff();
+    if (
+      current
+      && current.goalId === normalizedGoalId
+      && current.phase === normalizedPhase
+    ) return current;
+
+    const generation = ++this.terminalHandoffGeneration;
+    const tracksReport = Boolean(reportPromise && typeof reportPromise.then === 'function');
+    this.terminalHandoff = {
+      generation,
+      goalId: normalizedGoalId,
+      phase: normalizedPhase,
+      code: boundedText(code, 'goal_terminal'),
+      startedAt: now,
+      minimumUntil: now + TERMINAL_HANDOFF_MIN_MS,
+      expiresAt: now + TERMINAL_HANDOFF_MAX_MS,
+      reportPending: tracksReport,
+      reportSettledAt: tracksReport ? null : now,
+    };
+
+    if (tracksReport) {
+      void Promise.resolve(reportPromise).then(
+        () => this.settleTerminalReport(generation),
+        () => this.settleTerminalReport(generation),
+      );
+    }
+    return this.currentTerminalHandoff();
+  }
+
+  settleTerminalReport(generation) {
+    if (!this.terminalHandoff || this.terminalHandoff.generation !== generation) return false;
+    this.terminalHandoff.reportPending = false;
+    this.terminalHandoff.reportSettledAt = this.now();
+    this.wake('terminal_report_settled');
+    return true;
+  }
+
+  releaseTerminalHandoff(_reason = 'Terminal companion handoff released.', wake = true) {
+    if (!this.terminalHandoff) return false;
+    this.terminalHandoff = null;
+    if (wake) this.wake('terminal_handoff_released');
+    return true;
+  }
+
+  currentTerminalHandoff() {
+    const handoff = this.terminalHandoff;
+    if (!handoff) return null;
+    const now = this.now();
+    if (
+      now >= handoff.expiresAt
+      || (!handoff.reportPending && now >= handoff.minimumUntil)
+    ) {
+      this.terminalHandoff = null;
+      return null;
+    }
+    return {
+      ...handoff,
+      remainingMs: Math.max(0, handoff.expiresAt - now),
+    };
   }
 
   /**
@@ -558,6 +635,13 @@ export class BehaviorArbiter {
       // world; otherwise unstuck can see the first motionless frames of a new
       // command and preempt it before the pathfinder has had a chance to move.
       const activeBeforeSelection = this.actionState();
+      const activeJobSource = this.agent.job_director?.activeOrder?.source;
+      if (
+        activeBeforeSelection.owner === 'player'
+        || (activeBeforeSelection.owner === 'job' && PLAYER_JOB_SOURCES.has(activeJobSource))
+      ) {
+        this.releaseTerminalHandoff('Fresh player-authorized action owns the body.', false);
+      }
       if (['player', 'job'].includes(activeBeforeSelection.owner)) {
         try {
           // Reactions may speak while accompanying or working for the player.
@@ -656,6 +740,36 @@ export class BehaviorArbiter {
         return this.selectFrom('survival_job', 'basic_survival', job.status?.code || 'survival_job_selected', 'A survival recovery work order selected the tick.', true, perception);
       }
       this.traceRecorder.finishLane('survival_job', { status: 'ineligible', reasonCode: 'no_survival_job' });
+
+      const goal = this.agent.goal_director;
+      const explicitPlayerJob = Boolean(
+        job?.activeOrder && PLAYER_JOB_SOURCES.has(job.activeOrder.source)
+      );
+      if (goal?.activeGoal || explicitPlayerJob) {
+        this.releaseTerminalHandoff('Fresh player-authorized work superseded the terminal handoff.', false);
+      } else if (goal?.hasProtectedCompletion?.()) {
+        this.traceRecorder.startLane('player_goal');
+        return this.select(
+          'player_goal',
+          'player_goal_output_reserved',
+          'A verified player-goal result remains reserved until later player-authorized work releases it.',
+          true,
+          perception,
+        );
+      } else {
+        const terminalHandoff = this.currentTerminalHandoff();
+        if (terminalHandoff) {
+          this.traceRecorder.startLane('player_goal');
+          return this.select(
+            'player_goal',
+            'player_goal_terminal_handoff',
+            'The typed player outcome is settling its bounded companion handoff; unrelated autonomous work remains suppressed.',
+            true,
+            perception,
+          );
+        }
+      }
+
       // The agenda decides what comes next and hands it to an executor; it
       // never acts itself. Running it before the goal and job lanes means a
       // step it dispatches is picked up by those lanes on this same tick.
@@ -685,7 +799,6 @@ export class BehaviorArbiter {
         }
       }
 
-      const goal = this.agent.goal_director;
       this.traceRecorder.startLane('player_goal');
       const goalActiveAtTickEntry = Boolean(goal?.activeGoal);
       if (goalActiveAtTickEntry) {
@@ -695,21 +808,19 @@ export class BehaviorArbiter {
           return this.select('player_goal', 'player_goal_update_failed', `Typed player goal failed safely: ${boundedText(error?.message || error)}`, true, perception);
         }
         const terminalTransition = !goal.activeGoal && !goal.inFlight && !this.agent.actions?.executing;
+        if (terminalTransition) {
+          this.beginTerminalHandoff({
+            goalId: goal.lastGoal?.id,
+            phase: goal.lastGoal?.phase || goal.status?.phase || 'terminal',
+            code: goal.status?.code,
+          });
+        }
         return this.select(
           'player_goal',
           goal.status?.code || (terminalTransition ? 'player_goal_terminal_handoff' : 'player_goal_selected'),
           terminalTransition
             ? 'The typed player goal reached a terminal transition; lower-priority lanes remain suppressed for this tick.'
             : 'A typed player goal selected the tick.',
-          true,
-          perception,
-        );
-      }
-      if (goal?.hasProtectedCompletion?.()) {
-        return this.select(
-          'player_goal',
-          'player_goal_output_reserved',
-          'A verified player-goal result remains reserved until later player-authorized work releases it.',
           true,
           perception,
         );
@@ -850,6 +961,7 @@ export class BehaviorArbiter {
       urgency: this.urgency,
       nextTickDelayMs: this.nextTickDelayMs,
       comportment: this.comportment().preset,
+      terminalHandoff: this.currentTerminalHandoff(),
       decisionTrace: this.traceRecorder.snapshot(16),
     };
   }

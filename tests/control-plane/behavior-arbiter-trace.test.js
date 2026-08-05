@@ -253,9 +253,127 @@ test('a typed goal terminal transition retains the player-goal lane for the whol
   assert.equal(progressionUpdates, 0);
 
   protectedCompletion = false;
+  arbiter.releaseTerminalHandoff('The protected completion was released.', false);
   const releasedStatus = await arbiter.update(25);
   assert.equal(releasedStatus.selectedLane, 'self_progression');
   assert.equal(progressionUpdates, 1);
+});
+
+test('bounded terminal handoff suppresses autonomy but yields to every higher companion owner', async () => {
+  let now = 10_000;
+  let progressionUpdates = 0;
+  let standingOrderUpdates = 0;
+  let agendaUpdates = 0;
+  let settleReport;
+  const report = new Promise(resolve => { settleReport = resolve; });
+  const { agent } = fakeAgent();
+  agent.rule_engine = { update() { standingOrderUpdates += 1; } };
+  agent.agenda_director = { update() { agendaUpdates += 1; } };
+  agent.progression_director = {
+    permitted: () => true,
+    update() {
+      progressionUpdates += 1;
+      this.inFlight = true;
+    },
+    inFlight: false,
+  };
+  agent.goal_director = {
+    activeGoal: { id: 'goal-failed-handoff' },
+    lastGoal: null,
+    inFlight: false,
+    status: { code: 'goal_acting' },
+    update() {
+      this.activeGoal = null;
+      this.lastGoal = { id: 'goal-failed-handoff', phase: 'failed' };
+      this.status = { code: 'skill_target_unreachable' };
+      agent.behavior_arbiter.beginTerminalHandoff({
+        goalId: this.lastGoal.id,
+        phase: this.lastGoal.phase,
+        code: this.status.code,
+        reportPromise: report,
+      });
+    },
+    hasProtectedCompletion: () => false,
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => now,
+    trace: { enabled: true, retention: 16 },
+  });
+  agent.behavior_arbiter = arbiter;
+
+  const terminal = await arbiter.update(25);
+  assert.equal(terminal.selectedLane, 'player_goal');
+  assert.equal(progressionUpdates, 0);
+  const standingOrdersAtTerminal = standingOrderUpdates;
+  const agendaAtTerminal = agendaUpdates;
+
+  now += 500;
+  const pending = await arbiter.update(25);
+  assert.equal(pending.code, 'player_goal_terminal_handoff');
+  assert.equal(pending.terminalHandoff.reportPending, true);
+  assert.equal(standingOrderUpdates, standingOrdersAtTerminal);
+  assert.equal(agendaUpdates, agendaAtTerminal);
+  assert.equal(progressionUpdates, 0);
+
+  settleReport(true);
+  await Promise.resolve();
+  now += 400;
+  assert.equal((await arbiter.update(25)).code, 'player_goal_terminal_handoff');
+  now += 200;
+  const released = await arbiter.update(25);
+  assert.equal(released.selectedLane, 'self_progression');
+  assert.equal(progressionUpdates, 1);
+
+  progressionUpdates = 0;
+  agent.progression_director.inFlight = false;
+  const neverSettles = new Promise(() => {});
+  arbiter.beginTerminalHandoff({
+    goalId: 'goal-priority-handoff',
+    phase: 'failed',
+    code: 'failed',
+    reportPromise: neverSettles,
+  });
+
+  agent.isOperatorHeld = () => true;
+  assert.equal((await arbiter.update(25)).selectedLane, 'operator_hold');
+  assert.equal(progressionUpdates, 0);
+  agent.isOperatorHeld = () => false;
+
+  agent.survival_director = {
+    inFlight: false,
+    update() { this.inFlight = true; },
+    blocksLowerPriority() { return this.inFlight; },
+  };
+  assert.equal((await arbiter.update(25)).selectedLane, 'basic_survival');
+  assert.equal(progressionUpdates, 0);
+  agent.survival_director = null;
+
+  agent.companion_context = { snapshot: () => ({ directive: { kind: 'follow' } }) };
+  agent.actions = {
+    executing: true,
+    currentActionId: 'follow-action',
+    currentActionLabel: 'action:follow',
+    currentActionOwner: 'player',
+  };
+  assert.equal((await arbiter.update(25)).selectedLane, 'player_directive');
+  assert.equal(arbiter.snapshot().terminalHandoff, null);
+  assert.equal(progressionUpdates, 0);
+
+  agent.actions = { executing: false, currentActionLabel: '', currentActionOwner: '' };
+  agent.companion_context = null;
+  arbiter.beginTerminalHandoff({
+    goalId: 'goal-before-new-command',
+    phase: 'failed',
+    code: 'failed',
+    reportPromise: neverSettles,
+  });
+  agent.goal_director.activeGoal = { id: 'goal-new-player-command' };
+  agent.goal_director.update = function update() {
+    this.status = { code: 'goal_assess' };
+  };
+  assert.equal((await arbiter.update(25)).selectedLane, 'player_goal');
+  assert.equal(arbiter.snapshot().terminalHandoff, null);
+  assert.equal(progressionUpdates, 0);
 });
 
 test('scheduled wakes record prior-period overrun while event-driven early wakes do not', async () => {
