@@ -3,13 +3,57 @@ import test from 'node:test';
 
 import { Vec3 } from 'vec3';
 
-import { selectMiningDeadlinePrefix } from '../src/agent/library/skills.js';
+import {
+    selectMiningDeadlinePrefix,
+    selectMiningRouteTool,
+} from '../src/agent/library/skills.js';
 import {
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
 } from '../src/agent/runtime/mining-corridor-planner.js';
 
 const key = position => `${position.x}:${position.y}:${position.z}`;
+
+test('corridor binding preserves the ore-tier pick when a capable stone pick is carried', () => {
+    const stonePick = {
+        name: 'stone_pickaxe',
+        type: 2,
+        slot: 10,
+        maxDurability: 131,
+        durabilityUsed: 94,
+    };
+    const ironPick = {
+        name: 'iron_pickaxe',
+        type: 3,
+        slot: 11,
+        maxDurability: 250,
+        durabilityUsed: 195,
+    };
+    const bot = {
+        inventory: { items: () => [stonePick, ironPick] },
+        registry: {
+            itemsByName: {
+                wooden_pickaxe: { id: 1 },
+                stone_pickaxe: { id: 2 },
+                iron_pickaxe: { id: 3 },
+                diamond_pickaxe: { id: 4 },
+            },
+        },
+    };
+    const corridorStone = {
+        name: 'stone',
+        canHarvest: type => type === 2 || type === 3 || type === 4,
+    };
+    const redstoneOre = {
+        name: 'redstone_ore',
+        canHarvest: type => type === 3 || type === 4,
+    };
+
+    assert.equal(
+        selectMiningRouteTool(bot, corridorStone, redstoneOre),
+        stonePick,
+    );
+});
 
 test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {
     const origin = new Vec3(0, 4, 0);

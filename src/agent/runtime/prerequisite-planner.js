@@ -340,6 +340,28 @@ function acquisitionCost(name) {
   return DEFAULT_ACQUISITION_COST;
 }
 
+// Recipe ranking is only a hint, but it must value material already carried
+// one deterministic transform upstream. Otherwise one acacia plank beats an
+// oak log that can immediately produce four planks, and the accepted plan
+// searches for a tree that is not present. Recursive ensureItem() still proves
+// the chosen chain; this bounded look-through only ranks equivalent recipes.
+function immediateCarriedProduction(bot, context, target) {
+  const itemId = bot.registry?.itemsByName?.[target]?.id;
+  if (!Number.isInteger(itemId)) return 0;
+  let best = 0;
+  for (const recipe of (bot.registry?.recipes?.[itemId] || []).slice(0, 32)) {
+    const ingredients = recipeIngredientEntries(bot, recipe);
+    if (ingredients.length === 0) continue;
+    const batches = ingredients.reduce((limit, ingredient) => Math.min(
+      limit,
+      Math.floor(ledgerCount(context, ingredient.name) / ingredient.count),
+    ), Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(batches) || batches < 1) continue;
+    best = Math.max(best, batches * recipeOutputCount(recipe));
+  }
+  return best;
+}
+
 function recipeScore(bot, context, target, recipe) {
   const ingredients = recipeIngredientEntries(bot, recipe);
   let score = 0;
@@ -347,6 +369,11 @@ function recipeScore(bot, context, target, recipe) {
     const available = ledgerCount(context, ingredient.name);
     score += Math.min(ingredient.count, available) * 100;
     if (available < ingredient.count) {
+      const missing = ingredient.count - available;
+      score += Math.min(
+        missing,
+        immediateCarriedProduction(bot, context, ingredient.name),
+      ) * 110;
       const cacheKey = `${ingredient.name}:${context.range}`;
       if (!context.proximityCache.has(cacheKey)) {
         context.proximityCache.set(

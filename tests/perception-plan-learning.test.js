@@ -243,6 +243,29 @@ test('The causal planner prefers the nearest physical source behind equivalent r
   assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64)');
 });
 
+test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {
+  const bot = nearbyRecipeBot();
+  bot.inventory.items = () => [
+    { name: 'birch_planks', type: 3, count: 1 },
+    { name: 'oak_log', type: 4, count: 1 },
+  ];
+  bot.inventory.slots = bot.inventory.items();
+  bot.findBlock = () => null;
+  bot.registry.recipes[1] = [
+    { ingredients: [{ id: 2, count: 2 }], result: { id: 1, count: 1 } },
+    { ingredients: [{ id: 3, count: 2 }], result: { id: 1, count: 1 } },
+  ];
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'test_tool',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.binding.command, '!craftRecipe("oak_planks", 1)');
+});
+
 test('The causal planner acquires remote recipe ingredients before provisioning the final workstation', () => {
   const plan = buildPrerequisitePlan(remoteTableRecipeBot(), {
     target: 'test_machine',

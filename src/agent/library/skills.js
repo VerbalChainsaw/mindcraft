@@ -141,7 +141,6 @@ const MAX_MINING_PROGRESS_ROUTE_STEPS = 12;
 const MAX_MINING_PROGRESS_VERTICAL = 6;
 const MIN_MINING_PROGRESS_STEPS = 2;
 const MAX_MINING_PROGRESS_STANCES = 12;
-const MAX_MINING_TRANCHE_BREAKS_PER_STEP = 3;
 const MAX_MINING_FALLING_COLUMN = 3;
 const FALLING_BLOCK_SETTLE_MS = 250;
 const MIN_SURFACE_ROUTE_PROGRESS = 2;
@@ -837,6 +836,20 @@ function hasInventoryRoomFor(bot, itemName) {
     ));
 }
 
+function carriedOutputCapacity(bot, itemName) {
+    const definition = bot.registry?.itemsByName?.[itemName];
+    const stackSize = Math.max(1, Number(definition?.stackSize) || 64);
+    const partialCapacity = bot.inventory.items()
+        .filter(item => item.name === itemName)
+        .reduce((total, item) => (
+            total + Math.max(0, (Number(item.stackSize) || stackSize) - item.count)
+        ), 0);
+    return {
+        stackSize,
+        capacity: partialCapacity + (bot.inventory.emptySlotCount() * stackSize),
+    };
+}
+
 async function closeContainerQuietly(container) {
     if (!container?.close) return;
     try {
@@ -1274,9 +1287,11 @@ function collectionHazardObservation(bot, targetBlock) {
     };
 }
 
-function collectionBreakTime(bot, block) {
+function collectionBreakTime(bot, block, boundTool = undefined) {
     try {
-        const tool = bot.pathfinder.bestHarvestTool?.(block);
+        const tool = boundTool === undefined
+            ? bot.pathfinder.bestHarvestTool?.(block)
+            : boundTool;
         // Break-time feeds route scoring. Passing an empty enchantment list made
         // every estimate wrong for enchanted gear, so an Efficiency V pickaxe
         // was costed as if it were plain.
@@ -1918,6 +1933,36 @@ export async function craftRecipe(bot, itemName, num=1) {
             return finish(false, { kind: 'craft', outcome: 'missing_material', target, retryable: true }, `You do not have enough materials to craft ${itemName}.`);
         }
 
+        const outputPerCraft = Math.max(
+            1,
+            Math.floor(Number(recipe?.result?.count || recipeDocs[0]?.[1]?.craftedCount) || 1),
+        );
+        const expectedOutputCount = craftAttempts * outputPerCraft;
+        let outputCapacity = carriedOutputCapacity(bot, itemName);
+        if (outputCapacity.capacity < expectedOutputCount) {
+            const requiredFreeSlots = Math.ceil(
+                (expectedOutputCount - outputCapacity.capacity) / outputCapacity.stackSize,
+            );
+            const protectedNames = new Set([
+                itemName,
+                ...Object.keys(requiredIngredients),
+            ]);
+            await freeCollectionWorkingSlots(bot, protectedNames, requiredFreeSlots);
+            outputCapacity = carriedOutputCapacity(bot, itemName);
+            if (outputCapacity.capacity < expectedOutputCount) {
+                return finish(false, {
+                    kind: 'craft',
+                    outcome: 'inventory_full',
+                    target,
+                    expectedOutputCount,
+                    availableOutputCapacity: outputCapacity.capacity,
+                    requiredFreeSlots,
+                    observedFreeSlots: bot.inventory.emptySlotCount(),
+                    retryable: true,
+                }, `Cannot craft ${itemName}: inventory has no safe capacity for the verified output.`);
+            }
+        }
+
         const beforeCount = inventoryCount(bot, itemName);
         try {
             await bot.craft(recipe, craftAttempts, craftingTable);
@@ -2093,7 +2138,8 @@ function inventoryToolTier(bot, family) {
 }
 
 function toolFamilyForBlock(block) {
-    const recommended = mc.getBlockTool(block?.name);
+    let recommended = null;
+    try { recommended = mc.getBlockTool(block?.name); } catch { /* use name fallback */ }
     const recommendedFamily = recommended?.match(/_(pickaxe|axe|shovel|hoe)$/)?.[1];
     if (recommendedFamily) return recommendedFamily;
     const name = String(block?.name || '');
@@ -2109,11 +2155,98 @@ function toolFamilyForBlock(block) {
     return null;
 }
 
-async function equipBestToolForBlock(bot, block) {
+function toolPreparationTier(item) {
+    return TOOL_PREPARATION_SPECS[item?.name]?.tier
+        ?? TOOL_TIER[String(item?.name || '').split('_')[0]]
+        ?? 0;
+}
+
+function minimumPreparedToolTierForBlock(bot, block, family) {
+    return Object.entries(TOOL_PREPARATION_SPECS)
+        .filter(([, spec]) => spec.family === family)
+        .map(([name, spec]) => ({
+            name,
+            tier: spec.tier,
+            type: bot.registry?.itemsByName?.[name]?.id,
+        }))
+        .filter(candidate => {
+            if (!Number.isInteger(candidate.type)) return false;
+            try { return block.canHarvest(candidate.type); } catch { return false; }
+        })
+        .sort((left, right) => left.tier - right.tier || left.name.localeCompare(right.name))[0]
+        ?.tier ?? null;
+}
+
+/**
+ * Bind a carried tool for authorized mining-route fill without spending the
+ * minimum tier needed for the final ore when a lower capable pick exists.
+ * Pathfinder and mineflayer-tool intentionally optimize for fastest harvest;
+ * target-tier preservation is project planning policy, so the binder owns the
+ * choice while Mineflayer continues to own equip and dig mechanics.
+ */
+export function selectMiningRouteTool(
+    bot,
+    block,
+    targetBlock,
+    { capacities = null, allowWorn = false } = {},
+) {
     const family = toolFamilyForBlock(block);
-    const preferred = family
-        ? bestInventoryTool(bot, family, { block })
+    if (!family) return null;
+    const items = bot.inventory.items()
+        .filter(item => (
+            item.name.endsWith(`_${family}`)
+            && (allowWorn || toolDurability(bot, item).healthy)
+            && (!capacities || capacities.get(item.slot) > 0)
+        ))
+        .filter(item => {
+            try { return block.canHarvest(item.type); } catch { return false; }
+        });
+    if (items.length === 0) return null;
+
+    const targetFamily = toolFamilyForBlock(targetBlock);
+    const targetTier = targetFamily === family
+        ? minimumPreparedToolTierForBlock(bot, targetBlock, family)
         : null;
+    if (family !== 'pickaxe' || !Number.isFinite(targetTier)) {
+        return items.sort((left, right) => (
+            toolPreparationTier(right) - toolPreparationTier(left)
+            || toolEnchantmentScore(bot, right, block) - toolEnchantmentScore(bot, left, block)
+            || (capacities?.get(right.slot) ?? toolDurability(bot, right).usable)
+                - (capacities?.get(left.slot) ?? toolDurability(bot, left).usable)
+        ))[0];
+    }
+
+    // Wooden and golden picks are poor corridor tools even where Minecraft
+    // technically permits them. Prefer the fastest carried tier below the
+    // target requirement (iron below diamond, stone below iron), otherwise the
+    // lowest capable target tier. Durability breaks ties within that role.
+    const responsive = items.filter(item => toolPreparationTier(item) >= TOOL_TIER.stone);
+    const candidates = responsive.length > 0 ? responsive : items;
+    const lowerTier = candidates.filter(item => toolPreparationTier(item) < targetTier);
+    const roleCandidates = lowerTier.length > 0 ? lowerTier : candidates;
+    return roleCandidates.sort((left, right) => {
+        const leftTier = toolPreparationTier(left);
+        const rightTier = toolPreparationTier(right);
+        const tierDelta = lowerTier.length > 0
+            ? rightTier - leftTier
+            : leftTier - rightTier;
+        if (tierDelta !== 0) return tierDelta;
+        const enchantDelta = toolEnchantmentScore(bot, right, block)
+            - toolEnchantmentScore(bot, left, block);
+        if (enchantDelta !== 0) return enchantDelta;
+        return (capacities?.get(right.slot) ?? toolDurability(bot, right).usable)
+            - (capacities?.get(left.slot) ?? toolDurability(bot, left).usable);
+    })[0];
+}
+
+async function equipBestToolForBlock(bot, block, options = {}) {
+    const family = toolFamilyForBlock(block);
+    const routeTool = options?.preserveTargetToolFor
+        ? selectMiningRouteTool(bot, block, options.preserveTargetToolFor)
+        : null;
+    const preferred = routeTool || (family
+        ? bestInventoryTool(bot, family, { block })
+        : null);
     if (preferred && block.canHarvest(preferred.type)) {
         await bot.equip(preferred, 'hand');
         return preferred;
@@ -5186,7 +5319,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                 if (tree.natural) {
                     if (
                         !hasInventoryRoomFor(bot, nearest.name)
-                        && !await freeCollectionWorkingSlot(bot, woodTypes)
+                        && !await freeCollectionWorkingSlots(bot, woodTypes)
                     ) {
                         setActionEvidence(bot, {
                             kind: 'collect',
@@ -5651,7 +5784,9 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             const requireHarvest = options?.requireHarvest !== false;
             let harvestable = false;
             try {
-                await equipBestToolForBlock(bot, block);
+                await equipBestToolForBlock(bot, block, {
+                    preserveTargetToolFor: options?.preserveTargetToolFor || null,
+                });
             } catch (err) {
                 if (requireHarvest) {
                     setActionEvidence(bot, { kind: 'break', outcome: 'missing_tool', target, error: err.message, retryable: true });
@@ -9695,16 +9830,15 @@ function toolDurabilityReserve(bot, item) {
 
 function assessMiningRouteDurability(
     bot,
-    blocks,
+    routeBlocks,
     {
         allowReplacementBootstrapReserve = false,
         allowUnharvestedBreaks = false,
-        minimumTrancheUsableDurability = 0,
-        replacementCapabilityBlocks = [],
+        targetBlock = null,
     } = {},
 ) {
     const items = bot.inventory.items();
-    const capacities = new Map(items.map((item, index) => {
+    const capacities = new Map(items.map(item => {
         const durability = toolDurability(bot, item);
         const capacity = Number.isFinite(durability.remaining)
             ? Math.max(
@@ -9716,123 +9850,105 @@ function assessMiningRouteDurability(
                 ),
             )
             : Number.POSITIVE_INFINITY;
-        return [index, capacity];
+        return [item.slot, capacity];
     }));
-    const requirements = blocks
-        .map(block => {
-            let harvestableByHand = false;
-            try { harvestableByHand = block.canHarvest(null); } catch { /* require a real tool */ }
-            const eligible = items
-                .map((item, index) => ({ item, index }))
-                .filter(({ item, index }) => {
-                    if (!(capacities.get(index) > 0)) return false;
-                    try { return block.canHarvest(item.type); } catch { return false; }
-                });
-            return { block, harvestableByHand, eligible };
+    const replacementFor = (blocks, minimumUsableDurability) => Object.keys(TOOL_PREPARATION_SPECS)
+        .map(name => {
+            const type = bot.registry?.itemsByName?.[name]?.id;
+            if (!Number.isInteger(type)) return null;
+            const item = { name, type };
+            const durability = toolDurability(bot, item);
+            return {
+                ...item,
+                freshUsable: Number.isFinite(durability.max)
+                    ? durability.max - toolDurabilityReserve(bot, item)
+                    : Number.POSITIVE_INFINITY,
+            };
         })
-        .filter(requirement => !requirement.harvestableByHand)
-        .sort((left, right) => left.eligible.length - right.eligible.length);
+        .filter(item => (
+            item
+            && item.freshUsable >= minimumUsableDurability
+            && blocks.every(block => {
+                try { return block.canHarvest(item.type); } catch { return false; }
+            })
+        ))
+        .sort((left, right) => (
+            TOOL_PREPARATION_SPECS[left.name].tier - TOOL_PREPARATION_SPECS[right.name].tier
+            || left.name.localeCompare(right.name)
+        ))[0] || null;
 
-    const trancheMinimum = Math.max(
-        0,
-        Math.floor(Number(minimumTrancheUsableDurability) || 0),
-    );
-    if (trancheMinimum > 0) {
-        const capabilityBlocks = [...new Map([
-            ...requirements.map(requirement => requirement.block),
-            ...(replacementCapabilityBlocks || []),
-        ].filter(block => block?.position).map(block => [miningCellKey(block.position), block])).values()];
-        const canHarvestTranche = item => capabilityBlocks.every(block => {
-            try { return block.canHarvest(item.type); } catch { return false; }
-        });
-        const carried = items.find((item, index) => (
-            capacities.get(index) >= trancheMinimum
-            && canHarvestTranche(item)
-        ));
-        if (!carried) {
-            // Select from the supported capability catalogue, not only from
-            // tool names that happen to remain in inventory. A fully spent or
-            // broken tool must still yield a concrete generic replacement.
-            const replacement = Object.keys(TOOL_PREPARATION_SPECS)
-                .map(name => {
-                    const type = bot.registry?.itemsByName?.[name]?.id;
-                    if (!Number.isInteger(type)) return null;
-                    const item = { name, type };
-                    const durability = toolDurability(bot, item);
-                    return {
-                        ...item,
-                        freshUsable: Number.isFinite(durability.max)
-                            ? durability.max - toolDurabilityReserve(bot, item)
-                            : Number.POSITIVE_INFINITY,
-                    };
-                })
-                .filter(item => (
-                    item
-                    && canHarvestTranche(item)
-                    && item.freshUsable >= trancheMinimum
-                ))
-                .sort((left, right) => (
-                    TOOL_PREPARATION_SPECS[left.name].tier - TOOL_PREPARATION_SPECS[right.name].tier
-                    || left.name.localeCompare(right.name)
-                ))[0] || null;
+    // The target is a separate capability role. Reserve exactly one usable
+    // break for it before assigning corridor fill; a fixed whole-tranche
+    // minimum wrongly forced the ore-tier pick to excavate every route block.
+    let targetTool = null;
+    if (targetBlock) {
+        targetTool = items
+            .filter(item => capacities.get(item.slot) > 0)
+            .filter(item => {
+                try { return targetBlock.canHarvest(item.type); } catch { return false; }
+            })
+            .sort((left, right) => (
+                collectionBreakTime(bot, targetBlock, left)
+                - collectionBreakTime(bot, targetBlock, right)
+                || toolDurability(bot, right).usable - toolDurability(bot, left).usable
+            ))[0] || null;
+        if (!targetTool) {
+            const replacement = replacementFor([targetBlock], 1);
             return {
                 ok: false,
                 outcome: 'insufficient_tool_durability',
-                requiredFor: capabilityBlocks.at(-1)?.name || requirements[0]?.block?.name || null,
-                requiredBreaks: requirements.length,
+                requiredFor: targetBlock.name,
+                requiredBreaks: routeBlocks.length + 1,
                 replacementTool: replacement?.name || null,
-                minimumUsableDurability: trancheMinimum,
-                trancheSized: true,
+                minimumUsableDurability: 1,
+                targetCapability: true,
             };
         }
+        const remaining = capacities.get(targetTool.slot);
+        if (Number.isFinite(remaining)) capacities.set(targetTool.slot, remaining - 1);
     }
 
     const assigned = new Map();
     let unharvestedBreaks = 0;
-    for (const requirement of requirements) {
-        const eligible = requirement.eligible
-            .filter(({ index }) => capacities.get(index) > 0)
-            .sort((left, right) => (
-                capacities.get(right.index) - capacities.get(left.index)
-                || left.item.name.localeCompare(right.item.name)
-            ));
-        const selected = eligible[0];
+    const requirements = routeBlocks.map(block => {
+        let harvestableByHand = false;
+        try { harvestableByHand = block.canHarvest(null); } catch { /* require a real tool */ }
+        return { block, harvestableByHand };
+    });
+    for (let index = 0; index < requirements.length; index += 1) {
+        const requirement = requirements[index];
+        if (requirement.harvestableByHand) continue;
+        const selected = selectMiningRouteTool(bot, requirement.block, targetBlock, {
+            capacities,
+            allowWorn: allowReplacementBootstrapReserve,
+        });
         if (!selected) {
             if (allowUnharvestedBreaks) {
                 unharvestedBreaks += 1;
                 continue;
             }
-            const replacement = items
-                .filter(item => (
-                    TOOL_PREPARATION_SPECS[item.name]
-                    && requirements.every(requirement => {
-                        try { return requirement.block.canHarvest(item.type); } catch { return false; }
-                    })
-                    && toolDurability(bot, item).max - toolDurability(bot, item).reserve
-                        >= requirements.length
-                ))
-                .sort((left, right) => (
-                    TOOL_PREPARATION_SPECS[left.name].tier - TOOL_PREPARATION_SPECS[right.name].tier
-                    || left.name.localeCompare(right.name)
-                ))[0] || null;
+            const remainingBlocks = requirements.slice(index).map(entry => entry.block);
+            const replacement = replacementFor(remainingBlocks, remainingBlocks.length);
             return {
                 ok: false,
                 outcome: 'insufficient_tool_durability',
                 requiredFor: requirement.block.name,
-                requiredBreaks: requirements.length,
+                requiredBreaks: routeBlocks.length + (targetBlock ? 1 : 0),
                 replacementTool: replacement?.name || null,
-                minimumUsableDurability: requirements.length,
+                minimumUsableDurability: remainingBlocks.length,
             };
         }
-        const remaining = capacities.get(selected.index);
-        if (Number.isFinite(remaining)) capacities.set(selected.index, remaining - 1);
-        assigned.set(selected.item.name, (assigned.get(selected.item.name) || 0) + 1);
+        const remaining = capacities.get(selected.slot);
+        if (Number.isFinite(remaining)) capacities.set(selected.slot, remaining - 1);
+        assigned.set(selected.name, (assigned.get(selected.name) || 0) + 1);
     }
     return {
         ok: true,
         outcome: 'tool_capacity_sufficient',
-        requiredBreaks: requirements.length,
+        requiredBreaks: routeBlocks.length + (targetBlock ? 1 : 0),
         assigned: Object.fromEntries(assigned),
+        targetTool: targetTool?.name || null,
+        targetReserve: targetBlock ? 1 : 0,
         unharvestedBreaks,
         replacementBootstrapReserve: allowReplacementBootstrapReserve,
         allowUnharvestedBreaks,
@@ -9853,7 +9969,6 @@ function assessMiningAccessPlan(
         allowNaturalFoliageExcavation = false,
         stageFallingDebris = false,
         maxRouteSteps = null,
-        minimumTrancheUsableDurability = 0,
     } = {},
 ) {
     const maximumSteps = maxRouteSteps !== null && Number.isFinite(Number(maxRouteSteps))
@@ -9930,7 +10045,14 @@ function assessMiningAccessPlan(
         }
         stepExcavationBlocks.push(newlyBoundBlocks);
         stepEstimatedDigMs.push(newlyBoundBlocks.reduce(
-            (total, block) => total + Math.max(50, collectionBreakTime(bot, block)),
+            (total, block) => total + Math.max(
+                50,
+                collectionBreakTime(
+                    bot,
+                    block,
+                    selectMiningRouteTool(bot, block, targetBlock),
+                ),
+            ),
             0,
         ));
         previous = step.position;
@@ -9957,7 +10079,14 @@ function assessMiningAccessPlan(
             0,
             stepEstimatedDigMs.length,
             ...stepExcavationBlocks.map(blocks => blocks.reduce(
-                (total, block) => total + Math.max(50, collectionBreakTime(bot, block)),
+                (total, block) => total + Math.max(
+                    50,
+                    collectionBreakTime(
+                        bot,
+                        block,
+                        selectMiningRouteTool(bot, block, targetBlock),
+                    ),
+                ),
                 0,
             )),
         );
@@ -9999,21 +10128,28 @@ function assessMiningAccessPlan(
             blockBudget,
         };
     }
-    const durability = assessMiningRouteDurability(bot, plannedBreaks, {
+    const durability = assessMiningRouteDurability(bot, excavationBlocks, {
         allowReplacementBootstrapReserve,
         allowUnharvestedBreaks,
-        minimumTrancheUsableDurability,
-        replacementCapabilityBlocks: targetBlock ? [targetBlock] : [],
+        targetBlock,
     });
     if (!durability.ok) return { ...durability, route, stance, blockBudget };
 
-    const estimatedDigMs = plannedBreaks.reduce(
-        (total, block) => total + Math.max(50, collectionBreakTime(bot, block)),
+    const estimatedRouteDigMs = excavationBlocks.reduce(
+        (total, block) => total + Math.max(
+            50,
+            collectionBreakTime(
+                bot,
+                block,
+                selectMiningRouteTool(bot, block, targetBlock),
+            ),
+        ),
         0,
     );
     const estimatedTargetDigMs = breakTarget && targetBlock
         ? Math.max(50, collectionBreakTime(bot, targetBlock))
         : 0;
+    const estimatedDigMs = estimatedRouteDigMs + estimatedTargetDigMs;
     const estimatedReturnMs = Math.ceil(route.length * MINING_ROUTE_STEP_ESTIMATE_MS);
     const estimatedDurationMs = Math.ceil(estimatedDigMs + estimatedReturnMs);
     if (
@@ -10494,6 +10630,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 {
                     requireHarvest: plan.allowUnharvestedBreaks !== true,
                     acceptFallingReplacement: true,
+                    preserveTargetToolFor: liveTarget,
                 },
             )) return await fail('route_block_not_broken');
             excavated += 1;
@@ -10786,21 +10923,11 @@ export async function mineSearchTunnel(
         const progressStances = fullRouteLowerBound > MAX_MINING_PROGRESS_ROUTE_STEPS
             ? boundedMiningProgressStances(bot, stagedTarget, finalStances)
             : [];
-        const minimumTrancheUsableDurability = Number.isFinite(fullRouteLowerBound)
-            ? Math.min(
-                10_000,
-                (
-                    Math.min(fullRouteLowerBound, MAX_MINING_PROGRESS_ROUTE_STEPS)
-                    * MAX_MINING_TRANCHE_BREAKS_PER_STEP
-                ) + 1,
-            )
-            : 0;
         let plan = progressStances.length > 0
             ? buildMiningAccessPlan(bot, stagedTarget, 4, {
                 breakTarget: false,
                 stances: progressStances,
                 maxRouteSteps: MAX_MINING_PROGRESS_ROUTE_STEPS,
-                minimumTrancheUsableDurability,
             })
             : buildMiningAccessPlan(bot, stagedTarget, requestedLength);
         if (progressStances.length > 0 && plan.ok) {
