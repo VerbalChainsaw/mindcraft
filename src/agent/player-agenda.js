@@ -57,8 +57,60 @@ const CONNECTIVE_PATTERNS = [
 
 const SEGMENT_DELIMITER = '\u0000';
 
+// One collective delivery sentence names several concrete outputs but only one
+// destination: "make me X, Y, and Z, then bring them here." GoalDirector is
+// deliberately single-slot, so bind that list into the already durable Agenda
+// instead of truncating it to whichever registry item the single-goal parser
+// happens to notice first.
+const COLLECTIVE_DELIVERY = /^(?:please\s+)?(?:make|craft|prepare)\s+(?:me\s+)?([\s\S]+?)(?:,\s*)?(?:and\s+)?then\s+(?:bring|deliver|give)\s+(?:them|those|all(?:\s+of\s+them)?)\s+(?:here|to\s+me)\s*[.!?]*$/i;
+
 function normalizeMessage(message) {
   return String(message ?? '').slice(0, MAX_MESSAGE_CHARS);
+}
+
+function canonicalListedItem(value, bot) {
+  const requested = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^(?:the|a|an|one)\s+/, '')
+    .replace(/[.!?]+$/g, '')
+    .replace(/[\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .slice(0, 64);
+  if (!requested) return null;
+  const registry = bot?.registry?.itemsByName;
+  if (!registry) return null;
+  if (registry[requested]) return requested;
+  const singular = requested.replace(/s$/, '');
+  return singular && registry[singular] ? singular : null;
+}
+
+function collectiveDeliverySteps(playerName, message, context) {
+  const match = COLLECTIVE_DELIVERY.exec(normalizeMessage(message).trim());
+  if (!match) return null;
+  const listed = match[1]
+    .replace(/,\s*$/g, '')
+    .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
+    .map(item => item.trim())
+    .filter(Boolean);
+  if (listed.length < 2 || listed.length > MAX_SEGMENTS) return null;
+
+  const targets = listed.map(item => canonicalListedItem(item, context?.bot));
+  // All-or-nothing is important: a durable player request may not silently
+  // forget one output because only the other names resolved.
+  if (targets.some(target => !target)) return null;
+  return targets.map((target, index) => ({
+    segment: listed[index],
+    command: `!requestItemGoal("deliver", ${JSON.stringify(target)}, 1, ${JSON.stringify(playerName)}, "delivery")`,
+    response: `I will make and deliver one ${target.replaceAll('_', ' ')}.`,
+    entry: {
+      kind: 'deliver',
+      requester: playerName,
+      target,
+      quantity: 1,
+      recipient: playerName,
+    },
+  }));
 }
 
 /**
@@ -195,6 +247,15 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const body = disposition === 'interrupt'
     ? (text.replace(INTERRUPT_LEADING, '').trim() || text)
     : text;
+  const collectiveSteps = collectiveDeliverySteps(playerName, body, context);
+  if (collectiveSteps) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: collectiveSteps,
+      unresolved: [],
+    };
+  }
   const segments = splitAgendaSegments(body);
   if (segments.length === 0) return null;
 

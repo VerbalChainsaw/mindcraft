@@ -202,6 +202,38 @@ test('Given an active typed player goal, survival shelter cannot seize persisten
   assert.equal(director.snapshot().code, 'job_cancelled');
 });
 
+test('Given a queued player agenda, automatic survival work yields before agenda dispatch', () => {
+  const agent = createAgent('builder');
+  agent.agenda_director = { hasUnfinished: () => true };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({ inventory: {} }),
+    now: () => 10_000,
+  });
+
+  assert.deepEqual(director.requestWorkOrder({ kind: 'emergency_shelter' }), {
+    accepted: false,
+    code: 'player_agenda_active',
+  });
+
+  const restoredAutomatic = director.submit(createWorkOrder({
+    id: 'restored-survival-order',
+    role: 'builder',
+    kind: 'emergency_shelter',
+    source: 'survival',
+    requester: 'TestMiner',
+    target: { name: 'worksite', x: 0, y: 64, z: 0 },
+    quota: 1,
+    blueprint: EMERGENCY_SHELTER_BLUEPRINT,
+  }));
+  assert.equal(restoredAutomatic.accepted, true);
+
+  director.update();
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.snapshot().code, 'job_cancelled');
+});
+
 test('Given an emergency shelter, its concrete material remains bound across inventory changes and restart', () => {
   const agent = createAgent('builder');
   agent.bot.inventory.items = () => [

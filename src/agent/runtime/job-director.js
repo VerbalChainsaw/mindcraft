@@ -713,6 +713,12 @@ export class JobDirector extends RoleDirector {
         id: this.agent.goal_director.activeGoal.id,
       };
     }
+    if (this.agent.agenda_director?.hasUnfinished?.()) {
+      return {
+        accepted: false,
+        code: 'player_agenda_active',
+      };
+    }
     if (this.activeOrder && !TERMINAL_PHASES.has(this.activeOrder.phase)) {
       if (this.activeOrder.source !== 'role') {
         return { accepted: false, code: 'explicit_job_active', id: this.activeOrder.id };
@@ -889,12 +895,16 @@ export class JobDirector extends RoleDirector {
       this.setStatus('suppressed', 'operator_hold', null, this.agent.operator_hold_reason || 'Operator Stop is active.', false);
       return;
     }
-    if (
+    const playerWorkActive = Boolean(
       this.agent.goal_director?.activeGoal
+      || this.agent.agenda_director?.hasUnfinished?.()
+    );
+    if (
+      playerWorkActive
       && this.activeOrder
       && ['role', 'survival'].includes(this.activeOrder.source)
     ) {
-      this.cancel('Automatic work yielded to the active typed player goal.');
+      this.cancel('Automatic work yielded to active player-authorized work.');
       return;
     }
     if (

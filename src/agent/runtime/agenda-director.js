@@ -100,6 +100,10 @@ export class AgendaDirector {
     return this.entries.filter(entry => entry.state === 'pending');
   }
 
+  hasUnfinished() {
+    return this.entries.some(entry => !isTerminalAgendaState(entry.state));
+  }
+
   activeEntry() {
     return this.entries.find(entry => entry.state === 'active') || null;
   }

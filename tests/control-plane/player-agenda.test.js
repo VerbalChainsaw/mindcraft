@@ -106,6 +106,30 @@ test('parsePlayerAgenda sequences a multi-step line into ordered entries', () =>
   assert.deepEqual(plan.steps.map(step => step.entry.kind), ['harvest', 'shelter', 'goto']);
 });
 
+test('parsePlayerAgenda preserves every registry-backed output in one collective delivery request', () => {
+  const itemsByName = Object.fromEntries([
+    'iron_pickaxe',
+    'iron_axe',
+    'iron_shovel',
+    'iron_sword',
+  ].map(name => [name, { name }]));
+  const plan = parsePlayerAgenda(
+    'phixxation',
+    'Make me an iron pickaxe, iron axe, iron shovel, and iron sword, then bring them here.',
+    { bot: { registry: { itemsByName } } },
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => step.entry), [
+    { kind: 'deliver', requester: 'phixxation', target: 'iron_pickaxe', quantity: 1, recipient: 'phixxation' },
+    { kind: 'deliver', requester: 'phixxation', target: 'iron_axe', quantity: 1, recipient: 'phixxation' },
+    { kind: 'deliver', requester: 'phixxation', target: 'iron_shovel', quantity: 1, recipient: 'phixxation' },
+    { kind: 'deliver', requester: 'phixxation', target: 'iron_sword', quantity: 1, recipient: 'phixxation' },
+  ]);
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda carries interrupt disposition and drops non-agenda segments', () => {
   const plan = parsePlayerAgenda('Gabriel', 'stop, follow me then come here', {}, { resolveDirective: stubResolver });
   assert.ok(plan);
