@@ -349,7 +349,7 @@ This interruption does not change the Phase 4 direction. After the required revi
 
 ## Phase 4: Capability catalogue and generalized compound routes
 
-**Status:** the catalogue boundary is live for `collect_wood`, `collect_block`, `craft`, `smelt`, `equip`, and exact-item delivery; the prerequisite planner emits those typed actions and GoalDirector executes and verifies them. Do not recreate it, replace it, or start a parallel framework.
+**Status:** the catalogue boundary is live for `collect_wood`, `collect_block`, `craft`, `smelt`, `equip`, exact-item delivery, and mixed-family delivery; the prerequisite planner and durable directors execute and verify those typed actions. Do not recreate it, replace it, or start a parallel framework.
 
 ### Exact-item delivery checkpoint
 
@@ -365,7 +365,13 @@ That leak is repaired at the shared ownership boundary in `c89fee1`. BehaviorArb
 
 The decisive rerun used the same one-cobblestone miner order. Paper recorded player `73→74`, bot `466→465`, no loose cobblestone, work-order checkpoint `delivered: 1`, capability result `skill_delivered`, and a live `player_job` terminal handoff. Stop then held the runtime before any autonomous capacity release. Temporary leader-delivery settings were removed and the bot restarted under its persisted hold.
 
-Next, after the required read-only checkpoint review, migrate generic family delivery through the same catalogue without changing miner/lumberjack strategy or `giveFamilyToPlayer` mechanics. Prove at least one mixed-species log-family handoff and one exact job handoff on unchanged planner code. Do not add item recipes, a delivery controller, a second inventory system, or a new retry loop.
+### Mixed-family delivery checkpoint
+
+Generic family delivery now uses one `deliver_item_family` capability across GoalDirector and generic lumberjack leader delivery. The capability requires a supported family, sufficient aggregate carried quantity, and one present unambiguous recipient; it then binds an immutable concrete item/quantity manifest. The existing `giveFamilyToPlayer` adapter still delegates every concrete stack to the accepted exact `giveToPlayer` mechanic under ActionManager, but now retains each exact pickup receipt. Aggregate completion and partial progress are derived only from those receipts, not from an ambiguous inventory decrease. Partial verified transfers advance the durable job checkpoint before recovery, and interrupted results remain censored.
+
+The unchanged generic lumberjack campaign carried two oak and two birch logs and requested three generic logs. In 6.97 seconds it delivered two birch plus one oak through two exact pickups, reached `complete` with zero failed attempts and checkpoint `delivered: 3`, and obeyed immediate Stop. Paper verified phixxation oak `15→16` and birch `0→2`, MindcraftBot oak `2→1` and birch `2→0`, and no loose oak or birch entities. The temporary fixture chest was restored to its exact slot, leader settings were removed, and the runtime restarted held.
+
+Preserve `e07d0d3` and obtain the required read-only checkpoint review. Do not add item recipes, a delivery controller, a second inventory system, or a new retry loop while this boundary is under review.
 
 After the Phase 3 review gate, continue migrating remaining duplicated planning seams into this existing catalogue without changing their physical acceptance behavior. The next tranche begins with an exact ownership map of workstation, retrieval, delivery, navigation/stance binding, and remaining nested prerequisite decisions, then implements the smallest coherent cross-domain migration that removes a real duplicate strategy loop. It must finish with an unchanged real campaign, not merely catalogue unit tests.
 
@@ -448,4 +454,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Preserve the physically accepted exact-item delivery checkpoint and obtain the required read-only review. Then migrate the existing family-delivery seam through the same catalogue and prove a mixed-species log-family handoff plus an exact job handoff without changing their planners. Continue afterward by the first shared gameplay blocker; do not add item-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from a gameplay outcome.
+Preserve the physically accepted exact-item and mixed-family delivery checkpoint and obtain the required read-only review. After acceptance, continue the existing Phase 4 sequence at the next shared duplicated capability seam, anchored to one unchanged real gameplay campaign. Do not add item-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from a gameplay outcome.
