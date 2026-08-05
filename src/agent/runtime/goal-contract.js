@@ -20,7 +20,13 @@ const SUBGOAL_STATES = new Set(['pending', 'acting', 'succeeded', 'failed', 'can
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_PLAYER = /^[A-Za-z0-9_. -]{1,64}$/;
 const CANONICAL_NAME = /^[a-z0-9_]{1,80}$/;
-const MAX_SUBGOALS = 64;
+// Buried targets are bound within a 64-block collection radius, while the
+// deterministic corridor contract permits vertical distance + 32 bounded
+// dogleg steps + 2. Leave room for that 98-step physical route plus generic
+// tool, fuel, workstation, smelt, craft, and equip prerequisites. This remains
+// a hard finite ceiling; productive failures retain their separate four-attempt
+// limit and every physical action retains its own time/destruction budget.
+const MAX_SUBGOALS = 128;
 const MAX_QUANTITY = 2304;
 const MAX_FAILED_TARGETS = 24;
 

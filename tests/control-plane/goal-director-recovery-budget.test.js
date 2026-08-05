@@ -178,7 +178,9 @@ test('recovery history does not spend the productive-step ceiling, which still f
         outcome: 'search_advanced',
         target: { name: 'iron_ore', x: 4, y: 12, z: 8 },
         observedPosition: { x: 2, y: 24, z: 6 },
-        distance: 9,
+        // Occupying the next block center from an off-center start can be
+        // less than one floating-point block despite a verified route step.
+        distance: 0.75,
         routeSteps: 7,
         routeDigging: true,
         returnable: true,
@@ -298,7 +300,7 @@ test('one no-progress concrete failure relocates before the same regional signat
   director.update();
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.deepEqual(commands, ['!moveAway(32)']);
+  assert.deepEqual(commands, ['!moveAway(64)']);
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 2);
   assert.equal(director.activeGoal.subgoals.at(-1).kind, 'recover');

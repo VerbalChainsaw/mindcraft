@@ -3992,24 +3992,43 @@ export async function defendPlayer(bot, username, range=10) {
     return await followPlayer(bot, username, normalizePlayerDistance(Math.min(3, Number(range) || 3), 3));
 }
 
-async function cacheSmallExpendableStack(bot, protectedNames) {
+async function freeCollectionWorkingSlot(bot, protectedNames) {
     if (bot.inventory.emptySlotCount() > 0) return true;
-    const stacksByName = new Map();
-    for (const item of bot.inventory.items()) {
-        const stacks = stacksByName.get(item.name) || [];
-        stacks.push(item);
-        stacksByName.set(item.name, stacks);
-    }
-    const candidate = [...stacksByName.entries()]
-        .filter(([name, stacks]) => (
-            stacks.length === 1
-            && stacks[0].count > 0
-            && stacks[0].count <= 8
-            && NATURAL_FILL_BLOCKS.has(name)
-            && !protectedNames.has(name)
+    const inventoryItems = bot.inventory.items();
+    let candidate = inventoryItems
+        .filter(item => (
+            item.count > 0
+            && item.count <= 8
+            && Number.isInteger(item.slot)
+            && NATURAL_FILL_BLOCKS.has(item.name)
+            && !protectedNames.has(item.name)
         ))
-        .map(([name, [item]]) => ({ name, count: item.count }))
+        .map(item => ({
+            name: item.name,
+            count: item.count,
+            slot: item.slot,
+            kind: 'natural_fill',
+        }))
         .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))[0];
+    if (!candidate) {
+        // A carried one-block workstation is already durable world state, not
+        // disposable inventory. Placing it in a verified local cell frees the
+        // working slot while preserving the capability for the smelt/craft
+        // step that requested the material. Prefer the crafting table because
+        // furnace inventory may contain state when one already exists nearby.
+        candidate = inventoryItems.find(item => (
+            ['crafting_table', 'furnace'].includes(item.name)
+            && !protectedNames.has(item.name)
+            && item.count === 1
+            && Number.isInteger(item.slot)
+        ));
+        if (candidate) candidate = {
+            name: candidate.name,
+            count: candidate.count,
+            slot: candidate.slot,
+            kind: 'workstation',
+        };
+    }
     if (!candidate) return false;
 
     let placed = 0;
@@ -4018,6 +4037,12 @@ async function cacheSmallExpendableStack(bot, protectedNames) {
         && inventoryCount(bot, candidate.name) > 0
         && placed < candidate.count
     ) {
+        const selectedSlotItem = bot.inventory.slots[candidate.slot];
+        if (
+            selectedSlotItem?.name !== candidate.name
+            && bot.heldItem?.name === candidate.name
+            && Number.isInteger(bot.heldItem.slot)
+        ) candidate.slot = bot.heldItem.slot;
         const position = world.getNearestFreeSpace(bot, 1, 8);
         if (!position || !await placeBlock(
             bot,
@@ -4028,15 +4053,15 @@ async function cacheSmallExpendableStack(bot, protectedNames) {
             'bottom',
             true,
             false,
+            candidate.slot,
         )) return false;
         placed += 1;
     }
     const freed = bot.inventory.emptySlotCount() > 0;
     if (freed) {
-        log(
-            bot,
-            `Cached ${placed} expendable ${candidate.name} block${placed === 1 ? '' : 's'} in verified local cells to free one working slot.`,
-        );
+        log(bot, candidate.kind === 'workstation'
+            ? `Placed carried ${candidate.name} in a verified local cell to preserve it and free one working slot.`
+            : `Cached ${placed} expendable ${candidate.name} block${placed === 1 ? '' : 's'} in verified local cells to free one working slot.`);
     }
     return freed;
 }
@@ -4286,7 +4311,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 ...blocktypes,
                 ...[...expectedDropTypes].map(type => mc.getItemName(type)).filter(Boolean),
             ]);
-            const cleared = await cacheSmallExpendableStack(bot, protectedNames);
+            const cleared = await freeCollectionWorkingSlot(bot, protectedNames);
             hasFreeSlot = bot.inventory.emptySlotCount() > 0;
             hasPotentialStackSpace = bot.inventory.items().some(item => (
                 expectedDropTypes.has(item.type)
@@ -4949,7 +4974,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                 if (tree.natural) {
                     if (
                         !hasInventoryRoomFor(bot, nearest.name)
-                        && !await cacheSmallExpendableStack(bot, woodTypes)
+                        && !await freeCollectionWorkingSlot(bot, woodTypes)
                     ) {
                         setActionEvidence(bot, {
                             kind: 'collect',
@@ -6031,6 +6056,7 @@ export async function placeBlock(
     placeOn='bottom',
     dontCheat=false,
     replaceObstruction=true,
+    preferredInventorySlot=null,
 ) {
     /**
      * Place the given block type at the given position. It will build off from any adjacent blocks. Will fail if there is a block in the way or nothing to build off of.
@@ -6041,6 +6067,7 @@ export async function placeBlock(
      * @param {number} z, the z coordinate of the block to place.
      * @param {string} placeOn, the preferred side of the block to place on. Can be 'top', 'bottom', 'north', 'south', 'east', 'west', or 'side'. Defaults to bottom. Will place on first available side if not possible.
      * @param {boolean} dontCheat, overrides cheat mode to place the block normally. Defaults to false.
+     * @param {number|null} preferredInventorySlot, exact source slot for bounded inventory compaction. Defaults to normal item selection.
      * @returns {Promise<boolean>} true if the block was placed, false otherwise.
      * @example
      * let p = world.getPosition(bot);
@@ -6119,7 +6146,10 @@ export async function placeBlock(
     else if (item_name === 'lava') {
         item_name = 'lava_bucket';
     }
-    let block_item = bot.inventory.findInventoryItem(item_name);
+    let block_item = Number.isInteger(preferredInventorySlot)
+        ? bot.inventory.slots[preferredInventorySlot]
+        : bot.inventory.findInventoryItem(item_name);
+    if (block_item?.name !== item_name) block_item = null;
     if (!block_item && bot.game.gameMode === 'creative' && !bot.restrict_to_inventory) {
         await bot.creative.setInventorySlot(36, mc.makeItem(item_name, 1)); // 36 is first hotbar slot
         block_item = bot.inventory.findInventoryItem(item_name);

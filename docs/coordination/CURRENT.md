@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: parent ef1a3c4; repeat-compass capability tranche is preserved by this commit
-Milestone: a fresh compass completed twice through generic buried-resource, smelt, workstation, and craft capabilities
+Functional source checkpoint: parent bd4c02e; deep-acquisition responsiveness corrections are preserved by this commit
+Milestone: packed-inventory relief, exact stack placement, persisted-goal resume, and truthful mining prefixes work physically
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: package-first movement/collection, deterministic mining access, and bounded inventory/workstation primitives
-Live blocker: none in the repeat compass path
-Last physical result: goal-20f601f0 completed with attempts 0; Paper verified two compasses and scale 0.9999999
-Next campaign: verified delivery on unchanged code, then an unrelated catalogue goal
+Owned subsystem: deterministic deep acquisition, package-first movement, and bounded inventory/workstation primitives
+Live blocker: ordinary deep gold candidates still produce no usable deterministic mining stance across distinct regions
+Last physical result: goal-3b2f182b failed after verified progress and three 64-block region changes; no clock was produced
+Next campaign: center-audit exact gold stance/corridor rejection, then rerun the same clock request
 Jordan review: C2J-20260804-1720-responsive-bucket remains pending

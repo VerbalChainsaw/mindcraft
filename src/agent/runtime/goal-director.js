@@ -29,6 +29,12 @@ const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
 const FAILED_TARGET_EXCLUSION_RADIUS = 4;
+// Collection binds candidates inside a 64-block physical scan. A 32-block
+// retreat leaves most of that candidate field unchanged, so repeated failures
+// can spend the goal budget on the same contaminated region. Move one complete
+// scan radius before rebinding; owned Pathfinder still enforces the action
+// deadline, recent-region exclusions, and non-destructive movement policy.
+const ACQUISITION_REGION_RELOCATION_DISTANCE = 64;
 // A concrete acquisition failure already excludes that source. Trying a
 // second source with the same failure signature in the same search region
 // spends productive budget without changing strategy; relocate once and let
@@ -68,7 +74,6 @@ function verifiedMiningRouteProgress(kind, skill) {
     && skill?.routeDigging === true
     && skill?.returnable === true
     && Number(skill?.routeSteps) > 0
-    && Number(skill?.distance) >= 1
     && [
       skill?.target?.x,
       skill?.target?.y,
@@ -212,7 +217,7 @@ function recoveryCommand(goal) {
   if (
     /(?:not_found|no_safe|unreachable|search|resource|no_path|path_|stuck)/.test(code)
     && !/(?:missing_material|missing_item|missing_tool|invalid_|table_unreachable|furnace_unreachable)/.test(code)
-  ) return '!moveAway(32)';
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE})`;
   return null;
 }
 
@@ -221,11 +226,11 @@ function plannedDisengagementCommand(goal) {
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:resource_not_found|search_exhausted)/.test(code)
-  ) return '!moveAway(32)';
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE})`;
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken|timeout|action_deadline)/.test(code)
-  ) return '!moveAway(32)';
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE})`;
   return null;
 }
 
