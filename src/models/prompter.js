@@ -12,7 +12,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createModel, resolveConfiguredModel } from './_model_map.js';
 import { createRoutedModel, FallbackRouter } from './fallback-router.js';
-import { buildMemoryRecall } from '../agent/runtime/memory-recall.js';
+import { buildPromptMemory } from '../agent/runtime/memory-recall.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -282,7 +282,7 @@ export class Prompter {
         return this._disposePromise;
     }
 
-    async replaceStrings(prompt, messages, examples=null, to_summarize=[], last_goals=null) {
+    async replaceStrings(prompt, messages, examples=null, to_summarize=[], last_goals=null, memoryPurpose='runtime') {
         const characterName = this.agent.runtime?.identity?.displayName || this.agent.name;
         prompt = prompt.replaceAll('$NAME', characterName);
         if (prompt.includes('$PERSONA')) {
@@ -336,18 +336,14 @@ export class Prompter {
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY')) {
-            // Relevance-ranked against a hard cap rather than the most recent
-            // N of everything, so remembering more never crowds out thinking.
-            let recalled = '';
-            try {
-                recalled = buildMemoryRecall(this.agent, {
-                    focusText: messages?.slice(-2).map(message => message?.content || '').join(' ') || '',
-                });
-            } catch (error) {
-                console.warn(`[memory] Recall failed, falling back to the plain summary: ${String(error?.message || error).slice(0, 160)}`);
-                recalled = this.agent.memory_bank?.personal?.getPromptSummary?.() || '';
-            }
-            prompt = prompt.replaceAll('$MEMORY', [this.agent.history.memory, recalled].filter(Boolean).join('\n'));
+            // Legacy prose is available only to its own compaction pass.
+            // Runtime prompts receive authority-grounded structured recall;
+            // obsolete task narration can never masquerade as a work queue.
+            const memory = buildPromptMemory(this.agent, {
+                purpose: memoryPurpose,
+                focusText: messages?.slice(-2).map(message => message?.content || '').join(' ') || '',
+            });
+            prompt = prompt.replaceAll('$MEMORY', memory);
         }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
@@ -576,7 +572,7 @@ export class Prompter {
     async promptMemSaving(to_summarize) {
         await this.checkCooldown();
         let prompt = this.profile.saving_memory;
-        prompt = await this.replaceStrings(prompt, null, null, to_summarize);
+        prompt = await this.replaceStrings(prompt, null, null, to_summarize, null, 'summary');
         let resp = await (this.memory_model || this.chat_model).sendRequest([], prompt);
         await this._saveLog(prompt, to_summarize, resp, 'memSaving');
         if (resp?.includes('</think>')) {
