@@ -179,6 +179,43 @@ The locked falling-debris contract is now:
 
 This staged correction passes the focused checks but is not physically accepted: death respawned the bot at the natural surface, so replaying the buried sand setup would manufacture state. Preserve that distinction. Continue the unchanged `Please make a clock.` request from the real respawn state. The request must still acquire gold through the generic capability graph, smelt it, craft one clock, and pass immediate Paper inventory verification. If buried acquisition exercises the staged corridor again, its physical result governs. No new architecture tranche begins before that clock result.
 
+### Extra-high evaluation checkpoint: bounded deep convergence
+
+The unchanged clock campaign from the real respawn state then physically completed wood acquisition, wooden-tool bootstrap, stone mining, stone-tool replacement, iron acquisition, smelting, and iron-pickaxe replacement. A local furnace placement repeated one bad cell, while a direct replay placed and used a furnace at another safe cell. The working-tree repair now binds up to four distinct anchored, unoccupied local workstation cells for crafting tables, furnaces, and brewing stands. Its focused checks pass; the unchanged campaign must still prove the fallback physically.
+
+Gold acquisition exposed a separate binder defect. Five concrete gold targets survived through real region changes and were rejected before excavation. Solid regions were dominated by excavation-budget and route-support conflicts; an open-cave region was dominated by unsafe air support, water ingress, and support conflicts. This is not evidence for a larger expansion limit. The exact-target path currently asks `buildMiningAccessPlan()` to find one complete route from the current stance to the ore. `selectMiningDeadlinePrefix()` can advance only after that complete route exists, so a safe search that cannot solve the entire 30-plus-level corridor has no legal way to make bounded progress.
+
+The selected correction is receding-horizon binding at the existing capability boundary:
+
+1. preserve the selected ore name and coordinates throughout every intermediate leg;
+2. when the exact usable stance is beyond one bounded corridor leg, enumerate loaded, anchored intermediate standing cells that are legal under the same excavation policy;
+3. accept only a cell whose bounded route lower bound fits the leg ceiling and whose endpoint strictly reduces the remaining lower bound to an exact final stance;
+4. run the existing voxel search, durability/deadline preflight, staged-debris executor, and dig-disabled native Pathfinder traversal unchanged for that leg;
+5. report verified `search_advanced` only after occupying a returnable intermediate stance, then rebind against fresh blocks under the same productive attempt;
+6. if no bounded convergent leg exists, fail the concrete target cheaply so `GoalDirector` can change target or region.
+
+Do not add support placement, bridge building, dig-enabled Pathfinder, more corridor templates, or a larger search budget in this correction. Those remain possible later primitives only if a bounded staged run physically proves that existing anchored terrain cannot progress. Acceptance remains one Paper-verified clock from the same natural request. The terminal-player-goal/autonomy race and protected temporary-workstation cleanup are confirmed shared defects, but they do not supersede this first acquisition blocker.
+
+Physical result: bounded convergence is materially correct. From Y49, the unchanged clock goal descended through multiple verified legs to Y3, collected four raw gold, returned to the surface, and smelted four Paper-verified gold ingots while remaining at full health. The same code then began a staged redstone descent and preserved the nearly spent iron pickaxe for the final ore while lower-tier tools excavated the route.
+
+The full clock did not pass. Redstone exposed the next shared ownership defect: each intermediate leg advertised only its local durability demand, so the prerequisite planner repeatedly provisioned a wooden pickaxe instead of sizing one tool for the remaining exact-target tranche. Placed crafting tables and furnaces were protected from their own authorized cleanup, forcing repeated workstation recreation. Partial progress did not leave a durable active target binding across those prerequisites, so later actions could reselect and open another corridor. Superseded reserve tools and bulk excavation drops accumulated until all 36 inventory slots were occupied. The goal reached its 128-subgoal ceiling with zero productive attempts charged and failed truthfully as `skill_inventory_full`; immediate lower-priority autonomy was stopped separately.
+
+Do not raise the subgoal, expansion, destruction, or inventory ceilings. The next correction must trace and repair the shared contract across the catalogue, `GoalDirector`, and the mining binder:
+
+1. retain the concrete target and remaining lower-bound cost while a verified staged route is in progress;
+2. size generic tool replacement for the bounded remaining tranche, not one local leg, without spending the protected reserve;
+3. recover authorized temporary workstations despite general player-block protection;
+4. reserve collection capacity and retire or cache only genuinely superseded low-tier tools and bounded bulk excavation output;
+5. clear that tranche state on target change, failure, cancellation, or verified completion;
+6. rerun `Please make a clock.` from the surviving Paper state and require one verified redstone plus one verified clock.
+
+This is a capability-contract repair, not permission to add a general inventory framework, item-specific clock behavior, automatic broad disposal, or another planner.
+
+```text
+[codeplan · bounded-deep-convergence · IN · mode: constrained · profile: compact · confidence: high · candidates: V1=larger-full-route-search/same-binder;V2=deadline-prefix-without-complete-route/executor-policy;V3=bounded-intermediate-stance/binder-policy · lean: V3 · conservative: V3]
+[codeplan · bounded-deep-convergence · PLAN-OUT · mode: constrained · profile: compact · pick: V3 · baseline: V1 · confidence: high · beatBaseline: yes · scores: V1=0.34;V2=0.58;V3=0.91 · reason: V3 preserves exact-target ownership and every existing safety/execution contract while turning an oversized binding problem into finite verified legs · planned-fingerprint: same-target/bounded-stance/strict-progress/rebind]
+```
+
 ```text
 [codeplan · buried-corridor-binding · IN · mode: constrained · profile: compact · confidence: high · candidates: V1=native-Pathfinder-dry-run/adapter/internal-reuse;V2=binder-owned-bounded-voxel-search/new-module/zero-dep · lean: V2 · conservative: V1]
 [codeplan · buried-corridor-binding · PLAN-OUT · mode: constrained · profile: compact · pick: V2 · baseline: V1 · confidence: high · beatBaseline: yes · scores: V1=0.62;V2=0.85 · reason: V2 searches only legal excavation geometry at the existing binder boundary while V1 cannot constrain Pathfinder's movement graph tightly enough without package surgery · planned-fingerprint: binder-owned/bounded-search/zero-dep/existing-executor]

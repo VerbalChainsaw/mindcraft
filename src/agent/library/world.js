@@ -1,6 +1,73 @@
 import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.js';
 import * as mc from '../../utils/mcdata.js';
+import {
+    isAnchoredGameplaySupport,
+    isProtectedGameplayBlock,
+} from '../runtime/gameplay-safety.js';
 
+
+function cellKey(position) {
+    return `${position.x}:${position.y}:${position.z}`;
+}
+
+function entityOccupiesCell(bot, cell) {
+    return Object.values(bot.entities || {}).some(entity => {
+        if (!entity?.position || entity.id === bot.entity?.id) return false;
+        const feet = entity.position.floored();
+        return cell.equals(feet) || cell.equals(feet.offset(0, 1, 0));
+    });
+}
+
+export function getNearestFreeSpaces(
+    bot,
+    size = 1,
+    distance = 8,
+    { limit = 8, exclude = [] } = {},
+) {
+    const excluded = new Set((exclude || []).map(position => cellKey(position)));
+    const emptyPositions = (bot.findBlocks({
+        matching: block => block?.name === 'air',
+        maxDistance: distance,
+        count: 1000,
+    }) || []).sort((left, right) => (
+        bot.entity.position.distanceTo(left) - bot.entity.position.distanceTo(right)
+        || left.y - right.y
+        || left.x - right.x
+        || left.z - right.z
+    ));
+    const occupiedFeet = bot.entity.position.floored();
+    const occupiedHead = occupiedFeet.offset(0, 1, 0);
+    const results = [];
+    for (const position of emptyPositions) {
+        if (excluded.has(cellKey(position))) continue;
+        let empty = true;
+        for (let x = 0; x < size; x++) {
+            for (let z = 0; z < size; z++) {
+                const cell = position.offset(x, 0, z);
+                const top = bot.blockAt(cell);
+                const bottom = bot.blockAt(cell.offset(0, -1, 0));
+                const occupiedByBot = cell.equals(occupiedFeet) || cell.equals(occupiedHead);
+                if (
+                    !top
+                    || top.name !== 'air'
+                    || occupiedByBot
+                    || entityOccupiesCell(bot, cell)
+                    || !bottom
+                    || isProtectedGameplayBlock(bottom)
+                    || !isAnchoredGameplaySupport(bot, bottom)
+                ) {
+                    empty = false;
+                    break;
+                }
+            }
+            if (!empty) break;
+        }
+        if (!empty) continue;
+        results.push(position);
+        if (results.length >= Math.max(1, Math.floor(Number(limit) || 1))) break;
+    }
+    return results;
+}
 
 export function getNearestFreeSpace(bot, size=1, distance=8) {
     /**
@@ -12,34 +79,7 @@ export function getNearestFreeSpace(bot, size=1, distance=8) {
      * @example
      * let position = world.getNearestFreeSpace(bot, 1, 8);
      **/
-    let empty_pos = bot.findBlocks({
-        matching: (block) => {
-            return block && block.name == 'air';
-        },
-        maxDistance: distance,
-        count: 1000
-    });
-    const occupiedFeet = bot.entity.position.floored();
-    const occupiedHead = occupiedFeet.offset(0, 1, 0);
-    for (let i = 0; i < empty_pos.length; i++) {
-        let empty = true;
-        for (let x = 0; x < size; x++) {
-            for (let z = 0; z < size; z++) {
-                let top = bot.blockAt(empty_pos[i].offset(x, 0, z));
-                let bottom = bot.blockAt(empty_pos[i].offset(x, -1, z));
-                const cell = empty_pos[i].offset(x, 0, z);
-                const occupiedByBot = cell.equals(occupiedFeet) || cell.equals(occupiedHead);
-                if (!top || top.name !== 'air' || occupiedByBot || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
-                    empty = false;
-                    break;
-                }
-            }
-            if (!empty) break;
-        }
-        if (empty) {
-            return empty_pos[i];
-        }
-    }
+    return getNearestFreeSpaces(bot, size, distance, { limit: 1 })[0];
 }
 
 

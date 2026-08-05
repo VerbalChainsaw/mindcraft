@@ -21,7 +21,11 @@ import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
-import { searchSupportedMiningVoxelCorridors } from '../runtime/mining-corridor-planner.js';
+import {
+    minimumMiningCorridorSteps,
+    searchSupportedMiningVoxelCorridors,
+    selectBoundedMiningProgressStances,
+} from '../runtime/mining-corridor-planner.js';
 import {
     isWaterPotion,
     potionFingerprint,
@@ -131,6 +135,10 @@ const MAX_MINING_EXCAVATION_BLOCKS = 96;
 const MAX_MINING_CORRIDOR_EXPANSIONS = 6_000;
 const MAX_MINING_CORRIDOR_SOLUTIONS = 12;
 const MAX_MINING_CORRIDOR_DETOUR = 8;
+const MAX_MINING_PROGRESS_ROUTE_STEPS = 12;
+const MAX_MINING_PROGRESS_VERTICAL = 6;
+const MIN_MINING_PROGRESS_STEPS = 2;
+const MAX_MINING_PROGRESS_STANCES = 12;
 const MAX_MINING_FALLING_COLUMN = 3;
 const FALLING_BLOCK_SETTLE_MS = 250;
 const MIN_SURFACE_ROUTE_PROGRESS = 2;
@@ -139,6 +147,7 @@ const MAX_SURFACE_CORRIDOR_RISE = 4;
 const SURFACE_CORRIDOR_ROUTE_SLACK = 12;
 const MAX_SURFACE_CORRIDOR_STANCES = 4;
 const SURFACE_STANCE_SCAN_RADIUS = 24;
+const MAX_LOCAL_WORKSTATION_CANDIDATES = 4;
 const MINING_STAGING_SCAN_RADIUS = 12;
 const MAX_MINING_STAGING_ATTEMPTS = 2;
 const DEFAULT_MAX_DROP_DOWN = 4;
@@ -462,28 +471,60 @@ async function approachDroppedItem(bot, entity, timeoutMs=PICKUP_NAVIGATION_STAL
     return !bot.entities?.[entityId] && !bot.interrupt_code;
 }
 
-async function placeLocalCraftingTable(bot) {
-    const inventoryBeforePlacement = inventoryCount(bot, 'crafting_table');
+async function placeLocalWorkstation(bot, itemName, range = 8) {
+    const inventoryBeforePlacement = inventoryCount(bot, itemName);
     if (inventoryBeforePlacement < 1) {
-        return { ok: false, outcome: 'missing_crafting_table' };
+        return { ok: false, outcome: `missing_${itemName}`, failures: [] };
     }
-    const placement = world.getNearestFreeSpace(bot, 1, 6);
-    if (!placement) {
-        return { ok: false, outcome: 'no_table_space' };
+    const candidates = world.getNearestFreeSpaces(bot, 1, range, {
+        limit: MAX_LOCAL_WORKSTATION_CANDIDATES,
+    });
+    if (candidates.length === 0) {
+        return { ok: false, outcome: 'no_workstation_space', failures: [] };
     }
-    const position = new Vec3(
-        Math.floor(placement.x),
-        Math.floor(placement.y),
-        Math.floor(placement.z),
-    );
-    if (!await placeBlock(bot, 'crafting_table', position.x, position.y, position.z)) {
-        return { ok: false, outcome: 'table_not_placed' };
+    const failures = [];
+    for (const candidate of candidates) {
+        if (bot.interrupt_code) {
+            return { ok: false, outcome: 'interrupted', failures };
+        }
+        const position = new Vec3(
+            Math.floor(candidate.x),
+            Math.floor(candidate.y),
+            Math.floor(candidate.z),
+        );
+        const placed = await placeBlock(bot, itemName, position.x, position.y, position.z);
+        const block = bot.blockAt(position);
+        if (placed && block?.name === itemName) {
+            return {
+                ok: true,
+                outcome: 'workstation_placed',
+                block,
+                position,
+                inventoryBeforePlacement,
+                failures,
+            };
+        }
+        failures.push({
+            position: { x: position.x, y: position.y, z: position.z },
+            outcome: bot.lastActionEvidence?.outcome || (placed ? 'not_confirmed' : 'not_placed'),
+            error: bot.lastActionEvidence?.error || null,
+        });
     }
-    const block = bot.blockAt(position);
-    if (block?.name !== 'crafting_table') {
-        return { ok: false, outcome: 'table_unavailable' };
-    }
-    return { ok: true, block, position, inventoryBeforePlacement };
+    return { ok: false, outcome: 'workstation_not_placed', failures };
+}
+
+async function placeLocalCraftingTable(bot) {
+    const placement = await placeLocalWorkstation(bot, 'crafting_table', 6);
+    if (placement.ok) return placement;
+    const outcomes = {
+        missing_crafting_table: 'missing_crafting_table',
+        no_workstation_space: 'no_table_space',
+        interrupted: 'interrupted',
+    };
+    return {
+        ...placement,
+        outcome: outcomes[placement.outcome] || 'table_not_placed',
+    };
 }
 
 function directlyUsableWorkstation(bot, block, range = 4.5) {
@@ -2750,28 +2791,25 @@ export async function smeltItem(bot, itemName, num=1) {
             && inventoryCount(bot, 'furnace') > 0
         ) furnaceBlock = null;
         if (!furnaceBlock && inventoryCount(bot, 'furnace') > 0) {
-            const position = world.getNearestFreeSpace(bot, 1, 8);
-            if (!position) {
+            const localFurnace = await placeLocalWorkstation(bot, 'furnace', 8);
+            if (!localFurnace.ok && localFurnace.outcome === 'no_workstation_space') {
                 log(bot, 'There is no safe local space to place the furnace.');
                 return finish(false, 'no_furnace_space');
             }
-            const inventoryBeforePlacement = inventoryCount(bot, 'furnace');
-            if (!await placeBlock(bot, 'furnace', position.x, position.y, position.z)) {
-                return finish(false, 'furnace_not_placed');
+            if (!localFurnace.ok) {
+                log(bot, `Could not place the carried furnace in ${localFurnace.failures.length} bounded local candidate${localFurnace.failures.length === 1 ? '' : 's'}.`);
+                return finish(false, localFurnace.outcome === 'interrupted'
+                    ? 'interrupted'
+                    : 'furnace_not_placed', {
+                    placementFailures: localFurnace.failures,
+                    retryable: localFurnace.outcome !== 'interrupted',
+                });
             }
             temporaryFurnace = {
-                position: new Vec3(
-                    Math.floor(position.x),
-                    Math.floor(position.y),
-                    Math.floor(position.z),
-                ),
-                inventoryBeforePlacement,
+                position: localFurnace.position,
+                inventoryBeforePlacement: localFurnace.inventoryBeforePlacement,
             };
-            furnaceBlock = bot.blockAt(new Vec3(
-                Math.floor(position.x),
-                Math.floor(position.y),
-                Math.floor(position.z),
-            ));
+            furnaceBlock = localFurnace.block;
             if (furnaceBlock?.name !== 'furnace') {
                 return finish(false, 'furnace_not_confirmed');
             }
@@ -2983,26 +3021,26 @@ export async function brewPotion(bot, requestedTarget, num=1) {
             await craftRecipe(bot, 'brewing_stand', 1);
         }
         if (!standBlock && inventoryCount(bot, 'brewing_stand') > 0) {
-            const position = world.getNearestFreeSpace(bot, 1, 8);
-            if (!position) {
+            const localStand = await placeLocalWorkstation(bot, 'brewing_stand', 8);
+            if (!localStand.ok && localStand.outcome === 'no_workstation_space') {
                 log(bot, 'There is no safe local space to place the brewing stand.');
                 return finish(false, 'no_brewing_stand_space');
             }
-            const inventoryBeforePlacement = inventoryCount(bot, 'brewing_stand');
-            if (!await placeBlock(bot, 'brewing_stand', position.x, position.y, position.z)) {
-                return finish(false, 'brewing_stand_not_placed');
+            if (!localStand.ok) {
+                return finish(false, localStand.outcome === 'interrupted'
+                    ? 'interrupted'
+                    : 'brewing_stand_not_placed', {
+                    placementFailures: localStand.failures,
+                    retryable: localStand.outcome !== 'interrupted',
+                });
             }
-            standBlock = bot.blockAt(new Vec3(
-                Math.floor(position.x),
-                Math.floor(position.y),
-                Math.floor(position.z),
-            ));
+            standBlock = localStand.block;
             if (standBlock?.name !== 'brewing_stand') {
                 return finish(false, 'brewing_stand_not_confirmed');
             }
             temporaryStand = {
                 position: standBlock.position.clone(),
-                inventoryBeforePlacement,
+                inventoryBeforePlacement: localStand.inventoryBeforePlacement,
             };
         }
         if (!standBlock) {
@@ -6368,8 +6406,9 @@ export async function placeBlock(
         log(bot, `Placed ${blockType} at ${target_dest}.`);
         return true;
     } catch (err) {
-        setActionEvidence(bot, { kind: 'place', outcome: 'place_blocked', target, error: err.message, retryable: true });
-        log(bot, `Failed to place ${blockType} at ${target_dest}.`);
+        const message = String(err?.message || err).slice(0, 240);
+        setActionEvidence(bot, { kind: 'place', outcome: 'place_blocked', target, error: message, retryable: true });
+        log(bot, `Failed to place ${blockType} at ${target_dest}: ${message}.`);
         return false;
     }
 }
@@ -9143,6 +9182,56 @@ function prospectiveMiningStandingPositions(bot, targetBlock) {
     return positions;
 }
 
+function boundedMiningProgressStances(bot, targetBlock, finalStances) {
+    const origin = observedSupportedStandingCell(bot);
+    if (!origin || !targetBlock?.position || finalStances.length === 0) return [];
+    const candidates = [];
+    const keys = new Set();
+    const canBecomeClear = block => Boolean(
+        isCollectionStandingCellClear(block)
+        || isAuthorizedMiningRouteBlock(bot, block, targetBlock)
+    );
+    for (
+        let yOffset = -MAX_MINING_PROGRESS_VERTICAL;
+        yOffset <= MAX_MINING_PROGRESS_VERTICAL;
+        yOffset += 1
+    ) {
+        for (
+            let xOffset = -MAX_MINING_PROGRESS_ROUTE_STEPS;
+            xOffset <= MAX_MINING_PROGRESS_ROUTE_STEPS;
+            xOffset += 1
+        ) {
+            for (
+                let zOffset = -MAX_MINING_PROGRESS_ROUTE_STEPS;
+                zOffset <= MAX_MINING_PROGRESS_ROUTE_STEPS;
+                zOffset += 1
+            ) {
+                const horizontal = Math.abs(xOffset) + Math.abs(zOffset);
+                if (horizontal === 0 || horizontal > MAX_MINING_PROGRESS_ROUTE_STEPS) continue;
+                if (Math.max(Math.abs(yOffset), horizontal) > MAX_MINING_PROGRESS_ROUTE_STEPS) continue;
+                const stance = origin.offset(xOffset, yOffset, zOffset);
+                const key = miningCellKey(stance);
+                if (keys.has(key)) continue;
+                const feet = bot.blockAt(stance);
+                const head = bot.blockAt(stance.offset(0, 1, 0));
+                const support = bot.blockAt(stance.offset(0, -1, 0));
+                if (!canBecomeClear(feet) || !canBecomeClear(head)) continue;
+                if (!isAnchoredGameplaySupport(bot, support)) continue;
+                keys.add(key);
+                candidates.push(stance);
+            }
+        }
+    }
+    return selectBoundedMiningProgressStances({
+        origin,
+        finalStances,
+        candidates,
+        maxRouteSteps: MAX_MINING_PROGRESS_ROUTE_STEPS,
+        minProgress: MIN_MINING_PROGRESS_STEPS,
+        maxStances: MAX_MINING_PROGRESS_STANCES,
+    }).map(candidate => candidate.stance);
+}
+
 function isStableMiningStagingCell(bot, feet) {
     const standing = bot.blockAt(feet);
     const head = bot.blockAt(feet.offset(0, 1, 0));
@@ -9563,12 +9652,12 @@ function assessMiningAccessPlan(
         allowUnharvestedBreaks = false,
         allowNaturalFoliageExcavation = false,
         stageFallingDebris = false,
+        maxRouteSteps = null,
     } = {},
 ) {
-    const maximumSteps = Math.max(
-        4,
-        Math.abs(stance.y - origin.y) + requestedLength + 2,
-    );
+    const maximumSteps = maxRouteSteps !== null && Number.isFinite(Number(maxRouteSteps))
+        ? Math.max(1, Math.floor(Number(maxRouteSteps)))
+        : Math.max(4, Math.abs(stance.y - origin.y) + requestedLength + 2);
     if (route.length === 0 || route.length > maximumSteps) {
         return { ok: false, outcome: 'route_step_budget_exceeded', route, stance };
     }
@@ -9855,10 +9944,12 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
         : prospectiveMiningStandingPositions(bot, targetBlock);
     if (stances.length === 0) return { ok: false, outcome: 'no_safe_stance' };
 
-    const maximumSteps = Math.max(...stances.map(stance => Math.max(
-        4,
-        Math.abs(stance.y - origin.y) + requestedLength + 2,
-    )));
+    const maximumSteps = Number.isFinite(Number(options.maxRouteSteps))
+        ? Math.max(1, Math.floor(Number(options.maxRouteSteps)))
+        : Math.max(...stances.map(stance => Math.max(
+            4,
+            Math.abs(stance.y - origin.y) + requestedLength + 2,
+        )));
     const assessSearchStep = step => {
         if (
             options.stageFallingDebris === true
@@ -10486,7 +10577,30 @@ export async function mineSearchTunnel(
             return false;
         }
 
-        let plan = buildMiningAccessPlan(bot, stagedTarget, requestedLength);
+        const finalStances = prospectiveMiningStandingPositions(bot, stagedTarget);
+        const origin = observedSupportedStandingCell(bot);
+        const fullRouteLowerBound = minimumMiningCorridorSteps(origin, finalStances);
+        const progressStances = fullRouteLowerBound > MAX_MINING_PROGRESS_ROUTE_STEPS
+            ? boundedMiningProgressStances(bot, stagedTarget, finalStances)
+            : [];
+        let plan = progressStances.length > 0
+            ? buildMiningAccessPlan(bot, stagedTarget, 4, {
+                breakTarget: false,
+                stances: progressStances,
+                maxRouteSteps: MAX_MINING_PROGRESS_ROUTE_STEPS,
+            })
+            : buildMiningAccessPlan(bot, stagedTarget, requestedLength);
+        if (progressStances.length > 0 && plan.ok) {
+            plan = {
+                ...plan,
+                partial: true,
+                boundary: {
+                    kind: 'bounded_target_convergence',
+                    fullRouteLowerBound,
+                },
+                plannedRouteSteps: fullRouteLowerBound,
+            };
+        }
         const plannedRouteSteps = plan.plannedRouteSteps || plan.route?.length || 0;
         let partialAdvance = plan.partial === true;
         if (!plan.ok && plan.outcome === 'route_deadline_insufficient') {

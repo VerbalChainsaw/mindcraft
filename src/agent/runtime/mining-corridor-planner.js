@@ -115,6 +115,66 @@ function nearestCompletion(position, stances, verticalDirection) {
   return { steps, stance };
 }
 
+export function minimumMiningCorridorSteps(origin, stances, verticalDirection = 0) {
+  if (!origin || !Array.isArray(stances) || stances.length === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return nearestCompletion(origin, stances, verticalDirection).steps;
+}
+
+/**
+ * Rank already-observed standing cells for one receding-horizon mining leg.
+ * This is binding only: it neither invents support nor authorizes excavation.
+ * The caller still runs the normal voxel search and full physical preflight.
+ */
+export function selectBoundedMiningProgressStances({
+  origin,
+  finalStances,
+  candidates,
+  maxRouteSteps,
+  minProgress = 2,
+  maxStances = 12,
+}) {
+  if (!origin || !Array.isArray(finalStances) || finalStances.length === 0) return [];
+  const routeLimit = Math.max(1, Math.floor(Number(maxRouteSteps) || 1));
+  const requiredProgress = Math.max(1, Math.floor(Number(minProgress) || 1));
+  const stanceLimit = Math.max(1, Math.floor(Number(maxStances) || 1));
+  const initialSteps = minimumMiningCorridorSteps(origin, finalStances);
+  if (!Number.isFinite(initialSteps)) return [];
+
+  return (candidates || [])
+    .filter(position => position && Number.isFinite(position.x)
+      && Number.isFinite(position.y) && Number.isFinite(position.z))
+    .map(position => {
+      const verticalDirection = Math.sign(position.y - origin.y);
+      const legSteps = minimumStepsToStance(origin, position, verticalDirection);
+      const completion = nearestCompletion(position, finalStances, verticalDirection);
+      return {
+        stance: position,
+        legSteps,
+        remainingSteps: completion.steps,
+        progress: initialSteps - completion.steps,
+        verticalProgress: Math.abs(position.y - origin.y),
+      };
+    })
+    .filter(candidate => (
+      candidate.legSteps > 0
+      && candidate.legSteps <= routeLimit
+      && Number.isFinite(candidate.remainingSteps)
+      && candidate.progress >= requiredProgress
+    ))
+    .sort((left, right) => (
+      right.progress - left.progress
+      || right.verticalProgress - left.verticalProgress
+      || left.legSteps - right.legSteps
+      || left.remainingSteps - right.remainingSteps
+      || left.stance.y - right.stance.y
+      || left.stance.x - right.stance.x
+      || left.stance.z - right.stance.z
+    ))
+    .slice(0, stanceLimit);
+}
+
 function stateSignature(state) {
   return [
     cellKey(state.position),

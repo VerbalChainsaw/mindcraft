@@ -4,7 +4,10 @@ import test from 'node:test';
 import { Vec3 } from 'vec3';
 
 import { selectMiningDeadlinePrefix } from '../src/agent/library/skills.js';
-import { searchSupportedMiningVoxelCorridors } from '../src/agent/runtime/mining-corridor-planner.js';
+import {
+    searchSupportedMiningVoxelCorridors,
+    selectBoundedMiningProgressStances,
+} from '../src/agent/runtime/mining-corridor-planner.js';
 
 const key = position => `${position.x}:${position.y}:${position.z}`;
 
@@ -101,4 +104,32 @@ test('an over-deadline corridor advances the shortest safe prefix that makes the
         prefix.prefix.estimatedPostRouteRequiredMs
         <= prefix.prefix.estimatedPostRemainingMs,
     );
+});
+
+test('a distant exact mining stance binds only bounded intermediate cells with strict remaining-distance progress', () => {
+    const origin = new Vec3(0, 54, 0);
+    const finalStance = new Vec3(8, 20, 0);
+    const selected = selectBoundedMiningProgressStances({
+        origin,
+        finalStances: [finalStance],
+        candidates: [
+            new Vec3(-4, 48, 0),
+            new Vec3(4, 48, 0),
+            new Vec3(8, 40, 0),
+            new Vec3(12, 42, 0),
+        ],
+        maxRouteSteps: 12,
+        minProgress: 2,
+        maxStances: 4,
+    });
+
+    assert.deepEqual(
+        selected.map(candidate => candidate.stance),
+        [new Vec3(12, 42, 0), new Vec3(-4, 48, 0), new Vec3(4, 48, 0)],
+    );
+    assert.ok(selected.every(candidate => (
+        candidate.legSteps <= 12
+        && candidate.progress >= 2
+        && candidate.remainingSteps < 34
+    )));
 });
