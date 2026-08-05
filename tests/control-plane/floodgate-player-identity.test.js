@@ -51,3 +51,11 @@ test('follow and come directives preserve the canonical physical target only', (
   assert.equal(resolvePlayerDirective(canonical, 'follow me').command, '!followPlayer(".LittleBubby9352", 3)');
   assert.equal(resolvePlayerDirective(canonical, 'come here').command, '!goToPlayer(".LittleBubby9352", 2)');
 });
+
+test('chat authority accepts unloaded tab-listed players and rejects synthetic server sources', () => {
+  const bot = botWithPlayers(['phixxation']);
+  bot.players.phixxation.entity = null;
+
+  assert.equal(resolveCanonicalPlayerIdentity('phixxation', bot), 'phixxation');
+  assert.equal(resolveCanonicalPlayerIdentity('Server', bot), null);
+});

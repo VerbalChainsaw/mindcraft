@@ -130,9 +130,8 @@ export function resolveCanonicalPlayerIdentity(source, bot, { isBotAgent = () =>
     const indexedPlayerEntities = new Set();
     for (const [playerKey, player] of Object.entries(bot.players || {})) {
         const entity = player?.entity;
-        if (entity?.type !== 'player') continue;
-        indexedPlayerEntities.add(entity);
-        addPlayer(playerKey || entity.username || player?.username, [playerKey, player?.username, entity.username]);
+        if (entity?.type === 'player') indexedPlayerEntities.add(entity);
+        addPlayer(playerKey || entity?.username || player?.username, [playerKey, player?.username, entity?.username]);
     }
     for (const entity of Object.values(bot.entities || {})) {
         if (entity?.type !== 'player' || indexedPlayerEntities.has(entity)) continue;
@@ -441,17 +440,25 @@ export class Agent {
             try {
                 if (ignore_messages.some((m) => message.startsWith(m))) return;
 
+                const canonicalPlayer = resolveCanonicalPlayerIdentity(username, this.bot, {
+                    isBotAgent: identity => {
+                        if (convoManager.isOtherAgent(identity)) return true;
+                        const keys = new Set(identityMatchKeys(identity));
+                        return convoManager.getInGameAgents().some(agentName =>
+                            identityMatchKeys(agentName).some(key => keys.has(key))
+                        );
+                    },
+                });
+                if (!canonicalPlayer) {
+                    console.warn(`Ignoring Minecraft chat from untrusted source: ${String(username).slice(0, 80)}`);
+                    return;
+                }
+
                 this.shut_up = false;
 
                 console.log(this.name, 'received message from', username, ':', message);
-
-                if (convoManager.isOtherAgent(username)) {
-                    console.warn('received whisper from other bot??')
-                }
-                else {
-                    let translation = await handleEnglishTranslation(message);
-                    this.handleMessage(username, translation);
-                }
+                let translation = await handleEnglishTranslation(message);
+                this.handleMessage(username, translation);
             } catch (error) {
                 console.error('Error handling message:', error);
             }
