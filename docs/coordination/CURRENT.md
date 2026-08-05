@@ -1,6 +1,6 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: pushed 7413bb4; Paper-verified clock/Pathfinder checkpoint is ready for preservation
+Functional source checkpoint: e7c5955; Paper-verified clock/Pathfinder checkpoint is ready to push
 Milestone: natural clock campaign completed through full-inventory tool replacement, iron reacquisition/smelting, interruption resumption, and exact redstone descent
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: deterministic deep acquisition, package-first movement, and bounded inventory/workstation primitives
