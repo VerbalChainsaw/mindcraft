@@ -459,6 +459,7 @@ export class Agent {
 		this.respondFunc = respondFunc;
 
         const respondToMinecraftChat = (username, message) => {
+            if (username === this.name) return;
             const canonicalPlayer = resolveCanonicalPlayerIdentity(username, this.bot, {
                 isBotAgent: identity => {
                     if (convoManager.isOtherAgent(identity)) return true;

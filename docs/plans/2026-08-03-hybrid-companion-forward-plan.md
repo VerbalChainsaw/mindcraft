@@ -307,6 +307,8 @@ Acceptance:
 
 ## Phase 3: Companion work loop
 
+**Status:** physically completed on 2026-08-05; preserved pending read-only checkpoint review.
+
 **Goal:** Complete a broad, natural companion sequence in one session.
 
 Target session:
@@ -323,9 +325,17 @@ Acceptance:
 - The bot returns to a useful companion state after completing or failing the work.
 - Narration matches the physical state.
 
+The live campaign passed as one continuous companion sequence. Natural player chat started follow, `stop` held the bot promptly, and natural `Bring me a chest.` created a durable delivery outcome through the connected-registry planner. The first run exposed and repaired a generic acquire/delivery command-wrapper validation defect; it then crafted and delivered a chest successfully. The interrupted acceptance rerun began oak collection, yielded ActionManager ownership to a summoned husk, defeated the husk in six verified hits, and resumed the exact oak-log prerequisite without model restoration or a productive-attempt charge. It then crafted eight planks, crafted the chest, returned through native delivery navigation, and verified one delivered chest.
+
+Goal `goal-a13a89f0-ea8e-4f09-9496-b8d672fad5be` completed with `attempts: 0`, an interrupted first collection subgoal, a successful resumed collection subgoal, verified craft effects, `delivered: 1`, and terminal evidence `delivery_verified`. Exact narration reported the verified recipient and quantity. Paper verified health `20`; two position samples ten seconds apart were identical after terminal reporting, so unrelated autonomy did not take the body.
+
+One contaminated rehearsal also exposed an authorization-boundary defect: Paper `/say` arrived through Mineflayer chat as username `Server` and was incorrectly allowed to generate a player-authoritative command that cancelled the goal. Minecraft chat and whisper ingress now require an unambiguous real player from Mineflayer's tab list, including an unloaded player and the conservative Floodgate alias, while trusted Director transport remains outside that gate. A held-state Paper probe confirmed `Server` chat was rejected before the clean rerun.
+
 ## Phase 4: Capability catalogue and generalized compound routes
 
-After the repeatability gate passes, place the typed capability catalogue between the prerequisite planner and existing deterministic executors. Migrate the current collect, craft, smelt, equip, workstation, retrieval, and delivery paths without changing their physical acceptance behavior.
+**Status:** the catalogue boundary already exists and is live for `collect_wood`, `collect_block`, `craft`, `smelt`, and `equip`; the prerequisite planner emits those typed actions and GoalDirector executes and verifies them. Do not recreate it, replace it, or start a parallel framework.
+
+After the Phase 3 review gate, continue migrating remaining duplicated planning seams into this existing catalogue without changing their physical acceptance behavior. The next tranche begins with an exact ownership map of workstation, retrieval, delivery, navigation/stance binding, and remaining nested prerequisite decisions, then implements the smallest coherent cross-domain migration that removes a real duplicate strategy loop. It must finish with an unchanged real campaign, not merely catalogue unit tests.
 
 Then remove duplicated prerequisite knowledge from `prepareTool`, `prepareMaterial`, the hardcoded autonomous progression ladder, and other nested helpers by routing them through the same proven capability contracts. Autonomous progression may select a durable outcome; it must not maintain a second recipe or prerequisite engine.
 
@@ -406,4 +416,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Run one generic Phase 3 companion campaign from policy checkpoint `104f372`: follow the player, obey stop, accept a player-authorized delivery outcome, acquire or craft it through the catalogue, survive any legitimate interruption, resume the remaining prerequisite, return near the player using native Pathfinder, and verify the physical handoff and exact narration. The selected item must use existing connected-registry planning; it may not receive an item-specific route. Repair only the first shared return, delivery, ownership, or cancellation blocker exposed by that same campaign.
+Preserve the completed Phase 3 checkpoint and obtain the required read-only review. Then continue Phase 4 from the existing catalogue rather than opening a new architecture project: trace the remaining duplicated planner/executor seams, select one coherent cross-domain migration, implement it through typed preconditions/effects/binding/execution/verification, and prove it with an unchanged real companion campaign. Do not add item-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from a gameplay outcome.
