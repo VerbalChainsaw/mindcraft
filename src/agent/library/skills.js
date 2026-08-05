@@ -4250,6 +4250,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     decision: collectionDecisionEvidence(selection),
                 },
                 ...(miningFailure ? { accessOutcome: miningFailure.outcome } : {}),
+                ...(miningFailure?.routeOutcomes
+                    ? {
+                        consideredRoutes: miningFailure.consideredRoutes || 0,
+                        routeOutcomes: miningFailure.routeOutcomes,
+                    }
+                    : {}),
                 ...(miningFailure?.toolRequirement
                     ? { toolRequirement: miningFailure.toolRequirement }
                     : {}),
@@ -9879,9 +9885,19 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
             || left.blockBudget - right.blockBudget
             || left.route.length - right.route.length
         ));
-    return boundaryPrefixes[0]
+    const rejected = boundaryPrefixes[0]
         || assessments[0]
         || { ok: false, outcome: 'no_safe_route' };
+    const routeOutcomes = {};
+    for (const assessment of assessments) {
+        const outcome = String(assessment?.outcome || 'unknown');
+        routeOutcomes[outcome] = (routeOutcomes[outcome] || 0) + 1;
+    }
+    return {
+        ...rejected,
+        consideredRoutes: assessments.length,
+        routeOutcomes,
+    };
 }
 
 function isMiningRouteCellReturnable(bot, position) {
@@ -10370,11 +10386,22 @@ export async function mineSearchTunnel(
                     ? plan.blockedStepIndex
                     : null,
                 blockedStep: plan.blockedStep || null,
+                consideredRoutes: plan.consideredRoutes || 0,
+                routeOutcomes: plan.routeOutcomes || null,
                 ...(toolRequirement ? { toolRequirement } : {}),
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
-            log(bot, `Rejected the known ${stagedTarget.name} target before excavation: ${String(plan.outcome || 'no safe route').replace(/_/g, ' ')}.`);
+            const dominantRoutes = Object.entries(plan.routeOutcomes || {})
+                .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+                .slice(0, 4)
+                .map(([outcome, count]) => `${outcome}:${count}`)
+                .join(', ');
+            log(
+                bot,
+                `Rejected the known ${stagedTarget.name} target before excavation: ${String(plan.outcome || 'no safe route').replace(/_/g, ' ')}`
+                + `${dominantRoutes ? ` (${plan.consideredRoutes} routes; ${dominantRoutes})` : ''}.`,
+            );
             return false;
         }
 
