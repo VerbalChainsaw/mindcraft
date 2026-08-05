@@ -123,7 +123,6 @@ const MINING_ROUTE_STEP_TIMEOUT_MS = 2_000;
 const MINING_ROUTE_STEP_ESTIMATE_MS = 450;
 const MINING_ROUTE_DEADLINE_RESERVE_MS = 3_500;
 const MAX_MINING_EXCAVATION_BLOCKS = 96;
-const MAX_MINING_ROUTE_SEARCH_NODES = 8_192;
 const MINING_STAGING_SCAN_RADIUS = 12;
 const MAX_MINING_STAGING_ATTEMPTS = 2;
 const DEFAULT_MAX_DROP_DOWN = 4;
@@ -8865,6 +8864,16 @@ function isMiningTargetExposed(bot, targetBlock) {
     ));
 }
 
+function isProspectiveMiningStance(target, feet) {
+    return Boolean(
+        target
+        && feet
+        && Math.abs(feet.x - target.x) + Math.abs(feet.z - target.z) === 1
+        && feet.y <= target.y
+        && target.y - feet.y <= 1
+    );
+}
+
 function prospectiveMiningStandingPositions(bot, targetBlock) {
     const target = targetBlock?.position;
     const origin = bot.entity?.position;
@@ -8882,18 +8891,20 @@ function prospectiveMiningStandingPositions(bot, targetBlock) {
         return isCollectionStandingCellClear(block) || isNaturalFillBlock(bot, block);
     };
     const positions = [];
-    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const feet = target.offset(x, 0, z);
-        let support;
-        try {
-            support = bot.blockAt(feet.offset(0, -1, 0));
-        } catch {
-            continue;
+    for (const y of [-1, 0]) {
+        for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const feet = target.offset(x, y, z);
+            let support;
+            try {
+                support = bot.blockAt(feet.offset(0, -1, 0));
+            } catch {
+                continue;
+            }
+            if (!canBecomeClear(feet)) continue;
+            if (!canBecomeClear(feet.offset(0, 1, 0))) continue;
+            if (!isSafeGameplaySupport(support)) continue;
+            positions.push(feet);
         }
-        if (!canBecomeClear(feet)) continue;
-        if (!canBecomeClear(feet.offset(0, 1, 0))) continue;
-        if (!isSafeGameplaySupport(support)) continue;
-        positions.push(feet);
     }
     positions.sort((left, right) => (
         origin.distanceTo(left) - origin.distanceTo(right)
@@ -9055,17 +9066,6 @@ async function carveExploratoryDepthRoute(bot, targetY) {
     };
 }
 
-const MINING_ROUTE_VARIANTS = Object.freeze([
-    Object.freeze({ axisPhase: 0, wiggleAxis: 'x', wiggleSign: 1 }),
-    Object.freeze({ axisPhase: 1, wiggleAxis: 'x', wiggleSign: 1 }),
-    Object.freeze({ axisPhase: 0, wiggleAxis: 'x', wiggleSign: -1 }),
-    Object.freeze({ axisPhase: 1, wiggleAxis: 'x', wiggleSign: -1 }),
-    Object.freeze({ axisPhase: 0, wiggleAxis: 'z', wiggleSign: 1 }),
-    Object.freeze({ axisPhase: 1, wiggleAxis: 'z', wiggleSign: 1 }),
-    Object.freeze({ axisPhase: 0, wiggleAxis: 'z', wiggleSign: -1 }),
-    Object.freeze({ axisPhase: 1, wiggleAxis: 'z', wiggleSign: -1 }),
-]);
-
 function sameMiningCell(left, right) {
     return Boolean(
         left
@@ -9080,180 +9080,113 @@ function miningCellKey(position) {
     return `${position.x}:${position.y}:${position.z}`;
 }
 
-function miningRouteHeading(current, target, variant, stepIndex) {
-    const dx = target.x - current.x;
-    const dz = target.z - current.z;
-    const xHeading = dx === 0 ? null : { x: Math.sign(dx), z: 0 };
-    const zHeading = dz === 0 ? null : { x: 0, z: Math.sign(dz) };
-    if (xHeading && zHeading) {
-        return (stepIndex + variant.axisPhase) % 2 === 0 ? xHeading : zHeading;
+function appendMiningAxisLeg(path, current, axis, destination) {
+    while (current[axis] !== destination) {
+        current[axis] += Math.sign(destination - current[axis]);
+        path.push({ x: current.x, z: current.z });
     }
-    if (xHeading) return xHeading;
-    if (zHeading) return zHeading;
-    return variant.wiggleAxis === 'x'
-        ? { x: variant.wiggleSign, z: 0 }
-        : { x: 0, z: variant.wiggleSign };
 }
 
-function planMiningVoxelCorridor(origin, stance, variant) {
-    const route = [];
-    let current = origin.clone();
-    const verticalDirection = Math.sign(stance.y - current.y);
-    const verticalSteps = Math.abs(stance.y - current.y);
-    for (let index = 0; index < verticalSteps; index += 1) {
-        const heading = miningRouteHeading(current, stance, variant, index);
-        current = current.offset(heading.x, verticalDirection, heading.z);
-        route.push({ position: current, heading, yOffset: verticalDirection });
-    }
-    let horizontalIndex = verticalSteps;
-    while (current.x !== stance.x || current.z !== stance.z) {
-        const heading = miningRouteHeading(current, stance, variant, horizontalIndex);
-        current = current.offset(heading.x, 0, heading.z);
-        route.push({ position: current, heading, yOffset: 0 });
-        horizontalIndex += 1;
-    }
-    return route;
-}
-
-function miningRouteHeuristic(position, stance) {
-    const horizontal = Math.abs(stance.x - position.x) + Math.abs(stance.z - position.z);
-    const vertical = Math.abs(stance.y - position.y);
-    return Math.max(horizontal, vertical);
-}
-
-function pushMiningRouteNode(heap, node) {
-    heap.push(node);
-    let index = heap.length - 1;
-    while (index > 0) {
-        const parent = Math.floor((index - 1) / 2);
-        const parentNode = heap[parent];
-        if (
-            parentNode.score < node.score
-            || (parentNode.score === node.score && parentNode.key <= node.key)
-        ) break;
-        heap[index] = parentNode;
-        index = parent;
-    }
-    heap[index] = node;
-}
-
-function popMiningRouteNode(heap) {
-    if (heap.length === 0) return null;
-    const first = heap[0];
-    const last = heap.pop();
-    if (heap.length === 0) return first;
-    let index = 0;
-    while (true) {
-        const left = (index * 2) + 1;
-        const right = left + 1;
-        if (left >= heap.length) break;
-        let child = left;
-        if (
-            right < heap.length
-            && (
-                heap[right].score < heap[left].score
-                || (heap[right].score === heap[left].score && heap[right].key < heap[left].key)
-            )
-        ) child = right;
-        if (
-            heap[child].score > last.score
-            || (heap[child].score === last.score && heap[child].key >= last.key)
-        ) break;
-        heap[index] = heap[child];
-        index = child;
-    }
-    heap[index] = last;
-    return first;
-}
-
-function searchMiningVoxelCorridor(bot, origin, stance, targetBlock, requestedLength) {
-    const maximumSteps = Math.max(
-        4,
-        Math.abs(stance.y - origin.y) + requestedLength + 2,
-    );
-    const minimumY = Math.min(origin.y, stance.y) - 2;
-    const maximumY = Math.max(origin.y, stance.y) + 2;
-    const headings = [
-        { x: 1, z: 0 },
-        { x: -1, z: 0 },
-        { x: 0, z: 1 },
-        { x: 0, z: -1 },
-    ];
-    const startKey = miningCellKey(origin);
-    const heap = [];
-    const best = new Map([[startKey, { cost: 0, steps: 0 }]]);
-    const parents = new Map();
-    pushMiningRouteNode(heap, {
-        key: startKey,
-        position: origin,
-        cost: 0,
-        steps: 0,
-        score: miningRouteHeuristic(origin, stance),
-    });
-
-    let expanded = 0;
-    while (heap.length > 0 && expanded < MAX_MINING_ROUTE_SEARCH_NODES) {
-        const current = popMiningRouteNode(heap);
-        const recorded = best.get(current.key);
-        if (!recorded || recorded.cost !== current.cost || recorded.steps !== current.steps) continue;
-        if (sameMiningCell(current.position, stance)) {
-            const route = [];
-            let key = current.key;
-            while (key !== startKey) {
-                const link = parents.get(key);
-                if (!link) return null;
-                route.push(link.step);
-                key = link.parentKey;
-            }
-            return route.reverse();
+function miningHorizontalDoglegs(origin, stance, routeLength) {
+    const dx = stance.x - origin.x;
+    const dz = stance.z - origin.z;
+    const horizontalDistance = Math.abs(dx) + Math.abs(dz);
+    const detour = Math.max(0, Math.floor((routeLength - horizontalDistance) / 2));
+    const paths = [];
+    const addPath = legs => {
+        const current = { x: origin.x, z: origin.z };
+        const path = [];
+        for (const [axis, destination] of legs) {
+            appendMiningAxisLeg(path, current, axis, destination);
         }
-        if (current.steps >= maximumSteps) continue;
-        expanded += 1;
+        if (
+            current.x === stance.x
+            && current.z === stance.z
+            && path.length === routeLength
+        ) paths.push(path);
+    };
 
-        const verticalToward = Math.sign(stance.y - current.position.y);
-        const verticalOffsets = [...new Set([verticalToward, 0, -verticalToward, 1, -1])];
-        const orderedHeadings = [...headings].sort((left, right) => {
-            const leftPosition = current.position.offset(left.x, 0, left.z);
-            const rightPosition = current.position.offset(right.x, 0, right.z);
-            return miningRouteHeuristic(leftPosition, stance)
-                - miningRouteHeuristic(rightPosition, stance)
-                || left.x - right.x
-                || left.z - right.z;
+    if (detour === 0) {
+        addPath([['x', stance.x], ['z', stance.z]]);
+        addPath([['z', stance.z], ['x', stance.x]]);
+    } else if (dx !== 0 || dz !== 0) {
+        if (dz !== 0) {
+            const signs = dx === 0 ? [-1, 1] : [-Math.sign(dx)];
+            for (const sign of signs) {
+                const detourX = origin.x + (sign * detour);
+                addPath([['x', detourX], ['z', stance.z], ['x', stance.x]]);
+            }
+        }
+        if (dx !== 0) {
+            const signs = dz === 0 ? [-1, 1] : [-Math.sign(dz)];
+            for (const sign of signs) {
+                const detourZ = origin.z + (sign * detour);
+                addPath([['z', detourZ], ['x', stance.x], ['z', stance.z]]);
+            }
+        }
+    } else {
+        // A target directly above or below the origin still needs horizontal
+        // run for a one-block staircase. Use a thin rectangular loop; only
+        // its final, vertically separated cell repeats the origin column.
+        const longLeg = Math.max(1, Math.floor(routeLength / 2) - 1);
+        for (const xSign of [-1, 1]) {
+            for (const zSign of [-1, 1]) {
+                addPath([
+                    ['x', origin.x + (xSign * longLeg)],
+                    ['z', origin.z + zSign],
+                    ['x', origin.x],
+                    ['z', origin.z],
+                ]);
+                addPath([
+                    ['z', origin.z + (zSign * longLeg)],
+                    ['x', origin.x + xSign],
+                    ['z', origin.z],
+                    ['x', origin.x],
+                ]);
+            }
+        }
+    }
+
+    const unique = new Map();
+    for (const path of paths) {
+        const key = path.map(position => `${position.x}:${position.z}`).join('|');
+        if (!unique.has(key)) unique.set(key, path);
+    }
+    return [...unique.values()];
+}
+
+export function planSupportedMiningVoxelCorridors(origin, stance) {
+    const verticalDelta = stance.y - origin.y;
+    const verticalDistance = Math.abs(verticalDelta);
+    const horizontalDistance = Math.abs(stance.x - origin.x) + Math.abs(stance.z - origin.z);
+    let routeLength = Math.max(verticalDistance, horizontalDistance);
+    if ((routeLength - horizontalDistance) % 2 !== 0) routeLength += 1;
+    if (routeLength === 0) return [];
+
+    return miningHorizontalDoglegs(origin, stance, routeLength).map(horizontalPath => {
+        let previous = origin;
+        return horizontalPath.map((horizontal, index) => {
+            const completedVertical = Math.sign(verticalDelta) * Math.floor(
+                ((index + 1) * verticalDistance) / routeLength,
+            );
+            const position = new Vec3(
+                horizontal.x,
+                origin.y + completedVertical,
+                horizontal.z,
+            );
+            const heading = {
+                x: position.x - previous.x,
+                z: position.z - previous.z,
+            };
+            const step = {
+                position,
+                heading,
+                yOffset: position.y - previous.y,
+            };
+            previous = position;
+            return step;
         });
-
-        for (const heading of orderedHeadings) {
-            for (const yOffset of verticalOffsets) {
-                const position = current.position.offset(heading.x, yOffset, heading.z);
-                if (position.y < minimumY || position.y > maximumY) continue;
-                if (
-                    Math.abs(position.x - origin.x) + Math.abs(position.z - origin.z)
-                    > maximumSteps
-                ) continue;
-                const step = { position, heading, yOffset };
-                const assessment = assessMiningRouteStep(bot, step, targetBlock);
-                if (!assessment.ok) continue;
-                const stepCost = 1 + (assessment.blocks.length * 8) + (Math.abs(yOffset) * 0.25);
-                const cost = current.cost + stepCost;
-                const steps = current.steps + 1;
-                const key = miningCellKey(position);
-                const prior = best.get(key);
-                if (
-                    prior
-                    && (prior.cost < cost || (prior.cost === cost && prior.steps <= steps))
-                ) continue;
-                best.set(key, { cost, steps });
-                parents.set(key, { parentKey: current.key, step });
-                pushMiningRouteNode(heap, {
-                    key,
-                    position,
-                    cost,
-                    steps,
-                    score: cost + miningRouteHeuristic(position, stance),
-                });
-            }
-        }
-    }
-    return null;
+    });
 }
 
 function miningRouteTouchesLiquid(bot, positions) {
@@ -9449,11 +9382,7 @@ function assessMiningAccessPlan(
         for (const block of assessment.blocks) excavation.set(miningCellKey(block.position), block);
         previous = step.position;
     }
-    if (
-        previous.y !== targetBlock.position.y
-        || Math.abs(previous.x - targetBlock.position.x)
-            + Math.abs(previous.z - targetBlock.position.z) !== 1
-    ) {
+    if (!isProspectiveMiningStance(targetBlock.position, previous)) {
         return { ok: false, outcome: 'route_misses_target_stance', route, stance };
     }
     if (miningRouteTouchesLiquid(bot, [targetBlock.position])) {
@@ -9550,19 +9479,7 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
     const assessments = [];
     const seenRoutes = new Set();
     for (const stance of stances) {
-        const searchedRoute = searchMiningVoxelCorridor(
-            bot,
-            origin,
-            stance,
-            targetBlock,
-            requestedLength,
-        );
-        const routes = [
-            searchedRoute,
-            ...MINING_ROUTE_VARIANTS.map(variant => (
-                planMiningVoxelCorridor(origin, stance, variant)
-            )),
-        ].filter(Boolean);
+        const routes = planSupportedMiningVoxelCorridors(origin, stance);
         for (const route of routes) {
             const routeKey = route.map(step => miningCellKey(step.position)).join('|');
             if (seenRoutes.has(routeKey)) continue;

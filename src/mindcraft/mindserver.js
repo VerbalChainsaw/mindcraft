@@ -564,6 +564,18 @@ async function createMindServerAtPort(port, dependencies = {}) {
       connection?.setSettings(normalizedSettings);
       return managedTarget;
     };
+    const applyManagedAgentRuntimeCompatibility = async (agentName, connection) => {
+      if (typeof managedMinecraftServer.applyAgentRuntimeCompatibility !== 'function') return;
+      const managedTarget = await getActiveManagedTarget();
+      const settings = connection?.settings;
+      const loopback = new Set(['127.0.0.1', 'localhost', '::1']);
+      if (
+        !managedTarget
+        || Number(settings?.port) !== managedTarget.port
+        || !loopback.has(String(settings?.host || '').trim())
+      ) return;
+      await managedMinecraftServer.applyAgentRuntimeCompatibility(agentName);
+    };
     const startAgentWithCurrentTarget = async (agentName) => {
       try {
         await reconcileAgentTarget(agentName);
@@ -2238,6 +2250,9 @@ async function createMindServerAtPort(port, dependencies = {}) {
             agentsStatusUpdate();
             socket.emit('state-stream-demand', agent_listeners.length > 0);
             reply({ success: true, error: null });
+            void applyManagedAgentRuntimeCompatibility(agentName, connection).catch((error) => {
+                console.warn(`Could not apply managed Minecraft compatibility for ${agentName}: ${error.message || error}`);
+            });
         });
 
         socket.on('disconnect', () => {

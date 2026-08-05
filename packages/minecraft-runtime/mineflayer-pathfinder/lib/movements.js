@@ -663,7 +663,12 @@ class Movements {
     // Similarly for the down path
     let floorCleared = !this.getBlock(node, dir.x, -2, dir.z).physical
 
-    const maxD = this.allowSprinting ? 4 : 2
+    // The executor can settle two- and three-block gap jumps from an ordinary
+    // path node. A four-block edge needs a guaranteed run-up that this graph
+    // does not bind or preserve, and live execution repeatedly stopped just
+    // short of the landing. Do not advertise a move the native executor
+    // cannot deterministically complete.
+    const maxD = this.allowSprinting ? 3 : 2
 
     for (let d = 2; d <= maxD; d++) {
       const dx = dir.x * d

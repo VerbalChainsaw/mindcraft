@@ -350,6 +350,7 @@ function defaultRuntimeCandidates() {
       'Minecraft Launcher',
     ],
     [process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Minecraft Launcher', 'runtime'), 'Minecraft Launcher'],
+    [process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Microsoft'), 'Microsoft OpenJDK'],
     [process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Java'), 'Java installation'],
     [process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Eclipse Adoptium'), 'Java installation'],
     [process.env.JAVA_HOME, 'JAVA_HOME'],
@@ -1601,6 +1602,23 @@ export class ManagedMinecraftServer {
     this.child.stdin.write(`${value}\n`);
     this.pushLog(`[command] > ${redactCommandForLog(value)}`);
     return this.getStatus();
+  }
+
+  applyAgentRuntimeCompatibility(agentName) {
+    const normalizedName = typeof agentName === 'string' ? agentName.trim() : '';
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(normalizedName)) {
+      throw new ManagedMinecraftServerError('Agent name is not valid for a Minecraft command target.');
+    }
+    const config = this.readConfig();
+    if (config.version !== '1.21.11') return this.getStatus();
+
+    // Minecraft 1.21.11 has an authoritative hitbox edge at exact player
+    // scale that leaves protocol bots suspended against ordinary one-block
+    // steps. A microscopic server-owned epsilon restores vanilla traversal;
+    // it is scoped to registered agents and reapplied idempotently on join.
+    return this.sendCommand(
+      `attribute ${normalizedName} minecraft:scale base set 0.9999999`,
+    );
   }
 
   async sendCommands(commands, { settleMs = 0 } = {}) {
