@@ -20,6 +20,7 @@ const SAFE_COMMANDS = new Set([
   '!equip',
   '!giveFamilyToPlayer',
   '!givePlayer',
+  '!goToSurface',
   '!moveAway',
 ]);
 

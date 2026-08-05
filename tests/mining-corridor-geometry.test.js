@@ -3,41 +3,74 @@ import test from 'node:test';
 
 import { Vec3 } from 'vec3';
 
-import {
-    planSupportedMiningVoxelCorridors,
-    selectMiningDeadlinePrefix,
-} from '../src/agent/library/skills.js';
+import { selectMiningDeadlinePrefix } from '../src/agent/library/skills.js';
+import { searchSupportedMiningVoxelCorridors } from '../src/agent/runtime/mining-corridor-planner.js';
 
 const key = position => `${position.x}:${position.y}:${position.z}`;
 
-test('deep mining corridors do not excavate their own required support', () => {
-    const origin = new Vec3(-582, 65, -322);
-    const stance = new Vec3(-584, 51, -319);
-    const routes = planSupportedMiningVoxelCorridors(origin, stance);
+test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {
+    const origin = new Vec3(0, 4, 0);
+    const stance = new Vec3(4, 2, 0);
+    const allowed = [
+        new Vec3(1, 4, 0),
+        new Vec3(1, 3, 1),
+        new Vec3(2, 3, 1),
+        new Vec3(2, 3, 2),
+        new Vec3(3, 2, 2),
+        new Vec3(4, 2, 2),
+        new Vec3(4, 2, 1),
+        stance,
+    ];
+    const allowedKeys = new Set(allowed.map(key));
+    const search = searchSupportedMiningVoxelCorridors({
+        origin,
+        stances: [stance],
+        maxRouteSteps: 10,
+        maxExcavationBlocks: 96,
+        maxExpansions: 1_000,
+        maxSolutions: 4,
+        assessStep: step => allowedKeys.has(key(step.position))
+            ? {
+                ok: true,
+                outcome: 'route_step_safe',
+                blocks: [
+                    { position: step.position },
+                    { position: step.position.offset(0, 1, 0) },
+                    ...(step.yOffset < 0
+                        ? [{ position: step.position.offset(0, 2, 0) }]
+                        : []),
+                ],
+            }
+            : { ok: false, outcome: 'non_natural_block_in_route', blocks: [] },
+    });
 
-    assert.ok(routes.length >= 2);
-    assert.ok(new Set(routes.map(route => route.length)).size >= 3);
-    for (const route of routes) {
-        assert.deepEqual(route.at(-1).position, stance);
-        assert.ok(route.every(step => (
-            Math.abs(step.heading.x) + Math.abs(step.heading.z) === 1
-            && [-1, 0].includes(step.yOffset)
-        )));
+    assert.equal(search.expansionLimitReached, false);
+    assert.ok(search.solutions.length >= 1);
+    const route = search.solutions[0].route;
+    assert.deepEqual(route.map(step => step.position), allowed);
+    assert.ok(route.every(step => (
+        Math.abs(step.heading.x) + Math.abs(step.heading.z) === 1
+        && [-1, 0].includes(step.yOffset)
+    )));
+    const headingChanges = route.slice(1).filter((step, index) => (
+        step.heading.x !== route[index].heading.x
+        || step.heading.z !== route[index].heading.z
+    )).length;
+    assert.ok(headingChanges >= 4);
 
-        const requiredSupports = new Set([
-            key(origin.offset(0, -1, 0)),
-            ...route.map(step => key(step.position.offset(0, -1, 0))),
-        ]);
-        const excavation = route.flatMap(step => [
-            step.position,
-            step.position.offset(0, 1, 0),
-            ...(step.yOffset < 0 ? [step.position.offset(0, 2, 0)] : []),
-        ]);
-        assert.equal(
-            excavation.some(position => requiredSupports.has(key(position))),
-            false,
-        );
-    }
+    const requiredSupports = new Set([
+        key(origin.offset(0, -1, 0)),
+        ...route.map(step => key(step.position.offset(0, -1, 0))),
+    ]);
+    const excavation = route.flatMap(step => [
+        step.position,
+        step.position.offset(0, 1, 0),
+        ...(step.yOffset < 0 ? [step.position.offset(0, 2, 0)] : []),
+    ]);
+    assert.equal(
+        excavation.some(position => requiredSupports.has(key(position))),
+        false,
+    );
 });
 
 test('an over-deadline corridor advances the shortest safe prefix that makes the remainder viable', () => {

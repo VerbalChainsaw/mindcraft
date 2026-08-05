@@ -19,6 +19,7 @@ import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
+import { searchSupportedMiningVoxelCorridors } from '../runtime/mining-corridor-planner.js';
 import {
     isWaterPotion,
     potionFingerprint,
@@ -125,6 +126,11 @@ const MINING_ROUTE_STEP_TIMEOUT_MS = 2_000;
 const MINING_ROUTE_STEP_ESTIMATE_MS = 450;
 const MINING_ROUTE_DEADLINE_RESERVE_MS = 3_500;
 const MAX_MINING_EXCAVATION_BLOCKS = 96;
+const MAX_MINING_CORRIDOR_EXPANSIONS = 6_000;
+const MAX_MINING_CORRIDOR_SOLUTIONS = 12;
+const MAX_MINING_CORRIDOR_DETOUR = 8;
+const MIN_SURFACE_ROUTE_PROGRESS = 2;
+const MAX_SURFACE_ROUTE_LEGS = 6;
 const MINING_STAGING_SCAN_RADIUS = 12;
 const MAX_MINING_STAGING_ATTEMPTS = 2;
 const DEFAULT_MAX_DROP_DOWN = 4;
@@ -4254,6 +4260,14 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     ? {
                         consideredRoutes: miningFailure.consideredRoutes || 0,
                         routeOutcomes: miningFailure.routeOutcomes,
+                    }
+                    : {}),
+                ...(miningFailure?.searchRejections
+                    ? {
+                        consideredStates: miningFailure.consideredStates || 0,
+                        expandedStates: miningFailure.expandedStates || 0,
+                        searchRejections: miningFailure.searchRejections,
+                        searchLimitReached: miningFailure.searchLimitReached === true,
                     }
                     : {}),
                 ...(miningFailure?.toolRequirement
@@ -9247,121 +9261,6 @@ function miningCellKey(position) {
     return `${position.x}:${position.y}:${position.z}`;
 }
 
-function appendMiningAxisLeg(path, current, axis, destination) {
-    while (current[axis] !== destination) {
-        current[axis] += Math.sign(destination - current[axis]);
-        path.push({ x: current.x, z: current.z });
-    }
-}
-
-function miningHorizontalDoglegs(origin, stance, routeLength) {
-    const dx = stance.x - origin.x;
-    const dz = stance.z - origin.z;
-    const horizontalDistance = Math.abs(dx) + Math.abs(dz);
-    const detour = Math.max(0, Math.floor((routeLength - horizontalDistance) / 2));
-    const paths = [];
-    const addPath = legs => {
-        const current = { x: origin.x, z: origin.z };
-        const path = [];
-        for (const [axis, destination] of legs) {
-            appendMiningAxisLeg(path, current, axis, destination);
-        }
-        if (
-            current.x === stance.x
-            && current.z === stance.z
-            && path.length === routeLength
-        ) paths.push(path);
-    };
-
-    if (detour === 0) {
-        addPath([['x', stance.x], ['z', stance.z]]);
-        addPath([['z', stance.z], ['x', stance.x]]);
-    } else if (dx !== 0 || dz !== 0) {
-        if (dz !== 0) {
-            for (const sign of [-1, 1]) {
-                const detourX = origin.x + (sign * detour);
-                addPath([['x', detourX], ['z', stance.z], ['x', stance.x]]);
-            }
-        }
-        if (dx !== 0) {
-            for (const sign of [-1, 1]) {
-                const detourZ = origin.z + (sign * detour);
-                addPath([['z', detourZ], ['x', stance.x], ['z', stance.z]]);
-            }
-        }
-    } else {
-        // A target directly above or below the origin still needs horizontal
-        // run for a one-block staircase. Use a thin rectangular loop; only
-        // its final, vertically separated cell repeats the origin column.
-        const longLeg = Math.max(1, Math.floor(routeLength / 2) - 1);
-        for (const xSign of [-1, 1]) {
-            for (const zSign of [-1, 1]) {
-                addPath([
-                    ['x', origin.x + (xSign * longLeg)],
-                    ['z', origin.z + zSign],
-                    ['x', origin.x],
-                    ['z', origin.z],
-                ]);
-                addPath([
-                    ['z', origin.z + (zSign * longLeg)],
-                    ['x', origin.x + xSign],
-                    ['z', origin.z],
-                    ['x', origin.x],
-                ]);
-            }
-        }
-    }
-
-    const unique = new Map();
-    for (const path of paths) {
-        const key = path.map(position => `${position.x}:${position.z}`).join('|');
-        if (!unique.has(key)) unique.set(key, path);
-    }
-    return [...unique.values()];
-}
-
-export function planSupportedMiningVoxelCorridors(origin, stance) {
-    const verticalDelta = stance.y - origin.y;
-    const verticalDistance = Math.abs(verticalDelta);
-    const horizontalDistance = Math.abs(stance.x - origin.x) + Math.abs(stance.z - origin.z);
-    let minimumRouteLength = Math.max(verticalDistance, horizontalDistance);
-    if ((minimumRouteLength - horizontalDistance) % 2 !== 0) minimumRouteLength += 1;
-    if (minimumRouteLength === 0) return [];
-
-    // Natural corridors routinely intersect an unrelated ore pocket. Keep
-    // those blocks protected and offer a small deterministic set of longer
-    // doglegs instead of falling back to excavation A*. Even increments
-    // preserve endpoint parity, and the downstream block/deadline/durability
-    // preflight still rejects every unsafe or excessive route.
-    const routeLengths = [0, 2, 4, 6].map(extra => minimumRouteLength + extra);
-    return routeLengths.flatMap(routeLength => (
-        miningHorizontalDoglegs(origin, stance, routeLength).map(horizontalPath => {
-            let previous = origin;
-            return horizontalPath.map((horizontal, index) => {
-                const completedVertical = Math.sign(verticalDelta) * Math.floor(
-                    ((index + 1) * verticalDistance) / routeLength,
-                );
-                const position = new Vec3(
-                    horizontal.x,
-                    origin.y + completedVertical,
-                    horizontal.z,
-                );
-                const heading = {
-                    x: position.x - previous.x,
-                    z: position.z - previous.z,
-                };
-                const step = {
-                    position,
-                    heading,
-                    yOffset: position.y - previous.y,
-                };
-                previous = position;
-                return step;
-            });
-        })
-    ));
-}
-
 function miningRouteTouchesLiquid(bot, positions) {
     const offsets = [
         [1, 0, 0], [-1, 0, 0], [0, 1, 0],
@@ -9762,99 +9661,48 @@ export function selectMiningDeadlinePrefix(plan, remainingMs) {
     };
 }
 
-function selectMiningSafetyBoundaryPrefix(bot, targetBlock, plan, remainingMs) {
-    if (
-        plan?.ok !== false
-        || !Number.isInteger(plan.safePrefixLength)
-        || plan.safePrefixLength < 1
-        || !Array.isArray(plan.route)
-        || !Array.isArray(plan.stepExcavationBlocks)
-        || !Array.isArray(plan.stepEstimatedDigMs)
-        || !plan.origin
-        || !targetBlock?.position
-    ) return null;
-
-    const availableMs = Math.max(0, Number(remainingMs) || 0);
-    const originDistance = plan.origin.distanceTo(targetBlock.position);
-    let cumulativeDigMs = 0;
-    let cumulativeBlocks = 0;
-    let selectedLength = 0;
-    for (let length = 1; length <= plan.safePrefixLength; length += 1) {
-        cumulativeDigMs += Math.max(0, Number(plan.stepEstimatedDigMs[length - 1]) || 0);
-        cumulativeBlocks += plan.stepExcavationBlocks[length - 1]?.length || 0;
-        if (cumulativeBlocks > MAX_MINING_EXCAVATION_BLOCKS) break;
-        const traversalMs = length * MINING_ROUTE_STEP_ESTIMATE_MS;
-        const requiredMs = cumulativeDigMs
-            + (traversalMs * 2)
-            + MINING_ROUTE_DEADLINE_RESERVE_MS;
-        if (requiredMs > availableMs) break;
-        const endpoint = plan.route[length - 1]?.position;
-        if (endpoint && endpoint.distanceTo(targetBlock.position) < originDistance - 0.5) {
-            selectedLength = length;
-        }
-    }
-    if (selectedLength < 1) return null;
-
-    const route = plan.route.slice(0, selectedLength);
-    const stepExcavationBlocks = plan.stepExcavationBlocks.slice(0, selectedLength);
-    const excavationBlocks = stepExcavationBlocks.flat();
-    if (excavationBlocks.length > MAX_MINING_EXCAVATION_BLOCKS) return null;
-    const durability = assessMiningRouteDurability(bot, excavationBlocks);
-    if (!durability.ok) return null;
-    const estimatedDigMs = plan.stepEstimatedDigMs
-        .slice(0, selectedLength)
-        .reduce((total, duration) => total + Math.max(0, Number(duration) || 0), 0);
-    const estimatedReturnMs = selectedLength * MINING_ROUTE_STEP_ESTIMATE_MS;
-    return {
-        ...plan,
-        ok: true,
-        outcome: 'route_boundary_ready',
-        route,
-        stance: route.at(-1).position,
-        excavationBlocks,
-        excavationBudget: excavationBlocks.length,
-        stepExcavationBlocks,
-        stepEstimatedDigMs: plan.stepEstimatedDigMs.slice(0, selectedLength),
-        blockBudget: excavationBlocks.length,
-        breakTarget: false,
-        partial: true,
-        plannedRouteSteps: plan.route.length,
-        estimatedDurationMs: estimatedDigMs + estimatedReturnMs,
-        estimatedReturnMs,
-        durability,
-        boundary: {
-            outcome: plan.outcome,
-            stepIndex: plan.blockedStepIndex,
-            step: plan.blockedStep,
-        },
-    };
-}
-
 function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) {
     const origin = observedSupportedStandingCell(bot);
     if (!origin) return { ok: false, outcome: 'position_unavailable' };
     const stances = prospectiveMiningStandingPositions(bot, targetBlock);
     if (stances.length === 0) return { ok: false, outcome: 'no_safe_stance' };
 
-    const assessments = [];
-    const seenRoutes = new Set();
-    for (const stance of stances) {
-        const routes = planSupportedMiningVoxelCorridors(origin, stance);
-        for (const route of routes) {
-            const routeKey = route.map(step => miningCellKey(step.position)).join('|');
-            if (seenRoutes.has(routeKey)) continue;
-            seenRoutes.add(routeKey);
-            assessments.push(assessMiningAccessPlan(
-                bot,
-                origin,
-                targetBlock,
-                stance,
-                route,
-                requestedLength,
-                options,
-            ));
-        }
+    const maximumSteps = Math.max(...stances.map(stance => Math.max(
+        4,
+        Math.abs(stance.y - origin.y) + requestedLength + 2,
+    )));
+    const search = searchSupportedMiningVoxelCorridors({
+        origin,
+        stances,
+        assessStep: step => assessMiningRouteStep(bot, step, targetBlock),
+        maxRouteSteps: maximumSteps,
+        maxExcavationBlocks: MAX_MINING_EXCAVATION_BLOCKS,
+        maxExpansions: MAX_MINING_CORRIDOR_EXPANSIONS,
+        maxSolutions: MAX_MINING_CORRIDOR_SOLUTIONS,
+        maxDetour: MAX_MINING_CORRIDOR_DETOUR,
+    });
+    const assessments = search.solutions.map(solution => assessMiningAccessPlan(
+        bot,
+        origin,
+        targetBlock,
+        solution.stance,
+        solution.route,
+        requestedLength,
+        options,
+    ));
+    const routeOutcomes = {};
+    for (const assessment of assessments) {
+        const outcome = String(assessment?.outcome || 'unknown');
+        routeOutcomes[outcome] = (routeOutcomes[outcome] || 0) + 1;
     }
+    const diagnostics = {
+        consideredRoutes: assessments.length,
+        consideredStates: search.consideredStates,
+        expandedStates: search.expandedStates,
+        routeOutcomes,
+        searchRejections: search.rejectionOutcomes,
+        searchLimitReached: search.expansionLimitReached,
+    };
     const viable = assessments
         .filter(assessment => assessment.ok)
         .sort((left, right) => (
@@ -9862,41 +9710,24 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
             || left.route.length - right.route.length
             || left.estimatedDurationMs - right.estimatedDurationMs
         ));
-    if (viable.length > 0) return viable[0];
+    if (viable.length > 0) return { ...viable[0], ...diagnostics };
     const toolBlocked = assessments.find(
         assessment => assessment.outcome === 'insufficient_tool_durability',
     );
-    if (toolBlocked) return toolBlocked;
+    if (toolBlocked) return { ...toolBlocked, ...diagnostics };
     const deadlineBlocked = assessments.find(
         assessment => assessment.outcome === 'route_deadline_insufficient',
     );
-    if (deadlineBlocked) return deadlineBlocked;
-    const boundaryPrefixes = assessments
-        .map(assessment => selectMiningSafetyBoundaryPrefix(
-            bot,
-            targetBlock,
-            assessment,
-            remainingActionTimeMs(),
-        ))
-        .filter(Boolean)
-        .sort((left, right) => (
-            left.stance.distanceTo(targetBlock.position)
-                - right.stance.distanceTo(targetBlock.position)
-            || left.blockBudget - right.blockBudget
-            || left.route.length - right.route.length
-        ));
-    const rejected = boundaryPrefixes[0]
-        || assessments[0]
-        || { ok: false, outcome: 'no_safe_route' };
-    const routeOutcomes = {};
-    for (const assessment of assessments) {
-        const outcome = String(assessment?.outcome || 'unknown');
-        routeOutcomes[outcome] = (routeOutcomes[outcome] || 0) + 1;
-    }
+    if (deadlineBlocked) return { ...deadlineBlocked, ...diagnostics };
+    const rejected = assessments[0] || {
+        ok: false,
+        outcome: search.expansionLimitReached
+            ? 'corridor_search_exhausted'
+            : 'no_safe_route',
+    };
     return {
         ...rejected,
-        consideredRoutes: assessments.length,
-        routeOutcomes,
+        ...diagnostics,
     };
 }
 
@@ -10167,6 +9998,12 @@ async function reachKnownBlockByVoxelCorridor(
             estimatedDurationMs: plan.estimatedDurationMs,
             replacementTool: plan.replacementTool || null,
             minimumUsableDurability: plan.minimumUsableDurability || null,
+            consideredRoutes: plan.consideredRoutes || 0,
+            consideredStates: plan.consideredStates || 0,
+            expandedStates: plan.expandedStates || 0,
+            routeOutcomes: plan.routeOutcomes || null,
+            searchRejections: plan.searchRejections || null,
+            searchLimitReached: plan.searchLimitReached === true,
         };
     }
     const result = await executeMiningAccessPlan(bot, liveTarget, plan);
@@ -10387,7 +10224,11 @@ export async function mineSearchTunnel(
                     : null,
                 blockedStep: plan.blockedStep || null,
                 consideredRoutes: plan.consideredRoutes || 0,
+                consideredStates: plan.consideredStates || 0,
+                expandedStates: plan.expandedStates || 0,
                 routeOutcomes: plan.routeOutcomes || null,
+                searchRejections: plan.searchRejections || null,
+                searchLimitReached: plan.searchLimitReached === true,
                 ...(toolRequirement ? { toolRequirement } : {}),
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
@@ -10397,10 +10238,21 @@ export async function mineSearchTunnel(
                 .slice(0, 4)
                 .map(([outcome, count]) => `${outcome}:${count}`)
                 .join(', ');
+            const dominantSearchRejections = Object.entries(plan.searchRejections || {})
+                .filter(([outcome]) => ![
+                    'corridor_bounds',
+                    'route_cell_revisited',
+                    'route_step_budget_exceeded',
+                ].includes(outcome))
+                .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+                .slice(0, 4)
+                .map(([outcome, count]) => `${outcome}:${count}`)
+                .join(', ');
+            const searchSummary = dominantRoutes || dominantSearchRejections;
             log(
                 bot,
                 `Rejected the known ${stagedTarget.name} target before excavation: ${String(plan.outcome || 'no safe route').replace(/_/g, ' ')}`
-                + `${dominantRoutes ? ` (${plan.consideredRoutes} routes; ${dominantRoutes})` : ''}.`,
+                + `${searchSummary ? ` (${plan.consideredRoutes} completed routes, ${plan.expandedStates || 0} states; ${searchSummary})` : ''}.`,
             );
             return false;
         }
@@ -13398,76 +13250,127 @@ export async function goToSurface(bot) {
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @returns {Promise<boolean>} true if the surface was reached, false otherwise.
      **/
-    const pos = bot.entity.position;
-    const columnX = Math.floor(pos.x);
-    const columnZ = Math.floor(pos.z);
+    const origin = bot.entity.position.clone();
     const minY = Number.isFinite(Number(bot.game?.minY)) ? Number(bot.game.minY) : -64;
     const height = Number.isFinite(Number(bot.game?.height)) ? Number(bot.game.height) : 384;
     const maxY = minY + Math.max(1, height) - 1;
     const isClear = block => ['air', 'cave_air', 'void_air'].includes(block.name) || block.boundingBox === 'empty';
-    let target = null;
-    for (let y = maxY - 2; y >= minY; y -= 1) {
-        const support = bot.blockAt(new Vec3(columnX, y, columnZ));
-        const feet = bot.blockAt(new Vec3(columnX, y + 1, columnZ));
-        const head = bot.blockAt(new Vec3(columnX, y + 2, columnZ));
-        if (!support || !feet || !head) continue;
-        if (support.boundingBox !== 'empty' && isClear(feet) && isClear(head)) {
-            target = support.position.offset(0, 1, 0);
-            break;
+    const findTarget = position => {
+        const columnX = Math.floor(position.x);
+        const columnZ = Math.floor(position.z);
+        for (let y = maxY - 2; y >= minY; y -= 1) {
+            const support = bot.blockAt(new Vec3(columnX, y, columnZ));
+            const feet = bot.blockAt(new Vec3(columnX, y + 1, columnZ));
+            const head = bot.blockAt(new Vec3(columnX, y + 2, columnZ));
+            if (!support || !feet || !head) continue;
+            if (support.boundingBox !== 'empty' && isClear(feet) && isClear(head)) {
+                return support.position.offset(0, 1, 0);
+            }
         }
-    }
-    if (!target) {
-        setActionEvidence(bot, {
-            kind: 'surface_navigation',
-            outcome: 'surface_not_loaded',
-            target: { x: columnX, z: columnZ, minY, maxY },
-            retryable: true,
-        });
-        log(bot, 'No loaded, standable surface target is visible in the current column.');
-        return false;
-    }
+        return null;
+    };
 
-    const routed = await goToPosition(bot, target.x, target.y, target.z, 1);
-    if (!routed) {
-        const routeOutcome = bot.lastActionEvidence?.outcome || 'unreachable';
-        setActionEvidence(bot, {
-            kind: 'surface_navigation',
-            outcome: bot.interrupt_code ? 'interrupted' : 'surface_unreachable',
-            target: { x: target.x, y: target.y, z: target.z },
-            routeOutcome,
-            retryable: !bot.interrupt_code,
+    let lastTarget = null;
+    for (let leg = 1; leg <= MAX_SURFACE_ROUTE_LEGS; leg += 1) {
+        if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
+        const started = bot.entity.position.clone();
+        const target = findTarget(started);
+        lastTarget = target;
+        if (!target) {
+            setActionEvidence(bot, {
+                kind: 'surface_navigation',
+                outcome: 'surface_not_loaded',
+                target: { x: Math.floor(started.x), z: Math.floor(started.z), minY, maxY },
+                observed: { x: started.x, y: started.y, z: started.z },
+                legs: leg - 1,
+                verticalProgress: started.y - origin.y,
+                retryable: true,
+            });
+            log(bot, 'No loaded, standable surface target is visible in the current column.');
+            return false;
+        }
+
+        // Surface recovery asks Pathfinder for altitude, not the original
+        // column. Binding X/Z here forced the body to climb toward one shaft
+        // even when an ordinary cave or hillside route reached the same
+        // elevation nearby. Native GoalY keeps locomotion package-owned while
+        // the verification below still requires a genuinely supported surface
+        // cell in whichever column Pathfinder selected.
+        const routed = await goToGoal(bot, new pf.goals.GoalY(target.y), {
+            movements: () => clearedMiningMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
         });
-        log(bot, `The loaded surface at y=${target.y} is not reachable by a safe route.`);
-        return false;
+        const observed = bot.entity.position.clone();
+        const legVerticalProgress = observed.y - started.y;
+        const totalVerticalProgress = observed.y - origin.y;
+        const supported = observedSupportedStandingCell(bot);
+        const reboundTarget = findTarget(observed);
+        if (reboundTarget) lastTarget = reboundTarget;
+        const arrived = Boolean(
+            supported
+            && reboundTarget
+            && observed.y >= reboundTarget.y - 1
+        );
+        if (arrived) {
+            const support = bot.blockAt(supported.offset(0, -1, 0));
+            setActionEvidence(bot, {
+                kind: 'surface_navigation',
+                outcome: 'surface_reached',
+                target: { x: reboundTarget.x, y: reboundTarget.y, z: reboundTarget.z },
+                observed: { x: observed.x, y: observed.y, z: observed.z },
+                support: support?.name || null,
+                legs: leg,
+                verticalProgress: totalVerticalProgress,
+                retryable: false,
+            });
+            log(bot, `Reached the loaded surface at y=${reboundTarget.y} in ${leg} bounded route leg${leg === 1 ? '' : 's'}.`);
+            return true;
+        }
+
+        const madeSupportedProgress = Boolean(
+            !bot.interrupt_code
+            && supported
+            && legVerticalProgress >= MIN_SURFACE_ROUTE_PROGRESS
+        );
+        if (!madeSupportedProgress) {
+            const routeOutcome = bot.lastActionEvidence?.outcome || (routed ? 'goal_resolved' : 'unreachable');
+            setActionEvidence(bot, {
+                kind: 'surface_navigation',
+                outcome: bot.interrupt_code ? 'interrupted' : 'surface_unreachable',
+                target: { x: target.x, y: target.y, z: target.z },
+                observed: { x: observed.x, y: observed.y, z: observed.z },
+                routeOutcome,
+                legs: leg,
+                legVerticalProgress,
+                verticalProgress: totalVerticalProgress,
+                retryable: !bot.interrupt_code,
+            });
+            log(bot, `The loaded surface at y=${target.y} is not reachable by a safe, upward-converging route.`);
+            return false;
+        }
+
+        log(
+            bot,
+            `Advanced ${legVerticalProgress.toFixed(1)} vertical blocks toward the loaded surface at y=${target.y}; `
+                + `rebinding the next Pathfinder leg from the verified supported stance (${leg}/${MAX_SURFACE_ROUTE_LEGS}).`,
+        );
     }
 
     const observed = bot.entity.position;
-    const horizontalDistance = Math.hypot(observed.x - target.x, observed.z - target.z);
-    const support = bot.blockAt(observed.floored().offset(0, -1, 0));
-    const arrived = horizontalDistance <= 2 && observed.y >= target.y - 1 && support?.boundingBox !== 'empty';
-    if (!arrived) {
-        setActionEvidence(bot, {
-            kind: 'surface_navigation',
-            outcome: 'surface_arrival_unverified',
-            target: { x: target.x, y: target.y, z: target.z },
-            observed: { x: observed.x, y: observed.y, z: observed.z },
-            horizontalDistance,
-            support: support?.name || null,
-            retryable: true,
-        });
-        log(bot, `Pathfinding ended, but Minecraft did not confirm arrival at the surface target y=${target.y}.`);
-        return false;
-    }
     setActionEvidence(bot, {
         kind: 'surface_navigation',
-        outcome: 'surface_reached',
-        target: { x: target.x, y: target.y, z: target.z },
+        outcome: bot.interrupt_code ? 'interrupted' : 'surface_progress_incomplete',
+        ...(lastTarget ? { target: { x: lastTarget.x, y: lastTarget.y, z: lastTarget.z } } : {}),
         observed: { x: observed.x, y: observed.y, z: observed.z },
-        support: support?.name || null,
-        retryable: false,
+        legs: MAX_SURFACE_ROUTE_LEGS,
+        verticalProgress: observed.y - origin.y,
+        retryable: !bot.interrupt_code,
     });
-    log(bot, `Reached the loaded surface at y=${target.y}.`);
-    return true;
+    log(bot, bot.interrupt_code
+        ? 'Surface navigation was interrupted before verified arrival.'
+        : `Surface navigation made bounded progress but did not reach a verified surface after ${MAX_SURFACE_ROUTE_LEGS} route legs.`);
+    return false;
 }
 
 function compactStateFingerprint(value) {

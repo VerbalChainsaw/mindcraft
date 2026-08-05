@@ -306,3 +306,85 @@ test('one no-progress concrete failure relocates before the same regional signat
   assert.equal(director.activeGoal.subgoals.at(-1).kind, 'recover');
   assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
 });
+
+test('a deep bot surfaces before retrying a concrete target materially above it', async () => {
+  const director = createDirector();
+  const now = Date.now();
+  const commands = [];
+  director.agent.bot.game = { dimension: 'overworld' };
+  director.agent.bot.entity = { position: { y: 31 } };
+  director.executeGoalCommand = async (agent, command) => {
+    commands.push(command);
+    agent.last_action_result = {
+      actionId: 'verified-surface-arrival',
+      phase: 'succeeded',
+      code: 'skill_surface_reached',
+      detail: 'Reached a supported surface stance.',
+      retryable: false,
+    };
+    return true;
+  };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'recover',
+    attempts: 1,
+    evidence: {
+      actionId: 'failed-surface-target',
+      phase: 'failed',
+      code: 'skill_unreachable',
+      detail: 'The known target above the bot had no route from the mine.',
+      verified: false,
+      at: now,
+    },
+    subgoals: [
+      {
+        ...subgoal('plan', 1, 'failed'),
+        targetName: 'jungle_log',
+        code: 'skill_unreachable',
+        startedAt: now - 200,
+        finishedAt: now - 150,
+      },
+      {
+        ...subgoal('recover', 2, 'acting'),
+        commandName: '!goToSurface',
+        startedAt: now - 100,
+        finishedAt: null,
+      },
+    ],
+    memory: {
+      failedTargets: [{
+        kind: 'collect',
+        name: 'jungle_log',
+        position: { x: -763, y: 64, z: -398 },
+        code: 'skill_unreachable',
+        failures: 1,
+        firstFailedAt: now - 145,
+        lastFailedAt: now - 145,
+        avoidUntil: now + 90_000,
+      }],
+    },
+  });
+
+  director.handleResult('recover', {
+    actionId: 'surface-reflex-preemption',
+    phase: 'interrupted',
+    code: 'interrupted',
+    detail: 'Self-preservation briefly took ownership.',
+    retryable: true,
+  });
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 1);
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(commands, ['!goToSurface'], JSON.stringify({
+    phase: director.activeGoal?.phase,
+    evidence: director.activeGoal?.evidence,
+    subgoals: director.activeGoal?.subgoals,
+    memory: director.activeGoal?.memory,
+    status: director.status,
+  }));
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 1);
+});

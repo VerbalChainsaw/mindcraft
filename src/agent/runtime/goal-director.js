@@ -35,6 +35,9 @@ const FAILED_TARGET_EXCLUSION_RADIUS = 4;
 // scan radius before rebinding; owned Pathfinder still enforces the action
 // deadline, recent-region exclusions, and non-destructive movement policy.
 const ACQUISITION_REGION_RELOCATION_DISTANCE = 64;
+const UNDERGROUND_SURFACE_RECOVERY_Y = 48;
+const SURFACE_ACCESS_TARGET_Y = 56;
+const SURFACE_ACCESS_MIN_VERTICAL_GAP = 12;
 // A concrete acquisition failure already excludes that source. Trying a
 // second source with the same failure signature in the same search region
 // spends productive budget without changing strategy; relocate once and let
@@ -144,9 +147,18 @@ class GoalStateStore {
 function restoredGoal(goal) {
   if (!goal || TERMINAL_PHASES.has(goal.phase)) return null;
   const now = Date.now();
+  const interrupted = [...goal.subgoals]
+    .reverse()
+    .find(subgoal => subgoal.state === 'acting') || null;
+  const resumePhase = interrupted?.kind === 'recover' ? 'recover' : 'assess';
   return normalizeGoalContract({
     ...goal,
-    phase: 'assess',
+    // Fresh Minecraft state must always be verified after restart. A recovery
+    // action is different from an opaque productive action, though: its last
+    // productive failure still selects the strategy. Preserve that lifecycle
+    // phase so restart resumes deterministic recovery instead of replaying the
+    // acquisition that already proved it was inaccessible from this region.
+    phase: resumePhase,
     subgoals: goal.subgoals.map(subgoal => (
       subgoal.state === 'acting'
         ? {
@@ -162,7 +174,9 @@ function restoredGoal(goal) {
       actionId: '',
       phase: 'assess',
       code: 'restart_revalidation',
-      detail: 'Restored goal requires fresh Minecraft-state verification.',
+      detail: interrupted?.kind === 'recover'
+        ? 'Restored goal requires fresh Minecraft-state verification before resuming deterministic recovery.'
+        : 'Restored goal requires fresh Minecraft-state verification.',
       verified: false,
       at: now,
     },
@@ -212,8 +226,31 @@ function deliveryCommand(goal, remaining, procedure) {
   return `${selected}(${JSON.stringify(goal.destination.player)}, ${JSON.stringify(goal.target.inventoryName)}, ${remaining})`;
 }
 
-function recoveryCommand(goal) {
+function needsSurfaceRecovery(goal, bot) {
+  const dimension = String(bot?.game?.dimension || '').replace(/^minecraft:/, '');
+  const y = Number(bot?.entity?.position?.y);
+  const latestPlan = latestFailedPlanSubgoal(goal);
+  const code = `${goal?.evidence?.code || ''} ${latestPlan?.code || ''}`;
+  const failedTarget = latestPlanFailedTarget(goal);
+  const targetY = Number(failedTarget?.position?.y);
+  const failedAboveGroundAccess = (
+    /(?:unreachable|no_path|path_|stuck)/.test(code)
+    && Number.isFinite(targetY)
+    && targetY >= SURFACE_ACCESS_TARGET_Y
+    && targetY - y >= SURFACE_ACCESS_MIN_VERTICAL_GAP
+  );
+  return dimension === 'overworld'
+    && Number.isFinite(y)
+    && y < UNDERGROUND_SURFACE_RECOVERY_Y
+    && (
+      /(?:resource_not_found|search_exhausted)/.test(code)
+      || failedAboveGroundAccess
+    );
+}
+
+function recoveryCommand(goal, bot) {
   const code = String(goal.evidence?.code || '');
+  if (needsSurfaceRecovery(goal, bot)) return '!goToSurface';
   if (
     /(?:not_found|no_safe|unreachable|search|resource|no_path|path_|stuck)/.test(code)
     && !/(?:missing_material|missing_item|missing_tool|invalid_|table_unreachable|furnace_unreachable)/.test(code)
@@ -221,8 +258,9 @@ function recoveryCommand(goal) {
   return null;
 }
 
-function plannedDisengagementCommand(goal) {
+function plannedDisengagementCommand(goal, bot) {
   const code = String(goal.evidence?.code || '');
+  if (needsSurfaceRecovery(goal, bot)) return '!goToSurface';
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:resource_not_found|search_exhausted)/.test(code)
@@ -234,13 +272,25 @@ function plannedDisengagementCommand(goal) {
   return null;
 }
 
+function latestFailedPlanSubgoal(goal) {
+  return [...(goal?.subgoals || [])]
+    .reverse()
+    .find(subgoal => subgoal.kind === 'plan' && subgoal.state === 'failed') || null;
+}
+
+function latestPlanFailedTarget(goal) {
+  const subgoal = latestFailedPlanSubgoal(goal);
+  if (!subgoal) return null;
+  return (goal.memory?.failedTargets || [])
+    .filter(target => (
+      target.kind === 'collect'
+      && target.lastFailedAt >= Math.max(0, Number(subgoal.finishedAt) || 0)
+    ))
+    .sort((left, right) => right.lastFailedAt - left.lastFailedAt)[0] || null;
+}
+
 function latestPlanFailureHasConcreteTarget(goal) {
-  const subgoal = goal.subgoals.at(-1);
-  if (subgoal?.kind !== 'plan' || subgoal.state !== 'failed') return false;
-  return (goal.memory?.failedTargets || []).some(target => (
-    target.kind === 'collect'
-    && target.lastFailedAt >= Math.max(0, Number(subgoal.finishedAt) || 0)
-  ));
+  return Boolean(latestPlanFailedTarget(goal));
 }
 
 function consecutiveLocalPlanFailures(goal) {
@@ -298,7 +348,14 @@ export class GoalDirector {
       : null;
     if (this.activeGoal) {
       this.store.save(this.activeGoal, this.lastGoal, this.protectedGoalId);
-      this.setStatus('assess', 'restart_revalidation', 'Restored typed goal is waiting for fresh Minecraft state.', true);
+      this.setStatus(
+        this.activeGoal.phase,
+        'restart_revalidation',
+        this.activeGoal.phase === 'recover'
+          ? 'Restored typed goal is resuming its deterministic recovery from fresh Minecraft state.'
+          : 'Restored typed goal is waiting for fresh Minecraft state.',
+        true,
+      );
     } else if (this.store.lastError) {
       this.setStatus('failed', 'goal_state_load_failed', this.store.lastError, false);
     }
@@ -976,7 +1033,11 @@ export class GoalDirector {
         ...goal,
         checkpoint,
         attempts,
-        phase: 'assess',
+        // A reflex may interrupt recovery without invalidating the productive
+        // failure that selected it. Resume the same deterministic recovery
+        // before rebuilding the material plan, otherwise every combat or
+        // hazard check inserts another identical acquisition failure.
+        phase: kind === 'recover' ? 'recover' : 'assess',
         updatedAt: this.now(),
       });
       this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
@@ -1213,7 +1274,7 @@ export class GoalDirector {
           if (latestPlanFailureHasConcreteTarget(goal)) {
             const localFailures = consecutiveLocalPlanFailures(goal);
             const disengagement = localFailures >= MAX_LOCAL_CONCRETE_TARGET_FAILURES
-              ? plannedDisengagementCommand(goal)
+              ? plannedDisengagementCommand(goal, this.agent.bot)
               : null;
             if (disengagement) {
               this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
@@ -1230,7 +1291,7 @@ export class GoalDirector {
             );
             return;
           }
-          const disengagement = plannedDisengagementCommand(goal);
+          const disengagement = plannedDisengagementCommand(goal, this.agent.bot);
           if (disengagement) {
             this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
             this.dispatch('recover', disengagement);
@@ -1246,7 +1307,7 @@ export class GoalDirector {
           );
           return;
         }
-        const command = recoveryCommand(goal);
+        const command = recoveryCommand(goal, this.agent.bot);
         if (command) {
           this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
           this.dispatch('recover', command);
