@@ -13,8 +13,13 @@ function cellKey(position) {
 
 function compareQueueEntries(left, right) {
   return left.priority - right.priority
+    // For equal-cost A* frontiers, finish the state that has materially
+    // converged toward a bound stance. Preferring the shortest partial route
+    // here breadth-first expands every shallow permutation of the same
+    // staircase and can exhaust the bounded search before any route arrives.
+    || left.remainingSteps - right.remainingSteps
     || left.excavation.size - right.excavation.size
-    || left.route.length - right.route.length
+    || right.route.length - left.route.length
     || left.position.y - right.position.y
     || left.position.x - right.position.x
     || left.position.z - right.position.z
@@ -191,6 +196,7 @@ export function searchSupportedMiningVoxelCorridors({
   maxExpansions = 6_000,
   maxSolutions = 12,
   maxDetour = 8,
+  initialSupportBlocks = [],
 }) {
   const goals = (stances || [])
     .filter(stance => stance && Number.isFinite(stance.x)
@@ -214,14 +220,21 @@ export function searchSupportedMiningVoxelCorridors({
   const bounds = searchBounds(start, goals, routeLimit, Math.max(2, maxDetour));
   const initialCompletion = nearestCompletion(start, goals, 0);
   const queue = new MinHeap(compareQueueEntries);
+  const initialSupports = new Set([
+    cellKey(start.offset(0, -1, 0)),
+    ...initialSupportBlocks
+      .filter(block => block?.position)
+      .map(block => cellKey(block.position)),
+  ]);
   const initial = {
     position: start,
     verticalDirection: 0,
     route: [],
     excavation: new Set(),
-    supports: new Set([cellKey(start.offset(0, -1, 0))]),
+    supports: initialSupports,
     pathCells: new Set([cellKey(start)]),
     priority: initialCompletion.steps,
+    remainingSteps: initialCompletion.steps,
     order: 0,
   };
   queue.push(initial);
@@ -280,12 +293,20 @@ export function searchSupportedMiningVoxelCorridors({
       };
       const assessment = assessStep(step);
       if (!assessment?.ok) {
-        countOutcome(rejectionOutcomes, assessment?.outcome || 'route_step_rejected');
+        const outcome = assessment?.outcome || 'route_step_rejected';
+        countOutcome(
+          rejectionOutcomes,
+          assessment?.blockedBy ? `${outcome}:${assessment.blockedBy}` : outcome,
+        );
         continue;
       }
 
-      const supportKey = cellKey(candidate.position.offset(0, -1, 0));
-      if (state.excavation.has(supportKey)) {
+      const supportKeys = new Set(
+        (assessment.supportBlocks || [{ position: candidate.position.offset(0, -1, 0) }])
+          .filter(block => block?.position)
+          .map(block => cellKey(block.position)),
+      );
+      if ([...supportKeys].some(key => state.excavation.has(key))) {
         countOutcome(rejectionOutcomes, 'route_support_excavation_conflict');
         continue;
       }
@@ -294,7 +315,7 @@ export function searchSupportedMiningVoxelCorridors({
       for (const block of assessment.blocks || []) {
         if (!block?.position) continue;
         const blockKey = cellKey(block.position);
-        if (state.supports.has(blockKey) || blockKey === supportKey) {
+        if (state.supports.has(blockKey) || supportKeys.has(blockKey)) {
           supportConflict = true;
           break;
         }
@@ -310,7 +331,7 @@ export function searchSupportedMiningVoxelCorridors({
       }
 
       const supports = new Set(state.supports);
-      supports.add(supportKey);
+      for (const supportKey of supportKeys) supports.add(supportKey);
       const pathCells = new Set(state.pathCells);
       pathCells.add(candidateKey);
       const route = [...state.route, step];
@@ -321,7 +342,12 @@ export function searchSupportedMiningVoxelCorridors({
         excavation,
         supports,
         pathCells,
-        priority: route.length + candidate.completion.steps + (excavation.size * 0.5),
+        // Geometry decides whether a bounded corridor can finish. Excavation
+        // is a secondary preference, not part of the A* completion score;
+        // otherwise an open sideways wander outranks the direct staircase the
+        // capability was explicitly asked to bind through solid terrain.
+        priority: route.length + candidate.completion.steps,
+        remainingSteps: candidate.completion.steps,
         order,
       };
       order += 1;

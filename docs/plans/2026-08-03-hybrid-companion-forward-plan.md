@@ -157,7 +157,27 @@ Implementation checkpoint: the fixed dogleg generator has been replaced by a zer
 
 The unchanged clock campaign then exposed a prerequisite-access defect before gold acquisition could exercise the new binder. A deep bot treated incremental ascent as successful recovery, rebuilt collection after reflex interruptions, and restored an interrupted recovery as `assess` after process restart. The shared correction now requires verified surface arrival, sends a concrete materially-higher failed target directly to surface recovery, resumes interrupted recovery without another acquisition attempt, and preserves an in-flight recovery phase across restart. A forced reload physically confirmed model-free deterministic recovery resumption.
 
-Surface locomotion is now bound to Pathfinder's native `GoalY` so the package may choose the horizontal cave or hillside route instead of being forced toward one X/Z column. That call explicitly disables digging, towers, parkour, health-bounded descent, and local excavation recovery. If native locomotion proves there is no cleared route, the next repair is to bind an exact surface stance through the same deterministic corridor catalogue and let Pathfinder traverse only the authorized cleared cells. Do not restore dig-enabled A* or add collection-specific ascent retries.
+Surface locomotion is bound first to Pathfinder's native `GoalY` so the package may choose a cleared horizontal cave or hillside route instead of being forced toward one X/Z column. That call explicitly disables digging, towers, parkour, health-bounded descent, and local excavation recovery. When native locomotion proves no-path, the same deterministic corridor catalogue binds exact loaded surface stances and Pathfinder traverses only its already-cleared cells. Do not restore dig-enabled A* or add collection-specific ascent retries.
+
+### Extra-high evaluation checkpoint: support and debris semantics
+
+The architecture verdict remains unchanged: hybrid wins. The live surface campaign confirmed that the capability boundary is now producing reusable mechanics rather than clock-specific recipes. The generic corridor moved a tool-less bot from Y37 to Y58 through bounded cardinal cells before desert geology exposed two primitive defects.
+
+First, the corridor A* queue preferred shallow and low-excavation states over completion. Equal-cost states now prefer lower remaining distance, while excavation count is only a secondary choice. Second, the shared support descriptor classified every falling-material block as unsafe ground. A settled sand or gravel column is now usable only when a bounded scan proves a non-falling solid anchor; every block in that support chain is protected from route excavation. This is the richer `can I stand here?` contract required by the physical world, not a material-name exception.
+
+The first bottom-up debris executor was unsafe. It admitted a six-step staircase from `(-752,58,-394)` to `(-758,64,-394)`, then breaking sand above the occupied origin column allowed debris to settle into the bot's body. Survival recovery could not escape and Paper recorded `MindcraftBot suffocated in a wall` at 03:33:56. This run is a failed safety result, not progress acceptance.
+
+The locked falling-debris contract is now:
+
+1. keep the per-column falling-debris, total excavation, reach, time, durability, and return-route caps;
+2. never bottom-up clear falling material in the currently occupied X/Z column;
+3. require a level staging step when debris exists above the origin;
+4. while still in the prior supported cell, pre-clear the destination body, headroom, and the next ascent's overhead column;
+5. verify that a same-name falling replacement reduced the bounded column height before charging physical progress;
+6. require a stable clear interval before Pathfinder receives the cell;
+7. fail before digging if the world changed and debris is again above the occupied column.
+
+This staged correction passes the focused checks but is not physically accepted: death respawned the bot at the natural surface, so replaying the buried sand setup would manufacture state. Preserve that distinction. Continue the unchanged `Please make a clock.` request from the real respawn state. The request must still acquire gold through the generic capability graph, smelt it, craft one clock, and pass immediate Paper inventory verification. If buried acquisition exercises the staged corridor again, its physical result governs. No new architecture tranche begins before that clock result.
 
 ```text
 [codeplan · buried-corridor-binding · IN · mode: constrained · profile: compact · confidence: high · candidates: V1=native-Pathfinder-dry-run/adapter/internal-reuse;V2=binder-owned-bounded-voxel-search/new-module/zero-dep · lean: V2 · conservative: V1]
@@ -305,4 +325,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Replace the fixed buried-target dogleg enumeration with the bounded corridor binder defined above. Keep `GoalDirector`, the capability catalogue, `ActionManager`, the V2-owned Pathfinder, existing execution/safety policy, and Minecraft-state verification in their current ownership lanes. Prove the tranche by rerunning `Please make a clock.` through Paper verification; do not add a clock-specific route, give Pathfinder excavation authority, or start a second executor.
+Rerun `Please make a clock.` from the bot's real post-death surface spawn. Keep `GoalDirector`, the capability catalogue, `ActionManager`, the V2-owned Pathfinder, deterministic corridor excavation, and Minecraft-state verification in their current ownership lanes. Repair only the first shared capability blocker encountered and rerun the same request until Paper verifies one clock or a genuine external blocker remains. Do not add a clock-specific route, give Pathfinder excavation authority, manufacture a buried test state, or start a second executor.

@@ -6,6 +6,7 @@ import {
     assessStableMiningCollectionTarget,
     findStableMiningCollectionCandidates,
 } from '../src/agent/library/skills.js';
+import { assessAnchoredGameplaySupport } from '../src/agent/runtime/gameplay-safety.js';
 
 function block(name, x, y, z, boundingBox = name === 'air' ? 'empty' : 'block') {
     return {
@@ -91,4 +92,29 @@ test('nearer unsupported blocks cannot hide a supported mining target from the b
 
     const selected = findStableMiningCollectionCandidates(bot, value => value.name === 'stone', 64);
     assert.deepEqual(selected.map(value => value.position), [supported.position]);
+});
+
+test('settled falling material is support only while its bounded column remains anchored', () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const sand = block('sand', 0, 63, 0);
+    put(sand);
+    put(block('sand', 0, 62, 0));
+    put(block('sandstone', 0, 61, 0));
+    const bot = {
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+
+    const anchored = assessAnchoredGameplaySupport(bot, sand);
+    assert.equal(anchored.ok, true);
+    assert.equal(anchored.outcome, 'falling_support_anchored');
+    assert.deepEqual(anchored.blocks.map(value => value.name), ['sand', 'sand', 'sandstone']);
+
+    blocks.delete('0:61:0');
+    const unanchored = assessAnchoredGameplaySupport(bot, sand);
+    assert.equal(unanchored.ok, false);
+    assert.equal(unanchored.outcome, 'falling_support_unanchored');
 });

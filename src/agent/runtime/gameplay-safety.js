@@ -89,3 +89,55 @@ export function isSafeGameplaySupport(block) {
     );
 }
 
+export function assessAnchoredGameplaySupport(bot, block, { maxFallingDepth = 8 } = {}) {
+    if (isSafeGameplaySupport(block)) {
+        return { ok: true, outcome: 'stable_support', blocks: [block], anchor: block };
+    }
+    if (
+        !block?.position?.offset
+        || !isFallingGameplayBlock(block)
+        || !bot?.blockAt
+    ) {
+        return {
+            ok: false,
+            outcome: block ? 'unsafe_support' : 'support_unloaded',
+            blocks: [],
+            anchor: null,
+        };
+    }
+
+    const depthLimit = Math.max(1, Math.floor(Number(maxFallingDepth) || 1));
+    const blocks = [block];
+    let position = block.position.offset(0, -1, 0);
+    for (let depth = 1; depth <= depthLimit; depth += 1) {
+        let below;
+        try {
+            below = bot.blockAt(position);
+        } catch {
+            below = null;
+        }
+        if (!below) {
+            return { ok: false, outcome: 'support_unloaded', blocks, anchor: null };
+        }
+        if (isFallingGameplayBlock(below)) {
+            blocks.push(below);
+            position = position.offset(0, -1, 0);
+            continue;
+        }
+        if (isSafeGameplaySupport(below)) {
+            blocks.push(below);
+            return {
+                ok: true,
+                outcome: 'falling_support_anchored',
+                blocks,
+                anchor: below,
+            };
+        }
+        return { ok: false, outcome: 'falling_support_unanchored', blocks, anchor: null };
+    }
+    return { ok: false, outcome: 'falling_support_depth_exceeded', blocks, anchor: null };
+}
+
+export function isAnchoredGameplaySupport(bot, block, options = {}) {
+    return assessAnchoredGameplaySupport(bot, block, options).ok;
+}
