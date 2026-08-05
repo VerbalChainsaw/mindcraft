@@ -72,12 +72,6 @@ class Movements {
     this.climbables = new Set()
     this.climbables.add(registry.blocksByName.ladder.id)
     if (registry.blocksByName.vine) this.climbables.add(registry.blocksByName.vine.id)
-    if (registry.blocksByName.weeping_vines) this.climbables.add(registry.blocksByName.weeping_vines.id)
-    if (registry.blocksByName.weeping_vines_plant) this.climbables.add(registry.blocksByName.weeping_vines_plant.id)
-    if (registry.blocksByName.twisting_vines) this.climbables.add(registry.blocksByName.twisting_vines.id)
-    if (registry.blocksByName.twisting_vines_plant) this.climbables.add(registry.blocksByName.twisting_vines_plant.id)
-    if (registry.blocksByName.cave_vines) this.climbables.add(registry.blocksByName.cave_vines.id)
-    if (registry.blocksByName.cave_vines_plant) this.climbables.add(registry.blocksByName.cave_vines_plant.id)
     this.emptyBlocks = new Set()
 
     this.replaceables = new Set()
@@ -574,7 +568,16 @@ class Movements {
     cost += this.safeOrBreak(block2, toBreak)
     if (cost > 100) return
 
-    if (!block1.climbable) {
+    if (block1.climbable) {
+      // A climb node is transient, not literal ground. The installed physics
+      // can keep ascending only while the destination feet cell is also a
+      // supported ladder/vine. Advertising the air cell above the top of a
+      // vine makes A* end on an unoccupiable node and the executor jump until
+      // its stall watchdog fires. Exiting onto a ledge is an ordinary
+      // horizontal move from the last real climbable cell.
+      const destination = this.getBlock(node, 0, 1, 0)
+      if (!destination.climbable) return
+    } else {
       if (!this.allow1by1towers || node.remainingBlocks === 0) return // not enough blocks to place
 
       if (!block1.replaceable) {
@@ -616,29 +619,6 @@ class Movements {
 
     // Add cost for opening the trapdoor
     toPlace.push({ x: node.x, y: node.y + 2, z: node.z, dx: 0, dy: 0, dz: 0, useOne: true })
-
-    neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'climb_up'))
-  }
-
-  // Enhanced ladder/vine climbing that can handle stepping on top and jumping
-  getMoveClimbTop (node, neighbors) {
-    const blockCurrent = this.getBlock(node, 0, 0, 0) // Current position (should be climbable)
-    const blockAbove = this.getBlock(node, 0, 1, 0) // Block directly above
-
-    // Only attempt this move if we're on a climbable block (ladder/vine)
-    if (!blockCurrent.climbable) return
-
-    // Check if we can step on top of the ladder/vine and then jump up
-    if (!blockAbove.safe) return
-
-    let cost = 2 // Cost for climbing to top of ladder and jumping
-    const toBreak = []
-    const toPlace = []
-
-    // Check if there's space to jump up from the top of the ladder
-    const blockJumpTarget = this.getBlock(node, 0, 2, 0)
-    cost += this.safeOrBreak(blockJumpTarget, toBreak)
-    if (cost > 100) return
 
     neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'climb_up'))
   }
@@ -750,9 +730,9 @@ class Movements {
     this.getMoveDown(node, neighbors)
     this.getMoveUp(node, neighbors)
 
-    // Enhanced climbing moves for ladders, vines, and trapdoors
+    // Climbing remains bounded to continuous physics-supported cells. A top
+    // exit must be represented by an ordinary supported horizontal node.
     this.getMoveClimbUpThroughTrapdoor(node, neighbors)
-    this.getMoveClimbTop(node, neighbors)
 
     return neighbors
   }
