@@ -349,7 +349,23 @@ This interruption does not change the Phase 4 direction. After the required revi
 
 ## Phase 4: Capability catalogue and generalized compound routes
 
-**Status:** the catalogue boundary already exists and is live for `collect_wood`, `collect_block`, `craft`, `smelt`, and `equip`; the prerequisite planner emits those typed actions and GoalDirector executes and verifies them. Do not recreate it, replace it, or start a parallel framework.
+**Status:** the catalogue boundary is live for `collect_wood`, `collect_block`, `craft`, `smelt`, `equip`, and exact-item delivery; the prerequisite planner emits those typed actions and GoalDirector executes and verifies them. Do not recreate it, replace it, or start a parallel framework.
+
+### Exact-item delivery checkpoint
+
+Exact delivery is now one shared typed capability rather than separate GoalDirector, miner, and exact-species lumberjack command construction. `deliver_exact_item` declares the carried quantity and present unambiguous recipient preconditions, binds the canonical live player entity, invokes the existing `giveToPlayer` physical primitive under ActionManager, and accepts only authoritative pickup evidence matching the exact recipient, item, requested quantity, and transferred quantity. Family delivery remains on its existing path and is the next bounded migration; it was not disguised as exact delivery.
+
+The unchanged physical campaign passed all three ownership surfaces:
+
+1. GoalDirector crafted and delivered one chest; Paper verified player chest `0→1`, bot chest `1→0`, and no loose chest.
+2. Stop during delivery interrupted in under 100 ms; Paper verified no transfer, the bot retained the chest, and the cancelled goal's active subgoal settled to `cancelled` rather than stale `acting`.
+3. A player miner work order requested exactly one cobblestone. Its first measurement appeared as player `7→72` and bot `529→464`; a controlled direct replay proved the exact primitive moved only one. The remaining 64 were a lower-priority full-stack capacity release that began after the job reached terminal state while the player stood in pickup range.
+
+That leak is repaired at the shared ownership boundary in `c89fee1`. BehaviorArbiter's terminal handoff is now a general player-outcome primitive used by both typed goals and explicit player work orders. A terminal job retains the `player_job` lane before unrelated progression can act. The physical delivery primitive also measures the inventory delta immediately around the exact toss and fails closed on any over- or under-transfer instead of reporting the requested amount as observed fact.
+
+The decisive rerun used the same one-cobblestone miner order. Paper recorded player `73→74`, bot `466→465`, no loose cobblestone, work-order checkpoint `delivered: 1`, capability result `skill_delivered`, and a live `player_job` terminal handoff. Stop then held the runtime before any autonomous capacity release. Temporary leader-delivery settings were removed and the bot restarted under its persisted hold.
+
+Next, after the required read-only checkpoint review, migrate generic family delivery through the same catalogue without changing miner/lumberjack strategy or `giveFamilyToPlayer` mechanics. Prove at least one mixed-species log-family handoff and one exact job handoff on unchanged planner code. Do not add item recipes, a delivery controller, a second inventory system, or a new retry loop.
 
 After the Phase 3 review gate, continue migrating remaining duplicated planning seams into this existing catalogue without changing their physical acceptance behavior. The next tranche begins with an exact ownership map of workstation, retrieval, delivery, navigation/stance binding, and remaining nested prerequisite decisions, then implements the smallest coherent cross-domain migration that removes a real duplicate strategy loop. It must finish with an unchanged real campaign, not merely catalogue unit tests.
 
@@ -432,4 +448,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Preserve the completed Phase 3 checkpoint and obtain the required read-only review. Then continue Phase 4 from the existing catalogue rather than opening a new architecture project: trace the remaining duplicated planner/executor seams, select one coherent cross-domain migration, implement it through typed preconditions/effects/binding/execution/verification, and prove it with an unchanged real companion campaign. Do not add item-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from a gameplay outcome.
+Preserve the physically accepted exact-item delivery checkpoint and obtain the required read-only review. Then migrate the existing family-delivery seam through the same catalogue and prove a mixed-species log-family handoff plus an exact job handoff without changing their planners. Continue afterward by the first shared gameplay blocker; do not add item-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from a gameplay outcome.

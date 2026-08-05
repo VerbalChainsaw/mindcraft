@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: 6b84d68 (pushed); Phase 3 remains accepted at de802a6
-Milestone: emergency-shelter material, Peaceful difficulty, restart silence, and persistent Stop physically repaired
+Functional source checkpoint: c89fee1 (pushed); exact-item capability began at a95e99f
+Milestone: Phase 4 exact-item delivery is physically accepted across GoalDirector and player jobs
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: hybrid runtime, typed capability boundary, GoalDirector lifecycle, and package-first locomotion
-Live blocker: none; runtime is held in clear Peaceful at (-598.5,76,164.5)
-Last physical result: thunder shelter used one fixed material; Stop cleared its live work order and survived restart without dialogue/autonomy
-Next tranche: Jordan checkpoint, then migrate delivery into the existing capability catalogue and prove an unchanged campaign
-Jordan review: requested as C2J-20260805-1235-survival-restart
+Owned subsystem: typed delivery capability, player-work lifecycle, and verified inventory transfer
+Live blocker: none; runtime is held in clear Peaceful near phixxation at (-600.6,70,-299.5)
+Last physical result: one-cobblestone player job changed player 73→74 and bot 466→465 with no loose item
+Next tranche: Jordan checkpoint, then generic family delivery on unchanged miner/lumberjack planners
+Jordan review: pending exact-delivery checkpoint request
