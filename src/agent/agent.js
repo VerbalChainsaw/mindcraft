@@ -440,25 +440,17 @@ export class Agent {
             try {
                 if (ignore_messages.some((m) => message.startsWith(m))) return;
 
-                const canonicalPlayer = resolveCanonicalPlayerIdentity(username, this.bot, {
-                    isBotAgent: identity => {
-                        if (convoManager.isOtherAgent(identity)) return true;
-                        const keys = new Set(identityMatchKeys(identity));
-                        return convoManager.getInGameAgents().some(agentName =>
-                            identityMatchKeys(agentName).some(key => keys.has(key))
-                        );
-                    },
-                });
-                if (!canonicalPlayer) {
-                    console.warn(`Ignoring Minecraft chat from untrusted source: ${String(username).slice(0, 80)}`);
-                    return;
-                }
-
                 this.shut_up = false;
 
                 console.log(this.name, 'received message from', username, ':', message);
-                let translation = await handleEnglishTranslation(message);
-                this.handleMessage(username, translation);
+
+                if (convoManager.isOtherAgent(username)) {
+                    console.warn('received whisper from other bot??')
+                }
+                else {
+                    let translation = await handleEnglishTranslation(message);
+                    this.handleMessage(username, translation);
+                }
             } catch (error) {
                 console.error('Error handling message:', error);
             }
@@ -466,7 +458,24 @@ export class Agent {
 
 		this.respondFunc = respondFunc;
 
-        this.bot.on('whisper', respondFunc);
+        const respondToMinecraftChat = (username, message) => {
+            const canonicalPlayer = resolveCanonicalPlayerIdentity(username, this.bot, {
+                isBotAgent: identity => {
+                    if (convoManager.isOtherAgent(identity)) return true;
+                    const keys = new Set(identityMatchKeys(identity));
+                    return convoManager.getInGameAgents().some(agentName =>
+                        identityMatchKeys(agentName).some(key => keys.has(key))
+                    );
+                },
+            });
+            if (!canonicalPlayer) {
+                console.warn(`Ignoring Minecraft chat from untrusted source: ${String(username).slice(0, 80)}`);
+                return;
+            }
+            respondFunc(username, message);
+        };
+
+        this.bot.on('whisper', respondToMinecraftChat);
         
         this.bot.on('chat', (username, message) => {
             // Alone, every open message is obviously for this bot. In company,
@@ -478,7 +487,7 @@ export class Agent {
                 serverProxy.getNumOtherAgents() > 0
                 && !addressesAgent(message, this.name)
             ) return;
-            respondFunc(username, message);
+            respondToMinecraftChat(username, message);
         });
 
         // SurvivalDirector owns eating so equipment restoration, interruption, and
