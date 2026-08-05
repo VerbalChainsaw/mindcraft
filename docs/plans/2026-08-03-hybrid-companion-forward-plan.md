@@ -331,6 +331,22 @@ Goal `goal-a13a89f0-ea8e-4f09-9496-b8d672fad5be` completed with `attempts: 0`, a
 
 One contaminated rehearsal also exposed an authorization-boundary defect: Paper `/say` arrived through Mineflayer chat as username `Server` and was incorrectly allowed to generate a player-authoritative command that cancelled the goal. Minecraft chat and whisper ingress now require an unambiguous real player from Mineflayer's tab list, including an unloaded player and the conservative Floodgate alias, while trusted Director transport remains outside that gate. A held-state Paper probe confirmed `Server` chat was rejected before the clean rerun.
 
+### Post-Phase 3 survival and restart ownership correction
+
+The first unattended observation after Phase 3 exposed a shared survival defect, not random building intelligence. At clear night the runtime authorized an emergency shelter beside the player, and the builder repeatedly replaced dirt with cobblestone and back again. The exact causes were three ownership violations:
+
+1. `survival_building_block` was rebound from current inventory during every audit instead of once for the lifetime of the work order;
+2. Mineflayer discarded difficulty value `0` during login, so Peaceful arrived as unknown and the night policy treated it as dangerous;
+3. operator Stop cancelled the current body action but its held state was process-local, while a generic restart message was sent through the LLM and autonomous progression resumed immediately.
+
+The repair is preserved in `7ddbdfc` and `6b84d68`. Emergency work orders now persist one concrete material in every blueprint cell, including migration of older placeholder orders. The companion-owned Mineflayer patch accepts `0` as a valid difficulty. Clear Peaceful night cannot authorize emergency construction. Operator hold and its bounded reason persist in the existing bot-memory schema and are restored before world control becomes available. Lifecycle restart notifications no longer become conversational model turns, so completed goals cannot be resurrected as stale questions. Explicit later player commands remain the only ordinary release path.
+
+Physical acceptance used remote sites while the player remained more than 150 blocks away. Clear Peaceful night produced no work order and the higher-priority survival lane yielded to ordinary progression. A real thunderstorm then created a 23-cell shelter whose persisted blueprint contained only `dirt`; all observed placements used dirt and no replacement loop occurred. A second thunderstorm created work order `builder-e3f4fe31-2580-40cc-a3bb-056491b222fc` with only `cobblestone`; Stop interrupted after its first placement, cleared `activeOrder`, persisted the hold, and left the bot stationary. A subsequent process restart restored the hold before handlers became active and produced neither coal work nor stale chest dialogue.
+
+The remote physical artifacts are intentionally preserved rather than silently deleted: a cobblestone shelter around `(-451,68,-306)` from the initial failing probe, a dirt shelter around `(-428,69,-420)` from the legitimate thunder acceptance, and one cobblestone block at `(-600,76,163)` from the cancellation proof. The runtime was restored to clear weather, daytime, Peaceful difficulty, and operator hold at `(-598.5,76,164.5)`.
+
+This interruption does not change the Phase 4 direction. After the required review checkpoint, resume the existing capability catalogue with delivery as the next horizontal migration. Do not add shelter-specific strategy, another persistence store, another executor, or a generalized world-state layer.
+
 ## Phase 4: Capability catalogue and generalized compound routes
 
 **Status:** the catalogue boundary already exists and is live for `collect_wood`, `collect_block`, `craft`, `smelt`, and `equip`; the prerequisite planner emits those typed actions and GoalDirector executes and verifies them. Do not recreate it, replace it, or start a parallel framework.
