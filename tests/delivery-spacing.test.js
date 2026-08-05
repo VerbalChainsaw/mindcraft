@@ -19,7 +19,7 @@ test('delivery retreats from the failed close toss stance but preserves a proven
   ), false);
 });
 
-test('delivery requires a cardinal stance that excludes the thrower from the recipient pickup boundary', () => {
+test('delivery requires an axis-aligned 3D stance that excludes the thrower from the recipient pickup boundary', () => {
   const player = { x: 1028.5, y: 100, z: 1006.5 };
 
   assert.equal(deliveryDropStanceIsExclusive(
@@ -34,4 +34,8 @@ test('delivery requires a cardinal stance that excludes the thrower from the rec
     { x: 1029.51, y: 100, z: 1007.41 },
     player,
   ), false);
+  assert.equal(deliveryDropStanceIsExclusive(
+    { x: 1028.76, y: 102.17, z: 1008.64 },
+    player,
+  ), true);
 });

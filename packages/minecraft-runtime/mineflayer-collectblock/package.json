@@ -1,6 +1,6 @@
 {
   "name": "@mindcraft/mineflayer-collectblock",
-  "version": "1.6.0-mindcraft.1",
+  "version": "1.6.0-mindcraft.2",
   "description": "Mindcraft-owned bounded Mineflayer collection runtime",
   "private": true,
   "main": "lib/index.js",

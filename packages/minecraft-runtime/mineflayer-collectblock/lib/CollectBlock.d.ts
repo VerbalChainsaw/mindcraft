@@ -5,6 +5,13 @@ import { Vec3 } from 'vec3';
 import { ItemFilter } from './Inventory';
 import { Collectable } from './Targets';
 export type Callback = (err?: Error) => void;
+export type CollectionToolPolicy = 'preserve_durability' | 'fastest';
+export interface CollectionToolSelection {
+    kind: 'empty_hand' | 'item';
+    item: unknown | null;
+    digTime: number;
+}
+export declare function selectCollectionTool(bot: Bot, block: Block, policy?: CollectionToolPolicy): CollectionToolSelection | null;
 /**
  * A set of options to apply when collecting the given targets.
  */
@@ -33,6 +40,12 @@ export interface CollectOptions {
      * skipped. Zero disables the stall deadline. Defaults to zero.
      */
     targetStallTimeoutMs?: number;
+    /**
+     * Selects the fastest tool by default, but avoids durability wear when an
+     * empty hand or non-wearing item has identical break speed. Set to
+     * `fastest` to retain mineflayer-tool's original tie behavior.
+     */
+    toolPolicy?: CollectionToolPolicy;
     /**
      * Called between physical targets. When it returns true, remaining queued
      * targets are released and collection completes successfully. This lets a

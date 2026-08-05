@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CollectBlock = void 0;
+exports.CollectBlock = exports.selectCollectionTool = void 0;
 const mineflayer_pathfinder_1 = require("../../mineflayer-pathfinder");
 const TemporarySubscriber_1 = require("./TemporarySubscriber");
 const Util_1 = require("./Util");
@@ -192,6 +192,64 @@ const equipToolOptions = {
     getFromChest: true,
     maxTools: 2
 };
+function itemWearsWithUse(bot, item) {
+    if (item == null)
+        return false;
+    const direct = Number(item.maxDurability);
+    const registered = Number(bot.registry?.items?.[item.type]?.maxDurability);
+    return (Number.isFinite(direct) && direct > 0)
+        || (Number.isFinite(registered) && registered > 0);
+}
+function selectCollectionTool(bot, block, policy = 'preserve_durability') {
+    if (policy === 'fastest')
+        return null;
+    let handHarvestable = false;
+    try {
+        handHarvestable = block.canHarvest(null) === true;
+    }
+    catch (_a) {
+        return null;
+    }
+    if (!handHarvestable || typeof bot?.tool?.getDigTime !== 'function')
+        return null;
+    const digTime = (item) => {
+        try {
+            const time = Number(bot.tool.getDigTime(block, item));
+            return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY;
+        }
+        catch (_a) {
+            return Number.POSITIVE_INFINITY;
+        }
+    };
+    const bareHandTime = digTime(undefined);
+    const items = bot.inventory.items();
+    const fastestCarriedTime = items.reduce((fastest, item) => Math.min(fastest, digTime(item)), Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(bareHandTime) || fastestCarriedTime < bareHandTime)
+        return null;
+    if (bot.inventory.emptySlotCount() > 0)
+        return { kind: 'empty_hand', item: null, digTime: bareHandTime };
+    const item = items
+        .filter(candidate => !itemWearsWithUse(bot, candidate))
+        .sort((left, right) => digTime(left) - digTime(right) || left.slot - right.slot)[0] || null;
+    return item && digTime(item) <= bareHandTime
+        ? { kind: 'item', item, digTime: digTime(item) }
+        : null;
+}
+exports.selectCollectionTool = selectCollectionTool;
+function equipCollectionTool(bot, block, policy) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const selected = selectCollectionTool(bot, block, policy);
+        if (selected?.kind === 'empty_hand') {
+            yield bot.unequip('hand');
+            return;
+        }
+        if (selected?.item) {
+            yield bot.equip(selected.item, 'hand');
+            return;
+        }
+        yield bot.tool.equipForBlock(block, equipToolOptions);
+    });
+}
 function mineBlock(bot, block, options) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
@@ -200,7 +258,7 @@ function mineBlock(bot, block, options) {
             options.targets.removeTarget(block);
             return;
         }
-        yield bot.tool.equipForBlock(block, equipToolOptions);
+        yield equipCollectionTool(bot, block, options.toolPolicy);
         if (bot.heldItem !== null && !block.canHarvest(bot.heldItem.type)) {
             options.targets.removeTarget(block);
             return;
@@ -322,6 +380,7 @@ class CollectBlock {
                 targetStallTimeoutMs: boundedTargetTimeout(options.targetStallTimeoutMs === undefined
                     ? this.targetStallTimeoutMs
                     : options.targetStallTimeoutMs),
+                toolPolicy: options.toolPolicy === 'fastest' ? 'fastest' : 'preserve_durability',
                 targets: this.targets
             };
             if (this.bot.pathfinder == null) {

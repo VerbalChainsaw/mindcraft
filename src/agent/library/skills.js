@@ -104,9 +104,9 @@ const GROUND_SETTLE_TIMEOUT_MS = 800;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
 const SHALLOW_WATER_SHORE_SCAN_RADIUS = 32;
 const DROWNING_RECOVERY_OXYGEN = 20;
-const DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE = 1.6;
-const DELIVERY_MAX_DROP_HORIZONTAL_DISTANCE = 2.6;
-const DELIVERY_MAX_DROP_LATERAL_OFFSET = 0.65;
+const DELIVERY_MIN_DROP_DISTANCE = 1.6;
+const DELIVERY_MAX_DROP_DISTANCE = 3.25;
+const DELIVERY_MAX_DROP_AXIS_OFFSET = 0.65;
 const DELIVERY_PICKUP_TIMEOUT_MS = 3_250;
 const MAX_DELIVERY_DROP_ATTEMPTS = 3;
 const MOUNT_INTERACTION_RANGE = 4.5;
@@ -2230,43 +2230,7 @@ export function selectMiningRouteTool(
     })[0];
 }
 
-/**
- * Prefer an empty hand or a non-wearing inventory item when it breaks a block
- * just as quickly as every carried tool. mineflayer-tool intentionally keeps
- * an already-held item on equal dig time, which can make a pickaxe mine sand
- * or dirt even though that gains no speed and needlessly spends durability.
- *
- * Return null when a carried item is materially faster so the native tool
- * plugin still owns ordinary tool selection.
- */
-export function selectNonWearingBlockTool(bot, block) {
-    let harvestableByHand = false;
-    try { harvestableByHand = block?.canHarvest?.(null) === true; } catch { /* native selector owns unknown blocks */ }
-    if (!harvestableByHand || typeof bot?.tool?.getDigTime !== 'function') return null;
-
-    const inventoryItems = bot.inventory.items();
-    const digTime = item => {
-        try { return Number(bot.tool.getDigTime(block, item)); } catch { return Number.POSITIVE_INFINITY; }
-    };
-    const bareHandTime = digTime(undefined);
-    const fastestCarriedTime = inventoryItems.reduce(
-        (fastest, item) => Math.min(fastest, digTime(item)),
-        Number.POSITIVE_INFINITY,
-    );
-    if (!Number.isFinite(bareHandTime) || fastestCarriedTime < bareHandTime) return null;
-
-    if (bot.inventory.emptySlotCount() > 0) {
-        return { kind: 'empty_hand', item: null, digTime: bareHandTime };
-    }
-    const item = inventoryItems
-        .filter(candidate => toolDurability(bot, candidate).max === Infinity)
-        .sort((left, right) => digTime(left) - digTime(right) || left.slot - right.slot)[0] || null;
-    return item && digTime(item) <= bareHandTime
-        ? { kind: 'item', item, digTime: digTime(item) }
-        : null;
-}
-
-export async function equipBestToolForBlock(bot, block, options = {}) {
+async function equipBestToolForBlock(bot, block, options = {}) {
     const family = toolFamilyForBlock(block);
     const routeTool = options?.preserveTargetToolFor
         ? selectMiningRouteTool(bot, block, options.preserveTargetToolFor)
@@ -2277,15 +2241,6 @@ export async function equipBestToolForBlock(bot, block, options = {}) {
     if (preferred && block.canHarvest(preferred.type)) {
         await bot.equip(preferred, 'hand');
         return preferred;
-    }
-    const nonWearing = selectNonWearingBlockTool(bot, block);
-    if (nonWearing?.kind === 'empty_hand') {
-        await bot.unequip('hand');
-        return null;
-    }
-    if (nonWearing?.item) {
-        await bot.equip(nonWearing.item, 'hand');
-        return nonWearing.item;
     }
     await bot.tool.equipForBlock(block);
     if (family && bot.heldItem?.name?.endsWith(`_${family}`)) {
@@ -8330,19 +8285,45 @@ export function deliveryDropSpacingNeedsRetreat(botPosition, playerPosition) {
     return Math.hypot(
         botPosition.x - playerPosition.x,
         botPosition.z - playerPosition.z,
-    ) < DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE;
+    ) < DELIVERY_MIN_DROP_DISTANCE;
 }
 
 export function deliveryDropStanceIsExclusive(botPosition, playerPosition) {
-    if (![botPosition?.x, botPosition?.z, playerPosition?.x, playerPosition?.z].every(Number.isFinite)) {
+    if (![botPosition?.x, botPosition?.y, botPosition?.z, playerPosition?.x, playerPosition?.y, playerPosition?.z].every(Number.isFinite)) {
         return false;
     }
     const dx = Math.abs(botPosition.x - playerPosition.x);
+    const dy = Math.abs(botPosition.y - playerPosition.y);
     const dz = Math.abs(botPosition.z - playerPosition.z);
-    const distance = Math.hypot(dx, dz);
-    return distance >= DELIVERY_MIN_DROP_HORIZONTAL_DISTANCE
-        && distance <= DELIVERY_MAX_DROP_HORIZONTAL_DISTANCE
-        && Math.min(dx, dz) <= DELIVERY_MAX_DROP_LATERAL_OFFSET;
+    const distance = Math.hypot(dx, dy, dz);
+    return distance >= DELIVERY_MIN_DROP_DISTANCE
+        && distance <= DELIVERY_MAX_DROP_DISTANCE
+        && Math.min(dx, dz) <= DELIVERY_MAX_DROP_AXIS_OFFSET;
+}
+
+function deliveryDropStanceIsUsable(bot, player) {
+    return deliveryDropStanceIsExclusive(bot?.entity?.position, player?.position)
+        && deliveryDropPositionHasSafeSupport(bot, bot?.entity?.position)
+        && world.hasLineOfSightToEntity(bot, player) === true;
+}
+
+function deliveryDropPositionHasSafeSupport(bot, position) {
+    if (![position?.x, position?.y, position?.z].every(Number.isFinite)) return false;
+    const feetPosition = new Vec3(
+        Math.floor(position.x),
+        Math.floor(position.y),
+        Math.floor(position.z),
+    );
+    const feet = bot.blockAt(feetPosition);
+    const head = bot.blockAt(feetPosition.offset(0, 1, 0));
+    const support = bot.blockAt(feetPosition.offset(0, -1, 0));
+    return feet?.boundingBox === 'empty'
+        && head?.boundingBox === 'empty'
+        && !isHazardousGameplayBlock(feet)
+        && !isHazardousGameplayBlock(head)
+        && !isLiquidGameplayBlock(feet)
+        && !isLiquidGameplayBlock(head)
+        && isSafeGameplaySupport(support);
 }
 
 function deliveryDropStances(bot, player) {
@@ -8356,17 +8337,8 @@ function deliveryDropStances(bot, player) {
         new Vec3(x, y, z + 2),
         new Vec3(x, y, z - 2),
     ].filter(position => {
-        const feet = bot.blockAt(position);
-        const head = bot.blockAt(position.offset(0, 1, 0));
-        const support = bot.blockAt(position.offset(0, -1, 0));
         const center = position.offset(0.5, 0, 0.5);
-        return feet?.boundingBox === 'empty'
-            && head?.boundingBox === 'empty'
-            && !isHazardousGameplayBlock(feet)
-            && !isHazardousGameplayBlock(head)
-            && !isLiquidGameplayBlock(feet)
-            && !isLiquidGameplayBlock(head)
-            && isSafeGameplaySupport(support)
+        return deliveryDropPositionHasSafeSupport(bot, position)
             && deliveryDropStanceIsExclusive(center, player.position);
     }).sort((left, right) => (
         bot.entity.position.distanceTo(left.offset(0.5, 0, 0.5))
@@ -8376,7 +8348,7 @@ function deliveryDropStances(bot, player) {
 
 async function reachDeliveryDropStance(bot, player) {
     for (let replan = 0; replan < 2 && !bot.interrupt_code; replan += 1) {
-        if (!deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) {
+        if (!deliveryDropStanceIsUsable(bot, player)) {
             const stances = deliveryDropStances(bot, player);
             if (stances.length === 0) return false;
             const routed = await goToGoal(bot, new pf.goals.GoalCompositeAny(
@@ -8384,12 +8356,12 @@ async function reachDeliveryDropStance(bot, player) {
             ));
             if (!routed) return false;
         }
-        if (!deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) continue;
+        if (!deliveryDropStanceIsUsable(bot, player)) continue;
         // Aim through the recipient's pickup volume, not at their feet. A
         // downward inventory toss can land back inside the thrower's pickup
         // radius even from an otherwise exclusive cardinal stance.
         await bot.lookAt(player.position.offset(0, 1, 0));
-        if (deliveryDropStanceIsExclusive(bot.entity.position, player?.position)) return true;
+        if (deliveryDropStanceIsUsable(bot, player)) return true;
     }
     return false;
 }
@@ -8461,9 +8433,9 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             return false;
         }
     }
-    // A diagonal toss can enter both pickup boxes and let the thrower reclaim
-    // the item first. Use a supported cardinal stance so only the recipient
-    // intersects the toss at the pickup boundary.
+    // A close toss can enter both pickup boxes and let the thrower reclaim the
+    // item first. Use a supported, visible stance whose full 3D separation
+    // excludes the thrower. This also permits a safe vertical tunnel handoff.
     if (!await reachDeliveryDropStance(bot, player)) {
         setActionEvidence(bot, {
             kind: 'give',
@@ -8474,7 +8446,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             transferred: 0,
             retryable: true,
         });
-        log(bot, `Failed to give ${itemType} to ${username}: no safe cardinal drop stance was reachable.`);
+        log(bot, `Failed to give ${itemType} to ${username}: no safe visible drop stance was reachable.`);
         return false;
     }
     resolution = resolvePhysicalPlayer(bot, username);
@@ -8571,7 +8543,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             resolution = resolvePhysicalPlayer(bot, username);
             target = playerTargetEvidence(resolution);
             player = resolution.entity;
-            if (!player || !deliveryDropStanceIsExclusive(bot.entity.position, player.position)) return false;
+            if (!player || !deliveryDropStanceIsUsable(bot, player)) return false;
             deliveryAttempts += 1;
             const inventoryBeforeDrop = inventoryCount(bot, itemType);
             if (!await discard(bot, itemType, transferCount)) return false;
