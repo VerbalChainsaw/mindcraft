@@ -97,6 +97,7 @@ const NAVIGATION_STALL_TIMEOUT_MS = 3_700;
 const NAVIGATION_RECOVERY_STALL_TIMEOUT_MS = 1_500;
 const NAVIGATION_PROGRESS_DISTANCE = 0.75;
 const NAVIGATION_GOAL_PROGRESS_DELTA = 0.25;
+const NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS = 4_000;
 const NAVIGATION_RECOVERY_DISTANCE = 1;
 const NAVIGATION_RECOVERY_RADIUS = 4;
 const MAX_NAVIGATION_RECOVERY_ATTEMPTS = 1;
@@ -1634,12 +1635,18 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
 
         const origin = start.floored();
         const local = localNavigationRecoveryMovements(bot, origin);
+        const requiresMonotonicAscent = (
+            candidate.position.y - Math.floor(start.y) >= MIN_SURFACE_ROUTE_PROGRESS
+        );
         // Access recovery may clear nearby leaves, but it must not turn a
         // harvest request into a damaging plunge toward an unreachable block.
-        local.movements.maxDropDown = Math.min(
-            Number(local.movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
-            DEFAULT_MAX_DROP_DOWN,
-        );
+        local.movements.maxDropDown = requiresMonotonicAscent
+            ? 0
+            : Math.min(
+                Number(local.movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+                DEFAULT_MAX_DROP_DOWN,
+            );
+        local.movements.infiniteLiquidDropdownDistance = false;
         const goal = collectionApproachGoal(candidateEntry.safeStances)
             || new pf.goals.GoalLookAtBlock(candidate.position, bot.world, {
                 reach: 4.5,
@@ -1661,10 +1668,19 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
         const targetProgress = end ? startDistance - end.distanceTo(candidate.position) : 0;
         const reached = outcome?.state === 'resolved'
             && Boolean(goal.isEnd?.(end?.floored?.()));
+        const monotonicAscentPreserved = !requiresMonotonicAscent || Boolean(
+            end
+            && Math.floor(end.y) >= Math.floor(start.y)
+            && observedSupportedStandingCell(bot)
+        );
         const recovered = !bot.interrupt_code
+            && monotonicAscentPreserved
             && (reached || targetProgress >= COLLECTION_ACCESS_PROGRESS_DISTANCE);
-        search.lastMovementOutcome = navigationOutcomeName(outcome, bot);
+        search.lastMovementOutcome = monotonicAscentPreserved
+            ? navigationOutcomeName(outcome, bot)
+            : 'unsafe_descent';
         search.distanceMoved += moved;
+        if (!monotonicAscentPreserved) return false;
         if (!recovered) continue;
 
         search.accessRecoveries += 1;
@@ -8735,7 +8751,6 @@ function navigationGoalSignature(goal) {
 function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS) {
     const startedAt = Date.now();
     const startPosition = bot.entity.position.clone();
-    let checkpoint = startPosition.clone();
     let lastPosition = startPosition.clone();
     const startMetric = navigationGoalMetric(goal, startPosition);
     let bestMetric = startMetric;
@@ -8754,14 +8769,12 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
             const targetChanged = nextSignature !== goalSignature;
             const metricProgress = Number.isFinite(metric)
                 && (!Number.isFinite(bestMetric) || metric <= bestMetric - NAVIGATION_GOAL_PROGRESS_DELTA);
-            // A native route may legitimately move sideways around collision
-            // geometry or out of a movement medium before its straight-line
-            // goal metric improves. Verified body displacement is still real
-            // progress and must keep the silence watchdog from cancelling the
-            // route; the action deadline remains the outer convergence bound.
-            const physicalProgress = checkpoint.distanceTo(current) >= NAVIGATION_PROGRESS_DISTANCE;
-            if (targetChanged || metricProgress || physicalProgress || digTarget !== lastDigTarget) {
-                checkpoint = current.clone();
+            // Body displacement alone is not convergence: a stuck Pathfinder
+            // can pace between two nearby cells forever. Native routes may
+            // detour briefly, but they must improve the selected goal metric,
+            // advance a dig target, or rebind a moving goal within the bounded
+            // no-progress window.
+            if (targetChanged || metricProgress || digTarget !== lastDigTarget) {
                 if (targetChanged) {
                     goalSignature = nextSignature;
                     bestMetric = metric;
@@ -8818,12 +8831,20 @@ async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIG
         const outcome = await Promise.race([navigation, progressWatchdog.stalled]);
         const pathfinderState = bot.pathfinder.getLastStuckState?.();
         if (pathfinderState) outcome.pathfinder = pathfinderState;
-        if (outcome.state === 'stalled') {
+        if (['stalled', 'rejected'].includes(outcome.state)) {
             stopNavigationGoal(bot);
-            // Do not release ActionManager while the cancelled path promise is
-            // still alive. A new route must never race stale movement from the
-            // operation that just timed out.
+            // Both the external convergence watchdog and Pathfinder's own
+            // timeout can stop an ordinary step-up while the body is airborne.
+            // Do not let the caller bind recovery geometry until the plugin
+            // promise is finished and the server observes a supported stance.
             await navigation;
+            try { bot.clearControlStates?.(); } catch { /* disconnected body */ }
+            await waitForWorldCondition(
+                bot,
+                () => Boolean(observedSupportedStandingCell(bot)),
+                remainingActionTimeMs(NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS),
+                25,
+            );
         }
         return outcome;
     } finally {
@@ -10399,6 +10420,25 @@ function clearedMiningMovements(bot) {
     movements.allow1by1towers = false;
     movements.allowParkour = false;
     movements.allowSprinting = false;
+    // The deterministic corridor contract preflights only cardinal adjacent
+    // cells with at most one vertical block per step. Pathfinder owns motion
+    // through that exact geometry, not a multi-block shortcut into an open
+    // cave or liquid column.
+    movements.maxDropDown = Math.min(
+        Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+        1,
+    );
+    movements.infiniteLiquidDropdownDistance = false;
+    return movements;
+}
+
+function monotonicSurfaceMovements(bot) {
+    const movements = clearedMiningMovements(bot);
+    // Surface recovery must not turn a failed ascent into a damaging cave
+    // descent. Buried-resource corridors retain their separately preflighted
+    // descending steps through clearedMiningMovements().
+    movements.maxDropDown = 0;
+    movements.infiniteLiquidDropdownDistance = false;
     return movements;
 }
 
@@ -14180,23 +14220,81 @@ function surfaceCorridorStances(bot, origin, surfaceTarget, minY, maxY) {
     return stances;
 }
 
+function incrementalSurfaceCorridorStances(bot, origin, surfaceTarget) {
+    const candidates = [];
+    const keys = new Set();
+    for (let horizontal = 1; horizontal <= MAX_SURFACE_CORRIDOR_RISE; horizontal += 1) {
+        for (let dx = -horizontal; dx <= horizontal; dx += 1) {
+            for (let dz = -horizontal; dz <= horizontal; dz += 1) {
+                if (Math.abs(dx) + Math.abs(dz) !== horizontal) continue;
+                for (const rise of [2, 1]) {
+                    if (rise > horizontal) continue;
+                    const stance = origin.offset(dx, rise, dz);
+                    const support = bot.blockAt(stance.offset(0, -1, 0));
+                    if (!support || !isAnchoredGameplaySupport(bot, support)) continue;
+                    const key = miningCellKey(stance);
+                    if (keys.has(key)) continue;
+                    keys.add(key);
+                    candidates.push({
+                        stance,
+                        rise,
+                        horizontal,
+                        targetDistance: Math.hypot(
+                            surfaceTarget.x - stance.x,
+                            surfaceTarget.z - stance.z,
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    return candidates
+        .sort((left, right) => (
+            right.rise - left.rise
+            || left.targetDistance - right.targetDistance
+            || left.horizontal - right.horizontal
+            || left.stance.x - right.stance.x
+            || left.stance.z - right.stance.z
+        ))
+        .slice(0, MAX_SURFACE_CORRIDOR_STANCES)
+        .map(candidate => candidate.stance);
+}
+
 function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY) {
     const origin = observedSupportedStandingCell(bot);
     if (!origin) return { ok: false, outcome: 'position_unavailable' };
     const stances = surfaceCorridorStances(bot, origin, surfaceTarget, minY, maxY);
-    if (stances.length === 0) return { ok: false, outcome: 'no_safe_surface_stance' };
-    let plan = buildMiningAccessPlan(
+    const incrementalStances = incrementalSurfaceCorridorStances(bot, origin, surfaceTarget);
+    if (stances.length === 0 && incrementalStances.length === 0) {
+        return { ok: false, outcome: 'no_safe_surface_stance' };
+    }
+    const planFor = (candidateStances, requestedLength, maxRouteSteps = null) => buildMiningAccessPlan(
         bot,
         null,
-        SURFACE_CORRIDOR_ROUTE_SLACK,
+        requestedLength,
         {
             breakTarget: false,
-            stances,
+            stances: candidateStances,
             allowUnharvestedBreaks: true,
             allowNaturalFoliageExcavation: true,
             stageFallingDebris: true,
+            ...(Number.isFinite(maxRouteSteps) ? { maxRouteSteps } : {}),
         },
     );
+    let plan = stances.length > 0
+        ? planFor(stances, SURFACE_CORRIDOR_ROUTE_SLACK)
+        : planFor(incrementalStances, MAX_SURFACE_CORRIDOR_RISE, MAX_SURFACE_CORRIDOR_RISE + 2);
+    if (
+        !plan.ok
+        && !['insufficient_tool_durability', 'route_deadline_insufficient'].includes(plan.outcome)
+        && incrementalStances.length > 0
+    ) {
+        plan = planFor(
+            incrementalStances,
+            MAX_SURFACE_CORRIDOR_RISE,
+            MAX_SURFACE_CORRIDOR_RISE + 2,
+        );
+    }
     if (!plan.ok && plan.outcome === 'route_deadline_insufficient') {
         plan = selectMiningDeadlinePrefix(plan, remainingActionTimeMs()) || plan;
     }
@@ -14266,6 +14364,7 @@ export async function goToSurface(bot) {
                 scan: before.scan,
                 legs: leg - 1,
                 verticalProgress: before.observed?.y - origin.y,
+                supported: Boolean(before.supported),
                 retryable: true,
             });
             const blockers = Object.entries(before.scan?.blockedBodies || {})
@@ -14282,8 +14381,18 @@ export async function goToSurface(bot) {
         }
 
         const nativeStart = bot.entity.position.clone();
-        const routed = await goToGoal(bot, new pf.goals.GoalY(target.y), {
-            movements: () => clearedMiningMovements(bot),
+        // The scan already bound a concrete, supported surface stance. Asking
+        // Pathfinder for any cell at the same elevation makes its search fan
+        // out through the whole cave and can time out despite a viable route to
+        // the selected exit. Keep the native locomotion policy, but give it the
+        // exact usable stance the surface planner chose.
+        const routed = await goToGoal(bot, new pf.goals.GoalNear(
+            target.x,
+            target.y,
+            target.z,
+            2,
+        ), {
+            movements: () => monotonicSurfaceMovements(bot),
             allowHealthBoundedDescent: false,
             allowLocalRecovery: false,
         });
@@ -14323,6 +14432,7 @@ export async function goToSurface(bot) {
                 routeDigging: true,
                 legs: leg,
                 verticalProgress: arrival.observed.y - origin.y,
+                supported: Boolean(arrival.supported),
                 retryable: true,
             });
             const dominantRejections = Object.entries({
@@ -14349,11 +14459,12 @@ export async function goToSurface(bot) {
         const corridorStart = bot.entity.position.clone();
         const access = await executeMiningAccessPlan(bot, null, plan);
         if (!access.success) {
+            const observed = access.observed || bot.entity.position;
             setActionEvidence(bot, {
                 kind: 'surface_navigation',
                 outcome: access.outcome,
                 target: { x: target.x, y: target.y, z: target.z },
-                observed: access.observed || bot.entity.position,
+                observed,
                 routeSteps: plan.route.length,
                 excavated: access.excavated,
                 blockBudget: plan.blockBudget,
@@ -14361,6 +14472,8 @@ export async function goToSurface(bot) {
                 retreat: access.retreat || null,
                 routeDigging: true,
                 legs: leg,
+                verticalProgress: observed.y - origin.y,
+                supported: Boolean(observedSupportedStandingCell(bot)),
                 retryable: !bot.interrupt_code,
             });
             log(bot, `Deterministic surface corridor stopped (${String(access.failureOutcome || access.outcome).replace(/_/g, ' ')}).`);
@@ -14371,6 +14484,21 @@ export async function goToSurface(bot) {
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg, true);
         const corridorRise = arrival.observed.y - corridorStart.y;
+        const verifiedPrefixAdvance = Boolean(
+            plan.partial === true
+            && access.outcome === 'route_advanced'
+            && Number(access.reachedSteps) > 0
+            && arrival.supported
+        );
+        if (verifiedPrefixAdvance) {
+            // A deadline-safe prefix can end on a horizontal staging cell
+            // before the staircase rises. The executor has already proved the
+            // exact bound cell clear, supported, occupied, and returnable, so
+            // continue the same bounded recovery action from that new stance.
+            // Arbitrary lateral Pathfinder displacement still does not count.
+            log(bot, `Deterministic excavation occupied ${access.reachedSteps} verified prefix cell${access.reachedSteps === 1 ? '' : 's'}; rebinding surface leg ${leg}/${MAX_SURFACE_ROUTE_LEGS}.`);
+            continue;
+        }
         if (arrival.supported && corridorRise >= MIN_SURFACE_ROUTE_PROGRESS) {
             log(bot, `Deterministic excavation advanced ${corridorRise.toFixed(1)} vertical blocks through ${plan.route.length} preflighted cells; rebinding surface leg ${leg}/${MAX_SURFACE_ROUTE_LEGS}.`);
             continue;
@@ -14384,6 +14512,8 @@ export async function goToSurface(bot) {
             excavated: access.excavated,
             routeDigging: true,
             legs: leg,
+            verticalProgress: arrival.observed.y - origin.y,
+            supported: Boolean(arrival.supported),
             retryable: true,
         });
         log(bot, 'The deterministic surface corridor completed without verified upward convergence.');
@@ -14398,6 +14528,7 @@ export async function goToSurface(bot) {
         observed: { x: observed.x, y: observed.y, z: observed.z },
         legs: MAX_SURFACE_ROUTE_LEGS,
         verticalProgress: observed.y - origin.y,
+        supported: Boolean(observedSupportedStandingCell(bot)),
         retryable: !bot.interrupt_code,
     });
     log(bot, bot.interrupt_code

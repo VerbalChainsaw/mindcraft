@@ -1,11 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: d20fa4a (pushed)
-Milestone: broad 16-glass production/delivery plus stale-memory work-authority repair physically accepted
+Functional source checkpoint: recovery changes atop 3a97ba1, pending this checkpoint commit
+Milestone: persisted surface recovery crossed the old release boundary and reached real wood/tool progression
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: broad compound capability execution through the existing catalogue and deterministic body
-Live blocker: none; runtime is safely in-game awaiting the player's exact next broad request
-Last physical result: stale clock/chest prose remained on disk, restart stayed idle, and live status correctly reported no active work
+Owned subsystem: broad four-iron-tool agenda through GoalDirector and the deterministic physical body
+Live blocker: none; first agenda step is progressing from surface wood into stone/iron prerequisites
+Last physical result: Y8 to Y72 at full health, no collection replay, then birch planks/sticks and stone-pickaxe crafting
 Repository: normal V2 Git discovery repaired; frozen control remains 4a94cdc; protected untracked files untouched
-Next campaign: make and deliver iron pickaxe, axe, shovel, and sword; narrow work only after its first live blocker
-Jordan review: accepted in J2C-20260805-1633-glass-accepted-next-broad
+Next campaign: complete and deliver iron pickaxe, axe, shovel, and sword on unchanged recovery code
+Jordan review: request after this surface-recovery checkpoint is pushed

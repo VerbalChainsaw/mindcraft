@@ -500,3 +500,71 @@ test('a deep bot surfaces before retrying a concrete target materially above it'
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 1);
 });
+
+test('verified supported ascent stays latched below the old target-gap threshold', () => {
+  const director = createDirector();
+  const now = Date.now();
+  director.agent.bot.game = { dimension: 'overworld' };
+  director.agent.bot.entity = { position: { y: 55 } };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'recover',
+    attempts: 2,
+    evidence: {
+      actionId: 'surface-progress',
+      phase: 'failed',
+      code: 'skill_route_step_not_reached',
+      detail: 'The bounded ascent made progress but did not reach the surface.',
+      verified: false,
+      at: now,
+    },
+    subgoals: [
+      {
+        ...subgoal('plan', 1, 'failed'),
+        targetName: 'oak_log',
+        code: 'skill_unreachable',
+        startedAt: now - 200,
+        finishedAt: now - 150,
+      },
+      {
+        ...subgoal('recover', 2, 'acting'),
+        commandName: '!goToSurface',
+        startedAt: now - 100,
+        finishedAt: null,
+      },
+    ],
+    memory: {
+      failedTargets: [{
+        kind: 'collect',
+        name: 'oak_log',
+        position: { x: -518, y: 65, z: -388 },
+        code: 'skill_unreachable',
+        failures: 1,
+        firstFailedAt: now - 145,
+        lastFailedAt: now - 145,
+        avoidUntil: now + 90_000,
+      }],
+    },
+  });
+
+  director.handleResult('recover', {
+    actionId: 'surface-progress',
+    phase: 'failed',
+    code: 'skill_route_step_not_reached',
+    detail: 'The bounded ascent advanced on safe support.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'surface_navigation',
+        outcome: 'route_step_not_reached',
+        verticalProgress: 1,
+        supported: true,
+        retryable: true,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.status.code, 'verified_surface_progress');
+});

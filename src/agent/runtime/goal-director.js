@@ -90,6 +90,15 @@ function verifiedMiningRouteProgress(kind, skill) {
   );
 }
 
+function verifiedSurfaceRecoveryProgress(kind, skill) {
+  return Boolean(
+    kind === 'recover'
+    && skill?.kind === 'surface_navigation'
+    && skill?.supported === true
+    && Number(skill?.verticalProgress) >= 1
+  );
+}
+
 function collectionSourceMatches(requestedName, targetName) {
   const normalized = value => String(value || '').trim().toLowerCase();
   const base = value => normalized(value).replace(/^deepslate_/, '');
@@ -258,6 +267,18 @@ function deliveryAction(goal, remaining) {
 function needsSurfaceRecovery(goal, bot) {
   const dimension = String(bot?.game?.dimension || '').replace(/^minecraft:/, '');
   const y = Number(bot?.entity?.position?.y);
+  const latestSubgoal = goal?.subgoals?.at(-1);
+  // Once a concrete acquisition failure has handed control to surface
+  // recovery, the persisted recovery subgoal is the durable latch. Altitude
+  // heuristics may start that recovery, but only Minecraft-verified arrival at
+  // a literal surface stance may release it. Recomputing the original vertical
+  // gap after each safe stair step used to resume collection a few blocks below
+  // the tree and let its ordinary route dive back through the mine.
+  const surfaceRecoveryLatched = Boolean(
+    latestSubgoal?.kind === 'recover'
+    && latestSubgoal.commandName === '!goToSurface'
+    && latestSubgoal.code !== 'skill_surface_reached'
+  );
   const latestPlan = latestFailedPlanSubgoal(goal);
   const code = `${goal?.evidence?.code || ''} ${latestPlan?.code || ''}`;
   const failedTarget = latestPlanFailedTarget(goal);
@@ -270,9 +291,13 @@ function needsSurfaceRecovery(goal, bot) {
   );
   return dimension === 'overworld'
     && Number.isFinite(y)
-    && y < UNDERGROUND_SURFACE_RECOVERY_Y
     && (
-      /(?:resource_not_found|search_exhausted)/.test(code)
+      surfaceRecoveryLatched
+      ||
+      (
+        y < UNDERGROUND_SURFACE_RECOVERY_Y
+        && /(?:resource_not_found|search_exhausted)/.test(code)
+      )
       || failedAboveGroundAccess
     );
 }
@@ -1113,6 +1138,7 @@ export class GoalDirector {
     if (!verifiedStepProgress) this.rememberFailedTarget(effectiveResult);
     const goal = this.activeGoal;
     const skill = actionResultEvidence(effectiveResult);
+    const surfaceRecoveryProgress = verifiedSurfaceRecoveryProgress(kind, skill);
     const prerequisiteBlocked = Boolean(
       skill?.toolRequirement || skill?.workstationRequirement,
     );
@@ -1134,6 +1160,7 @@ export class GoalDirector {
       : currentInventory >= checkpoint.targetInventory;
     const delivered = goal.kind === 'deliver' && checkpoint.delivered >= goal.quantity;
     const madeProgress = verifiedStepProgress
+      || surfaceRecoveryProgress
       || transferredProgress(skill)
       || (
         ['acquire', 'plan'].includes(kind)
@@ -1146,18 +1173,31 @@ export class GoalDirector {
       return;
     }
     if (effectiveResult.phase === 'succeeded' || madeProgress) {
+      const continueSurfaceRecovery = surfaceRecoveryProgress
+        && needsSurfaceRecovery(goal, this.agent.bot);
       this.persist({
         ...goal,
         checkpoint,
         // A successful relocation changes the search area, not the goal's
         // material state. Preserve the failure budget until acquisition or
         // delivery makes verified progress, otherwise recovery can loop forever.
-        attempts: madeProgress ? 0 : goal.attempts,
-        phase: acquired ? (goal.kind === 'deliver' ? 'deliver' : 'verify_complete') : 'assess',
+        attempts: madeProgress && !surfaceRecoveryProgress ? 0 : goal.attempts,
+        phase: continueSurfaceRecovery
+          ? 'recover'
+          : acquired
+            ? (goal.kind === 'deliver' ? 'deliver' : 'verify_complete')
+            : 'assess',
         updatedAt: this.now(),
       });
       this.nextAttemptAt = this.now() + SUCCESS_DELAY_MS;
-      this.setStatus('assess', effectiveResult.code || 'subgoal_succeeded', effectiveResult.detail || 'Verified subgoal completed.', true);
+      this.setStatus(
+        continueSurfaceRecovery ? 'recover' : 'assess',
+        continueSurfaceRecovery ? 'verified_surface_progress' : effectiveResult.code || 'subgoal_succeeded',
+        continueSurfaceRecovery
+          ? `Surface recovery advanced ${Math.round(Number(skill.verticalProgress) * 10) / 10} vertical blocks on safe support; continuing toward the bound surface stance.`
+          : effectiveResult.detail || 'Verified subgoal completed.',
+        true,
+      );
       return;
     }
 

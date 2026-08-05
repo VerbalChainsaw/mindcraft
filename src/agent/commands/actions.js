@@ -1720,7 +1720,7 @@ export const actionsList = [
         params: {},
         perform: runAsAction(async (agent) => {
             return await skills.goToSurface(agent.bot);
-        })
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!useItem',
