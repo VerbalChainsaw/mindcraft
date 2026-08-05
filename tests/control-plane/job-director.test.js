@@ -209,6 +209,42 @@ test('Given a resumable mining order, JobDirector dispatches one phase action an
   assert.equal(director.snapshot().phase, 'succeeded');
 });
 
+test('Given a terminal player work order, JobDirector retains the shared player handoff before autonomy', () => {
+  const agent = createAgent();
+  const handoffs = [];
+  agent.behavior_arbiter = {
+    beginTerminalHandoff(value) {
+      handoffs.push(value);
+      return value;
+    },
+  };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => safeMiningSnapshot({ cobblestone: 1 }),
+    now: () => 10_000,
+  });
+  director.submit(createWorkOrder({
+    id: 'player-mine-complete',
+    role: 'miner',
+    kind: 'mine',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'cobblestone' },
+    quota: 1,
+  }));
+
+  director.update();
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.lastOrder.phase, 'complete');
+  assert.deepEqual(handoffs, [{
+    outcomeId: 'player-mine-complete',
+    owner: 'player_job',
+    phase: 'complete',
+    code: 'mining_quota_retained',
+  }]);
+});
+
 test('Given retryable failure, JobDirector persists bounded recovery instead of falsely advancing', async () => {
   const agent = createAgent();
   const store = memoryStore();

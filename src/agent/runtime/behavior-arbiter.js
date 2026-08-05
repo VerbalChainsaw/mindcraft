@@ -184,15 +184,26 @@ export class BehaviorArbiter {
     return true;
   }
 
-  beginTerminalHandoff({ goalId = '', phase = 'terminal', code = '', reportPromise = null } = {}) {
+  beginTerminalHandoff({
+    outcomeId = '',
+    owner = 'player_goal',
+    // Backward-compatible input for persisted dashboard clients and any
+    // extension that still identifies a typed goal by the old field name.
+    goalId = '',
+    phase = 'terminal',
+    code = '',
+    reportPromise = null,
+  } = {}) {
     if (this.stopped) return null;
     const now = this.now();
-    const normalizedGoalId = boundedText(goalId, 'unknown-goal');
+    const normalizedOutcomeId = boundedText(outcomeId || goalId, 'unknown-outcome');
+    const normalizedOwner = owner === 'player_job' ? 'player_job' : 'player_goal';
     const normalizedPhase = boundedText(phase, 'terminal');
     const current = this.currentTerminalHandoff();
     if (
       current
-      && current.goalId === normalizedGoalId
+      && current.outcomeId === normalizedOutcomeId
+      && current.owner === normalizedOwner
       && current.phase === normalizedPhase
     ) return current;
 
@@ -200,7 +211,11 @@ export class BehaviorArbiter {
     const tracksReport = Boolean(reportPromise && typeof reportPromise.then === 'function');
     this.terminalHandoff = {
       generation,
-      goalId: normalizedGoalId,
+      owner: normalizedOwner,
+      outcomeId: normalizedOutcomeId,
+      // Retain the additive compatibility field for existing typed-goal state
+      // consumers while making the shared ownership primitive explicit.
+      ...(normalizedOwner === 'player_goal' ? { goalId: normalizedOutcomeId } : {}),
       phase: normalizedPhase,
       code: boundedText(code, 'goal_terminal'),
       startedAt: now,
@@ -759,11 +774,12 @@ export class BehaviorArbiter {
       } else {
         const terminalHandoff = this.currentTerminalHandoff();
         if (terminalHandoff) {
-          this.traceRecorder.startLane('player_goal');
+          const handoffLane = terminalHandoff.owner === 'player_job' ? 'player_job' : 'player_goal';
+          this.traceRecorder.startLane(handoffLane);
           return this.select(
-            'player_goal',
-            'player_goal_terminal_handoff',
-            'The typed player outcome is settling its bounded companion handoff; unrelated autonomous work remains suppressed.',
+            handoffLane,
+            `${handoffLane}_terminal_handoff`,
+            'The player-authorized outcome is settling its bounded companion handoff; unrelated autonomous work remains suppressed.',
             true,
             perception,
           );
@@ -810,7 +826,8 @@ export class BehaviorArbiter {
         const terminalTransition = !goal.activeGoal && !goal.inFlight && !this.agent.actions?.executing;
         if (terminalTransition) {
           this.beginTerminalHandoff({
-            goalId: goal.lastGoal?.id,
+            outcomeId: goal.lastGoal?.id,
+            owner: 'player_goal',
             phase: goal.lastGoal?.phase || goal.status?.phase || 'terminal',
             code: goal.status?.code,
           });

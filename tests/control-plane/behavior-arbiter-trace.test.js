@@ -374,6 +374,19 @@ test('bounded terminal handoff suppresses autonomy but yields to every higher co
   assert.equal((await arbiter.update(25)).selectedLane, 'player_goal');
   assert.equal(arbiter.snapshot().terminalHandoff, null);
   assert.equal(progressionUpdates, 0);
+
+  agent.goal_director.activeGoal = null;
+  arbiter.beginTerminalHandoff({
+    outcomeId: 'job-complete-handoff',
+    owner: 'player_job',
+    phase: 'complete',
+    code: 'delivery_verified',
+  });
+  const playerJobHandoff = await arbiter.update(25);
+  assert.equal(playerJobHandoff.selectedLane, 'player_job');
+  assert.equal(playerJobHandoff.code, 'player_job_terminal_handoff');
+  assert.equal(playerJobHandoff.terminalHandoff.outcomeId, 'job-complete-handoff');
+  assert.equal(progressionUpdates, 0);
 });
 
 test('scheduled wakes record prior-period overrun while event-driven early wakes do not', async () => {

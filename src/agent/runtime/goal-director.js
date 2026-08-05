@@ -628,7 +628,8 @@ export class GoalDirector {
     });
     const report = Promise.resolve(this.agent.openChat?.(`Completed: ${goalContractDescription(completed)}. ${verification.detail}`));
     this.agent.behavior_arbiter?.beginTerminalHandoff?.({
-      goalId: completed.id,
+      outcomeId: completed.id,
+      owner: 'player_goal',
       phase: 'complete',
       code: verification.code,
       reportPromise: report,
@@ -665,7 +666,8 @@ export class GoalDirector {
     });
     const report = Promise.resolve(this.agent.openChat?.(`Goal stopped without completion: ${detail}`));
     this.agent.behavior_arbiter?.beginTerminalHandoff?.({
-      goalId: failed.id,
+      outcomeId: failed.id,
+      owner: 'player_goal',
       phase: 'failed',
       code,
       reportPromise: report,

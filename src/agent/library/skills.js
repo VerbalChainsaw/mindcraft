@@ -8487,22 +8487,6 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     const markDelivered = entityId => {
         if (given) return;
         droppedEntityId = Number.isFinite(entityId) ? entityId : droppedEntityId;
-        const complete = transferCount >= requested;
-        setActionEvidence(bot, {
-            kind: 'give',
-            outcome: complete ? 'delivered' : 'partial',
-            target,
-            item: itemType,
-            requested,
-            transferred: transferCount,
-            inventoryBefore,
-            inventoryAfter: inventoryCount(bot, itemType),
-            droppedEntityId,
-            deliveryAttempts,
-            reclaimedAttempts,
-            retryable: !complete,
-        });
-        log(bot, `${username} received ${transferCount} ${itemType}.`);
         given = true;
     };
     const isExpectedDroppedEntity = entity => {
@@ -8587,26 +8571,30 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
             }
 
             await bot.lookAt(player.position);
+            const inventoryBeforeDrop = inventoryCount(bot, itemType);
             if (!await discard(bot, itemType, transferCount)) return false;
             if (droppedEntityId === null) {
                 const dropped = Object.values(bot.entities || {}).find(isExpectedDroppedEntity);
                 droppedEntityId = Number.isFinite(dropped?.id) ? dropped.id : null;
             }
             const inventoryAfterDrop = inventoryCount(bot, itemType);
-            if (inventoryBefore - inventoryAfterDrop < transferCount) {
+            const actualTransferred = Math.max(0, inventoryBeforeDrop - inventoryAfterDrop);
+            if (actualTransferred !== transferCount) {
                 setActionEvidence(bot, {
                     kind: 'give',
-                    outcome: 'inventory_not_decremented',
+                    outcome: 'delivery_quantity_mismatch',
                     target,
                     item: itemType,
                     requested,
-                    transferred: 0,
+                    transferred: actualTransferred,
                     inventoryBefore,
+                    inventoryBeforeDrop,
                     inventoryAfter: inventoryAfterDrop,
                     deliveryAttempts,
                     reclaimedAttempts,
-                    retryable: true,
+                    retryable: false,
                 });
+                log(bot, `Delivery stopped: expected to drop ${transferCount} ${itemType}, but inventory changed by ${actualTransferred}.`);
                 return false;
             }
 
@@ -8615,7 +8603,26 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
                 await new Promise(resolve => setTimeout(resolve, 100));
                 if (Date.now() - pickupStartedAt > DELIVERY_PICKUP_TIMEOUT_MS) break;
             }
-            if (given) return true;
+            if (given) {
+                const complete = actualTransferred >= requested;
+                setActionEvidence(bot, {
+                    kind: 'give',
+                    outcome: complete ? 'delivered' : 'partial',
+                    target,
+                    item: itemType,
+                    requested,
+                    transferred: actualTransferred,
+                    inventoryBefore,
+                    inventoryBeforeDrop,
+                    inventoryAfter: inventoryAfterDrop,
+                    droppedEntityId,
+                    deliveryAttempts,
+                    reclaimedAttempts,
+                    retryable: !complete,
+                });
+                log(bot, `${username} received ${actualTransferred} ${itemType}.`);
+                return true;
+            }
             if (!reclaimed || deliveryAttempts >= MAX_DELIVERY_DROP_ATTEMPTS) break;
             reclaimedAttempts += 1;
             const reacquired = await waitForWorldCondition(

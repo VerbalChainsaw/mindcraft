@@ -29,6 +29,7 @@ import { isClearableWorksiteBlock } from '../library/skills.js';
 
 const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
+const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
 const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
@@ -750,6 +751,7 @@ export class JobDirector extends RoleDirector {
     this.activeOrder = null;
     this.store.save(null);
     this.setStatus('cancelled', 'job_cancelled', cancelled.target?.name || null, reason, false);
+    this.beginTerminalHandoff(cancelled, 'job_cancelled');
     return true;
   }
 
@@ -776,6 +778,16 @@ export class JobDirector extends RoleDirector {
     }
   }
 
+  beginTerminalHandoff(order, code) {
+    if (!order || !PLAYER_JOB_SOURCES.has(order.source)) return null;
+    return this.agent.behavior_arbiter?.beginTerminalHandoff?.({
+      outcomeId: order.id,
+      owner: 'player_job',
+      phase: order.phase,
+      code,
+    }) || null;
+  }
+
   finishOrder(phase, code, detail = '', retryable = false) {
     const terminal = normalizeWorkOrder({
       ...this.activeOrder,
@@ -799,6 +811,7 @@ export class JobDirector extends RoleDirector {
       },
       salience: phase === 'complete' ? 4 : 3,
     });
+    this.beginTerminalHandoff(terminal, code);
     const radioKind = phase === 'complete' ? 'completion' : phase === 'failed' ? 'warning' : null;
     if (radioKind) {
       const message = phase === 'complete'
