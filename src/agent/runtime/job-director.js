@@ -970,15 +970,28 @@ export class JobDirector extends RoleDirector {
             };
           }
           const preempted = isPreemption(result);
-          const verifiedOrder = result.phase === 'succeeded' && step.checkpointOnSuccess
+          const transferred = Math.max(0, Math.floor(Number(outcome?.verification?.transferred) || 0));
+          const transferCheckpoint = step.checkpointOnVerifiedTransfer;
+          const verifiedOrder = transferCheckpoint && transferred > 0
             ? {
               ...orderAtDispatch,
               checkpoint: {
                 ...orderAtDispatch.checkpoint,
-                ...step.checkpointOnSuccess,
+                [transferCheckpoint.field]: Math.min(
+                  Math.max(0, Number(transferCheckpoint.maximum) || 0),
+                  Math.max(0, Number(transferCheckpoint.baseline) || 0) + transferred,
+                ),
               },
             }
-            : orderAtDispatch;
+            : result.phase === 'succeeded' && step.checkpointOnSuccess
+              ? {
+                ...orderAtDispatch,
+                checkpoint: {
+                  ...orderAtDispatch.checkpoint,
+                  ...step.checkpointOnSuccess,
+                },
+              }
+              : orderAtDispatch;
           const advanced = advanceWorkOrder(verifiedOrder, result, {
             previousActionId,
             nextPhase: step.nextPhase,

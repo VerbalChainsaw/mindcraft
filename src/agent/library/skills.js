@@ -22,6 +22,15 @@ import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
 import {
+    COOKABLE_FOOD,
+    familyInventoryCount,
+    familyInventoryEntries,
+    familyTransferManifest,
+    itemMatchesFamily,
+    SUPPORTED_ITEM_FAMILIES,
+    UNSAFE_FOOD_ITEMS,
+} from '../runtime/item-family.js';
+import {
     minimumMiningCorridorSteps,
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
@@ -281,24 +290,6 @@ const TOOL_TIER = Object.freeze({
     iron: 4,
     diamond: 5,
     netherite: 6,
-});
-const UNSAFE_FOOD_ITEMS = new Set([
-    'chicken',
-    'poisonous_potato',
-    'pufferfish',
-    'rotten_flesh',
-    'spider_eye',
-    'suspicious_stew',
-]);
-const COOKABLE_FOOD = Object.freeze({
-    raw_beef: 'steak',
-    raw_chicken: 'cooked_chicken',
-    raw_cod: 'cooked_cod',
-    raw_mutton: 'cooked_mutton',
-    raw_porkchop: 'cooked_porkchop',
-    raw_rabbit: 'cooked_rabbit',
-    raw_salmon: 'cooked_salmon',
-    potato: 'baked_potato',
 });
 const SMELTING_OUTPUT = Object.freeze({
     ...COOKABLE_FOOD,
@@ -7788,44 +7779,6 @@ export async function discard(bot, itemName, num=-1) {
     return true;
 }
 
-function itemMatchesFamily(bot, item, family) {
-    const name = String(item?.name || '');
-    if (family === 'logs') return /_(?:log|stem)$/.test(name);
-    if (family === 'planks') return name.endsWith('_planks');
-    if (family === 'food') {
-        return Boolean(
-            bot.registry?.foodsByName?.[name]
-            && !UNSAFE_FOOD_ITEMS.has(name)
-            && !Object.prototype.hasOwnProperty.call(COOKABLE_FOOD, name)
-        );
-    }
-    if (family === 'ores') {
-        return name.startsWith('raw_')
-            || /_(?:ore|ingot|nugget)$/.test(name)
-            || ['coal', 'charcoal', 'diamond', 'emerald', 'redstone', 'lapis_lazuli', 'quartz'].includes(name);
-    }
-    if (family === 'building_blocks') {
-        return name.endsWith('_planks')
-            || ['cobblestone', 'cobbled_deepslate', 'stone', 'dirt', 'glass'].includes(name);
-    }
-    return false;
-}
-
-function familyInventoryEntries(bot, family) {
-    const counts = new Map();
-    for (const item of bot.inventory.items()) {
-        if (!itemMatchesFamily(bot, item, family)) continue;
-        const existing = counts.get(item.name);
-        if (existing) existing.count += item.count;
-        else counts.set(item.name, { name: item.name, count: item.count });
-    }
-    return [...counts.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name));
-}
-
-function familyInventoryCount(bot, family) {
-    return familyInventoryEntries(bot, family).reduce((total, entry) => total + entry.count, 0);
-}
-
 export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
     /**
      * Put the given item in the nearest chest.
@@ -7936,7 +7889,7 @@ export async function putFamilyInChestAt(bot, family, num, x, y, z) {
     const requested = Math.max(1, Math.min(2304, Math.floor(Number(num) || 1)));
     const before = familyInventoryCount(bot, family);
     const target = { name: family || 'item_family', x, y, z };
-    if (!['logs', 'planks', 'food', 'ores', 'building_blocks'].includes(family)) {
+    if (!SUPPORTED_ITEM_FAMILIES.includes(family)) {
         setActionEvidence(bot, { kind: 'family_transfer', outcome: 'unsupported_family', target, retryable: false });
         return false;
     }
@@ -8662,7 +8615,7 @@ export async function giveFamilyToPlayer(bot, family, username, num=1) {
     const requested = Math.max(1, Math.min(2304, Math.floor(Number(num) || 1)));
     const before = familyInventoryCount(bot, family);
     const target = playerTargetEvidence(resolvePhysicalPlayer(bot, username), { family });
-    if (!['logs', 'planks', 'food', 'ores', 'building_blocks'].includes(family)) {
+    if (!SUPPORTED_ITEM_FAMILIES.includes(family)) {
         setActionEvidence(bot, { kind: 'family_give', outcome: 'unsupported_family', target, retryable: false });
         return false;
     }
@@ -8671,27 +8624,59 @@ export async function giveFamilyToPlayer(bot, family, username, num=1) {
         log(bot, `There are no ${family} to give to ${username}.`);
         return false;
     }
-    let remaining = Math.min(requested, before);
+    const expected = Math.min(requested, before);
+    const manifest = familyTransferManifest(bot, family, expected);
+    const deliveries = [];
     let allVerified = true;
-    for (const entry of familyInventoryEntries(bot, family)) {
-        if (remaining < 1 || bot.interrupt_code) break;
-        const amount = Math.min(remaining, entry.count);
-        if (!await giveToPlayer(bot, entry.name, username, amount)) {
+    let transferred = 0;
+    for (const entry of manifest) {
+        if (bot.interrupt_code) {
             allVerified = false;
             break;
         }
-        remaining -= amount;
+        const succeeded = await giveToPlayer(bot, entry.item, username, entry.quantity);
+        const exact = bot.lastActionEvidence || {};
+        const verified = Boolean(
+            succeeded
+            && exact.kind === 'give'
+            && exact.outcome === 'delivered'
+            && exact.item === entry.item
+            && Number(exact.requested) === entry.quantity
+            && Number(exact.transferred) === entry.quantity
+            && exact.target?.canonicalName === target.canonicalName
+            && Number.isFinite(exact.droppedEntityId)
+        );
+        const observed = verified ? entry.quantity : Math.max(0, Math.floor(Number(exact.transferred) || 0));
+        deliveries.push({
+            item: entry.item,
+            requested: entry.quantity,
+            transferred: observed,
+            outcome: String(exact.outcome || (bot.interrupt_code ? 'interrupted' : 'delivery_blocked')),
+            target: exact.target || target,
+            droppedEntityId: Number.isFinite(exact.droppedEntityId) ? exact.droppedEntityId : null,
+            deliveryAttempts: Math.max(0, Math.floor(Number(exact.deliveryAttempts) || 0)),
+        });
+        if (!verified) {
+            allVerified = false;
+            break;
+        }
+        transferred += observed;
     }
     const after = familyInventoryCount(bot, family);
-    const transferred = Math.max(0, before - after);
-    const expected = Math.min(requested, before);
-    const success = allVerified && transferred >= expected;
+    const inventoryDelta = Math.max(0, before - after);
+    const success = allVerified && transferred === expected && deliveries.length === manifest.length;
     setActionEvidence(bot, {
         kind: 'family_give',
         outcome: success ? 'delivered' : bot.interrupt_code ? 'interrupted' : transferred > 0 ? 'partial' : 'delivery_blocked',
         target,
+        family,
         requested: expected,
         transferred,
+        inventoryBefore: before,
+        inventoryAfter: after,
+        inventoryDelta,
+        manifest,
+        deliveries,
         retryable: !success && !bot.interrupt_code,
     });
     log(bot, success

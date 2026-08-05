@@ -44,11 +44,19 @@ function deliveryStep(order, snapshot, amount) {
         checkpointOnSuccess,
       });
     }
-    return {
-      command: `!giveFamilyToPlayer("logs", ${JSON.stringify(snapshot.deposit.leader)}, ${deliverable})`,
+    return createCapabilityRequest('deliver_item_family', {
+      player: snapshot.deposit.leader,
+      family: 'logs',
+      quantity: deliverable,
+    }, {
       nextPhase,
       checkpointOnSuccess,
-    };
+      checkpointOnVerifiedTransfer: {
+        field: 'delivered',
+        baseline: delivered,
+        maximum: order.quota,
+      },
+    });
   }
   if (snapshot.deposit?.mode === 'assigned') {
     const target = snapshot.deposit?.target;

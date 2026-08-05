@@ -115,6 +115,11 @@ test('Lumberjack bounds collection by remaining quota and inventory capacity', (
     inventory: { oak_log: 4 },
     deposit: { mode: 'leader', leader: 'Director' },
   });
-  assert.equal(familyDelivery.capability, undefined);
-  assert.equal(familyDelivery.command, '!giveFamilyToPlayer("logs", "Director", 4)');
+  assert.equal(familyDelivery.capability.id, 'deliver_item_family');
+  assert.equal(capabilityCommand(familyDelivery.capability), '!giveFamilyToPlayer("logs", "Director", 4)');
+  assert.deepEqual(familyDelivery.checkpointOnVerifiedTransfer, {
+    field: 'delivered',
+    baseline: 0,
+    maximum: 4,
+  });
 });

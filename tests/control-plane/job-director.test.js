@@ -209,6 +209,90 @@ test('Given a resumable mining order, JobDirector dispatches one phase action an
   assert.equal(director.snapshot().phase, 'succeeded');
 });
 
+test('Given a partial mixed-family handoff, JobDirector checkpoints only verified transfers', async () => {
+  const agent = createAgent('lumberjack');
+  const recipient = {
+    id: 42,
+    type: 'player',
+    username: 'Director',
+    position: { x: 2, y: 64, z: 0 },
+  };
+  agent.bot.inventory.slots = [
+    { name: 'oak_log', count: 2 },
+    { name: 'birch_log', count: 2 },
+  ];
+  agent.bot.inventory.items = () => agent.bot.inventory.slots;
+  agent.bot.players = { Director: { username: 'Director', entity: recipient } };
+  agent.bot.entities = { 42: recipient };
+  agent.getKnownAgentNames = () => ['TestMiner'];
+  const commands = [];
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({
+      inventory: { oak_log: 2, birch_log: 2 },
+      tools: { axeTier: 3 },
+      freeSlots: 20,
+      safeTrunks: true,
+      deposit: { mode: 'leader', leader: 'Director' },
+    }),
+    now: () => 10_000,
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.bot.inventory.slots = [{ name: 'oak_log', count: 2 }];
+      agent.last_action_result = {
+        actionId: 'family-partial-1',
+        phase: 'failed',
+        code: 'skill_delivery_partial',
+        detail: 'One concrete species was delivered before the second failed.',
+        evidence: {
+          skill: {
+            kind: 'family_give',
+            outcome: 'partial',
+            family: 'logs',
+            target: { canonicalName: 'Director', entityId: 42 },
+            requested: 3,
+            transferred: 2,
+            manifest: [
+              { item: 'birch_log', quantity: 2 },
+              { item: 'oak_log', quantity: 1 },
+            ],
+            deliveries: [{
+              item: 'birch_log',
+              requested: 2,
+              transferred: 2,
+              outcome: 'delivered',
+              target: { canonicalName: 'Director', entityId: 42 },
+              droppedEntityId: 101,
+              deliveryAttempts: 1,
+            }],
+          },
+        },
+        retryable: true,
+      };
+      return false;
+    },
+  });
+  director.submit(createWorkOrder({
+    id: 'family-partial-order',
+    role: 'lumberjack',
+    kind: 'harvest',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'logs' },
+    quota: 3,
+  }));
+  director.activeOrder = { ...director.activeOrder, phase: 'deliver' };
+
+  director.nextAttemptAt = 0;
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!giveFamilyToPlayer("logs", "Director", 3)']);
+  assert.equal(director.activeOrder.phase, 'recover');
+  assert.equal(director.activeOrder.checkpoint.delivered, 2);
+  assert.equal(director.activeOrder.attempts, 1);
+});
+
 test('Given a terminal player work order, JobDirector retains the shared player handoff before autonomy', () => {
   const agent = createAgent();
   const handoffs = [];

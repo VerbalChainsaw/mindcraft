@@ -482,6 +482,182 @@ test('Exact-item delivery binds one recipient and trusts only authoritative pick
   assert.equal(absent.result.code, 'precondition_missing');
 });
 
+test('Family delivery binds a concrete mixed manifest, retains partial evidence, and censors Stop', async () => {
+  const recipient = {
+    id: 42,
+    type: 'player',
+    username: 'Director',
+    position: { x: 2, y: 64, z: 0 },
+  };
+  const carried = () => [
+    { name: 'oak_log', count: 2 },
+    { name: 'birch_log', count: 2 },
+  ];
+  const manifest = [
+    { item: 'birch_log', quantity: 2 },
+    { item: 'oak_log', quantity: 1 },
+  ];
+  const delivery = (item, quantity, droppedEntityId) => ({
+    item,
+    requested: quantity,
+    transferred: quantity,
+    outcome: 'delivered',
+    target: { canonicalName: 'Director', entityId: 42 },
+    droppedEntityId,
+    deliveryAttempts: 1,
+  });
+  const bot = {
+    username: 'TestBot',
+    inventory: { slots: carried() },
+    players: { Director: { username: 'Director', entity: recipient } },
+    entities: { 42: recipient },
+    registry: { itemsByName: { oak_log: {}, birch_log: {} } },
+  };
+  const agent = {
+    bot,
+    last_action_result: null,
+    getKnownAgentNames: () => ['TestBot'],
+  };
+  const request = createCapabilityRequest('deliver_item_family', {
+    player: 'Director',
+    family: 'logs',
+    quantity: 3,
+  }).capability;
+
+  assert.equal(capabilityCommand(request), '!giveFamilyToPlayer("logs", "Director", 3)');
+  const delivered = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: (_agent, command) => {
+      assert.equal(command, '!giveFamilyToPlayer("logs", "Director", 3)');
+      bot.inventory.slots = [{ name: 'oak_log', count: 1 }];
+      agent.last_action_result = {
+        actionId: 'family-delivery-1',
+        phase: 'succeeded',
+        code: 'skill_delivered',
+        detail: 'Minecraft confirmed both exact pickups.',
+        evidence: {
+          skill: {
+            kind: 'family_give',
+            outcome: 'delivered',
+            family: 'logs',
+            target: { canonicalName: 'Director', entityId: 42 },
+            requested: 3,
+            transferred: 3,
+            manifest,
+            deliveries: [delivery('birch_log', 2, 101), delivery('oak_log', 1, 102)],
+          },
+        },
+        retryable: false,
+      };
+      return true;
+    },
+  });
+
+  assert.equal(delivered.verification.ok, true);
+  assert.deepEqual(delivered.binding.manifest, manifest);
+  assert.deepEqual(delivered.result.evidence.capability.binding.manifest, manifest);
+  assert.equal(delivered.result.evidence.capability.verification.transferred, 3);
+
+  bot.inventory.slots = carried();
+  const partial = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: () => {
+      bot.inventory.slots = [{ name: 'oak_log', count: 2 }];
+      agent.last_action_result = {
+        actionId: 'family-delivery-2',
+        phase: 'failed',
+        code: 'skill_delivery_partial',
+        detail: 'The second exact stack was not received.',
+        evidence: {
+          skill: {
+            kind: 'family_give',
+            outcome: 'partial',
+            family: 'logs',
+            target: { canonicalName: 'Director', entityId: 42 },
+            requested: 3,
+            transferred: 2,
+            manifest,
+            deliveries: [delivery('birch_log', 2, 103)],
+          },
+        },
+        retryable: true,
+      };
+      return false;
+    },
+  });
+  assert.equal(partial.result.phase, 'failed');
+  assert.equal(partial.verification.ok, false);
+  assert.equal(partial.verification.transferred, 2);
+  assert.equal(partial.verification.remaining, 1);
+
+  bot.inventory.slots = carried();
+  const stopped = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: () => {
+      bot.inventory.slots = [{ name: 'oak_log', count: 2 }];
+      agent.last_action_result = {
+        actionId: 'family-delivery-3',
+        phase: 'interrupted',
+        code: 'stop_requested',
+        detail: 'Operator Stop interrupted the family handoff.',
+        evidence: {
+          skill: {
+            kind: 'family_give',
+            outcome: 'interrupted',
+            family: 'logs',
+            target: { canonicalName: 'Director', entityId: 42 },
+            requested: 3,
+            transferred: 2,
+            manifest,
+            deliveries: [delivery('birch_log', 2, 104)],
+          },
+        },
+        retryable: true,
+      };
+      return false;
+    },
+  });
+  assert.equal(stopped.result.phase, 'interrupted');
+  assert.equal(stopped.verification.transferred, 2);
+  assert.equal(classifyMethodOutcome(stopped.result), 'censored');
+
+  bot.inventory.slots = carried();
+  bot.players = {};
+  bot.entities = {};
+  const absent = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: () => assert.fail('Precondition failure must not execute a physical command.'),
+  });
+  assert.equal(absent.result.code, 'precondition_missing');
+  assert.equal(absent.result.evidence.capability.id, 'deliver_item_family');
+  assert.deepEqual(absent.result.evidence.capability.arguments, {
+    player: 'Director',
+    family: 'logs',
+    quantity: 3,
+  });
+  assert.equal(absent.result.evidence.capability.preconditions.ok, false);
+  assert.equal(absent.result.evidence.capability.binding, null);
+
+  bot.players = { Director: { username: 'Director', entity: recipient } };
+  bot.entities = { 42: recipient };
+  let inventoryReads = 0;
+  bot.inventory = {
+    items: () => {
+      inventoryReads += 1;
+      return inventoryReads === 1 ? carried() : [];
+    },
+  };
+  const unbound = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: () => assert.fail('Binding failure must not execute a physical command.'),
+  });
+  assert.equal(unbound.result.code, 'binding_failed');
+  assert.equal(unbound.result.evidence.capability.id, 'deliver_item_family');
+  assert.equal(unbound.result.evidence.capability.preconditions.ok, true);
+  assert.equal(unbound.result.evidence.capability.binding, null);
+  assert.equal(unbound.result.evidence.capability.bindingReport.ok, false);
+});
+
 test('A persisted goal preserves the learning identity of its active plan step', () => {
   const goal = createItemGoalContract({
     kind: 'acquire',

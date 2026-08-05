@@ -240,13 +240,13 @@ function acquisitionCommand(goal, remaining, procedure) {
   return null;
 }
 
-function deliveryAction(goal, remaining, procedure) {
-  const preferred = preferredProcedureCommand(procedure, 'deliver');
+function deliveryAction(goal, remaining) {
   if (goal.target.family) {
-    const selected = preferred === '!giveFamilyToPlayer' ? preferred : '!giveFamilyToPlayer';
-    return {
-      command: `${selected}(${JSON.stringify(goal.target.family)}, ${JSON.stringify(goal.destination.player)}, ${remaining})`,
-    };
+    return createCapabilityRequest('deliver_item_family', {
+      player: goal.destination.player,
+      family: goal.target.family,
+      quantity: remaining,
+    });
   }
   return createCapabilityRequest('deliver_exact_item', {
     player: goal.destination.player,
