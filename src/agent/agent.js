@@ -239,6 +239,12 @@ export class Agent {
         if (load_mem) {
             save_data = this.history.load();
         }
+        if (save_data?.operator_hold === true) {
+            this.operator_hold = true;
+            this.operator_hold_reason = save_data.operator_hold_reason || 'operator stop restored after restart';
+            this.operator_hold_generation += 1;
+            console.log('[operator] Persisted stop restored before world control became available.');
+        }
         let taskStart = null;
         if (save_data) {
             taskStart = save_data.taskStart;
@@ -424,6 +430,8 @@ export class Agent {
     async _setupEventHandlers(save_data, init_message) {
         const startupDialogue = { initMessage: null, greet: false };
         const resumeTypedGoal = Boolean(this.goal_director?.activeGoal);
+        const restoreHeld = this.isOperatorHeld();
+        const lifecycleRestart = init_message === 'Agent process restarted.';
         const ignore_messages = [
             "Set own game mode to",
             "Set the time to",
@@ -496,7 +504,7 @@ export class Agent {
         configureSurvivalOwnership(this.bot);
 
         if (save_data?.self_prompt) {
-            if (init_message) {
+            if (init_message && !lifecycleRestart && !restoreHeld && !resumeTypedGoal) {
                 this.history.add('system', init_message);
             }
             // A persisted player goal is already a complete deterministic work
@@ -504,14 +512,20 @@ export class Agent {
             // that contract reaches a truthful terminal state.
             await this.self_prompter.handleLoad(
                 save_data.self_prompt,
-                resumeTypedGoal ? 0 : save_data.self_prompting_state,
+                (resumeTypedGoal || restoreHeld) ? 0 : save_data.self_prompting_state,
             );
         }
         if (save_data?.last_sender) {
             this.last_sender = save_data.last_sender;
         }
-        if (resumeTypedGoal) {
+        if (restoreHeld) {
+            console.log('[operator] Restart remains held; startup dialogue and autonomy are suppressed.');
+        }
+        else if (resumeTypedGoal) {
             console.log('[goal] Persisted typed goal will resume without model restoration.');
+        }
+        else if (lifecycleRestart) {
+            console.log('[startup] Lifecycle restart acknowledged without model dialogue.');
         }
         else if (save_data?.last_sender) {
             if (convoManager.otherAgentInGame(this.last_sender)) {
@@ -599,6 +613,9 @@ export class Agent {
         }
         this.self_prompter?.stop(false);
         this.requestInterrupt();
+        try { this.history?.save?.(); } catch (error) {
+            console.warn(`[operator] Could not persist hold state: ${String(error?.message || error).slice(0, 240)}`);
+        }
         return this.operator_hold_generation;
     }
 
@@ -607,6 +624,9 @@ export class Agent {
         this.operator_hold_generation += 1;
         this.operator_hold = false;
         this.operator_hold_reason = String(reason || 'explicit command').slice(0, 160);
+        try { this.history?.save?.(); } catch (error) {
+            console.warn(`[operator] Could not persist released hold state: ${String(error?.message || error).slice(0, 240)}`);
+        }
         return true;
     }
 

@@ -52,6 +52,12 @@ function validateStoredHistory(value) {
     ) {
         throw new TypeError('Bot self-prompt state is invalid.');
     }
+    if (value.operator_hold !== undefined && typeof value.operator_hold !== 'boolean') {
+        throw new TypeError('Bot operator-hold state is invalid.');
+    }
+    if (value.operator_hold_reason !== undefined && typeof value.operator_hold_reason !== 'string') {
+        throw new TypeError('Bot operator-hold reason is invalid.');
+    }
     return {
         ...value,
         memory: String(value.memory || '').slice(0, MAX_STORED_MEMORY_CHARS),
@@ -62,6 +68,10 @@ function validateStoredHistory(value) {
         self_prompting_state: value.self_prompting_state ?? 0,
         last_sender: typeof value.last_sender === 'string' ? value.last_sender.slice(0, 64) : null,
         taskStart: Number.isFinite(value.taskStart) ? value.taskStart : null,
+        operator_hold: value.operator_hold === true,
+        operator_hold_reason: typeof value.operator_hold_reason === 'string'
+            ? value.operator_hold_reason.slice(0, 160)
+            : '',
     };
 }
 
@@ -174,7 +184,9 @@ export class History {
                 self_prompting_state: this.agent.self_prompter.state,
                 self_prompt: this.agent.self_prompter.isStopped() ? null : this.agent.self_prompter.prompt,
                 taskStart: this.agent.task.taskStartTime,
-                last_sender: this.agent.last_sender
+                last_sender: this.agent.last_sender,
+                operator_hold: this.agent.isOperatorHeld?.() === true,
+                operator_hold_reason: String(this.agent.operator_hold_reason || '').slice(0, 160),
             };
             writeJsonAtomicSync(this.memory_fp, data);
             console.log('Saved memory to:', this.memory_fp);

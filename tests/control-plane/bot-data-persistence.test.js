@@ -16,11 +16,13 @@ test('Given bot memory and history, when state is persisted, then canonical JSON
       name: 'DataBot',
       last_sender: null,
       self_prompter: {
-        state: 'stopped',
+        state: 0,
         isStopped: () => true,
         prompt: null,
       },
       task: { taskStartTime: null },
+      operator_hold_reason: 'operator stop command',
+      isOperatorHeld: () => true,
     };
     const history = new History(agent);
     await history.appendFullHistory([{ role: 'user', content: 'first' }]);
@@ -38,10 +40,17 @@ test('Given bot memory and history, when state is persisted, then canonical JSON
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'second' },
     ]);
-    assert.equal(JSON.parse(await readFile(
+    const persistedMemory = JSON.parse(await readFile(
       path.join(root, 'bots', 'DataBot', 'memory.json'),
       'utf8',
-    )).memory, '');
+    ));
+    assert.equal(persistedMemory.memory, '');
+    assert.equal(persistedMemory.operator_hold, true);
+    assert.equal(persistedMemory.operator_hold_reason, 'operator stop command');
+
+    const restoredMemory = history.load();
+    assert.equal(restoredMemory.operator_hold, true);
+    assert.equal(restoredMemory.operator_hold_reason, 'operator stop command');
 
     const canonical = path.join(root, 'canonical.json');
     writeJsonAtomicSync(canonical, { version: 1 });
