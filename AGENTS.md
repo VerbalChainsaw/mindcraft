@@ -21,3 +21,15 @@ Direct implementation is authorized; working Minecraft gameplay is the primary d
 - Never create a parallel movement, combat, collection, tool, or survival engine beside an installed plugin because one route or scenario failed.
 - Do not add or upgrade dependencies without the user's explicit approval and a compatibility check.
 - At meaningful checkpoints, report delegated mechanics and the evidence for every custom exception.
+
+### Product outcome and campaign scale
+
+- The product is a convincing, useful Minecraft companion, not a catalogue of independently certified mechanics. Every meaningful tranche must improve a player-visible outcome or repair a cross-cutting invariant that materially threatens those outcomes.
+- Preserve the current development loop: run a broad natural player scenario in the real Paper world, observe the first material blocker, repair the smallest shared seam, add only focused regression coverage for that observed defect, rerun the same broad scenario, then commit and stop.
+- The default unit of work is a broad multi-stage player request or companion session. Do not invent a narrow campaign merely because another item, quantity, caller, or family can be routed through an existing capability.
+- A narrow synthetic or controlled campaign is allowed only when a broad live scenario or review exposes a distinct physical failure, ownership race, false-success path, safety violation, or persistence defect. After the narrow proof, return to the broad player outcome when the changed seam could affect it.
+- Once a mechanic or domain has passed physical acceptance, freeze it. Do not reopen it for noun swaps, quantity permutations, caller permutations, exhaustive family coverage, or theoretical edge certification unless new live evidence exposes a materially different failure class or the code is directly changed again.
+- Capability migration, abstraction cleanup, and duplicate removal are not deliverables by themselves. Perform them only when they remove an observed blocker, eliminate a dangerous shared invariant, or are required by a broad player-valued campaign.
+- Do not normalize every duplicated seam merely because it exists. Record non-blocking duplication and theoretical risks for later; prefer a deferred note over expanding the active tranche.
+- Every review request must state: the player-visible outcome being improved, the new failure class that justified the slice, why the correction is shared rather than item-specific, what behavior is now frozen, and the next broad campaign. Keep this concise and do not create a new review artifact system.
+- Stop when the broad physical outcome works truthfully and repeatably enough for play. Do not pursue exhaustive certification, perfect coverage, or formal completeness before returning to real gameplay.
