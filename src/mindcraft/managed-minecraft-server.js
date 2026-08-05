@@ -367,7 +367,11 @@ function defaultRuntimeCandidates() {
 }
 
 function defaultInspectJava(candidate) {
-  const result = spawnSync(candidate.path, ['-version'], {
+  // `java -version` succeeds even when a bundled runtime has been partially
+  // removed (for example, with no java.security or tzdb.dat). Paper fails
+  // immediately in that state, so candidate detection must exercise the
+  // security runtime before preferring the closest compatible major.
+  const result = spawnSync(candidate.path, ['-XshowSettings:security', '-version'], {
     windowsHide: true,
     encoding: 'utf8',
     timeout: 5000,

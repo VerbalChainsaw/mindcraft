@@ -261,6 +261,38 @@ test('Planner capabilities expose and enforce the typed execution contract', asy
   assert.equal(outcome.verification.ok, true);
 });
 
+test('Verified capability effects supersede a stale executor failure', async () => {
+  const bot = plannerBot();
+  const plan = buildPrerequisitePlan(bot, { target: 'test_gem', quantity: 1 });
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(plan.nextStep.capability, {
+    agent,
+    executeCommand: () => {
+      bot.inventory.slots = [{ name: 'test_gem', count: 1 }];
+      agent.last_action_result = {
+        actionId: 'stale-collection-failure',
+        label: 'action:collectBlocksInRange',
+        phase: 'failed',
+        code: 'skill_unreachable',
+        detail: 'The final route candidate was unreachable after collection.',
+        target: { name: 'alpha_ore', x: 4, y: 12, z: 8 },
+        evidence: { skill: { outcome: 'unreachable' } },
+        retryable: true,
+        startedAt: 1,
+        finishedAt: 2,
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, true);
+  assert.equal(outcome.result.phase, 'succeeded');
+  assert.equal(outcome.result.code, 'capability_effects_verified');
+  assert.equal(outcome.result.retryable, false);
+  assert.equal(outcome.result.evidence.capability.executorResult.code, 'skill_unreachable');
+});
+
 test('A persisted goal preserves the learning identity of its active plan step', () => {
   const goal = createItemGoalContract({
     kind: 'acquire',

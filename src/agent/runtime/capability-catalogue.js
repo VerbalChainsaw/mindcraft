@@ -1,3 +1,5 @@
+import { createActionResult } from './action-result.js';
+
 const CAPABILITY_OUTCOME_CODES = Object.freeze({
   PRECONDITION: 'precondition_missing',
   BINDING: 'binding_failed',
@@ -360,6 +362,51 @@ function capabilityFailure(code, detail) {
   });
 }
 
+function reconcileCapabilityResult(result, verification) {
+  if (!result || !verification) return result || null;
+  const evidence = {
+    ...(result.evidence || {}),
+    capability: {
+      ...(result.evidence?.capability || {}),
+      verification,
+      executorResult: {
+        phase: result.phase,
+        code: result.code,
+        detail: result.detail,
+        retryable: result.retryable === true,
+      },
+    },
+  };
+
+  // A bounded adapter may finish its requested effect and then report a stale
+  // route or cleanup failure. Minecraft state is authoritative for the
+  // capability outcome once the complete expected effect is present. Blocked,
+  // interrupted, and cancelled actions remain censored ownership outcomes;
+  // unrelated inventory movement must not turn them into method successes.
+  if (verification.ok && ['failed', 'requested'].includes(result.phase)) {
+    return createActionResult({
+      ...result,
+      phase: 'succeeded',
+      code: 'capability_effects_verified',
+      detail: `${verification.detail} Executor reported ${result.code || result.phase} after the effect was already present.`,
+      evidence,
+      retryable: false,
+    });
+  }
+
+  if (!verification.ok && result.phase === 'succeeded') {
+    return createActionResult({
+      ...result,
+      phase: 'failed',
+      code: verification.code || CAPABILITY_OUTCOME_CODES.VERIFICATION,
+      detail: verification.detail || 'The capability effects were not verified in Minecraft.',
+      evidence,
+      retryable: true,
+    });
+  }
+  return result;
+}
+
 export async function executeCapabilityAction(capability, {
   agent,
   executeCommand,
@@ -383,6 +430,7 @@ export async function executeCapabilityAction(capability, {
     return { result: capabilityFailure(CAPABILITY_OUTCOME_CODES.BINDING, binding?.detail || 'Capability binding failed.') };
   }
   try {
+    const previousActionId = agent?.last_action_result?.actionId || null;
     const value = await definition.execute({ ...binding, expectedEffects }, {
       agent,
       executeCommand,
@@ -391,10 +439,16 @@ export async function executeCapabilityAction(capability, {
       signal,
     });
     const after = captureCapabilitySnapshot(agent?.bot);
+    const verification = definition.verify(before, after, { ...binding, expectedEffects });
+    const executorResult = agent?.last_action_result;
+    const result = executorResult?.actionId && executorResult.actionId !== previousActionId
+      ? reconcileCapabilityResult(executorResult, verification)
+      : null;
     return {
       value,
       binding,
-      verification: definition.verify(before, after, { ...binding, expectedEffects }),
+      verification,
+      result,
     };
   } catch (error) {
     return {

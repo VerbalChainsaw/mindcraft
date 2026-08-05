@@ -8376,7 +8376,7 @@ function shallowWaterExitCandidates(bot) {
     return candidates.sort((left, right) => left.distance - right.distance);
 }
 
-async function attemptShallowWaterExit(bot) {
+async function attemptShallowWaterExit(bot, { deadlineAt = null } = {}) {
     const start = bot.entity?.position?.clone?.();
     const feet = start ? bot.blockAt(start.floored()) : null;
     if (!start || (!bot.entity?.isInWater && !isLiquidGameplayBlock(feet))) {
@@ -8397,7 +8397,10 @@ async function attemptShallowWaterExit(bot) {
         .slice(0, 4);
     let lastOutcome = null;
     for (const candidate of ordered) {
-        if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
+        const localRemainingMs = Number.isFinite(deadlineAt)
+            ? Math.max(0, deadlineAt - Date.now())
+            : Number.POSITIVE_INFINITY;
+        if (bot.interrupt_code || remainingActionTimeMs() <= 0 || localRemainingMs <= 0) break;
         const goal = new pf.goals.GoalBlock(
             candidate.position.x,
             candidate.position.y,
@@ -8408,7 +8411,11 @@ async function attemptShallowWaterExit(bot) {
                 bot,
                 goal,
                 safeMovements(bot),
-                Math.min(SHALLOW_WATER_EXIT_TIMEOUT_MS, remainingActionTimeMs(SHALLOW_WATER_EXIT_TIMEOUT_MS)),
+                Math.min(
+                    SHALLOW_WATER_EXIT_TIMEOUT_MS,
+                    remainingActionTimeMs(SHALLOW_WATER_EXIT_TIMEOUT_MS),
+                    localRemainingMs,
+                ),
             );
         } catch (error) {
             if (bot.interrupt_code) break;
@@ -8626,7 +8633,11 @@ export async function goToGoal(bot, goal, options = {}) {
             });
             if (outcome.pathfinder) {
                 const stuck = outcome.pathfinder;
-                log(bot, `Pathfinder stalled in ${stuck.executionMode} at ${stuck.position.x.toFixed(2)}, ${stuck.position.y.toFixed(2)}, ${stuck.position.z.toFixed(2)} toward ${stuck.nextPoint.x}, ${stuck.nextPoint.y}, ${stuck.nextPoint.z}.`);
+                const source = stuck.locomotion?.source;
+                const sourceDetail = source
+                    ? ` from ${source.x}, ${source.y}, ${source.z} via ${stuck.locomotion.type}`
+                    : '';
+                log(bot, `Pathfinder stalled in ${stuck.executionMode} at ${stuck.position.x.toFixed(2)}, ${stuck.position.y.toFixed(2)}, ${stuck.position.z.toFixed(2)} toward ${stuck.nextPoint.x}, ${stuck.nextPoint.y}, ${stuck.nextPoint.z}${sourceDetail}; onGround=${stuck.onGround}, controls=${JSON.stringify(stuck.controls)}, blocks=${JSON.stringify(stuck.blocks)}.`);
             }
             log(bot, `Navigation stopped after ${Math.round(outcome.stalledMs / 1000)} seconds without physical progress.`);
             return false;
@@ -9450,6 +9461,27 @@ function assessMiningAccessPlan(
     }
 
     const excavationBlocks = [...excavation.values()];
+    const requiredSupports = new Map(
+        [origin, ...route.map(step => step.position)].map(position => {
+            const support = position.offset(0, -1, 0);
+            return [miningCellKey(support), { support, standingCell: position }];
+        }),
+    );
+    const supportConflict = excavationBlocks.find(block => (
+        requiredSupports.has(miningCellKey(block.position))
+    ));
+    if (supportConflict) {
+        const conflict = requiredSupports.get(miningCellKey(supportConflict.position));
+        return {
+            ok: false,
+            outcome: 'route_support_excavation_conflict',
+            route,
+            stance,
+            origin,
+            conflictBlock: supportConflict.position,
+            conflictStandingCell: conflict.standingCell,
+        };
+    }
     const excavationBudget = excavationBlocks.length;
     const plannedBreaks = breakTarget
         ? [...excavationBlocks, targetBlock]
@@ -12691,6 +12723,7 @@ function stringifyItem(bot, item) {
 export async function escapeDrowning(bot, timeoutMs=8_000) {
     const startOxygen = Number(bot.oxygenLevel);
     const target = bot.entity?.position?.floored?.() || null;
+    const deadlineAt = Date.now() + Math.max(1_000, Math.min(12_000, Number(timeoutMs) || 8_000));
     try {
         try { bot.pathfinder?.setGoal?.(null); } catch { /* best-effort immediate movement preemption */ }
         try { bot.clearControlStates(); } catch { /* best-effort control reset */ }
@@ -12702,7 +12735,7 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
                 && head.name !== 'water'
                 && !bot.entity?.isInLava
                 && (!Number.isFinite(oxygen) || oxygen >= DROWNING_RECOVERY_OXYGEN);
-        }, Math.max(1_000, Math.min(12_000, Number(timeoutMs) || 8_000)), 100);
+        }, Math.max(1, deadlineAt - Date.now()), 100);
         if (!surfaced) {
             setActionEvidence(bot, {
                 kind: 'survival',
@@ -12714,15 +12747,43 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
             });
             return false;
         }
+
+        // Breathing for one tick is not a completed escape. Releasing jump at
+        // the waterline can drop the bot into the same cell and reacquire the
+        // reflex lane forever, starving every player action. Once air is
+        // restored, hand ordinary shoreline locomotion to native Pathfinder
+        // and require verified non-liquid support before releasing ownership.
+        bot.setControlState('jump', false);
+        const feetPosition = bot.entity?.position?.floored?.() || null;
+        const feet = feetPosition ? bot.blockAt(feetPosition) : null;
+        const support = feetPosition ? bot.blockAt(feetPosition.offset(0, -1, 0)) : null;
+        const alreadyStable = !isLiquidGameplayBlock(feet)
+            && isTraversableShoreSupport(support);
+        const shore = alreadyStable
+            ? { success: true, outcome: 'stable_shore_reached', target: feetPosition }
+            : await attemptShallowWaterExit(bot, { deadlineAt });
+        if (!shore.success) {
+            setActionEvidence(bot, {
+                kind: 'survival',
+                outcome: bot.interrupt_code ? 'interrupted' : 'drowning_shore_unreached',
+                target,
+                oxygenBefore: Number.isFinite(startOxygen) ? startOxygen : null,
+                oxygenAfter: Number.isFinite(Number(bot.oxygenLevel)) ? Number(bot.oxygenLevel) : null,
+                shore,
+                retryable: !bot.interrupt_code,
+            });
+            return false;
+        }
         setActionEvidence(bot, {
             kind: 'survival',
-            outcome: 'surfaced',
-            target,
+            outcome: 'drowning_escape_stable',
+            target: shore.target || target,
             oxygenBefore: Number.isFinite(startOxygen) ? startOxygen : null,
             oxygenAfter: Number.isFinite(Number(bot.oxygenLevel)) ? Number(bot.oxygenLevel) : null,
+            shore: shore.outcome,
             retryable: false,
         });
-        log(bot, 'Reached breathable air.');
+        log(bot, 'Reached breathable air and stable shore.');
         return true;
     } finally {
         try { bot.setControlState('jump', false); } catch { /* best-effort control cleanup */ }

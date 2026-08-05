@@ -429,6 +429,45 @@ function inject (bot) {
     return true
   }
 
+  function pathSegmentDrifted (nextPoint, position) {
+    const locomotion = nextPoint.locomotion
+    if (!locomotion?.source || !['walk', 'step_up', 'drop_down'].includes(locomotion.type)) return false
+
+    const sourceX = locomotion.source.x + 0.5
+    const sourceZ = locomotion.source.z + 0.5
+    const segmentX = nextPoint.x - sourceX
+    const segmentZ = nextPoint.z - sourceZ
+    const segmentLengthSq = (segmentX * segmentX) + (segmentZ * segmentZ)
+    const projection = segmentLengthSq > 0
+      ? Math.max(0, Math.min(1, (
+          ((position.x - sourceX) * segmentX)
+          + ((position.z - sourceZ) * segmentZ)
+        ) / segmentLengthSq))
+      : 0
+    const nearestX = sourceX + (segmentX * projection)
+    const nearestZ = sourceZ + (segmentZ * projection)
+
+    // A body inside the source cell is at most sqrt(0.5^2 + 0.5^2)
+    // from the segment. A larger gap means the server corrected or displaced
+    // the body after this path cursor advanced. Replanning is the native
+    // response; continuing to drive a stale node can leave the target several
+    // blocks ahead while the bot remains still.
+    return Math.hypot(position.x - nearestX, position.z - nearestZ) > 0.85
+  }
+
+  function hasSettledStandingSupport (position) {
+    const velocityY = Number(bot.entity.velocity?.y) || 0
+    if (Math.abs(velocityY) > 0.12) return false
+
+    const sample = new Vec3(position.x, position.y - 0.05, position.z).floored()
+    const support = bot.blockAt(sample)
+    const standingPosition = getPositionOnTopOf(support)
+    return Boolean(
+      standingPosition
+      && Math.abs(position.y - standingPosition.y) <= 0.125
+    )
+  }
+
   function prepareVerticalTransition (nextPoint, position) {
     const locomotion = nextPoint.locomotion
     if (!locomotion?.source || !['step_up', 'drop_down'].includes(locomotion.type)) {
@@ -466,6 +505,17 @@ function inject (bot) {
         source: locomotion.source
       }
     }
+    // Paper can confirm the player is grounded while Mineflayer's local flag
+    // remains false between collision ticks. A step-up cannot start in that
+    // state because prismarine-physics will ignore jump input. Reconcile only
+    // when actual collision geometry proves the body is settled on support.
+    if (
+      locomotion.type === 'step_up'
+      && !bot.entity.onGround
+      && hasSettledStandingSupport(position)
+    ) {
+      bot.entity.onGround = true
+    }
     if (verticalTransition.phase === 'execute') return false
 
     const verticalProgress = locomotion.type === 'step_up'
@@ -476,8 +526,14 @@ function inject (bot) {
       return false
     }
     if (!bot.entity.onGround) {
-      bot.clearControlStates()
-      return true
+      // Fractional vertical movement is already part of the planned
+      // transition. Paper can report the bot airborne before it clears the
+      // fixed vertical-progress threshold (for example at y + 0.15 while
+      // entering an ordinary one-block step). Clearing controls here leaves
+      // the bot suspended against the step and also bypasses the executor's
+      // stall check. Let the native locomotion controls finish the move.
+      verticalTransition.phase = 'execute'
+      return false
     }
 
     const centerX = locomotion.source.x + 0.5
@@ -729,6 +785,11 @@ function inject (bot) {
       dz = nextPoint.z - p.z
     }
 
+    if (pathSegmentDrifted(nextPoint, p)) {
+      resetPath('position_corrected')
+      return
+    }
+
     if (prepareVerticalTransition(nextPoint, p)) return
 
     const locomotionType = nextPoint.locomotion?.type || 'legacy'
@@ -742,8 +803,17 @@ function inject (bot) {
 
     let executionMode
     if (bot.entity.isInWater) {
-      executionMode = 'water_ascent'
-      bot.setControlState('jump', true)
+      const ascendingWaterRoute = dy > 0.35 || [
+        'step_up',
+        'vertical_up',
+        'climb_up'
+      ].includes(locomotionType)
+      executionMode = ascendingWaterRoute ? 'water_ascent' : 'water_traverse'
+      // Swimming upward is the only water transition that needs jump held.
+      // Holding it for a level native path node pushes the body above and
+      // away from the node that A* actually selected, so shoreline traversal
+      // can stall despite having a valid route.
+      bot.setControlState('jump', ascendingWaterRoute)
       bot.setControlState('sprint', false)
     } else if (bot.entity.isInLava) {
       executionMode = 'lava_ascent'

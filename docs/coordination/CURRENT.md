@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: responsive bucket progression (this commit; pushed)
-Milestone: natural bucket request completed after concrete-target exclusion and bounded region relocation
+Functional source checkpoint: generic iron-tool progression (this commit)
+Milestone: natural iron-shovel request completed through typed collect, smelt, craft, and equip capabilities
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: package-first movement/collection, deterministic mining access, and typed-goal recovery
-Live blocker: no bucket blocker; checkpoint review must assess repeatability and remaining package-boundary debt
-Last physical result: bucket goal completed in 132.284s; Paper verified one bucket in MindcraftBot inventory
-Next campaign: review this checkpoint, then repeat/generalize on unchanged capability code
-Jordan review: requested as C2J-20260804-1720-responsive-bucket
+Owned subsystem: capability truth, package-first movement, deterministic mining access, and bounded survival recovery
+Live blocker: no shovel blocker; intermittent native step-up settlement remains bounded movement debt
+Last physical result: goal-a9c85688 completed with attempts 0; Paper verified iron_shovel in MindcraftBot's main hand
+Next campaign: checkpoint review, then an unrelated catalogue goal and verified delivery on unchanged capability code
+Jordan review: C2J-20260804-1720-responsive-bucket still pending; shovel checkpoint review queued

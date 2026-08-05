@@ -29,6 +29,7 @@ import {
 
 
 const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
+const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
 
 function runAsAction (actionFn, resume = false, timeout = -1) {
     let actionLabel = null;  // Will be set on first use
@@ -423,7 +424,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, resource_name, length) => {
             return await skills.mineSearchTunnel(agent.bot, resource_name, length);
-        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!searchForEntity',
@@ -658,7 +659,7 @@ export const actionsList = [
                 64,
                 { relocate: true },
             );
-        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!pickupUsefulItems',
@@ -696,7 +697,7 @@ export const actionsList = [
                 range,
                 { relocate: false },
             );
-        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!prepareMaterial',
