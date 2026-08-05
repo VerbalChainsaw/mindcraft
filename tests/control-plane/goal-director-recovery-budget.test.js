@@ -153,7 +153,76 @@ test('recovery history does not spend the productive-step ceiling, which still f
   });
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 0);
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
+  assert.equal(director.activeGoal.evidence.code, 'verified_partial_progress');
   assert.deepEqual(director.activeGoal.memory.failedTargets, []);
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([{
+      ...subgoal('plan', 1, 'acting'),
+      targetName: 'raw_iron',
+      expectedIncrease: 1,
+      targetInventoryBefore: 1,
+    }]),
+    attempts: 2,
+  });
+  director.handleResult('plan', {
+    actionId: 'verified-corridor-prefix',
+    phase: 'failed',
+    code: 'skill_search_advanced',
+    detail: 'Reached a stable intermediate mining cell under the action deadline.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'mining_search',
+        outcome: 'search_advanced',
+        target: { name: 'iron_ore', x: 4, y: 12, z: 8 },
+        observedPosition: { x: 2, y: 24, z: 6 },
+        distance: 9,
+        routeSteps: 7,
+        routeDigging: true,
+        returnable: true,
+      },
+    },
+  });
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
+  assert.equal(director.activeGoal.evidence.phase, 'succeeded');
+  assert.deepEqual(director.activeGoal.memory.failedTargets, []);
+
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([{
+      ...subgoal('plan', 1, 'acting'),
+      targetName: 'raw_iron',
+      expectedIncrease: 1,
+      targetInventoryBefore: 1,
+    }]),
+  });
+  director.handleResult('plan', {
+    actionId: 'nested-concrete-target',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    detail: 'The exact ore target had no safe route.',
+    retryable: true,
+    target: { name: 'raw_iron' },
+    evidence: {
+      skill: {
+        kind: 'collect',
+        outcome: 'unreachable',
+        target: { name: 'iron_ore', x: 4, y: 12, z: 8 },
+      },
+    },
+  });
+  assert.deepEqual(director.activeGoal.memory.failedTargets.map(entry => ({
+    kind: entry.kind,
+    name: entry.name,
+    position: entry.position,
+  })), [{
+    kind: 'collect',
+    name: 'iron_ore',
+    position: { x: 4, y: 12, z: 8 },
+  }]);
 
   director.activeGoal = normalizeGoalContract({
     ...boundaryGoal([subgoal('plan', 1, 'acting')]),
@@ -175,7 +244,7 @@ test('recovery history does not spend the productive-step ceiling, which still f
   ]);
 });
 
-test('two concrete failures for one planned material relocate before spending the remaining attempts locally', async () => {
+test('one no-progress concrete failure relocates before the same regional signature can spend another attempt', async () => {
   const director = createDirector();
   const now = Date.now();
   const commands = [];
@@ -195,10 +264,10 @@ test('two concrete failures for one planned material relocate before spending th
     phase: 'recover',
     attempts: 2,
     evidence: {
-      actionId: 'second-local-failure',
+      actionId: 'first-local-failure',
       phase: 'failed',
       code: 'skill_unreachable',
-      detail: 'The second concrete target in this region had no safe stance.',
+      detail: 'The concrete target in this region had no safe stance.',
       verified: false,
       at: now,
     },
@@ -208,12 +277,6 @@ test('two concrete failures for one planned material relocate before spending th
         targetName: 'raw_iron',
         startedAt: now - 200,
         finishedAt: now - 150,
-      },
-      {
-        ...subgoal('plan', 2, 'failed'),
-        targetName: 'raw_iron',
-        startedAt: now - 100,
-        finishedAt: now - 50,
       },
     ],
     memory: {
@@ -226,16 +289,6 @@ test('two concrete failures for one planned material relocate before spending th
           failures: 1,
           firstFailedAt: now - 145,
           lastFailedAt: now - 145,
-          avoidUntil: now + 90_000,
-        },
-        {
-          kind: 'collect',
-          name: 'iron_ore',
-          position: { x: 16, y: 14, z: 8 },
-          code: 'skill_unreachable',
-          failures: 1,
-          firstFailedAt: now - 45,
-          lastFailedAt: now - 45,
           avoidUntil: now + 90_000,
         },
       ],

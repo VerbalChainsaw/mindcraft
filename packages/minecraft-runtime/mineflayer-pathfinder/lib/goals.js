@@ -77,27 +77,50 @@ class GoalNear extends Goal {
 // A* converges on the cheapest boundary exit instead of preferring arbitrarily
 // distant nodes.
 class GoalOutsideRadius extends Goal {
-  constructor (x, y, z, range) {
+  constructor (x, y, z, range, exclusionZones = []) {
     super()
     this.x = Math.floor(x)
     this.y = Math.floor(y)
     this.z = Math.floor(z)
     this.range = Math.max(0, Number(range) || 0)
     this.rangeSq = this.range * this.range
+    this.exclusionZones = Array.isArray(exclusionZones)
+      ? exclusionZones
+          .filter(zone => zone && [zone.x, zone.y, zone.z].every(Number.isFinite))
+          .map(zone => {
+            const zoneRange = Math.max(0, Number(zone.range) || 0)
+            return {
+              x: Math.floor(zone.x),
+              y: Math.floor(zone.y),
+              z: Math.floor(zone.z),
+              range: zoneRange,
+              rangeSq: zoneRange * zoneRange
+            }
+          })
+      : []
   }
 
   heuristic (node) {
-    const dx = this.x - node.x
-    const dy = this.y - node.y
-    const dz = this.z - node.z
-    return Math.max(0, this.range - Math.sqrt(dx * dx + dy * dy + dz * dz))
+    let requiredDistance = 0
+    for (const zone of [this, ...this.exclusionZones]) {
+      const dx = zone.x - node.x
+      const dy = zone.y - node.y
+      const dz = zone.z - node.z
+      requiredDistance = Math.max(
+        requiredDistance,
+        zone.range - Math.sqrt(dx * dx + dy * dy + dz * dz)
+      )
+    }
+    return Math.max(0, requiredDistance)
   }
 
   isEnd (node) {
-    const dx = this.x - node.x
-    const dy = this.y - node.y
-    const dz = this.z - node.z
-    return (dx * dx + dy * dy + dz * dz) >= this.rangeSq
+    return [this, ...this.exclusionZones].every(zone => {
+      const dx = zone.x - node.x
+      const dy = zone.y - node.y
+      const dz = zone.z - node.z
+      return (dx * dx + dy * dy + dz * dz) >= zone.rangeSq
+    })
   }
 }
 

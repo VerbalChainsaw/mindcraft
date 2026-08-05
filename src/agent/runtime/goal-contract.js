@@ -518,7 +518,12 @@ export function createItemGoalContract({
     phase: 'assess',
     attempts: 0,
     maxAttempts: 4,
-    maxSubgoals: Math.min(MAX_SUBGOALS, Math.max(32, Math.ceil(numericQuantity / 32) * 4 + 8)),
+    // A valid dependency graph can cross 32 productive operations while it
+    // establishes workstations, tool tiers, and transformed materials.
+    // Failed productive attempts retain their separate four-attempt ceiling;
+    // use the existing hard cap so successful prerequisites cannot terminate
+    // a still-converging player goal.
+    maxSubgoals: MAX_SUBGOALS,
     subgoals: [],
     memory: { failedTargets: [] },
     checkpoint: {

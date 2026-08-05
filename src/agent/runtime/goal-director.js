@@ -29,7 +29,11 @@ const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
 const FAILED_TARGET_EXCLUSION_RADIUS = 4;
-const MAX_LOCAL_CONCRETE_TARGET_FAILURES = 2;
+// A concrete acquisition failure already excludes that source. Trying a
+// second source with the same failure signature in the same search region
+// spends productive budget without changing strategy; relocate once and let
+// the next plan bind a genuinely different region instead.
+const MAX_LOCAL_CONCRETE_TARGET_FAILURES = 1;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 function boundedText(value, maximum = 280, fallback = '') {
@@ -54,6 +58,26 @@ function actionResultEvidence(result) {
   return result?.evidence?.skill && typeof result.evidence.skill === 'object'
     ? result.evidence.skill
     : null;
+}
+
+function verifiedMiningRouteProgress(kind, skill) {
+  return Boolean(
+    kind === 'plan'
+    && skill?.kind === 'mining_search'
+    && skill?.outcome === 'search_advanced'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.routeSteps) > 0
+    && Number(skill?.distance) >= 1
+    && [
+      skill?.target?.x,
+      skill?.target?.y,
+      skill?.target?.z,
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
 }
 
 class GoalStateStore {
@@ -653,7 +677,16 @@ export class GoalDirector {
     // world target is bad. Preserve the target and let the causal planner
     // replace the tool before retrying the same physical source.
     if (skill?.toolRequirement || skill?.workstationRequirement) return this.activeGoal;
-    const target = result?.target || skill?.target;
+    const resultTarget = result?.target;
+    const skillTarget = skill?.target;
+    // Capability results often carry only the requested inventory identity at
+    // the outer layer. Prefer whichever target preserves the executor's exact
+    // world coordinate so a failed vein cannot be rebound immediately as if
+    // it were new evidence.
+    const target = [resultTarget, skillTarget].find(candidate => (
+      candidate?.name
+      && [candidate.x, candidate.y, candidate.z].every(Number.isFinite)
+    )) || resultTarget || skillTarget;
     if (
       !target?.name
       || ![target.x, target.y, target.z].every(Number.isFinite)
@@ -807,6 +840,10 @@ export class GoalDirector {
         retryable: true,
       };
     }
+    const miningRouteProgress = verifiedMiningRouteProgress(
+      kind,
+      actionResultEvidence(effectiveResult),
+    );
     const verifiedStepProgress = (
       kind === 'acquire'
       && inventoryAfter > Math.max(0, Number(actingSubgoal?.inventoryBefore) || 0)
@@ -817,7 +854,26 @@ export class GoalDirector {
     ) || (
       kind === 'deliver'
       && transferredBeforeFinish > 0
-    );
+    ) || miningRouteProgress;
+    if (verifiedStepProgress && effectiveResult.phase === 'failed') {
+      // A bounded adapter can produce only part of its requested inventory
+      // effect, or advance a returnable corridor without producing the item
+      // yet. Both are successful planner operations even though the original
+      // executor result is incomplete. Normalize before finishing the subgoal
+      // so lifecycle state and method learning follow verified Minecraft
+      // progress while the Director replans the remaining work.
+      effectiveResult = {
+        ...effectiveResult,
+        phase: 'succeeded',
+        code: miningRouteProgress
+          ? effectiveResult.code
+          : 'verified_partial_progress',
+        detail: miningRouteProgress
+          ? effectiveResult.detail
+          : `${effectiveResult.detail || 'The bounded action ended before its full effect.'} GoalDirector verified partial target-state progress and will replan the remainder.`,
+        retryable: false,
+      };
+    }
     this.finishLatestSubgoal(effectiveResult);
     this.rememberToolRequirement(effectiveResult);
     this.rememberWorkstationRequirement(effectiveResult);

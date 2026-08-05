@@ -81,13 +81,26 @@ declare module 'mineflayer-pathfinder' {
 		}
 
 		export class GoalOutsideRadius extends Goal {
-			public constructor(x: number, y: number, z: number, range: number);
+			public constructor(
+				x: number,
+				y: number,
+				z: number,
+				range: number,
+				exclusionZones?: Array<{ x: number; y: number; z: number; range: number }>
+			);
 
 			public x: number;
 			public y: number;
 			public z: number;
 			public range: number;
 			public rangeSq: number;
+			public exclusionZones: Array<{
+				x: number;
+				y: number;
+				z: number;
+				range: number;
+				rangeSq: number;
+			}>;
 
 			public heuristic(node: Move): number;
 			public isEnd(node: Move): boolean;

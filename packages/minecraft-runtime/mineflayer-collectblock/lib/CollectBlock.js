@@ -95,10 +95,12 @@ function collectAll(bot, options) {
                 options.targets.clear();
                 break;
             }
-            yield (0, Inventory_1.emptyInventoryIfFull)(bot, options.chestLocations, options.itemFilter);
             const closest = options.targets.getClosest();
             if (closest == null)
                 break;
+            if (!(0, Inventory_1.hasInventoryRoomForTarget)(bot, closest)) {
+                yield (0, Inventory_1.emptyInventory)(bot, options.chestLocations, options.itemFilter);
+            }
             try {
                 switch (closest.constructor.name) {
                     case 'Block': {

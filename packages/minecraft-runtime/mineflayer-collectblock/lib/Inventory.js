@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.emptyInventory = exports.emptyInventoryIfFull = void 0;
+exports.emptyInventory = exports.emptyInventoryIfFull = exports.hasInventoryRoomForTarget = void 0;
 const Util_1 = require("./Util");
 const mineflayer_pathfinder_1 = require("mineflayer-pathfinder");
 const util_1 = require("util");
@@ -28,6 +28,41 @@ function getClosestChest(bot, chestLocations) {
     }
     return chest;
 }
+function hasStackCapacity(bot, type, metadata, count = 1) {
+    const available = bot.inventory.items().reduce((capacity, item) => {
+        if (item.type !== type)
+            return capacity;
+        if (metadata != null && item.metadata !== metadata)
+            return capacity;
+        return capacity + (Number.isFinite(item.stackSize)
+            ? Math.max(0, item.stackSize - item.count)
+            : 0);
+    }, 0);
+    return available >= count;
+}
+function hasInventoryRoomForTarget(bot, target) {
+    if (bot.inventory.emptySlotCount() > 0)
+        return true;
+    if ((target === null || target === void 0 ? void 0 : target.constructor.name) === 'Block') {
+        const dropTypes = Array.isArray(target.drops)
+            ? target.drops.filter(type => Number.isInteger(type))
+            : [];
+        return dropTypes.some(type => hasStackCapacity(bot, type, null, 1));
+    }
+    if ((target === null || target === void 0 ? void 0 : target.constructor.name) === 'Entity') {
+        const dropped = target.getDroppedItem === null || target.getDroppedItem === void 0
+            ? void 0
+            : target.getDroppedItem();
+        return Boolean(dropped && hasStackCapacity(
+            bot,
+            dropped.type,
+            dropped.metadata,
+            Math.max(1, Number(dropped.count) || 1)
+        ));
+    }
+    return false;
+}
+exports.hasInventoryRoomForTarget = hasInventoryRoomForTarget;
 function emptyInventoryIfFull(bot, chestLocations, itemFilter, cb) {
     return __awaiter(this, void 0, void 0, function* () {
         // @ts-expect-error
