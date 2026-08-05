@@ -7,4 +7,4 @@ Owned subsystem: hybrid runtime, typed capability boundary, GoalDirector lifecyc
 Live blocker: none; runtime is terminal-held in Peaceful after accepted delivery
 Last physical result: follow/stop passed; chest goal survived husk interruption, resumed oak collection, delivered, reported exactly, and stayed still
 Next tranche: preserve/review Phase 3, then consolidate remaining duplicated planning seams through the existing capability catalogue
-Jordan review: Phase 3 checkpoint request pending
+Jordan review: requested as C2J-20260805-1151-phase3-accepted
