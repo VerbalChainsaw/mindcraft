@@ -7,4 +7,4 @@ Owned subsystem: hybrid runtime, typed capability boundary, GoalDirector lifecyc
 Live blocker: none; runtime is held in clear Peaceful at (-598.5,76,164.5)
 Last physical result: thunder shelter used one fixed material; Stop cleared its live work order and survived restart without dialogue/autonomy
 Next tranche: Jordan checkpoint, then migrate delivery into the existing capability catalogue and prove an unchanged campaign
-Jordan review: pending new request for the survival/restart interruption checkpoint
+Jordan review: requested as C2J-20260805-1235-survival-restart
