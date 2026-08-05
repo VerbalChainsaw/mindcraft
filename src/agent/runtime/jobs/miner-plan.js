@@ -1,3 +1,5 @@
+import { createCapabilityRequest } from '../capability-catalogue.js';
+
 const MINING_TARGETS = Object.freeze({
   cobblestone: 'stone',
   stone: 'stone',
@@ -109,11 +111,14 @@ function deliveryStep(order, snapshot, amount) {
   const nextPhase = checkpointOnSuccess.delivered >= order.quota ? 'complete' : 'assess';
   if (snapshot.deposit?.mode === 'leader') {
     if (!snapshot.deposit.leader) return { blocked: true, code: 'delivery_leader_missing', retryable: true };
-    return {
-      command: `!givePlayer(${JSON.stringify(item)}, ${JSON.stringify(snapshot.deposit.leader)}, ${deliverable})`,
+    return createCapabilityRequest('deliver_exact_item', {
+      player: snapshot.deposit.leader,
+      item,
+      quantity: deliverable,
+    }, {
       nextPhase,
       checkpointOnSuccess,
-    };
+    });
   }
   if (snapshot.deposit?.mode === 'assigned') {
     const target = snapshot.deposit?.target;

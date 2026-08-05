@@ -6,6 +6,7 @@ import {
   miningOutputName,
   nextMinerStep,
 } from '../../src/agent/runtime/jobs/miner-plan.js';
+import { capabilityCommand } from '../../src/agent/runtime/capability-catalogue.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 
 test('Miner preserves cobblestone to natural-stone collection mapping and requires a usable pickaxe', () => {
@@ -87,7 +88,8 @@ test('Miner bounds quota collection, verifies inventory, then returns or deposit
     inventory: { cobblestone: 6 },
     deposit: { mode: 'leader', leader: 'Director' },
   });
-  assert.equal(deliver.command, '!givePlayer("cobblestone", "Director", 6)');
+  assert.equal(deliver.capability.id, 'deliver_exact_item');
+  assert.equal(capabilityCommand(deliver.capability), '!givePlayer("Director", "cobblestone", 6)');
   assert.equal(deliver.nextPhase, 'complete');
 });
 

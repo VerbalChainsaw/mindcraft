@@ -15,6 +15,8 @@ import {
 import { PersonalMemory } from '../src/agent/runtime/personal-memory.js';
 import { classifyMethodOutcome } from '../src/agent/runtime/action-result.js';
 import {
+  capabilityCommand,
+  createCapabilityRequest,
   executeCapabilityAction,
   getCapabilityDefinition,
 } from '../src/agent/runtime/capability-catalogue.js';
@@ -377,6 +379,107 @@ test('Verified capability effects supersede a stale executor failure', async () 
   assert.equal(outcome.result.code, 'capability_effects_verified');
   assert.equal(outcome.result.retryable, false);
   assert.equal(outcome.result.evidence.capability.executorResult.code, 'skill_unreachable');
+});
+
+test('Exact-item delivery binds one recipient and trusts only authoritative pickup evidence', async () => {
+  const recipient = {
+    id: 41,
+    type: 'player',
+    username: 'Director',
+    position: { x: 2, y: 64, z: 0 },
+  };
+  const bot = {
+    username: 'TestBot',
+    inventory: { slots: [{ name: 'chest', count: 1 }] },
+    players: { Director: { username: 'Director', entity: recipient } },
+    entities: { 41: recipient },
+    registry: { itemsByName: { chest: { id: 1, name: 'chest' } } },
+  };
+  const agent = {
+    bot,
+    last_action_result: null,
+    getKnownAgentNames: () => ['TestBot'],
+  };
+  const request = createCapabilityRequest('deliver_exact_item', {
+    player: 'Director',
+    item: 'chest',
+    quantity: 1,
+  }).capability;
+
+  assert.equal(capabilityCommand(request), '!givePlayer("Director", "chest", 1)');
+  const delivered = await executeCapabilityAction(request, {
+    agent,
+    owner: 'player',
+    routeOrigin: 'goal-director',
+    executeCommand: (_agent, command, options) => {
+      assert.equal(command, '!givePlayer("Director", "chest", 1)');
+      assert.deepEqual(options, { owner: 'player', routeOrigin: 'goal-director' });
+      bot.inventory.slots = [];
+      agent.last_action_result = {
+        actionId: 'delivery-1',
+        label: 'action:givePlayer',
+        phase: 'succeeded',
+        code: 'skill_delivered',
+        detail: 'Minecraft confirmed the pickup.',
+        evidence: {
+          skill: {
+            kind: 'give',
+            outcome: 'delivered',
+            target: { canonicalName: 'Director', entityId: 41 },
+            item: 'chest',
+            requested: 1,
+            transferred: 1,
+          },
+        },
+        retryable: false,
+        startedAt: 1,
+        finishedAt: 2,
+      };
+      return true;
+    },
+  });
+
+  assert.equal(delivered.verification.ok, true);
+  assert.equal(delivered.result.evidence.capability.id, 'deliver_exact_item');
+  assert.deepEqual(delivered.result.evidence.capability.binding, {
+    commandName: '!givePlayer',
+    recipient: 'Director',
+    recipientEntityId: 41,
+    item: 'chest',
+    requestedQuantity: 1,
+  });
+  assert.equal(delivered.result.evidence.capability.verification.transferred, 1);
+
+  bot.inventory.slots = [{ name: 'chest', count: 1 }];
+  const interrupted = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: () => {
+      agent.last_action_result = {
+        actionId: 'delivery-2',
+        label: 'action:givePlayer',
+        phase: 'interrupted',
+        code: 'stop_requested',
+        detail: 'Delivery was stopped before pickup.',
+        evidence: { skill: { kind: 'give', outcome: 'interrupted', transferred: 0 } },
+        retryable: true,
+        startedAt: 3,
+        finishedAt: 4,
+      };
+      return false;
+    },
+  });
+  assert.equal(interrupted.result.phase, 'interrupted');
+  assert.equal(interrupted.result.code, 'stop_requested');
+  assert.equal(interrupted.verification.ok, false);
+  assert.equal(classifyMethodOutcome(interrupted.result), 'censored');
+
+  bot.players = {};
+  bot.entities = {};
+  const absent = await executeCapabilityAction(request, {
+    agent,
+    executeCommand: () => assert.fail('An absent recipient must fail before physical execution.'),
+  });
+  assert.equal(absent.result.code, 'precondition_missing');
 });
 
 test('A persisted goal preserves the learning identity of its active plan step', () => {

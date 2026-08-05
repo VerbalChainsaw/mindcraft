@@ -6,7 +6,9 @@ import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
 import { classifyMethodOutcome, isPreemption } from './action-result.js';
 import {
+  capabilityCommand,
   capabilityCommandName,
+  createCapabilityRequest,
   executeCapabilityAction,
 } from './capability-catalogue.js';
 import {
@@ -238,14 +240,19 @@ function acquisitionCommand(goal, remaining, procedure) {
   return null;
 }
 
-function deliveryCommand(goal, remaining, procedure) {
+function deliveryAction(goal, remaining, procedure) {
   const preferred = preferredProcedureCommand(procedure, 'deliver');
   if (goal.target.family) {
     const selected = preferred === '!giveFamilyToPlayer' ? preferred : '!giveFamilyToPlayer';
-    return `${selected}(${JSON.stringify(goal.target.family)}, ${JSON.stringify(goal.destination.player)}, ${remaining})`;
+    return {
+      command: `${selected}(${JSON.stringify(goal.target.family)}, ${JSON.stringify(goal.destination.player)}, ${remaining})`,
+    };
   }
-  const selected = preferred === '!givePlayer' ? preferred : '!givePlayer';
-  return `${selected}(${JSON.stringify(goal.destination.player)}, ${JSON.stringify(goal.target.inventoryName)}, ${remaining})`;
+  return createCapabilityRequest('deliver_exact_item', {
+    player: goal.destination.player,
+    item: goal.target.inventoryName,
+    quantity: remaining,
+  });
 }
 
 function needsSurfaceRecovery(goal, bot) {
@@ -1242,7 +1249,7 @@ export class GoalDirector {
       this.fail('subgoal_budget_exhausted', `Goal reached its ${this.activeGoal.maxSubgoals}-subgoal safety limit.`);
       return false;
     }
-    const capability = kind === 'plan' ? step?.capability : null;
+    const capability = step?.capability || null;
     const selectedName = capability
       ? capabilityCommandName(capability)
       : commandName(command);
@@ -1256,7 +1263,7 @@ export class GoalDirector {
     }
 
     const previousActionId = this.agent.last_action_result?.actionId || null;
-    this.appendActingSubgoal(kind, capability?.binding?.command || command, step);
+    this.appendActingSubgoal(kind, capabilityCommand(capability) || command, step);
     this.inFlight = true;
     this.setStatus('acting', `goal_${kind}`, `Executing ${selectedName} through the deterministic command path.`, true);
     const execution = capability
@@ -1540,7 +1547,8 @@ export class GoalDirector {
           continue;
         }
         const amount = Math.min(current, remainingDelivery);
-        this.dispatch('deliver', deliveryCommand(goal, amount, procedure));
+        const delivery = deliveryAction(goal, amount, procedure);
+        this.dispatch('deliver', delivery.command || null, delivery);
         return;
       }
 

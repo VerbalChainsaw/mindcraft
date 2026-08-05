@@ -11,6 +11,7 @@ const COMMAND_REQUEST_ROUTE_ORIGINS = new Set([
     'model-selected',
     'directive-resume',
     'goal-director',
+    'job-director',
     'internal',
 ]);
 const MAX_COMMAND_REQUEST_ARGS = 8;

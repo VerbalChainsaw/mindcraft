@@ -5,6 +5,7 @@ import {
   canonicalLogFamily,
   nextLumberjackStep,
 } from '../../src/agent/runtime/jobs/lumberjack-plan.js';
+import { capabilityCommand } from '../../src/agent/runtime/capability-catalogue.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 
 test('Lumberjack recognizes canonical log families and prepares an axe before harvesting', () => {
@@ -93,4 +94,27 @@ test('Lumberjack bounds collection by remaining quota and inventory capacity', (
   });
   assert.equal(full.phase, 'deliver');
   assert.equal(full.code, 'inventory_reserve_reached');
+
+  const deliver = nextLumberjackStep({ ...base, phase: 'deliver' }, {
+    inventory: { spruce_log: 12 },
+    deposit: { mode: 'leader', leader: 'Director' },
+  });
+  assert.equal(deliver.capability.id, 'deliver_exact_item');
+  assert.equal(capabilityCommand(deliver.capability), '!givePlayer("Director", "spruce_log", 12)');
+  assert.equal(deliver.nextPhase, 'complete');
+
+  const familyOrder = createWorkOrder({
+    id: 'logs-family',
+    role: 'lumberjack',
+    kind: 'harvest',
+    target: { name: 'logs' },
+    quota: 4,
+    phase: 'deliver',
+  });
+  const familyDelivery = nextLumberjackStep(familyOrder, {
+    inventory: { oak_log: 4 },
+    deposit: { mode: 'leader', leader: 'Director' },
+  });
+  assert.equal(familyDelivery.capability, undefined);
+  assert.equal(familyDelivery.command, '!giveFamilyToPlayer("logs", "Director", 4)');
 });

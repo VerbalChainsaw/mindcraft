@@ -3,6 +3,10 @@ import Vec3 from 'vec3';
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
 import { isPreemption } from './action-result.js';
+import {
+  capabilityCommand,
+  executeCapabilityAction,
+} from './capability-catalogue.js';
 import { RoleDirector } from './role-director.js';
 import { JobStateStore } from './job-state-store.js';
 import {
@@ -906,7 +910,7 @@ export class JobDirector extends RoleDirector {
           updatedAt: this.now(),
         });
       }
-      if (!step.command) continue;
+      if (!step.command && !step.capability) continue;
 
       if (step.checkpoint) {
         this.persist({ ...this.activeOrder, checkpoint: step.checkpoint, updatedAt: this.now() });
@@ -923,6 +927,7 @@ export class JobDirector extends RoleDirector {
       this.inFlight = true;
       const orderAtDispatch = this.activeOrder;
       const previousActionId = this.agent.last_action_result?.actionId || null;
+      const selectedCommand = step.capability ? capabilityCommand(step.capability) : step.command;
       this.setStatus(
         'acting',
         `job_${orderAtDispatch.phase}`,
@@ -930,9 +935,18 @@ export class JobDirector extends RoleDirector {
         `Executing ${orderAtDispatch.role} ${orderAtDispatch.phase} phase.`,
         true,
       );
-      void Promise.resolve(this.executeJobCommand(this.agent, step.command, { owner: 'job' }))
-        .then(() => {
-          let result = this.agent.last_action_result;
+      const execution = step.capability
+        ? executeCapabilityAction(step.capability, {
+          agent: this.agent,
+          executeCommand: this.executeJobCommand,
+          owner: 'job',
+          routeOrigin: 'job-director',
+        })
+        : Promise.resolve(this.executeJobCommand(this.agent, selectedCommand, { owner: 'job' }))
+          .then(value => ({ value, verification: null, result: null }));
+      void Promise.resolve(execution)
+        .then(outcome => {
+          let result = outcome?.result || this.agent.last_action_result;
           if (!result?.actionId || result.actionId === previousActionId) {
             result = {
               actionId: `missing-${this.now()}`,

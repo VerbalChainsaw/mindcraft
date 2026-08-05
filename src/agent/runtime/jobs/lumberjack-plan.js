@@ -1,3 +1,5 @@
+import { createCapabilityRequest } from '../capability-catalogue.js';
+
 const LOG_PATTERN = /^(?<family>[a-z0-9]+(?:_[a-z0-9]+)*)_(?:log|stem)$/;
 
 export function canonicalLogFamily(name) {
@@ -32,10 +34,18 @@ function deliveryStep(order, snapshot, amount) {
   const nextPhase = checkpointOnSuccess.delivered >= order.quota ? 'complete' : 'assess';
   if (snapshot.deposit?.mode === 'leader') {
     if (!snapshot.deposit.leader) return { blocked: true, code: 'delivery_leader_missing', retryable: true };
+    if (item !== 'logs') {
+      return createCapabilityRequest('deliver_exact_item', {
+        player: snapshot.deposit.leader,
+        item,
+        quantity: deliverable,
+      }, {
+        nextPhase,
+        checkpointOnSuccess,
+      });
+    }
     return {
-      command: item === 'logs'
-        ? `!giveFamilyToPlayer("logs", ${JSON.stringify(snapshot.deposit.leader)}, ${deliverable})`
-        : `!givePlayer(${JSON.stringify(item)}, ${JSON.stringify(snapshot.deposit.leader)}, ${deliverable})`,
+      command: `!giveFamilyToPlayer("logs", ${JSON.stringify(snapshot.deposit.leader)}, ${deliverable})`,
       nextPhase,
       checkpointOnSuccess,
     };

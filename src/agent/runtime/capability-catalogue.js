@@ -1,4 +1,5 @@
 import { createActionResult } from './action-result.js';
+import { resolvePlayerTarget } from '../player-target.js';
 
 const CAPABILITY_OUTCOME_CODES = Object.freeze({
   PRECONDITION: 'precondition_missing',
@@ -23,6 +24,14 @@ function boundedInteger(value, fallback, minimum, maximum) {
 
 function commandString(value) {
   return JSON.stringify(String(value || ''));
+}
+
+function playerIdentity(value) {
+  return String(value || '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 64);
 }
 
 function immutable(value) {
@@ -150,6 +159,13 @@ function preconditionReport(checks) {
     detail: missing.length === 0
       ? 'Capability preconditions are satisfied.'
       : `Missing capability precondition: ${missing.map(check => check.requirement).join(', ')}.`,
+  });
+}
+
+function resolveCapabilityPlayer(context, player) {
+  const agent = context?.agent;
+  return resolvePlayerTarget(context?.bot, player, {
+    knownBotNames: agent?.getKnownAgentNames?.() || [],
   });
 }
 
@@ -317,8 +333,101 @@ defineCapability({
   cost: () => 1,
 });
 
+function verifyExactDelivery(_before, _after, binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const transferred = Math.max(0, Math.floor(Number(skill?.transferred) || 0));
+  const verified = Boolean(
+    skill?.kind === 'give'
+    && skill?.outcome === 'delivered'
+    && skill?.item === binding.item
+    && skill?.target?.canonicalName === binding.recipient
+    && Number(skill?.requested) === binding.quantity
+    && transferred === binding.quantity
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'delivery_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed ${binding.recipient} received ${transferred} ${binding.item}.`
+      : `Minecraft did not confirm that ${binding.recipient} received exactly ${binding.quantity} ${binding.item}.`,
+    recipient: binding.recipient,
+    item: binding.item,
+    requestedQuantity: binding.quantity,
+    transferred,
+  });
+}
+
+defineCapability({
+  id: 'deliver_exact_item',
+  commandName: '!givePlayer',
+  parameters: {
+    player: { type: 'player_name' },
+    item: { type: 'item_name' },
+    quantity: { type: 'integer', minimum: 1, maximum: 2304 },
+  },
+  normalizeArguments: args => immutable({
+    player: playerIdentity(args?.player),
+    item: canonicalName(args?.item),
+    quantity: boundedInteger(args?.quantity, 1, 1, 2304),
+  }),
+  preconditions: (snapshot, args, context) => {
+    const resolution = resolveCapabilityPlayer(context, args.player);
+    return preconditionReport([
+      {
+        requirement: `carried quantity ${args.quantity} ${args.item}`,
+        satisfied: validName(args.item) && (Number(snapshot.inventory.get(args.item)) || 0) >= args.quantity,
+      },
+      {
+        requirement: `present unambiguous player ${args.player}`,
+        satisfied: Boolean(args.player && resolution.entity && resolution.canonical && !resolution.ambiguous),
+      },
+    ]);
+  },
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'verified_delivery',
+    player: args.player,
+    item: args.item,
+    quantity: args.quantity,
+  })],
+  command: args => `!givePlayer(${commandString(args.player)}, ${commandString(args.item)}, ${args.quantity})`,
+  bind: (context, args, _signal) => {
+    const resolution = resolveCapabilityPlayer(context, args.player);
+    if (!resolution.entity || !resolution.canonical || resolution.ambiguous) {
+      return immutable({
+        ok: false,
+        code: CAPABILITY_OUTCOME_CODES.BINDING,
+        detail: `Delivery player '${args.player}' is absent or ambiguous.`,
+      });
+    }
+    return immutable({
+      ok: true,
+      commandName: '!givePlayer',
+      command: `!givePlayer(${commandString(resolution.canonical)}, ${commandString(args.item)}, ${args.quantity})`,
+      recipient: resolution.canonical,
+      recipientEntityId: Number.isFinite(resolution.entity.id) ? resolution.entity.id : null,
+      item: args.item,
+      quantity: args.quantity,
+    });
+  },
+  execute: executeBoundCommand,
+  verify: verifyExactDelivery,
+  cost: () => 1,
+});
+
 export function getCapabilityDefinition(id) {
   return DEFINITIONS.get(String(id || '')) || null;
+}
+
+export function createCapabilityRequest(id, argumentsValue, metadata = {}) {
+  const definition = getCapabilityDefinition(id);
+  if (!definition) throw new TypeError(`Unknown capability '${id}'.`);
+  return Object.freeze({
+    ...metadata,
+    capability: immutable({
+      id: definition.id,
+      arguments: definition.normalizeArguments(argumentsValue),
+    }),
+  });
 }
 
 export function createCapabilityPlanAction(id, argumentsValue, metadata = {}, {
@@ -329,7 +438,7 @@ export function createCapabilityPlanAction(id, argumentsValue, metadata = {}, {
   if (!definition) throw new TypeError(`Unknown capability '${id}'.`);
   const args = definition.normalizeArguments(argumentsValue);
   const snapshot = captureCapabilitySnapshot(bot, { inventory });
-  const preconditions = definition.preconditions(snapshot, args);
+  const preconditions = definition.preconditions(snapshot, args, { bot });
   if (!preconditions.ok) throw new TypeError(preconditions.detail);
   const expectedEffects = immutable(definition.expectedEffects(snapshot, args));
   const binding = definition.bind({ bot, snapshot }, args, null);
@@ -348,7 +457,15 @@ export function createCapabilityPlanAction(id, argumentsValue, metadata = {}, {
 }
 
 export function capabilityCommandName(capability) {
-  return String(capability?.binding?.commandName || '');
+  const definition = getCapabilityDefinition(capability?.id);
+  return String(capability?.binding?.commandName || definition?.commandName || '');
+}
+
+export function capabilityCommand(capability) {
+  if (capability?.binding?.command) return String(capability.binding.command);
+  const definition = getCapabilityDefinition(capability?.id);
+  if (!definition || typeof definition.command !== 'function') return '';
+  return String(definition.command(definition.normalizeArguments(capability?.arguments)) || '');
 }
 
 function capabilityFailure(code, detail) {
@@ -362,12 +479,20 @@ function capabilityFailure(code, detail) {
   });
 }
 
-function reconcileCapabilityResult(result, verification) {
+function reconcileCapabilityResult(result, verification, capability, binding) {
   if (!result || !verification) return result || null;
   const evidence = {
     ...(result.evidence || {}),
     capability: {
-      ...(result.evidence?.capability || {}),
+      id: capability?.id || null,
+      arguments: capability?.arguments || null,
+      binding: {
+        commandName: binding?.commandName || null,
+        recipient: binding?.recipient || null,
+        recipientEntityId: binding?.recipientEntityId ?? null,
+        item: binding?.item || null,
+        requestedQuantity: binding?.quantity ?? null,
+      },
       verification,
       executorResult: {
         phase: result.phase,
@@ -404,7 +529,7 @@ function reconcileCapabilityResult(result, verification) {
       retryable: true,
     });
   }
-  return result;
+  return createActionResult({ ...result, evidence });
 }
 
 export async function executeCapabilityAction(capability, {
@@ -420,7 +545,7 @@ export async function executeCapabilityAction(capability, {
   }
   const args = definition.normalizeArguments(capability.arguments);
   const before = captureCapabilitySnapshot(agent?.bot);
-  const preconditions = definition.preconditions(before, args);
+  const preconditions = definition.preconditions(before, args, { agent, bot: agent?.bot });
   if (!preconditions.ok) {
     return { result: capabilityFailure(CAPABILITY_OUTCOME_CODES.PRECONDITION, preconditions.detail) };
   }
@@ -439,10 +564,14 @@ export async function executeCapabilityAction(capability, {
       signal,
     });
     const after = captureCapabilitySnapshot(agent?.bot);
-    const verification = definition.verify(before, after, { ...binding, expectedEffects });
     const executorResult = agent?.last_action_result;
+    const verification = definition.verify(before, after, { ...binding, expectedEffects }, {
+      agent,
+      value,
+      result: executorResult,
+    });
     const result = executorResult?.actionId && executorResult.actionId !== previousActionId
-      ? reconcileCapabilityResult(executorResult, verification)
+      ? reconcileCapabilityResult(executorResult, verification, { id: definition.id, arguments: args }, binding)
       : null;
     return {
       value,
