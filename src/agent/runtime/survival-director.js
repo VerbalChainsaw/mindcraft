@@ -311,6 +311,7 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
   const recentDamage = Date.now() - Number(bot.lastDamageTime || 0) < 4_000;
   const timeOfDay = Number(bot.time?.timeOfDay || 0);
   const dimension = dimensionName(bot.game?.dimension);
+  const difficulty = String(bot.game?.difficulty || '').toLowerCase();
   const weather = bot.thunderState > 0 ? 'Thunderstorm' : bot.rainState > 0 ? 'Rain' : 'Clear';
 
   // chooseSurvivalIntent reaches bed and shelter candidates through a fixed
@@ -321,12 +322,13 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
   // candidates that nothing could ever consult.
   const policy = agent.runtime?.survival || {};
   const night = isNightTime(timeOfDay);
+  const unsafeNight = night && difficulty !== 'peaceful';
   const eligible = policy.mode === 'full' && !held && !urgentDanger && idle;
   const needs = {
     beds: eligible && policy.sleep === 'safe' && night && dimension === 'overworld',
     shelters: eligible && (
       (Number.isFinite(health) && health <= 14 && recentDamage)
-      || (policy.shelter !== 'off' && (night || weather === 'Thunderstorm'))
+      || (policy.shelter !== 'off' && (unsafeNight || weather === 'Thunderstorm'))
     ),
   };
 
@@ -340,6 +342,7 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
     food: foodInventory(bot),
     timeOfDay,
     dimension,
+    difficulty,
     weather,
     armor: armorInventory(bot),
     ...environmentalSituation(bot, now, needs),

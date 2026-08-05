@@ -216,4 +216,23 @@ test('Given dangerous weather without a safe shelter, emergency policy emits a b
     blueprint: 'emergency_3x3',
     reason: 'dangerous_weather',
   });
+
+  const peacefulNight = chooseSurvivalIntent({
+    held: false,
+    idle: true,
+    health: 20,
+    hunger: 20,
+    recentDamage: false,
+    urgentDanger: false,
+    food: [],
+    armor: [],
+    timeOfDay: 14000,
+    dimension: 'overworld',
+    difficulty: 'peaceful',
+    weather: 'Clear',
+    sheltered: false,
+    shelters: [],
+  }, { ...POLICY, shelter: 'emergency' });
+
+  assert.equal(peacefulNight, null);
 });

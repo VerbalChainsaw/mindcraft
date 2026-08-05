@@ -5,6 +5,7 @@ import {
   JobDirector,
   constructionTaskOrder,
 } from '../../src/agent/runtime/job-director.js';
+import { EMERGENCY_SHELTER_BLUEPRINT } from '../../src/agent/runtime/emergency-shelter.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 
 function memoryStore(loaded = null) {
@@ -110,6 +111,35 @@ test('Given an active typed player goal, survival shelter cannot seize persisten
   director.update();
   assert.equal(director.activeOrder, null);
   assert.equal(director.snapshot().code, 'job_cancelled');
+});
+
+test('Given an emergency shelter, its concrete material remains bound across inventory changes and restart', () => {
+  const agent = createAgent('builder');
+  agent.bot.inventory.items = () => [
+    { name: 'dirt', count: 64 },
+    { name: 'cobblestone', count: 64 },
+  ];
+  const store = memoryStore();
+  const director = new JobDirector(agent, { store });
+
+  const accepted = director.requestWorkOrder({
+    kind: 'emergency_shelter',
+    blueprint: EMERGENCY_SHELTER_BLUEPRINT,
+  });
+
+  assert.equal(accepted.accepted, true);
+  assert.deepEqual(new Set(director.activeOrder.blueprint.cells.map(cell => cell.material)), new Set(['dirt']));
+
+  agent.bot.inventory.items = () => [
+    { name: 'cobblestone', count: 64 },
+    { name: 'dirt', count: 63 },
+  ];
+  const restored = new JobDirector(agent, {
+    store: memoryStore(store.saved.at(-1)),
+    getSnapshot: () => ({ inventory: {}, position: { x: 0, y: 64, z: 0 } }),
+    now: () => 10_000,
+  });
+  assert.deepEqual(new Set(restored.activeOrder.blueprint.cells.map(cell => cell.material)), new Set(['dirt']));
 });
 
 test('Given an explicit construction task, Builder converts it into an exact player-authorized work order', () => {

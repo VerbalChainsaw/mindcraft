@@ -28,6 +28,7 @@ const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
+const SURVIVAL_BUILDING_MATERIALS = new Set(['cobblestone', 'stone', 'dirt']);
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
@@ -81,6 +82,36 @@ function inventoryCounts(bot) {
     counts[item.name] = (counts[item.name] || 0) + Math.max(0, Number(item.count) || 0);
   }
   return counts;
+}
+
+function isSurvivalBuildingMaterial(name) {
+  return SURVIVAL_BUILDING_MATERIALS.has(name) || String(name || '').endsWith('_planks');
+}
+
+function selectedBuilderMaterial(inventory) {
+  return Object.keys(inventory || {}).find(name => (
+    isSurvivalBuildingMaterial(name) && Number(inventory[name]) > 0
+  )) || 'cobblestone';
+}
+
+function bindEmergencyShelterMaterial(order, bot) {
+  if (
+    order?.kind !== 'emergency_shelter'
+    || !Array.isArray(order?.blueprint?.cells)
+    || !order.blueprint.cells.some(cell => cell?.material === 'survival_building_block')
+  ) return order;
+  const material = selectedBuilderMaterial(inventoryCounts(bot));
+  return {
+    ...order,
+    blueprint: {
+      ...order.blueprint,
+      cells: order.blueprint.cells.map(cell => (
+        cell.material === 'survival_building_block'
+          ? { ...cell, material }
+          : cell
+      )),
+    },
+  };
 }
 
 function itemHasWorkingDurability(bot, item) {
@@ -457,10 +488,7 @@ export function summarizeJobSituation(agent, order) {
   if (replant) snapshot.replant = replant;
   if (order?.role === 'builder') {
     snapshot.blueprintAudit = auditBlueprint(bot, order, inventory);
-    snapshot.selectedMaterial = Object.keys(inventory).find(name => (
-      (name.endsWith('_planks') || ['cobblestone', 'stone', 'dirt'].includes(name))
-      && inventory[name] > 0
-    )) || 'cobblestone';
+    snapshot.selectedMaterial = selectedBuilderMaterial(inventory);
   }
   return snapshot;
 }
@@ -614,9 +642,10 @@ export class JobDirector extends RoleDirector {
         if (automaticSuppressed) {
           this.store.save(null);
         } else {
+          const boundOrder = bindEmergencyShelterMaterial(persisted, this.agent.bot);
           this.activeOrder = reconcileWorkOrder(
-            persisted,
-            this.getJobSnapshot(this.agent, persisted),
+            boundOrder,
+            this.getJobSnapshot(this.agent, boundOrder),
             this.now(),
           );
           this.store.save(this.activeOrder);
@@ -653,7 +682,7 @@ export class JobDirector extends RoleDirector {
       return { accepted: false, code: 'job_busy', id: this.activeOrder.id };
     }
     try {
-      const order = normalizeWorkOrder(raw);
+      const order = normalizeWorkOrder(bindEmergencyShelterMaterial(raw, this.agent.bot));
       if (TERMINAL_PHASES.has(order.phase)) return { accepted: false, code: 'job_already_terminal' };
       this.activeOrder = order;
       this.lastOrder = null;

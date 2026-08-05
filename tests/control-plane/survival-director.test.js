@@ -175,7 +175,7 @@ test('Given live inventory and cover, survival situation reports armor upgrades 
       registry: { foodsByName: {} },
       modes: { getStatus: () => [] },
       time: { timeOfDay: 6000 },
-      game: { dimension: 'minecraft:overworld' },
+      game: { dimension: 'minecraft:overworld', difficulty: 'peaceful' },
       rainState: 0,
       thunderState: 0,
       findBlocks: () => [],
@@ -211,6 +211,7 @@ test('Given live inventory and cover, survival situation reports armor upgrades 
     },
   ]);
   assert.equal(situation.sheltered, true);
+  assert.equal(situation.difficulty, 'peaceful');
 });
 
 test('Given nearly broken high-tier armor and a healthy replacement, survival situation makes the replacement actionable', () => {

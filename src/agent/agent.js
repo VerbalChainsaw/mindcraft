@@ -594,6 +594,7 @@ export class Agent {
         this.actions?.cancelResume?.();
         this.goal_director?.cancel?.(this.operator_hold_reason);
         if (/operator stop/i.test(this.operator_hold_reason)) {
+            this.job_director?.cancel?.(this.operator_hold_reason);
             this.prompter?.cancelPendingModelGeneration?.();
         }
         this.self_prompter?.stop(false);

@@ -177,6 +177,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
   }
   const timeOfDay = numeric(situation.timeOfDay, 0);
   const night = isNightTime(timeOfDay);
+  const unsafeNight = night && String(situation.difficulty || '').toLowerCase() !== 'peaceful';
   if (
     policy.mode === 'full'
     && policy.sleep === 'safe'
@@ -212,7 +213,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
     policy.mode === 'full'
     && policy.shelter !== 'off'
     && situation.sheltered !== true
-    && (night || dangerousWeather)
+    && (unsafeNight || dangerousWeather)
   ) {
     const shelter = (Array.isArray(situation.shelters) ? situation.shelters : [])
       .filter(candidate => candidate?.reachable === true && candidate?.safe === true)
