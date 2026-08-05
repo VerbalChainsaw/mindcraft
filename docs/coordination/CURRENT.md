@@ -1,10 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: e07d0d3 (pushed); exact-item capability began at a95e99f
-Milestone: Phase 4 exact-item and mixed-family delivery are physically accepted
+Functional source checkpoint: 92c9e76 (pushed)
+Milestone: mixed-family delivery and Stop-safe asynchronous job settlement physically accepted; delivery frozen
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: typed delivery capabilities, player-work lifecycle, and verified inventory transfer
-Live blocker: none; original settings restored and runtime held in clear Peaceful near phixxation
-Last physical result: generic logs job delivered birch 2 + oak 1 in 6.97 s; Paper verified exact counts and no loose logs
-Next tranche: Jordan family-delivery review, then the next accepted Phase 4 shared capability seam
-Jordan review: requested as C2J-20260805-1435-family-delivery
+Owned subsystem: broad compound capability execution through the existing catalogue and deterministic body
+Live blocker: none; runtime intentionally stopped after a clean managed shutdown
+Last physical result: Stop between mixed-log species retained verified birch 2, retained bot oak 1, cancelled terminally, and did not repersist
+Repository: normal V2 Git discovery repaired; frozen control remains 4a94cdc; protected untracked files untouched
+Next campaign: natural `Bring me 16 glass.` end to end; narrow work only after its first live blocker
+Jordan review: pending for 92c9e76; mailbox ID not yet assigned

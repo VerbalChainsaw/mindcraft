@@ -95,17 +95,21 @@ A package patch or version change must be reproducible: pin the exact source com
 
 ## Working method
 
+Broad, useful, unfamiliar player outcomes are now the default acceptance campaigns. Do not invent a narrow capability campaign before gameplay demands it, and do not keep certifying quantity or material variants after the shared boundary has passed physically. A narrow scenario is justified only when the active broad campaign exposes a specific defect, safety boundary, or ownership race.
+
 Each coding cycle follows one compact loop:
 
-1. Select one useful player outcome.
+1. Select one broad, useful player outcome stated as a natural request.
 2. Run it in a disposable live world.
 3. Identify the first blocker that prevents completion or truthful continuation.
-4. Repair the smallest existing seam.
+4. Keep the same broad request active and repair the smallest coherent shared seam.
 5. Add at most one focused regression for the observed defect.
 6. Repeat the same live request.
 7. Commit and push the functional result.
 
 A cycle is complete only when the bot physically succeeds or stops with a precise, honest blocker that identifies the next coding move.
+
+Once a capability boundary is physically accepted, freeze it. Reopen it only when a later broad campaign demonstrates a regression or a genuinely new cross-cutting contract violation. Broad scenarios select the work; focused tests preserve the repair. Tests do not select the product roadmap.
 
 ## Current transition gate
 
@@ -371,9 +375,17 @@ Generic family delivery now uses one `deliver_item_family` capability across Goa
 
 The unchanged generic lumberjack campaign carried two oak and two birch logs and requested three generic logs. In 6.97 seconds it delivered two birch plus one oak through two exact pickups, reached `complete` with zero failed attempts and checkpoint `delivered: 3`, and obeyed immediate Stop. Paper verified phixxation oak `15→16` and birch `0→2`, MindcraftBot oak `2→1` and birch `2→0`, and no loose oak or birch entities. The temporary fixture chest was restored to its exact slot, leader settings were removed, and the runtime restarted held.
 
-Preserve `e07d0d3` and obtain the required read-only checkpoint review. Do not add item recipes, a delivery controller, a second inventory system, or a new retry loop while this boundary is under review.
+### Stale asynchronous job-settlement correction
 
-After the Phase 3 review gate, continue migrating remaining duplicated planning seams into this existing catalogue without changing their physical acceptance behavior. The next tranche begins with an exact ownership map of workstation, retrieval, delivery, navigation/stance binding, and remaining nested prerequisite decisions, then implements the smallest coherent cross-domain migration that removes a real duplicate strategy loop. It must finish with an unchanged real campaign, not merely catalogue unit tests.
+The family-delivery review found one final shared ownership race: an asynchronous JobDirector dispatch captured its old order and could settle after Stop, repersisting or advancing a cancelled order. The repair in `92c9e76` binds every dispatch to an order ID and generation. Stop and terminal completion invalidate that token before clearing persistence; stale success, failure, and finalization callbacks cannot mutate the active store, schedule recovery, release a replacement dispatch, or resurrect the cancelled order. A late partial transfer may update only the cancelled in-memory receipt checkpoint when the physical transfer was independently verified.
+
+Two deferred regressions prove both dangerous shapes: a late result after cancellation remains terminal, and late order A settlement cannot mutate or release replacement order B. The controlled Paper campaign then stopped a three-log family handoff between concrete species. Birch reached phixxation `2→4`, oak remained `16`, MindcraftBot retained its one oak, no loose logs remained, the durable checkpoint retained `delivered: 2`, the order remained `cancelled`, and persisted `activeOrder` remained null. The chest fixture and original runtime settings were restored.
+
+Delivery is frozen at this checkpoint. Do not add item recipes, another delivery controller, a second inventory system, or more delivery-quantity campaigns unless a later broad player outcome exposes a real delivery regression.
+
+The next campaign is the natural unfamiliar request `Bring me 16 glass.` It remains one end-to-end acceptance scenario across sand acquisition, furnace discovery or creation, fuel acquisition, multi-item smelting, inventory pressure, return navigation, verified delivery, interruption, and truthful reporting. Do not prebuild separate acceptance projects for those seams. Run the request first, repair only its first demonstrated shared blocker, and rerun the same request until the full result succeeds or a named external blocker remains.
+
+Continue migrating duplicated planning seams into the existing catalogue only when that campaign exposes them. The capability catalogue remains the required planning/execution boundary, but catalogue coverage is pulled by playable outcomes rather than by an abstract inventory of possible actions. Every migration must end with the unchanged broad campaign, not merely catalogue unit tests.
 
 Then remove duplicated prerequisite knowledge from `prepareTool`, `prepareMaterial`, the hardcoded autonomous progression ladder, and other nested helpers by routing them through the same proven capability contracts. Autonomous progression may select a durable outcome; it must not maintain a second recipe or prerequisite engine.
 
@@ -417,9 +429,11 @@ The goal system already records proven procedures. Once several live capabilitie
 - Correct productive-attempt ceilings, target propagation, action-level deadlines, cancellation settlement, tool replacement, workstation recovery, and deterministic restart on the same live request. **Done and physically exercised.**
 - Introduce the minimal declarative capability contract around already-proven operations without adding item-specific routes.
 - Survival/reflex interruption followed by verified goal resumption.
+- Reject stale asynchronous job settlement after Stop or order replacement. **Done and physically exercised: `92c9e76`.**
 
 ### P1
 
+- Complete the broad natural `Bring me 16 glass.` campaign; narrow repairs are selected only by its first live blocker.
 - Migrate existing collect, craft, place, smelt, equip, retrieve, and delivery operations into the catalogue without changing physical ownership.
 - Retire duplicated prerequisite planning in `prepareTool`, `prepareMaterial`, and autonomous progression as each replacement path is physically proven.
 - Return-to-player and verified delivery after remote work.
@@ -454,4 +468,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Preserve the physically accepted exact-item and mixed-family delivery checkpoint and obtain the required read-only review. After acceptance, continue the existing Phase 4 sequence at the next shared duplicated capability seam, anchored to one unchanged real gameplay campaign. Do not add item-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from a gameplay outcome.
+Preserve `92c9e76`, obtain the required read-only review, then run the natural request `Bring me 16 glass.` before designing another narrow tranche. Keep that exact request active through every directly encountered sand, fuel, furnace, smelting, inventory, return, and delivery blocker. Repair only the first demonstrated shared seam, rerun the same request, and continue until Paper verifies delivery or a named external blocker remains. Do not add glass-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from that gameplay outcome.
