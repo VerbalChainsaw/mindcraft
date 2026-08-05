@@ -492,18 +492,31 @@ export class GoalDirector {
 
   cancel(reason = 'Cancelled by player.') {
     if (!this.activeGoal) return false;
+    const cancelledAt = this.now();
+    const subgoals = this.activeGoal.subgoals.map(subgoal => (
+      subgoal.state === 'acting'
+        ? {
+            ...subgoal,
+            state: 'cancelled',
+            code: 'goal_cancelled',
+            detail: boundedText(reason),
+            finishedAt: cancelledAt,
+          }
+        : subgoal
+    ));
     const cancelled = normalizeGoalContract({
       ...this.activeGoal,
       phase: 'cancelled',
+      subgoals,
       evidence: {
         actionId: this.activeGoal.evidence?.actionId || '',
         phase: 'cancelled',
         code: 'goal_cancelled',
         detail: reason,
         verified: false,
-        at: this.now(),
+        at: cancelledAt,
       },
-      updatedAt: this.now(),
+      updatedAt: cancelledAt,
     });
     this.lastGoal = cancelled;
     this.activeGoal = null;

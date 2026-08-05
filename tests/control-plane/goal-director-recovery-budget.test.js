@@ -80,6 +80,13 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.lastGoal.phase, 'failed');
   assert.equal(director.lastGoal.evidence.code, 'subgoal_budget_exhausted');
 
+  director.activeGoal = boundaryGoal([subgoal('plan', 1, 'acting')]);
+  assert.equal(director.cancel('Operator Stop.'), true);
+  assert.equal(director.lastGoal.phase, 'cancelled');
+  assert.equal(director.lastGoal.subgoals.at(-1).state, 'cancelled');
+  assert.equal(director.lastGoal.subgoals.at(-1).code, 'goal_cancelled');
+  assert.equal(Number.isFinite(director.lastGoal.subgoals.at(-1).finishedAt), true);
+
   director.activeGoal = normalizeGoalContract({
     ...boundaryGoal([subgoal('recover', 1, 'acting')]),
     attempts: 2,
