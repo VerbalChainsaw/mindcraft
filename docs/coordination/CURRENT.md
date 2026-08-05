@@ -8,4 +8,4 @@ Live blocker: none; runtime intentionally stopped after a clean managed shutdown
 Last physical result: Stop between mixed-log species retained verified birch 2, retained bot oak 1, cancelled terminally, and did not repersist
 Repository: normal V2 Git discovery repaired; frozen control remains 4a94cdc; protected untracked files untouched
 Next campaign: natural `Bring me 16 glass.` end to end; narrow work only after its first live blocker
-Jordan review: pending for 92c9e76; mailbox ID not yet assigned
+Jordan review: requested as C2J-20260805-1510-stale-settlement-broad-shift
