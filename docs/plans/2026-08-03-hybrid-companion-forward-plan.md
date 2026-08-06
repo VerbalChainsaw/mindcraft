@@ -466,6 +466,17 @@ These are product requirements, not optional polish. Implement them through the 
 
 Acceptance is product-scale: run broad building, resource-production, nearby-companionship, and remote-return scenarios in a lived-in world. Descend into a narrow regression only when one of those scenarios exposes the first concrete shared blocker.
 
+First physical stewardship tranche completed at `8f5b28b`:
+
+- A natural remembered-home repair request issued 313 blocks away now binds the authorized blueprint as a remote worksite and approaches it through the existing non-destructive native Pathfinder before auditing fresh loaded blocks.
+- Dropped item stacks and experience orbs no longer reserve blueprint cells; players and physical entities still do.
+- Blueprint clearance is atomic across the complete footprint. If any cell is protected or unsafe to clear, the builder refuses the whole mutation plan before breaking an otherwise natural obstruction elsewhere in that footprint.
+- The live route reached the remembered home at full health. The old blueprint intersects water-adjacent sand, so the final unchanged request failed truthfully with `blueprint_incorrect_block`, zero productive attempts, no physical action ID, and no break/place action. Operator Stop then held the runtime.
+
+Two pre-correction probes are contaminated evidence, not acceptance: they cleared several sand or leaf cells and briefly allowed a normal-night survival shelter to place blocks before Stop. Those artifacts remain in the world pending verified ownership; no cleanup was guessed. The accepted rerun is the no-mutation result above.
+
+This completes remote owned-worksite binding and mixed-footprint fail-closed behavior, not the entire stewardship TODO. General claimed-structure discovery, durable shared-work-area designation, and preference for existing furnaces, crafting tables, storage, farms, and shelters remain open and must be pulled by the next broad lived-in-world campaign.
+
 ### P2
 
 - Procedure selection informed by successful yield and duration.
@@ -493,4 +504,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Preserve `92c9e76`, obtain the required read-only review, then run the natural request `Bring me 16 glass.` before designing another narrow tranche. Keep that exact request active through every directly encountered sand, fuel, furnace, smelting, inventory, return, and delivery blocker. Repair only the first demonstrated shared seam, rerun the same request, and continue until Paper verifies delivery or a named external blocker remains. Do not add glass-specific routes, a second executor, another movement engine, or documentation/test workstreams detached from that gameplay outcome.
+Preserve `8f5b28b` and keep the pending companion-swimming review separate. Run one broad natural outcome from a lived-in work area that should reuse an existing furnace, crafting table, storage point, or shelter instead of creating a duplicate. Keep that exact outcome active through its first physical blocker; repair the shared discovery, ownership, approach, or interaction seam and rerun until Paper verifies the useful result or a named external blocker remains. Do not add a structure registry framework, workstation-specific controller, second executor, new movement engine, or another recipe campaign.
