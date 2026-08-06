@@ -755,7 +755,11 @@ function inject (bot) {
     let dx = nextPoint.x - p.x
     let dy = nextPoint.y - p.y
     let dz = nextPoint.z - p.z
-    if (Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1) {
+    let locomotionType = nextPoint.locomotion?.type || 'legacy'
+    const reachedNextPoint = locomotionType === 'swim_up'
+      ? Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && p.y >= nextPoint.y - 0.05 && p.y < nextPoint.y + 1
+      : Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1
+    if (reachedNextPoint) {
       // arrived at next point
       verticalTransition = null
       lastNodeTime = performance.now()
@@ -783,6 +787,7 @@ function inject (bot) {
       dx = nextPoint.x - p.x
       dy = nextPoint.y - p.y
       dz = nextPoint.z - p.z
+      locomotionType = nextPoint.locomotion?.type || 'legacy'
     }
 
     if (pathSegmentDrifted(nextPoint, p)) {
@@ -792,7 +797,6 @@ function inject (bot) {
 
     if (prepareVerticalTransition(nextPoint, p)) return
 
-    const locomotionType = nextPoint.locomotion?.type || 'legacy'
     bot.look(
       Math.atan2(-dx, -dz),
       0,
@@ -803,16 +807,18 @@ function inject (bot) {
 
     let executionMode
     if (bot.entity.isInWater) {
-      const ascendingWaterRoute = dy > 0.35 || [
+      const ascendingWaterRoute = dy > 0.05 || [
         'step_up',
         'vertical_up',
-        'climb_up'
+        'climb_up',
+        'swim_up'
       ].includes(locomotionType)
       executionMode = ascendingWaterRoute ? 'water_ascent' : 'water_traverse'
-      // Swimming upward is the only water transition that needs jump held.
-      // Holding it for a level native path node pushes the body above and
-      // away from the node that A* actually selected, so shoreline traversal
-      // can stall despite having a valid route.
+      // Converge tightly on the Y selected by A*. A 0.35-block tolerance let
+      // buoyancy settle the body just beneath a surface node: horizontal
+      // progress continued while the head stayed underwater. Lift only while
+      // below the native node, avoiding both that submerged near-miss and the
+      // old unconditional jump that overshot level water routes.
       bot.setControlState('jump', ascendingWaterRoute)
       bot.setControlState('sprint', false)
     } else if (bot.entity.isInLava) {

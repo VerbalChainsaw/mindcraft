@@ -8,6 +8,13 @@ function commandFor(message) {
   return directive?.command ?? null;
 }
 
+test('player self-assignment stays conversation instead of authorizing bot work', () => {
+  assert.equal(commandFor('I will build us some shelter for now'), null);
+  assert.equal(commandFor("I'll gather wood while you wait"), null);
+  assert.equal(commandFor('we are going to build a house'), null);
+  assert.equal(commandFor('build us a shelter'), '!assignFunctionalShelterJob("cobblestone")');
+});
+
 test('digTunnel is reachable deterministically (the reported gap)', () => {
   assert.equal(commandFor('dig a straight tunnel forward for 8 blocks'), '!digTunnel("forward", 8)');
   assert.equal(commandFor('cut a tunnel north 20'), '!digTunnel("north", 20)');

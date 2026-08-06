@@ -12,6 +12,7 @@ import { actionResultToTelemetry } from '../runtime/action-result.js';
 import { identityToTelemetry } from '../runtime/identity-config.js';
 import { evaluateGameplayProgression } from '../runtime/gameplay-progression.js';
 import { rideableEntityKnowledge } from './game_knowledge.js';
+import { minecraftWeather } from '../runtime/weather-state.js';
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 const HAZARD_BLOCKS = new Set([
@@ -819,9 +820,7 @@ export function getFullState(agent, { deep = false } = {}) {
         z: Number(pos.z.toFixed(2))
     };
 
-    let weather = 'Clear';
-    if (bot.thunderState > 0) weather = 'Thunderstorm';
-    else if (bot.rainState > 0) weather = 'Rain';
+    const weather = minecraftWeather(bot);
 
     let timeLabel = 'Night';
     if (bot.time.timeOfDay < 6000) timeLabel = 'Morning';

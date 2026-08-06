@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { History } from '../../src/agent/history.js';
+import { OperatorControlStateStore } from '../../src/agent/runtime/operator-control-state.js';
 import { writeJsonAtomicSync } from '../../src/utils/atomic-file.js';
 
 test('Given bot memory and history, when state is persisted, then canonical JSON stays complete and history appends without whole-file rewrites', async () => {
@@ -88,6 +89,26 @@ test('Given malformed bot memory, when an agent loads, then the bad file is pres
     assert.equal(botFiles.some((name) => /^memory\.corrupt-\d+\.json$/.test(name)), true);
   } finally {
     process.chdir(previousDirectory);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Given memory loading is disabled, operator Stop still survives restart in its dedicated control store', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'mindcraft-operator-control-'));
+  try {
+    const store = new OperatorControlStateStore('ControlBot', { root });
+    assert.equal(store.snapshot().held, false);
+    store.hold('operator stop command');
+
+    const restarted = new OperatorControlStateStore('ControlBot', { root });
+    assert.equal(restarted.snapshot().held, true);
+    assert.equal(restarted.snapshot().reason, 'operator stop command');
+
+    restarted.release('player command');
+    const released = new OperatorControlStateStore('ControlBot', { root });
+    assert.equal(released.snapshot().held, false);
+    assert.equal(released.snapshot().reason, 'player command');
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

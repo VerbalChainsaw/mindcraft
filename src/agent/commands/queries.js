@@ -6,6 +6,7 @@ import { checkLevelBlueprint, checkBlueprint } from '../tasks/construction_tasks
 import { load } from 'cheerio';
 import { getFullState } from '../library/full_state.js';
 import { formatGameObjectKnowledge, inspectGameObject } from '../library/game_knowledge.js';
+import { minecraftWeather } from '../runtime/weather-state.js';
 
 const pad = (str) => {
     return '\n' + str + '\n';
@@ -149,11 +150,7 @@ export const queryList = [
             res += `\n- Health: ${Math.round(bot.health)} / 20`;
             res += `\n- Hunger: ${Math.round(bot.food)} / 20`;
             res += `\n- Biome: ${world.getBiomeName(bot)}`;
-            let weather = "Clear";
-            if (bot.rainState > 0)
-                weather = "Rain";
-            if (bot.thunderState > 0)
-                weather = "Thunderstorm";
+            const weather = minecraftWeather(bot);
             res += `\n- Weather: ${weather}`;
             // let block = bot.blockAt(pos);
             // res += `\n- Artficial light: ${block.skyLight}`;

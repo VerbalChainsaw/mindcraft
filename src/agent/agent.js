@@ -20,6 +20,7 @@ import { log, validateNameFormat, handleDisconnection } from './connection_handl
 import { resolveBlockedActions } from './command-policy.js';
 import { addressesAgent } from './chat-address.js';
 import { resolvePlayerDirective, routeCompoundToolGoal } from './player-directives.js';
+import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import { parsePlayerAgenda } from './player-agenda.js';
 import { normalizeRuntimeBehavior } from './runtime/behavior-config.js';
 import { JobDirector } from './runtime/job-director.js';
@@ -31,6 +32,7 @@ import { EnvironmentObserver } from './runtime/environment-observer.js';
 import * as mc from '../utils/mcdata.js';
 import { CompanionContext } from './runtime/companion-context.js';
 import { HomeStateStore } from './runtime/home-state-store.js';
+import { OperatorControlStateStore } from './runtime/operator-control-state.js';
 import { LandmarkMemory } from './runtime/landmark-memory.js';
 import { PlayerMemory } from './runtime/player-memory.js';
 import { KnowledgeStore } from './runtime/knowledge-store.js';
@@ -39,6 +41,7 @@ import { AgendaDirector } from './runtime/agenda-director.js';
 import { RuleEngine } from './runtime/rule-engine.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 import { signalInterrupt } from './runtime/interruptible-delay.js';
+import { minecraftWeather } from './runtime/weather-state.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
     '!stop',
@@ -223,6 +226,7 @@ export class Agent {
         console.log(`Initializing agent ${this.name}...`);
         
         this.history = new History(this);
+        this.operator_control = new OperatorControlStateStore(this.name);
         this.coder = new Coder(this);
         this.npc = new NPCContoller(this);
         this.memory_bank = new MemoryBank(this.name);
@@ -242,9 +246,10 @@ export class Agent {
         if (load_mem) {
             save_data = this.history.load();
         }
-        if (save_data?.operator_hold === true) {
+        const operatorControl = this.operator_control.snapshot();
+        if (operatorControl.held) {
             this.operator_hold = true;
-            this.operator_hold_reason = save_data.operator_hold_reason || 'operator stop restored after restart';
+            this.operator_hold_reason = operatorControl.reason || 'operator stop restored after restart';
             this.operator_hold_generation += 1;
             console.log('[operator] Persisted stop restored before world control became available.');
         }
@@ -650,6 +655,9 @@ export class Agent {
         this.operator_hold_generation += 1;
         this.operator_hold = true;
         this.operator_hold_reason = String(reason || 'operator stop').slice(0, 160);
+        try { this.operator_control?.hold?.(this.operator_hold_reason); } catch (error) {
+            console.warn(`[operator] Could not persist dedicated hold state: ${String(error?.message || error).slice(0, 240)}`);
+        }
         this.companion_context?.clearControl?.();
         this.actions?.cancelResume?.();
         this.goal_director?.cancel?.(this.operator_hold_reason);
@@ -670,6 +678,9 @@ export class Agent {
         this.operator_hold_generation += 1;
         this.operator_hold = false;
         this.operator_hold_reason = String(reason || 'explicit command').slice(0, 160);
+        try { this.operator_control?.release?.(this.operator_hold_reason); } catch (error) {
+            console.warn(`[operator] Could not persist dedicated released state: ${String(error?.message || error).slice(0, 240)}`);
+        }
         try { this.history?.save?.(); } catch (error) {
             console.warn(`[operator] Could not persist released hold state: ${String(error?.message || error).slice(0, 240)}`);
         }
@@ -875,6 +886,9 @@ export class Agent {
 
         const self_prompt = source === 'system' || source === this.name;
         const from_other_bot = convoManager.isOtherAgent(source);
+        const playerSpeechAuthority = !self_prompt && !from_other_bot
+            ? classifyPlayerSpeechAuthority(message)
+            : 'action_eligible';
         // ADMIN is the authenticated dashboard transport identity, not a
         // Minecraft player. Let it issue explicit commands, but never let it
         // replace the tracked companion or start authoritative player polling.
@@ -1049,6 +1063,16 @@ export class Agent {
             if (command_name) { // contains query or command
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
+
+                if (playerSpeechAuthority === 'conversation_only') {
+                    const conversationalPrefix = res.substring(0, res.indexOf(command_name)).trim();
+                    await this.history.add(
+                        'system',
+                        'No command was executed because the player described their own intended action rather than assigning work to the bot.',
+                    );
+                    this.routeResponse(source, conversationalPrefix || 'Understood. I will leave that work to you.');
+                    break;
+                }
                 
                 if (!commandExists(command_name)) {
                     this.history.add('system', `Command ${command_name} does not exist.`);
@@ -1289,7 +1313,7 @@ export class Agent {
             }
             else if (this.bot.time.timeOfDay == 18000)
             this.bot.emit('midnight');
-            const weather = this.bot.thunderState > 0 ? 'thunderstorm' : this.bot.rainState > 0 ? 'rain' : 'clear';
+            const weather = minecraftWeather(this.bot).toLowerCase();
             if (this._lastBehaviorWeather && weather !== this._lastBehaviorWeather) {
                 this.publishBehaviorEvent({
                     id: `weather-${weather}-${Math.floor(Date.now() / 5_000)}`,

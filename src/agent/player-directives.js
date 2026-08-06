@@ -1,4 +1,5 @@
 import { parseItemGoalRequest } from './runtime/goal-contract.js';
+import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 
 function commandString(value) {
     return JSON.stringify(String(value || ''));
@@ -134,6 +135,7 @@ function parseCoordinates(text) {
 export function resolvePlayerDirective(playerName, message, context = {}) {
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
+    if (classifyPlayerSpeechAuthority(message) === 'conversation_only') return null;
 
     if (/^(?:please\s+)?(?:do not|don't|dont)\s+follow\s+me\b/.test(text)) {
         return {

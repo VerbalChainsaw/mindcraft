@@ -555,6 +555,38 @@ class Movements {
     neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'fall_down'))
   }
 
+  getMoveSwimUp (node, neighbors) {
+    const current = this.getBlock(node, 0, 0, 0)
+    const destination = this.getBlock(node, 0, 1, 0)
+    const head = this.getBlock(node, 0, 2, 0)
+    const waterType = this.bot.registry.blocksByName.water.id
+
+    // A submerged route must first converge on the top water cell. The
+    // executor can hold jump, but A* previously advertised only level liquid
+    // nodes, so the executor deliberately withheld jump and the bot walked
+    // along the bottom until drowning preempted the route. Keep this a native
+    // movement edge: ordinary travel still owns the destination and the
+    // package owns how the body reaches it.
+    if (!current || !destination || !head) return false
+    if (current.type !== waterType || destination.type !== waterType) return false
+    if (!destination.safe || !head.safe) return false
+    if (this.getNumEntitiesAt(node, 0, 1, 0) > 0) return false
+
+    const cost = 1 + this.liquidCost + this.exclusionStep(destination)
+    neighbors.push(this.makeMove(
+      node,
+      node.x,
+      node.y + 1,
+      node.z,
+      node.remainingBlocks,
+      cost,
+      [],
+      [],
+      'swim_up'
+    ))
+    return true
+  }
+
   getMoveUp (node, neighbors) {
     const block1 = this.getBlock(node, 0, 0, 0)
     if (block1.liquid) return
@@ -709,6 +741,11 @@ class Movements {
 
   getNeighbors (node) {
     const neighbors = []
+
+    // Do not plan a level route along the bottom of an open water column.
+    // When ascent is obstructed, retain the ordinary horizontal neighbors so
+    // Pathfinder can swim beneath the obstruction to the next open column.
+    if (this.getMoveSwimUp(node, neighbors)) return neighbors
 
     // Simple moves in 4 cardinal points
     for (const i in cardinalDirections) {

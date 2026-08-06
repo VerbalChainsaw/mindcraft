@@ -6,6 +6,7 @@ import {
   validateEmergencyShelterBlueprint,
 } from './emergency-shelter.js';
 import { chooseSurvivalIntent, isNightTime } from './survival-policy.js';
+import { minecraftWeather } from './weather-state.js';
 
 const SUCCESS_COOLDOWN_MS = 2_000;
 const FAILURE_COOLDOWN_MS = 10_000;
@@ -312,7 +313,7 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
   const timeOfDay = Number(bot.time?.timeOfDay || 0);
   const dimension = dimensionName(bot.game?.dimension);
   const difficulty = String(bot.game?.difficulty || '').toLowerCase();
-  const weather = bot.thunderState > 0 ? 'Thunderstorm' : bot.rainState > 0 ? 'Rain' : 'Clear';
+  const weather = minecraftWeather(bot);
 
   // chooseSurvivalIntent reaches bed and shelter candidates through a fixed
   // waterfall, so the conditions below are exactly the ones that can read them:
