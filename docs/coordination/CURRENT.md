@@ -8,4 +8,4 @@ Live blocker: no active code blocker; companion Follow/defense/resumption/gaze p
 Last physical result: Paper verified 5 iron swords, health 20, intact table/furnace, and one redundant granite stack released; bot Stop-held
 Repository: frozen control remains 4a94cdc; protected untracked files untouched; accidental nested C: path absent
 Next campaign: approved broad companion Follow -> hostile defense -> deterministic resume -> settled nearby-player gaze
-Jordan review: requested as C2J-20260806-0333-broad-craft-capacity; preserve this checkpoint while pending
+Jordan review: accepted as J2C-20260806-0355-broad-craft-capacity-accepted; Stop-held awaiting player presence
