@@ -605,11 +605,31 @@ function inject (bot) {
         return
       }
     }
+    let pathResetForChangedGoal = false
     if (stateGoal) {
       if (!stateGoal.isValid()) {
         stop()
       } else if (stateGoal.hasChanged()) {
         resetPath('goal_moved', false)
+        pathResetForChangedGoal = true
+      }
+
+      // A dynamic target can enter the accepted radius while an older path is
+      // still queued. Continuing that stale path makes followers cross their
+      // target, replan behind themselves, and oscillate. Settle immediately but
+      // retain the dynamic goal so movement resumes when the target leaves.
+      if (stateGoal && dynamicGoal && stateGoal.isEnd(bot.entity.position.floored())) {
+        const controlsActive = Object.values(bot.controlState || {}).some(Boolean)
+        if (!pathResetForChangedGoal && (path.length > 0 || digging || placing || verticalTransition || controlsActive)) {
+          resetPath('dynamic_goal_reached')
+        } else {
+          bot.clearControlStates()
+        }
+        if (stateGoal.entity?.position) {
+          const height = Math.max(0.75, (Number(stateGoal.entity.height) || 1.8) * 0.85)
+          bot.lookAt(stateGoal.entity.position.offset(0, height, 0), true)
+        }
+        return
       }
     }
 
