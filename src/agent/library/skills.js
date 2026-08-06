@@ -20,6 +20,7 @@ import { rankCollectionCandidates } from '../runtime/collection-candidate-select
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
+import { selectFarmSites } from '../runtime/farm-site-selector.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
 import {
     COOKABLE_FOOD,
@@ -84,6 +85,9 @@ const PICKUP_TARGET_TIMEOUT_MS = 6_000;
 const PICKUP_TARGET_STALL_TIMEOUT_MS = 2_500;
 const MAX_PICKUP_QUEUE_TARGETS = 16;
 const MAX_PICKUP_TARGET_FAILURES = 1;
+const MAX_FARM_WATER_CANDIDATES = 256;
+const MAX_FARM_ROUTE_CANDIDATES = 4;
+const FARM_ROUTE_PROBE_TIMEOUT_MS = 1_500;
 const DOOR_SEARCH_RADIUS = 16;
 const DOOR_INTERACTION_REACH = 4.5;
 const DOOR_STATE_SETTLE_MS = 150;
@@ -13223,48 +13227,90 @@ export async function establishFarm(bot, cropName='wheat', width=3, depth=3, ran
         log(bot, 'Farm crop must be wheat, carrots, potatoes, or beetroots.');
         return false;
     }
-    const water = world.getNearestBlock(bot, 'water', searchRange);
-    if (!water) {
+    const waterBlocks = world.getNearestBlocks(
+        bot,
+        'water',
+        searchRange,
+        MAX_FARM_WATER_CANDIDATES,
+    ).filter(block => block?.position);
+    if (waterBlocks.length === 0) {
         setActionEvidence(bot, { kind: 'farm_establish', outcome: 'missing_water', target: { name: spec.crop }, retryable: true });
         log(bot, `No loaded water source is available within ${searchRange} blocks for hydrated farmland.`);
         return false;
     }
-    const candidates = [];
-    for (let dx = -4; dx <= 4; dx += 1) {
-        for (let dz = -4; dz <= 4; dz += 1) {
-            if (dx === 0 && dz === 0) continue;
-            const soil = bot.blockAt(water.position.offset(dx, 0, dz));
-            const above = bot.blockAt(water.position.offset(dx, 1, dz));
-            if (
-                ['dirt', 'grass_block', 'farmland'].includes(soil?.name)
-                && (
-                    above?.name === 'air'
-                    || above?.name === spec.crop
-                    || isReplaceableGameplayBlock(above)
-                )
-            ) candidates.push({
-                x: soil.position.x,
-                y: soil.position.y,
-                z: soil.position.z,
-                distance: Math.abs(dx) + Math.abs(dz),
-            });
-        }
-    }
-    candidates.sort((left, right) => left.distance - right.distance || left.x - right.x || left.z - right.z);
     const requested = farmWidth * farmDepth;
-    const cells = candidates.slice(0, requested).map(({ x, y, z }) => ({ x, y, z }));
-    if (cells.length < requested) {
+    const selection = selectFarmSites(bot, waterBlocks, {
+        crop: spec.crop,
+        width: farmWidth,
+        depth: farmDepth,
+    });
+    if (selection.sites.length === 0) {
+        const nearestWater = waterBlocks[0].position;
         setActionEvidence(bot, {
             kind: 'farm_establish',
             outcome: 'insufficient_hydrated_soil',
-            target: { name: spec.crop, x: water.position.x, y: water.position.y, z: water.position.z },
+            target: { name: spec.crop, x: nearestWater.x, y: nearestWater.y, z: nearestWater.z },
             requested,
-            available: cells.length,
+            available: selection.bestAvailable,
+            waterCandidates: selection.waterCount,
             retryable: true,
         });
-        log(bot, `Only ${cells.length} safe hydrated farm plots are loaded; ${requested} were requested.`);
+        log(bot, `No coherent, safely serviceable hydrated ${farmWidth}x${farmDepth} farm site is loaded; the best candidate had ${selection.bestAvailable} of ${requested} usable plots.`);
         return false;
     }
+    let site = null;
+    const routeFailures = [];
+    for (const candidate of selection.sites.slice(0, MAX_FARM_ROUTE_CANDIDATES)) {
+        const goal = new pf.goals.GoalCompositeAny(
+            candidate.stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+        );
+        const route = goal.isEnd(bot.entity.position.floored())
+            ? { status: 'success', path: [] }
+            : bot.pathfinder.getPathTo(safeMovements(bot), goal, FARM_ROUTE_PROBE_TIMEOUT_MS);
+        const routePath = Array.isArray(route?.path) ? route.path : [];
+        const routeEnd = routePath.at(-1);
+        const endpointDistance = routeEnd
+            ? Math.min(...candidate.stances.map(position => Math.hypot(
+                routeEnd.x - position.x,
+                routeEnd.y - position.y,
+                routeEnd.z - position.z,
+            )))
+            : Number.POSITIVE_INFINITY;
+        const convergingPartial = route?.status === 'partial'
+            && routePath.length > 0
+            && endpointDistance + 1 < candidate.distance;
+        if (route?.status === 'success' || convergingPartial) {
+            site = {
+                ...candidate,
+                goal,
+                routeProbe: {
+                    status: route.status,
+                    pathLength: routePath.length,
+                    endpointDistance,
+                },
+            };
+            break;
+        }
+        routeFailures.push({
+            origin: candidate.origin,
+            status: route?.status || 'unknown',
+            pathLength: routePath.length,
+            endpointDistance: Number.isFinite(endpointDistance) ? endpointDistance : null,
+        });
+    }
+    if (!site) {
+        setActionEvidence(bot, {
+            kind: 'farm_establish',
+            outcome: 'farm_site_unreachable',
+            target: { name: spec.crop },
+            candidates: Math.min(selection.sites.length, MAX_FARM_ROUTE_CANDIDATES),
+            routeFailures,
+            retryable: true,
+        });
+        log(bot, `Found ${selection.sites.length} complete hydrated farm site${selection.sites.length === 1 ? '' : 's'}, but native Pathfinder found no non-destructive route to the bounded candidates.`);
+        return false;
+    }
+    const cells = site.cells;
     const alreadyPlanted = cells.filter(cell => farmCellStatus(bot, { crop: spec.crop }, cell).planted).length;
     const seedsNeeded = requested - alreadyPlanted;
     if (inventoryCount(bot, spec.seed) < seedsNeeded) {
@@ -13280,6 +13326,23 @@ export async function establishFarm(bot, cropName='wheat', width=3, depth=3, ran
         log(bot, `Establishing this farm requires ${seedsNeeded} ${spec.seed}; only ${inventoryCount(bot, spec.seed)} are carried.`);
         return false;
     }
+    if (!site.goal.isEnd(bot.entity.position.floored())) {
+        const reached = await goToGoal(bot, site.goal, {
+            movements: () => safeMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        if (!reached || !site.goal.isEnd(bot.entity.position.floored())) {
+            setActionEvidence(bot, {
+                kind: 'farm_establish',
+                outcome: 'farm_site_route_changed',
+                target: { name: spec.crop, ...site.origin },
+                retryable: true,
+            });
+            log(bot, 'The preflighted non-destructive farm route did not settle at its bound service stance.');
+            return false;
+        }
+    }
     for (const cell of cells) {
         if (bot.interrupt_code) return false;
         if (farmCellStatus(bot, { crop: spec.crop }, cell).planted) continue;
@@ -13290,7 +13353,7 @@ export async function establishFarm(bot, cropName='wheat', width=3, depth=3, ran
         dimension: dimensionName(bot),
         crop: spec.crop,
         seed: spec.seed,
-        water: { x: water.position.x, y: water.position.y, z: water.position.z },
+        water: site.water,
         cells,
     };
     setActionEvidence(bot, {
