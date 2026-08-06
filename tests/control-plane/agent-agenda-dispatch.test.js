@@ -165,3 +165,42 @@ test('a stale unrelated job result cannot settle a correlated active agenda job'
   assert.equal(director.pending().length, 0, 'stale evidence must not trigger a retry');
   assert.equal(saved.at(-1).find(entry => entry.id === added.id)?.state, 'failed');
 });
+
+test('an unrelated later action cannot replace the direct result captured for an agenda step', async () => {
+  const agent = {
+    name: 'TestBot',
+    last_action_result: { actionId: 'before', phase: 'succeeded', code: 'old_result' },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+  };
+  const store = { lastError: null, load: () => [], save() {} };
+  const executeCommand = (_agent, _command, options) => {
+    assert.equal(options.routeOrigin, 'agenda-director');
+    agent.last_action_result = {
+      actionId: 'agenda-return',
+      phase: 'failed',
+      code: 'skill_player_unreachable',
+      detail: 'The requested player could not be reached.',
+      retryable: false,
+      evidence: { request: { routeOrigin: 'agenda-director' } },
+    };
+    return Promise.resolve();
+  };
+  const director = new AgendaDirector(agent, { store, executeCommand });
+  const added = director.add({ kind: 'goto', requester: 'Gabriel', recipient: 'Gabriel' });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  agent.last_action_result = {
+    actionId: 'later-survival-reflex',
+    phase: 'succeeded',
+    code: 'skill_fall_landed',
+  };
+  director.update();
+
+  const settled = director.entries.find(entry => entry.id === added.id);
+  assert.equal(settled.state, 'failed');
+  assert.equal(settled.evidence.code, 'skill_player_unreachable');
+  assert.notEqual(settled.evidence.code, 'skill_fall_landed');
+});

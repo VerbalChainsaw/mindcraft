@@ -108,6 +108,7 @@ test('route origins remain distinct and unknown values fall back to internal', (
     'deterministic-nl',
     'model-selected',
     'directive-resume',
+    'agenda-director',
     'goal-director',
     'job-director',
     'internal',
@@ -121,7 +122,7 @@ test('route origins remain distinct and unknown values fall back to internal', (
 test('ActionManager propagates the bounded request context to the exact action start', async () => {
   const { agent, acquisitions } = createHarness();
   const context = createCommandRequestContext({
-    routeOrigin: 'model-selected',
+    routeOrigin: 'agenda-director',
     selectedSkill: '!build',
     args: ['oak_planks', 4],
     requestedAt: 2000,
@@ -136,7 +137,7 @@ test('ActionManager propagates the bounded request context to the exact action s
   assert.equal(acquisitions.length, 1);
   assert.equal(acquisitions[0].actionId, outcome.result.actionId);
   assert.equal(acquisitions[0].requestId, context.requestId);
-  assert.equal(acquisitions[0].routeOrigin, 'model-selected');
+  assert.equal(acquisitions[0].routeOrigin, 'agenda-director');
   assert.equal(acquisitions[0].selectedSkill, '!build');
   assert.deepEqual(acquisitions[0].args, ['oak_planks', 4]);
   assert.equal(acquisitions[0].requestedAt, 2000);

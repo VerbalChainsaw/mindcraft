@@ -958,6 +958,42 @@ async function closeContainerQuietly(container) {
     }
 }
 
+function containerItemCounts(container) {
+    return (container?.containerItems?.() || []).reduce((counts, item) => {
+        const name = String(item?.name || '');
+        if (!name) return counts;
+        counts[name] = (counts[name] || 0) + Math.max(0, Number(item.count) || 0);
+        return counts;
+    }, {});
+}
+
+function unrelatedContainerContentsPreserved(before, after, transferredItem) {
+    const names = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+    names.delete(transferredItem);
+    return [...names].every(name => (before?.[name] || 0) === (after?.[name] || 0));
+}
+
+async function approachContainerBlock(bot, selected) {
+    if (!selected?.position) return { block: null, outcome: 'container_not_found' };
+    const position = selected.position.clone();
+    const expectedName = selected.name;
+    const reached = await goToGoal(
+        bot,
+        new pf.goals.GoalLookAtBlock(position, bot.world, {
+            reach: 4,
+            entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+        }),
+    );
+    if (bot.interrupt_code) return { block: null, outcome: 'interrupted' };
+    const observed = bot.blockAt(position);
+    if (observed?.name !== expectedName || !EXPLORATION_CONTAINER_BLOCKS.includes(observed?.name)) {
+        return { block: null, outcome: 'container_changed', observed: observed?.name || 'unloaded' };
+    }
+    return reached
+        ? { block: observed, outcome: 'ready' }
+        : { block: null, outcome: 'chest_unreachable' };
+}
+
 // Blocks a route may tunnel through when the profile permits it. This is an
 // allow-list of unambiguously natural fill, never a deny-list: anything a
 // player could have built — planks, bricks, glass, wool, concrete, decorative
@@ -1202,6 +1238,19 @@ function observedSupportedStandingCell(bot) {
     if (!floored) return null;
     return [floored, floored.offset(0, 1, 0)]
         .find(candidate => physicallyOccupiesStandingCell(bot, candidate)) || null;
+}
+
+function navigationGoalSatisfied(bot, goal) {
+    if (typeof goal?.isEnd !== 'function') return false;
+    const floored = bot.entity?.position?.floored?.();
+    if (floored && goal.isEnd(floored)) return true;
+    // Farmland, paths, slabs, and other non-full support blocks can report the
+    // body a fraction below the integer feet Y. Raw floor() then describes the
+    // support block, not the cell occupied by the player. Use the same verified
+    // body-volume descriptor as mining and tunnel settlement before declaring
+    // native Pathfinder unable to satisfy an otherwise valid goal.
+    const supported = observedSupportedStandingCell(bot);
+    return Boolean(supported && goal.isEnd(supported));
 }
 
 function collectionDropSupport(bot, targetPosition) {
@@ -7968,18 +8017,37 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
         log(bot, `Cannot put a non-positive number of ${itemName} in the chest.`);
         return false;
     }
-    const reached = await goToPosition(bot, chest.position.x, chest.position.y, chest.position.z, 2);
-    if (!reached || bot.entity.position.distanceTo(chest.position) > 4.5) {
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'chest_unreachable', target, item: itemName, retryable: true });
+    const approach = await approachContainerBlock(bot, chest);
+    if (!approach.block) {
+        setActionEvidence(bot, { kind: 'chest_transfer', outcome: approach.outcome, target, item: itemName, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' });
         log(bot, `Could not reach the chest to deposit ${itemName}.`);
         return false;
     }
+    chest = approach.block;
 
     const beforeCount = inventoryCount(bot, itemName);
     let chestContainer = null;
+    let containerBefore = null;
+    let beforeContainerCount = 0;
     try {
         chestContainer = await bot.openContainer(chest);
+        containerBefore = containerItemCounts(chestContainer);
+        beforeContainerCount = containerBefore[itemName] || 0;
         await chestContainer.deposit(item.type, null, toPut);
+        await waitForWorldCondition(
+            bot,
+            () => (containerItemCounts(chestContainer)[itemName] || 0) >= beforeContainerCount + toPut,
+            1_000,
+            INVENTORY_POLL_MS,
+        );
+        const containerAfter = containerItemCounts(chestContainer);
+        const containerTransferred = Math.max(0, (containerAfter[itemName] || 0) - beforeContainerCount);
+        const unrelatedPreserved = unrelatedContainerContentsPreserved(containerBefore, containerAfter, itemName);
+        // Mineflayer updates the open window immediately, but its standalone
+        // player inventory can remain stale until that window closes. Verify
+        // the selected container first, then close it and verify the player
+        // side of the same transfer; waiting for both views concurrently turns
+        // a real deposit into a false failure and an unsafe retry.
         await closeContainerQuietly(chestContainer);
         chestContainer = null;
         await waitForWorldCondition(
@@ -7989,26 +8057,69 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
             INVENTORY_POLL_MS,
         );
         const afterCount = inventoryCount(bot, itemName);
-        const transferred = beforeCount - afterCount;
-        if (transferred < toPut) {
-            setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'deposit_unverified', target, item: itemName, requested: toPut, transferred, retryable: true });
-            log(bot, `Minecraft only confirmed ${Math.max(0, transferred)} of ${toPut} ${itemName} left inventory.`);
+        const inventoryTransferred = Math.max(0, beforeCount - afterCount);
+        if (inventoryTransferred !== toPut || containerTransferred !== toPut || !unrelatedPreserved) {
+            setActionEvidence(bot, {
+                kind: 'chest_transfer',
+                outcome: 'deposit_unverified',
+                target,
+                item: itemName,
+                requested: toPut,
+                transferred: Math.min(inventoryTransferred, containerTransferred),
+                inventoryTransferred,
+                containerTransferred,
+                unrelatedPreserved,
+                containerBefore,
+                containerAfter,
+                retryable: inventoryTransferred === 0 && containerTransferred === 0,
+            });
+            log(bot, `Minecraft did not verify ${toPut} ${itemName} in the selected chest without changing unrelated contents.`);
             return false;
         }
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'deposited', target, item: itemName, count: transferred, retryable: false });
-        log(bot, `Put ${transferred} ${itemName} in the chest.`);
+        setActionEvidence(bot, {
+            kind: 'chest_transfer',
+            outcome: 'deposited',
+            target,
+            item: itemName,
+            count: toPut,
+            inventoryTransferred,
+            containerTransferred,
+            unrelatedPreserved,
+            containerBefore,
+            containerAfter,
+            retryable: false,
+        });
+        log(bot, `Put ${toPut} ${itemName} in the chest and verified its contents.`);
         return true;
     } catch (error) {
+        const containerAfter = chestContainer ? containerItemCounts(chestContainer) : null;
+        const containerTransferred = Math.max(
+            0,
+            ((containerAfter?.[itemName] || 0) - beforeContainerCount),
+        );
+        await closeContainerQuietly(chestContainer);
+        chestContainer = null;
+        await waitForWorldCondition(
+            bot,
+            () => inventoryCount(bot, itemName) < beforeCount,
+            1_000,
+            INVENTORY_POLL_MS,
+        );
         const afterCount = inventoryCount(bot, itemName);
+        const inventoryTransferred = Math.max(0, beforeCount - afterCount);
         setActionEvidence(bot, {
             kind: 'chest_transfer',
             outcome: 'deposit_blocked',
             target,
             item: itemName,
             requested: toPut,
-            transferred: Math.max(0, beforeCount - afterCount),
+            transferred: Math.min(inventoryTransferred, containerTransferred),
+            inventoryTransferred,
+            containerTransferred,
+            containerBefore,
+            containerAfter,
             error: error.message,
-            retryable: true,
+            retryable: inventoryTransferred === 0 && containerTransferred === 0,
         });
         log(bot, `Could not put ${itemName} in the chest: ${error.message}.`);
         return false;
@@ -8206,12 +8317,13 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
         return false;
     }
     const target = { name: chest.name || 'chest', x: chest.position.x, y: chest.position.y, z: chest.position.z };
-    const reached = await goToPosition(bot, chest.position.x, chest.position.y, chest.position.z, 2);
-    if (!reached || bot.entity.position.distanceTo(chest.position) > 4.5) {
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'chest_unreachable', target, item: itemName, retryable: true });
+    const approach = await approachContainerBlock(bot, chest);
+    if (!approach.block) {
+        setActionEvidence(bot, { kind: 'chest_transfer', outcome: approach.outcome, target, item: itemName, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' });
         log(bot, `Could not reach the chest to take ${itemName}.`);
         return false;
     }
+    chest = approach.block;
 
     const beforeCount = inventoryCount(bot, itemName);
     let chestContainer = null;
@@ -8293,12 +8405,13 @@ export async function viewChest(bot) {
         return false;
     }
     const target = { name: chest.name || 'chest', x: chest.position.x, y: chest.position.y, z: chest.position.z };
-    const reached = await goToPosition(bot, chest.position.x, chest.position.y, chest.position.z, 2);
-    if (!reached || bot.entity.position.distanceTo(chest.position) > 4.5) {
-        setActionEvidence(bot, { kind: 'chest_view', outcome: 'chest_unreachable', target, retryable: true });
+    const approach = await approachContainerBlock(bot, chest);
+    if (!approach.block) {
+        setActionEvidence(bot, { kind: 'chest_view', outcome: approach.outcome, target, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' });
         log(bot, 'Could not reach the chest to inspect it.');
         return false;
     }
+    chest = approach.block;
     let chestContainer = null;
     try {
         chestContainer = await bot.openContainer(chest);
@@ -9227,7 +9340,7 @@ export async function goToGoal(bot, goal, options = {}) {
                 log(bot, 'Navigation stepped out of shallow water before routing to the requested goal.');
             }
         }
-        let outcome = goal?.isEnd?.(bot.entity.position.floored())
+        let outcome = navigationGoalSatisfied(bot, goal)
             ? { state: 'resolved' }
             : await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
         if (aborted()) return false;
@@ -9339,7 +9452,7 @@ export async function goToGoal(bot, goal, options = {}) {
             log(bot, 'Navigation was interrupted before arrival.');
             return false;
         }
-        const arrived = Boolean(goal?.isEnd?.(bot.entity.position.floored()));
+        const arrived = navigationGoalSatisfied(bot, goal);
         if (!arrived) {
             setActionEvidence(bot, {
                 kind: 'movement',
