@@ -9,4 +9,4 @@ Last physical result: 50ms attributed defense, verified kill, Follow resumed wit
 Runtime: Paper 1.21.11 healthy on Peaceful; bot full-health and Stop-held beside the farm; no temporary player or tagged hostile
 Repository: hold-safe runtime configuration is the only new production change; raw craft/window collision remains bounded P1 debt
 Next campaign: product-scale non-destructive travel/swimming plus reuse of player-designated infrastructure after review
-Jordan review: request pending from this preserved checkpoint
+Jordan review: requested as C2J-20260806-1137-broad-farm-companion
