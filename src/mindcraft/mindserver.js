@@ -2202,6 +2202,27 @@ async function createMindServerAtPort(port, dependencies = {}) {
             }
         });
 
+        socket.on('agent-player-position-request', async (playerName, callback) => {
+            const reply = typeof callback === 'function' ? callback : () => {};
+            if (!isAgentSocket(socket)) {
+                reply({ success: false, error: 'Only an authenticated agent may request player position.' });
+                return;
+            }
+            const requested = typeof playerName === 'string' ? playerName.trim() : '';
+            if (!/^\.?[A-Za-z0-9_]{1,32}$/.test(requested)) {
+                reply({ success: false, error: 'Player name is invalid.' });
+                return;
+            }
+            try {
+                reply(await managedMinecraftServer.locatePlayerPosition(requested));
+            } catch (error) {
+                reply({
+                    success: false,
+                    error: String(error?.message || error || 'Player position lookup failed.').slice(0, 240),
+                });
+            }
+        });
+
         socket.on('connect-agent-process', (agentName) => {
             if (ownsAgentIdentity(socket, agentName) && agent_connections[agentName]) {
                 agent_connections[agentName].socket = socket;

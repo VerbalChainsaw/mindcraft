@@ -49,6 +49,7 @@ export class CompanionContext {
     this.entityEpoch = 0;
     this.position = null;
     this.lastSeenPosition = null;
+    this.lastSeenSource = null;
     this.dimension = null;
     this.lastSeenDimension = null;
     this.loaded = false;
@@ -56,6 +57,9 @@ export class CompanionContext {
     this.lineOfSightObservedAt = null;
     this.observedAt = null;
     this.lastSeenAt = null;
+    this.authoritativeCheckedAt = null;
+    this.authoritativeFound = null;
+    this.authoritativePlayer = null;
     this.directive = null;
     this.protection = null;
     this.attention = null;
@@ -110,6 +114,7 @@ export class CompanionContext {
     this.presence = 'present';
     this.position = positionSnapshot(entity.position);
     this.lastSeenPosition = this.position ? { ...this.position } : this.lastSeenPosition;
+    this.lastSeenSource = this.position ? 'mineflayer_entity' : this.lastSeenSource;
     this.dimension = boundedText(dimension || this.agent?.bot?.game?.dimension, 64) || null;
     this.lastSeenDimension = this.dimension || this.lastSeenDimension;
     if (typeof lineOfSight === 'boolean' || lineOfSight === null) {
@@ -124,6 +129,26 @@ export class CompanionContext {
     if (notify && !wasPresent && this.directive && !this.agent?.isOperatorHeld?.()) {
       queueMicrotask(() => this.onReappeared(this.snapshot()));
     }
+    return this.snapshot();
+  }
+
+  observeAuthoritativePosition(requestedName, observation) {
+    const checkedAt = Number.isFinite(observation?.observedAt) ? observation.observedAt : this.now();
+    const requested = boundedText(requestedName, 64);
+    this.authoritativeCheckedAt = checkedAt;
+    this.authoritativeFound = observation?.success === true ? observation?.found === true : null;
+    this.authoritativePlayer = requested || this.authoritativePlayer;
+    if (requested) this.requestedName = requested;
+    const position = positionSnapshot(observation?.position);
+    if (!position || observation?.found !== true) return this.snapshot();
+    const canonical = boundedText(observation.player || requestedName, 64);
+    if (canonical) this.canonicalUsername = canonical;
+    this.lastSeenPosition = position;
+    this.lastSeenDimension = boundedText(observation.dimension, 64) || this.lastSeenDimension;
+    this.lastSeenSource = boundedText(observation.source, 32) || 'managed_paper';
+    this.lastSeenAt = Number.isFinite(observation.observedAt) ? observation.observedAt : this.now();
+    this.observedAt = this.lastSeenAt;
+    if (!this.loaded) this.presence = 'recent';
     return this.snapshot();
   }
 
@@ -266,6 +291,9 @@ export class CompanionContext {
     const now = this.now();
     if (this.protection && now >= this.protection.expiresAt) this.clearProtection('expired');
     const age = this.lastSeenAt === null ? null : Math.max(0, now - this.lastSeenAt);
+    const authoritativeCheckAge = this.authoritativeCheckedAt === null
+      ? null
+      : Math.max(0, now - this.authoritativeCheckedAt);
     const lineOfSightAge = this.lineOfSightObservedAt === null
       ? null
       : Math.max(0, now - this.lineOfSightObservedAt);
@@ -285,6 +313,7 @@ export class CompanionContext {
       entityEpoch: this.entityEpoch,
       position: this.position ? { ...this.position } : null,
       lastSeenPosition: this.lastSeenPosition ? { ...this.lastSeenPosition } : null,
+      lastSeenSource: this.lastSeenSource,
       dimension: this.dimension,
       lastSeenDimension: this.lastSeenDimension,
       loaded: this.loaded,
@@ -294,6 +323,10 @@ export class CompanionContext {
       observedAt: this.observedAt,
       lastSeenAt: this.lastSeenAt,
       age,
+      authoritativeCheckedAt: this.authoritativeCheckedAt,
+      authoritativeCheckAge,
+      authoritativeFound: this.authoritativeFound,
+      authoritativePlayer: this.authoritativePlayer,
       directive: this.directive,
       protection: this.protection ? { ...this.protection } : null,
       attention: this.currentAttention(),

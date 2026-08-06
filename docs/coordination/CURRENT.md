@@ -1,11 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: f6c7bd1
-Milestone: goal/job agenda results are correlated; queued axe waits durably for its offline recipient
+Functional source checkpoint: HEAD (authoritative player locator and completed broad tool campaign)
+Milestone: pickaxe, axe, shovel, and sword were each acquired and Paper-verified as delivered
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: broad four-iron-tool agenda through GoalDirector and the deterministic physical body
-Live blocker: phixxation is offline; the active delivery retains one iron axe without charging productive attempts
-Last physical result: axe delivery remained active past the old 20-second failure ceiling at attempts 0 and health 20
+Owned subsystem: shared player-position primitive, GoalDirector return/delivery, and product-scale campaigns
+Live blocker: none; operator hold remains active after the post-campaign autonomy audit
+Last physical result: all four agenda entries are complete; Paper confirmed sword pickup and locator polling truthfully reports offline presence
 Repository: normal V2 Git discovery repaired; frozen control remains 4a94cdc; protected untracked files untouched
-Next campaign: deliver the retained axe when phixxation returns, then shovel and sword on unchanged code
-Jordan review: J2C-20260805-2112 accepted agenda handoff/wait and required job correlation now implemented
+Next campaign: one unfamiliar product-scale outcome after checkpoint review; narrow only at the first real blocker
+Jordan review: request at this completed functional checkpoint

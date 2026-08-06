@@ -12,7 +12,7 @@ import { SelfPrompter } from './self_prompter.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
-import { serverProxy, sendOutputToServer } from './mindserver_proxy.js';
+import { requestPlayerPosition, serverProxy, sendOutputToServer } from './mindserver_proxy.js';
 import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
@@ -282,6 +282,24 @@ export class Agent {
         this.environment_observer = new EnvironmentObserver(this);
         this.progression_director = new ProgressionDirector(this);
         this.agenda_director = new AgendaDirector(this);
+        const rememberedPlayerGoal = this.goal_director.activeGoal || this.goal_director.lastGoal;
+        const rememberedPlayer = rememberedPlayerGoal?.destination?.kind === 'player'
+            ? rememberedPlayerGoal.destination.player
+            : null;
+        const rememberedPosition = rememberedPlayerGoal?.memory?.deliveryTarget;
+        if (rememberedPlayer && rememberedPosition?.position) {
+            this.companion_context.observeAuthoritativePosition(rememberedPlayer, {
+                success: true,
+                found: true,
+                ...rememberedPosition,
+            });
+        } else if (rememberedPlayer) {
+            this.companion_context.observeResolution(
+                rememberedPlayer,
+                this.companion_context.resolve(rememberedPlayer),
+                { dimension: this.bot.game?.dimension, notify: false },
+            );
+        }
         try {
             this.rule_engine = new RuleEngine(this);
         } catch (error) {
@@ -587,6 +605,24 @@ export class Agent {
 
     getKnownAgentNames() {
         return [this.name, ...convoManager.getInGameAgents()];
+    }
+
+    async locatePlayerPosition(playerName) {
+        const normalized = String(playerName || '').trim().toLowerCase();
+        if (this._playerPositionLookup?.player === normalized) {
+            return this._playerPositionLookup.promise;
+        }
+        const promise = requestPlayerPosition(playerName)
+            .then(observation => {
+                this.companion_context?.observeAuthoritativePosition?.(playerName, observation);
+                return observation;
+            });
+        this._playerPositionLookup = { player: normalized, promise };
+        try {
+            return await promise;
+        } finally {
+            if (this._playerPositionLookup?.promise === promise) this._playerPositionLookup = null;
+        }
     }
 
     resumeCompanionDirective() {

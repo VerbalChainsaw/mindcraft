@@ -358,10 +358,12 @@ test('recovery history does not spend the productive-step ceiling, which still f
   ]);
 });
 
-test('delivery player absence remains a durable non-productive wait until the exact player returns', () => {
+test('delivery preserves attempts, resolves an unloaded player, and returns through owned navigation', async () => {
   const director = createDirector();
   director.agent.bot.players = {};
   director.agent.bot.entities = {};
+  director.agent.bot.entity = { position: { x: 0, y: 64, z: 0 } };
+  director.agent.bot.game = { dimension: 'overworld' };
   const goal = createItemGoalContract({
     kind: 'deliver',
     requester: 'phixxation',
@@ -387,7 +389,33 @@ test('delivery player absence remains a durable non-productive wait until the ex
     assert.equal(director.lastGoal, null);
   }
 
-  const player = { type: 'player', username: 'phixxation' };
+  const commands = [];
+  director.agent.locatePlayerPosition = async () => ({
+    success: true,
+    found: true,
+    player: 'phixxation',
+    position: { x: 100, y: 70, z: 100 },
+    dimension: 'minecraft:overworld',
+    source: 'managed_paper',
+    observedAt: Date.now(),
+  });
+  director.executeGoalCommand = async (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+
+  assert.equal(director.waitForPlayer(director.activeGoal), false);
+  assert.equal(director.activeGoal.evidence.code, 'delivery_player_locating');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(director.activeGoal.memory.deliveryTarget.position, { x: 100, y: 70, z: 100 });
+  assert.equal(director.activeGoal.memory.deliveryTarget.source, 'managed_paper');
+
+  assert.equal(director.waitForPlayer(director.activeGoal), false);
+  assert.deepEqual(commands, ['!goToCoordinates(100, 70, 100, 16)']);
+  assert.equal(director.activeGoal.subgoals.at(-1).kind, 'recover');
+  assert.equal(director.activeGoal.attempts, 2);
+
+  const player = { type: 'player', username: 'phixxation', position: { x: 99, y: 70, z: 99 } };
   director.agent.bot.players.phixxation = { username: 'phixxation', entity: player };
   director.agent.bot.entities[42] = player;
   assert.equal(director.waitForPlayer(director.activeGoal), true);

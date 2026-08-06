@@ -27,6 +27,7 @@ const SUCCESS_DELAY_MS = 100;
 const RETRY_DELAY_MS = 750;
 const PREEMPTION_RESUME_MS = 0;
 const PLAYER_WAIT_MS = 5_000;
+const DELIVERY_REACQUIRE_DISTANCE = 16;
 const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
@@ -59,6 +60,35 @@ function boundedText(value, maximum = 280, fallback = '') {
 
 function commandName(command) {
   return String(command || '').match(/^![A-Za-z0-9_]+/)?.[0] || '';
+}
+
+function normalizedDimension(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
+}
+
+function normalizedPlayerName(value) {
+  return String(value || '').trim().toLowerCase().replace(/^\./, '');
+}
+
+function playerNamesMatch(left, right) {
+  const first = normalizedPlayerName(left);
+  const second = normalizedPlayerName(right);
+  return Boolean(first && second && first === second);
+}
+
+function physicalPosition(value) {
+  if (!value || ![value.x, value.y, value.z].every(Number.isFinite)) return null;
+  return { x: Number(value.x), y: Number(value.y), z: Number(value.z) };
+}
+
+function distanceBetween(left, right) {
+  const first = physicalPosition(left);
+  const second = physicalPosition(right);
+  if (!first || !second) return Infinity;
+  return Math.hypot(first.x - second.x, first.y - second.y, first.z - second.z);
 }
 
 function budgetedSubgoalCount(goal) {
@@ -1388,11 +1418,140 @@ export class GoalDirector {
     return true;
   }
 
+  rememberDeliveryTarget(goalId, observation) {
+    if (!this.activeGoal || this.activeGoal.id !== goalId) return null;
+    const position = physicalPosition(observation?.position);
+    const player = boundedText(observation?.player || this.activeGoal.destination?.player, 64);
+    if (!position || !player) return null;
+    const goal = this.activeGoal;
+    return this.persist({
+      ...goal,
+      memory: {
+        ...goal.memory,
+        deliveryTarget: {
+          player,
+          position,
+          dimension: boundedText(observation?.dimension, 64) || null,
+          source: boundedText(observation?.source, 32) || 'last_seen',
+          observedAt: Number.isFinite(observation?.observedAt)
+            ? observation.observedAt
+            : this.now(),
+        },
+      },
+      updatedAt: this.now(),
+    }).memory.deliveryTarget;
+  }
+
+  companionDeliveryTarget(goal) {
+    const context = this.agent.companion_context?.snapshot?.();
+    if (!context?.lastSeenPosition) return null;
+    const observedName = context.canonicalUsername || context.requestedName || context.alias;
+    if (!playerNamesMatch(goal.destination.player, observedName)) return null;
+    return {
+      player: observedName,
+      position: context.lastSeenPosition,
+      dimension: context.lastSeenDimension,
+      source: context.lastSeenSource || 'mineflayer_last_seen',
+      observedAt: Number.isFinite(context.lastSeenAt) ? context.lastSeenAt : this.now(),
+    };
+  }
+
   waitForPlayer(goal) {
     const resolution = resolvePlayerTarget(this.agent.bot, goal.destination.player, {
       knownBotNames: this.agent.getKnownAgentNames?.() || [],
     });
-    if (resolution.entity && resolution.canonical) return true;
+    if (resolution.entity && resolution.canonical) {
+      this.rememberDeliveryTarget(goal.id, {
+        player: resolution.canonical,
+        position: resolution.entity.position,
+        dimension: this.agent.bot?.game?.dimension,
+        source: 'mineflayer_entity',
+        observedAt: this.now(),
+      });
+      return true;
+    }
+
+    const companion = this.agent.companion_context?.snapshot?.();
+    const lookupMatches = playerNamesMatch(
+      companion?.authoritativePlayer,
+      goal.destination.player,
+    );
+    const rememberedTarget = this.activeGoal?.memory?.deliveryTarget || goal.memory?.deliveryTarget;
+    const rememberedTargetFresh = playerNamesMatch(rememberedTarget?.player, goal.destination.player)
+      && rememberedTarget?.source === 'managed_paper'
+      && this.now() - rememberedTarget.observedAt < PLAYER_WAIT_MS;
+    const lookupStale = !rememberedTargetFresh && (
+      !lookupMatches
+      || companion?.authoritativeCheckAge === null
+      || companion?.authoritativeCheckAge >= PLAYER_WAIT_MS
+    );
+    if (lookupStale && typeof this.agent.locatePlayerPosition === 'function') {
+      const goalId = goal.id;
+      void this.agent.locatePlayerPosition(goal.destination.player)
+        .then(observation => {
+          if (!this.activeGoal || this.activeGoal.id !== goalId) return;
+          if (observation?.success === true && observation?.found === true) {
+            this.rememberDeliveryTarget(goalId, observation);
+          }
+          this.nextAttemptAt = 0;
+          this.agent.behavior_arbiter?.wake?.('delivery_position_resolved');
+        })
+        .catch(() => {});
+      this.persist({
+        ...this.activeGoal,
+        evidence: {
+          actionId: '',
+          phase: 'blocked',
+          code: 'delivery_player_locating',
+          detail: `Resolving ${goal.destination.player}'s authoritative Paper position before return.`,
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + 1_000;
+      this.setStatus('waiting', 'delivery_player_locating', `Locating ${goal.destination.player} through the managed server.`, true);
+      return false;
+    }
+
+    if (lookupMatches && companion?.authoritativeFound === false) {
+      this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
+      this.setStatus('waiting', 'delivery_player_offline', `Waiting for ${goal.destination.player} to join the managed server.`, true);
+      return false;
+    }
+
+    let anchor = this.activeGoal?.memory?.deliveryTarget || goal.memory?.deliveryTarget || null;
+    if (!anchor) {
+      const fallback = this.companionDeliveryTarget(goal);
+      if (fallback) anchor = this.rememberDeliveryTarget(goal.id, fallback);
+    }
+    const botPosition = physicalPosition(this.agent.bot?.entity?.position);
+    const anchorPosition = physicalPosition(anchor?.position);
+    const sameDimension = !anchor?.dimension
+      || normalizedDimension(anchor.dimension) === normalizedDimension(this.agent.bot?.game?.dimension);
+    if (anchorPosition && botPosition && sameDimension) {
+      const distance = distanceBetween(botPosition, anchorPosition);
+      if (distance > DELIVERY_REACQUIRE_DISTANCE) {
+        const ageSeconds = Math.max(0, Math.round((this.now() - anchor.observedAt) / 1_000));
+        this.persist({
+          ...this.activeGoal,
+          evidence: {
+            actionId: '',
+            phase: 'acting',
+            code: 'delivery_returning_to_player_anchor',
+            detail: `Returning through native Pathfinder to ${goal.destination.player}'s ${anchor.source} position (${ageSeconds}s old).`,
+            verified: false,
+            at: this.now(),
+          },
+          updatedAt: this.now(),
+        });
+        this.dispatch(
+          'recover',
+          `!goToCoordinates(${anchorPosition.x}, ${anchorPosition.y}, ${anchorPosition.z}, ${DELIVERY_REACQUIRE_DISTANCE})`,
+        );
+        return false;
+      }
+    }
     // Player presence is an external delivery precondition, not a productive
     // action or recovery failure. Charging this wait to `attempts` made a fully
     // crafted output terminally fail after four five-second presence checks.
@@ -1404,7 +1563,9 @@ export class GoalDirector {
         actionId: '',
         phase: 'blocked',
         code: resolution.ambiguous ? 'delivery_player_ambiguous' : 'delivery_player_absent',
-        detail: `Waiting for ${goal.destination.player} to be physically present for verified pickup.`,
+        detail: anchorPosition
+          ? `Waiting near ${goal.destination.player}'s last authoritative position for exact entity pickup verification.`
+          : `Waiting for ${goal.destination.player} to be physically present for verified pickup.`,
         verified: false,
         at: this.now(),
       },

@@ -545,6 +545,32 @@ export function requestBotSpawn(spec = {}) {
     });
 }
 
+export function requestPlayerPosition(playerName) {
+    return new Promise((resolve) => {
+        const socket = serverProxy.getSocket();
+        if (!socket?.connected) {
+            resolve({ success: false, error: 'MindServer is not connected.' });
+            return;
+        }
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(result || { success: false, error: 'Player position lookup returned no response.' });
+        };
+        const timeout = setTimeout(
+            () => finish({ success: false, error: 'Player position lookup timed out after 2 seconds.' }),
+            2_000,
+        );
+        try {
+            socket.emit('agent-player-position-request', String(playerName || '').slice(0, 32), finish);
+        } catch (error) {
+            finish({ success: false, error: String(error?.message || error || 'Player position lookup failed.').slice(0, 240) });
+        }
+    });
+}
+
 export function sendSquadRadio(message, kind = 'status') {
     return new Promise((resolve) => {
         const socket = serverProxy.getSocket();

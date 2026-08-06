@@ -14,6 +14,7 @@ const RECOVERY_MODES = Object.freeze(['unstuck']);
 // dark room, and never hunted. They are the difference between a bot that
 // executes orders and a player who notices things.
 const OPPORTUNITY_MODES = Object.freeze(['item_collecting', 'torch_placing', 'hunting']);
+const AUTHORITATIVE_PLAYER_REFRESH_MS = 5_000;
 const IDLE_EMBODIMENT_MODES = Object.freeze(['elbow_room', 'idle_staring']);
 const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
 // Automatic role work also owns a live order. Without this set the role lane
@@ -483,6 +484,19 @@ export class BehaviorArbiter {
         context.observeResolution(requested, resolution, {
           dimension: this.agent.bot?.game?.dimension,
         });
+        const companion = context.snapshot?.();
+        if (
+          !resolution.entity
+          && typeof this.agent.locatePlayerPosition === 'function'
+          && (
+            companion?.authoritativeCheckAge === null
+            || companion?.authoritativeCheckAge >= AUTHORITATIVE_PLAYER_REFRESH_MS
+          )
+        ) {
+          void this.agent.locatePlayerPosition(requested)
+            .then(() => this.wake('authoritative_player_position'))
+            .catch(() => {});
+        }
       }
       if (wasDue) this.lastObservedAt = now;
       const age = this.lastObservedAt === null ? Infinity : now - this.lastObservedAt;

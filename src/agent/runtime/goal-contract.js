@@ -433,6 +433,28 @@ function normalizeActiveCollectionTarget(raw) {
   });
 }
 
+function normalizeDeliveryTarget(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const player = boundedText(raw.player, 64);
+  const position = raw.position && typeof raw.position === 'object'
+    ? {
+        x: Number(raw.position.x),
+        y: Number(raw.position.y),
+        z: Number(raw.position.z),
+      }
+    : null;
+  if (!player || !position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+    return null;
+  }
+  return Object.freeze({
+    player,
+    position: Object.freeze(position),
+    dimension: boundedText(raw.dimension, 64) || null,
+    source: boundedText(raw.source, 32) || 'last_seen',
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
 function normalizeOperationalMemory(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const failedTargets = Array.isArray(source.failedTargets)
@@ -446,6 +468,7 @@ function normalizeOperationalMemory(raw) {
     toolRequirement: normalizeToolRequirement(source.toolRequirement),
     workstationRequirement: normalizeWorkstationRequirement(source.workstationRequirement),
     activeCollectionTarget: normalizeActiveCollectionTarget(source.activeCollectionTarget),
+    deliveryTarget: normalizeDeliveryTarget(source.deliveryTarget),
   });
 }
 

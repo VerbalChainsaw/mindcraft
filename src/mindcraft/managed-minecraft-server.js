@@ -314,6 +314,31 @@ export function parseJavaMajor(output) {
   return Number.isInteger(major) && major > 0 ? major : null;
 }
 
+export function parseManagedPlayerPositionLogs(logs, playerName) {
+  const name = String(playerName || '').trim();
+  const lines = Array.isArray(logs) ? logs.map(line => String(line || '')) : [];
+  const escapedName = escapeRegExp(name);
+  const prefix = new RegExp(`${escapedName} has the following entity data:\\s*`, 'i');
+  let position = null;
+  let dimension = null;
+  for (const line of lines) {
+    if (!prefix.test(line)) continue;
+    const vector = line.match(/\[\s*(-?\d+(?:\.\d+)?)[dDfF]?,\s*(-?\d+(?:\.\d+)?)[dDfF]?,\s*(-?\d+(?:\.\d+)?)[dDfF]?\s*\]/);
+    if (vector) {
+      position = { x: Number(vector[1]), y: Number(vector[2]), z: Number(vector[3]) };
+      continue;
+    }
+    const dimensionMatch = line.match(/"?(minecraft:[a-z0-9_.-]+)"?/i);
+    if (dimensionMatch) dimension = dimensionMatch[1].toLowerCase();
+  }
+  return {
+    found: Boolean(position),
+    player: name,
+    position,
+    dimension,
+  };
+}
+
 function findJavaExecutables(root, depth = 0, found = []) {
   if (!root || depth > 7 || found.length >= 32 || !existsSync(root)) return found;
   let entries;
@@ -1643,6 +1668,30 @@ export class ManagedMinecraftServer {
       }
     }
     return this.getStatus();
+  }
+
+  async locatePlayerPosition(playerName) {
+    const name = String(playerName || '').trim();
+    if (!/^\.?[A-Za-z0-9_]{1,32}$/.test(name)) {
+      throw new ManagedMinecraftServerError('Player name is not valid for an authoritative position lookup.');
+    }
+    const positionCommand = `data get entity ${name} Pos`;
+    await this.sendCommands([
+      positionCommand,
+      `data get entity ${name} Dimension`,
+    ], { settleMs: 150 });
+    const marker = `[command] > ${positionCommand}`;
+    const markerIndex = this.logs.findLastIndex(line => String(line).includes(marker));
+    const observation = parseManagedPlayerPositionLogs(
+      markerIndex >= 0 ? this.logs.slice(markerIndex) : this.logs.slice(-12),
+      name,
+    );
+    return {
+      success: true,
+      source: 'managed_paper',
+      observedAt: Date.now(),
+      ...observation,
+    };
   }
 
   waitForChildClose(child, timeoutMs) {
