@@ -27,6 +27,7 @@ const SUCCESS_DELAY_MS = 100;
 const RETRY_DELAY_MS = 750;
 const PREEMPTION_RESUME_MS = 0;
 const PLAYER_WAIT_MS = 5_000;
+const PLAYER_ANCHOR_MAX_AGE_MS = 15_000;
 const DELIVERY_REACQUIRE_DISTANCE = 16;
 const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
@@ -415,6 +416,8 @@ export class GoalDirector {
     this.planRevision = 0;
     this.lastPlanSignature = '';
     this.inFlight = false;
+    this.dispatchGeneration = 0;
+    this.activeDispatch = null;
     this.nextAttemptAt = 0;
     this.status = {
       phase: 'idle',
@@ -522,6 +525,7 @@ export class GoalDirector {
       };
     }
     try {
+      this.invalidateDispatch();
       let goal = normalizeGoalContract(raw);
       const procedure = this.procedures.find(goal);
       if (procedure) goal = normalizeGoalContract({ ...goal, procedureId: procedure.id });
@@ -581,9 +585,28 @@ export class GoalDirector {
     this.lastGoal = cancelled;
     this.activeGoal = null;
     this.protectedGoalId = null;
+    this.invalidateDispatch();
     this.store.save(null, cancelled, null);
     this.setStatus('cancelled', 'goal_cancelled', reason, false);
     return true;
+  }
+
+  invalidateDispatch() {
+    this.dispatchGeneration += 1;
+    this.activeDispatch = null;
+    this.inFlight = false;
+  }
+
+  ownsDispatch(token) {
+    return Boolean(
+      token
+      && this.activeDispatch === token
+      && token.generation === this.dispatchGeneration
+    );
+  }
+
+  canSettleDispatch(token) {
+    return this.ownsDispatch(token) && this.activeGoal?.id === token.goalId;
   }
 
   currentInventory(goal = this.activeGoal) {
@@ -672,6 +695,7 @@ export class GoalDirector {
     this.lastGoal = completed;
     this.activeGoal = null;
     this.protectedGoalId = completed.id;
+    this.invalidateDispatch();
     this.store.save(null, completed, this.protectedGoalId);
     this.setStatus('complete', verification.code, verification.detail, false);
     this.supersedeSubgoalFailureSpeech(completed);
@@ -715,6 +739,7 @@ export class GoalDirector {
     this.lastGoal = failed;
     this.activeGoal = null;
     this.protectedGoalId = null;
+    this.invalidateDispatch();
     this.store.save(null, failed, null);
     this.setStatus('failed', code, detail, false);
     this.supersedeSubgoalFailureSpeech(failed);
@@ -1362,6 +1387,13 @@ export class GoalDirector {
 
     const previousActionId = this.agent.last_action_result?.actionId || null;
     this.appendActingSubgoal(kind, capabilityCommand(capability) || command, step);
+    const goalAtDispatch = this.activeGoal;
+    const dispatchToken = Object.freeze({
+      generation: this.dispatchGeneration + 1,
+      goalId: goalAtDispatch.id,
+    });
+    this.dispatchGeneration = dispatchToken.generation;
+    this.activeDispatch = dispatchToken;
     this.inFlight = true;
     this.setStatus('acting', `goal_${kind}`, `Executing ${selectedName} through the deterministic command path.`, true);
     const execution = capability
@@ -1378,7 +1410,7 @@ export class GoalDirector {
         .then(value => ({ value, verification: null, result: null }));
     void Promise.resolve(execution)
       .then(outcome => {
-        if (!this.activeGoal) return;
+        if (!this.canSettleDispatch(dispatchToken)) return;
         let result = outcome?.result || this.agent.last_action_result;
         if (!result?.actionId || result.actionId === previousActionId) {
           result = {
@@ -1402,7 +1434,7 @@ export class GoalDirector {
         this.handleResult(kind, result);
       })
       .catch(error => {
-        if (!this.activeGoal) return;
+        if (!this.canSettleDispatch(dispatchToken)) return;
         this.handleResult(kind, {
           actionId: `dispatch-${this.now()}`,
           phase: 'failed',
@@ -1413,6 +1445,8 @@ export class GoalDirector {
         });
       })
       .finally(() => {
+        if (!this.ownsDispatch(dispatchToken)) return;
+        this.activeDispatch = null;
         this.inFlight = false;
       });
     return true;
@@ -1422,7 +1456,8 @@ export class GoalDirector {
     if (!this.activeGoal || this.activeGoal.id !== goalId) return null;
     const position = physicalPosition(observation?.position);
     const player = boundedText(observation?.player || this.activeGoal.destination?.player, 64);
-    if (!position || !player) return null;
+    const dimension = boundedText(observation?.dimension, 64) || null;
+    if (!position || !player || !dimension) return null;
     const goal = this.activeGoal;
     return this.persist({
       ...goal,
@@ -1431,7 +1466,7 @@ export class GoalDirector {
         deliveryTarget: {
           player,
           position,
-          dimension: boundedText(observation?.dimension, 64) || null,
+          dimension,
           source: boundedText(observation?.source, 32) || 'last_seen',
           observedAt: Number.isFinite(observation?.observedAt)
             ? observation.observedAt
@@ -1444,7 +1479,7 @@ export class GoalDirector {
 
   companionDeliveryTarget(goal) {
     const context = this.agent.companion_context?.snapshot?.();
-    if (!context?.lastSeenPosition) return null;
+    if (!context?.lastSeenPosition || !context?.lastSeenDimension) return null;
     const observedName = context.canonicalUsername || context.requestedName || context.alias;
     if (!playerNamesMatch(goal.destination.player, observedName)) return null;
     return {
@@ -1476,10 +1511,22 @@ export class GoalDirector {
       companion?.authoritativePlayer,
       goal.destination.player,
     );
-    const rememberedTarget = this.activeGoal?.memory?.deliveryTarget || goal.memory?.deliveryTarget;
-    const rememberedTargetFresh = playerNamesMatch(rememberedTarget?.player, goal.destination.player)
-      && rememberedTarget?.source === 'managed_paper'
-      && this.now() - rememberedTarget.observedAt < PLAYER_WAIT_MS;
+    const persistedTarget = this.activeGoal?.memory?.deliveryTarget || goal.memory?.deliveryTarget || null;
+    const persistedMatches = playerNamesMatch(persistedTarget?.player, goal.destination.player)
+      && physicalPosition(persistedTarget?.position)
+      && persistedTarget?.dimension
+      && Number.isFinite(persistedTarget?.observedAt);
+    const sharedTarget = this.companionDeliveryTarget(goal);
+    let anchor = persistedMatches ? persistedTarget : null;
+    if (
+      sharedTarget
+      && (!anchor || sharedTarget.observedAt > anchor.observedAt)
+    ) {
+      anchor = this.rememberDeliveryTarget(goal.id, sharedTarget) || sharedTarget;
+    }
+    const rememberedTargetFresh = playerNamesMatch(anchor?.player, goal.destination.player)
+      && anchor?.source === 'managed_paper'
+      && this.now() - anchor.observedAt < PLAYER_WAIT_MS;
     const lookupStale = !rememberedTargetFresh && (
       !lookupMatches
       || companion?.authoritativeCheckAge === null
@@ -1515,21 +1562,54 @@ export class GoalDirector {
     }
 
     if (lookupMatches && companion?.authoritativeFound === false) {
+      this.persist({
+        ...this.activeGoal,
+        evidence: {
+          actionId: '',
+          phase: 'blocked',
+          code: 'delivery_player_offline',
+          detail: `The managed server explicitly confirmed that ${goal.destination.player} is offline.`,
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
       this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
       this.setStatus('waiting', 'delivery_player_offline', `Waiting for ${goal.destination.player} to join the managed server.`, true);
       return false;
     }
 
-    let anchor = this.activeGoal?.memory?.deliveryTarget || goal.memory?.deliveryTarget || null;
-    if (!anchor) {
-      const fallback = this.companionDeliveryTarget(goal);
-      if (fallback) anchor = this.rememberDeliveryTarget(goal.id, fallback);
+    const recentTechnicalFailure = lookupMatches
+      && Number.isFinite(companion?.authoritativeCheckedAt)
+      && companion?.authoritativeFound === null
+      && Number.isFinite(companion?.authoritativeCheckAge)
+      && companion.authoritativeCheckAge < PLAYER_WAIT_MS;
+    if (recentTechnicalFailure) {
+      this.persist({
+        ...this.activeGoal,
+        evidence: {
+          actionId: '',
+          phase: 'blocked',
+          code: 'delivery_locator_unavailable',
+          detail: `The managed server could not produce a complete current position for ${goal.destination.player}; waiting without using historical coordinates.`,
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
+      this.setStatus('waiting', 'delivery_locator_unavailable', `Waiting for a complete current location for ${goal.destination.player}.`, true);
+      return false;
     }
     const botPosition = physicalPosition(this.agent.bot?.entity?.position);
     const anchorPosition = physicalPosition(anchor?.position);
-    const sameDimension = !anchor?.dimension
-      || normalizedDimension(anchor.dimension) === normalizedDimension(this.agent.bot?.game?.dimension);
-    if (anchorPosition && botPosition && sameDimension) {
+    const botDimension = boundedText(this.agent.bot?.game?.dimension, 64) || null;
+    const anchorComplete = Boolean(anchorPosition && anchor?.dimension && Number.isFinite(anchor?.observedAt));
+    const anchorFresh = anchorComplete && this.now() - anchor.observedAt <= PLAYER_ANCHOR_MAX_AGE_MS;
+    const sameDimension = anchorComplete
+      && botDimension
+      && normalizedDimension(anchor.dimension) === normalizedDimension(botDimension);
+    if (anchorFresh && botPosition && sameDimension) {
       const distance = distanceBetween(botPosition, anchorPosition);
       if (distance > DELIVERY_REACQUIRE_DISTANCE) {
         const ageSeconds = Math.max(0, Math.round((this.now() - anchor.observedAt) / 1_000));
@@ -1558,13 +1638,23 @@ export class GoalDirector {
     // Keep the typed goal durably in its delivery phase until the exact player
     // returns, Operator Stop cancels it, or a later player command supersedes it.
     this.persist({
-      ...goal,
+      ...this.activeGoal,
       evidence: {
         actionId: '',
         phase: 'blocked',
-        code: resolution.ambiguous ? 'delivery_player_ambiguous' : 'delivery_player_absent',
-        detail: anchorPosition
+        code: resolution.ambiguous
+          ? 'delivery_player_ambiguous'
+          : anchorComplete && !sameDimension
+            ? 'delivery_player_other_dimension'
+            : anchorComplete && !anchorFresh
+              ? 'delivery_player_anchor_stale'
+              : 'delivery_player_absent',
+        detail: anchorFresh && anchorPosition
           ? `Waiting near ${goal.destination.player}'s last authoritative position for exact entity pickup verification.`
+          : anchorComplete && !sameDimension
+            ? `Waiting for ${goal.destination.player} to return to ${botDimension || 'the bot dimension'} before navigation.`
+            : anchorComplete && !anchorFresh
+              ? `Waiting for a fresh authoritative position for ${goal.destination.player}; historical coordinates are not movement authority.`
           : `Waiting for ${goal.destination.player} to be physically present for verified pickup.`,
         verified: false,
         at: this.now(),
@@ -1572,7 +1662,12 @@ export class GoalDirector {
       updatedAt: this.now(),
     });
     this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
-    this.setStatus('waiting', 'delivery_player_absent', `Waiting for ${goal.destination.player} to return.`, true);
+    this.setStatus(
+      'waiting',
+      this.activeGoal.evidence.code,
+      `Waiting for ${goal.destination.player} to return.`,
+      true,
+    );
     return false;
   }
 

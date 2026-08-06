@@ -195,6 +195,9 @@ export class Agent {
         this._deathCleanupPromise = null;
         this._lastAliveInventorySnapshot = {};
         this._lastAliveInventorySnapshotAt = 0;
+        this._playerPositionLookup = null;
+        this._playerPositionLookupGeneration = 0;
+        this._requestPlayerPosition = requestPlayerPosition;
 
         const nameCheck = validateNameFormat(settings?.profile?.name);
         if (!nameCheck.success) {
@@ -287,7 +290,7 @@ export class Agent {
             ? rememberedPlayerGoal.destination.player
             : null;
         const rememberedPosition = rememberedPlayerGoal?.memory?.deliveryTarget;
-        if (rememberedPlayer && rememberedPosition?.position) {
+        if (rememberedPlayer && rememberedPosition?.position && rememberedPosition?.dimension) {
             this.companion_context.observeAuthoritativePosition(rememberedPlayer, {
                 success: true,
                 found: true,
@@ -612,12 +615,19 @@ export class Agent {
         if (this._playerPositionLookup?.player === normalized) {
             return this._playerPositionLookup.promise;
         }
-        const promise = requestPlayerPosition(playerName)
+        const generation = Math.max(0, Number(this._playerPositionLookupGeneration) || 0) + 1;
+        this._playerPositionLookupGeneration = generation;
+        const request = this._requestPlayerPosition || requestPlayerPosition;
+        const promise = Promise.resolve(request(playerName))
             .then(observation => {
+                if (
+                    this._playerPositionLookupGeneration !== generation
+                    || this._playerPositionLookup?.player !== normalized
+                ) return observation;
                 this.companion_context?.observeAuthoritativePosition?.(playerName, observation);
                 return observation;
             });
-        this._playerPositionLookup = { player: normalized, promise };
+        this._playerPositionLookup = { player: normalized, generation, promise };
         try {
             return await promise;
         } finally {

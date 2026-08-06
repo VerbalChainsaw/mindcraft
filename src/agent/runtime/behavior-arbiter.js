@@ -15,6 +15,7 @@ const RECOVERY_MODES = Object.freeze(['unstuck']);
 // executes orders and a player who notices things.
 const OPPORTUNITY_MODES = Object.freeze(['item_collecting', 'torch_placing', 'hunting']);
 const AUTHORITATIVE_PLAYER_REFRESH_MS = 5_000;
+const IDLE_AUTHORITATIVE_PLAYER_REFRESH_MS = 30_000;
 const IDLE_EMBODIMENT_MODES = Object.freeze(['elbow_room', 'idle_staring']);
 const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
 // Automatic role work also owns a live order. Without this set the role lane
@@ -90,6 +91,18 @@ export function tickDelayForStatus(status, {
   const cap = URGENCY_TICK_CAP[urgency] ?? MAX_TICK_MS;
   const scaled = urgency === 'calm' ? base * scale : base;
   return Math.min(MAX_TICK_MS, Math.max(MIN_TICK_MS, Math.round(Math.min(scaled, cap))));
+}
+
+export function authoritativePlayerRefreshMs(agent, companion) {
+  if (agent?.isOperatorHeld?.()) return null;
+  const activeGoal = agent?.goal_director?.activeGoal;
+  const ownsDelivery = activeGoal?.phase === 'deliver'
+    && activeGoal?.destination?.kind === 'player';
+  const directive = String(companion?.directive || '').toLowerCase();
+  const ownsCompanionMovement = directive === 'follow' || directive === 'guard';
+  return ownsDelivery || ownsCompanionMovement
+    ? AUTHORITATIVE_PLAYER_REFRESH_MS
+    : IDLE_AUTHORITATIVE_PLAYER_REFRESH_MS;
 }
 
 function boundedText(value, fallback = '') {
@@ -485,12 +498,14 @@ export class BehaviorArbiter {
           dimension: this.agent.bot?.game?.dimension,
         });
         const companion = context.snapshot?.();
+        const authoritativeRefreshMs = authoritativePlayerRefreshMs(this.agent, companion);
         if (
           !resolution.entity
           && typeof this.agent.locatePlayerPosition === 'function'
+          && authoritativeRefreshMs !== null
           && (
             companion?.authoritativeCheckAge === null
-            || companion?.authoritativeCheckAge >= AUTHORITATIVE_PLAYER_REFRESH_MS
+            || companion?.authoritativeCheckAge >= authoritativeRefreshMs
           )
         ) {
           void this.agent.locatePlayerPosition(requested)

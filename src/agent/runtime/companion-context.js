@@ -135,16 +135,27 @@ export class CompanionContext {
   observeAuthoritativePosition(requestedName, observation) {
     const checkedAt = Number.isFinite(observation?.observedAt) ? observation.observedAt : this.now();
     const requested = boundedText(requestedName, 64);
+    const position = positionSnapshot(observation?.position);
+    const dimension = boundedText(observation?.dimension, 64) || null;
+    const completePositive = Boolean(
+      observation?.success === true
+      && observation?.found === true
+      && position
+      && dimension
+    );
     this.authoritativeCheckedAt = checkedAt;
-    this.authoritativeFound = observation?.success === true ? observation?.found === true : null;
+    this.authoritativeFound = observation?.success === true && observation?.found === false
+      ? false
+      : completePositive
+        ? true
+        : null;
     this.authoritativePlayer = requested || this.authoritativePlayer;
     if (requested) this.requestedName = requested;
-    const position = positionSnapshot(observation?.position);
-    if (!position || observation?.found !== true) return this.snapshot();
+    if (!completePositive) return this.snapshot();
     const canonical = boundedText(observation.player || requestedName, 64);
     if (canonical) this.canonicalUsername = canonical;
     this.lastSeenPosition = position;
-    this.lastSeenDimension = boundedText(observation.dimension, 64) || this.lastSeenDimension;
+    this.lastSeenDimension = dimension;
     this.lastSeenSource = boundedText(observation.source, 32) || 'managed_paper';
     this.lastSeenAt = Number.isFinite(observation.observedAt) ? observation.observedAt : this.now();
     this.observedAt = this.lastSeenAt;

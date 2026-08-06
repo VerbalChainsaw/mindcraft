@@ -37,6 +37,16 @@ class FakeChildProcess extends EventEmitter {
   }
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 class FakeRegisteredAgentProcess {
   constructor() {
     this.state = 'idle';
@@ -938,4 +948,44 @@ test('Given a failed child startup, when Mindcraft creates the agent, then it re
   } finally {
     Mindcraft.destroyAgent(agentName);
   }
+});
+
+test('a delayed player-A lookup cannot overwrite the newer authorized player-B observation', async () => {
+  const requestA = deferred();
+  const requestB = deferred();
+  const observed = [];
+  const harness = {
+    _playerPositionLookup: null,
+    _playerPositionLookupGeneration: 0,
+    _requestPlayerPosition(name) {
+      return name === 'PlayerA' ? requestA.promise : requestB.promise;
+    },
+    companion_context: {
+      observeAuthoritativePosition(name, observation) {
+        observed.push({ name, observation });
+      },
+    },
+  };
+
+  const lookupA = Agent.prototype.locatePlayerPosition.call(harness, 'PlayerA');
+  const lookupB = Agent.prototype.locatePlayerPosition.call(harness, 'PlayerB');
+  requestB.resolve({
+    success: true,
+    found: true,
+    player: 'PlayerB',
+    position: { x: 20, y: 70, z: 20 },
+    dimension: 'minecraft:overworld',
+  });
+  await lookupB;
+  requestA.resolve({
+    success: true,
+    found: true,
+    player: 'PlayerA',
+    position: { x: -20, y: 70, z: -20 },
+    dimension: 'minecraft:overworld',
+  });
+  await lookupA;
+
+  assert.deepEqual(observed.map(entry => entry.name), ['PlayerB']);
+  assert.equal(harness._playerPositionLookup, null);
 });

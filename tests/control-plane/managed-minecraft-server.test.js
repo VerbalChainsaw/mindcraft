@@ -17,6 +17,82 @@ import { swarm } from '../../src/mindcraft/swarm/swarm.js';
 const sha1Of = (value) => createHash('sha1').update(value).digest('hex');
 const sha256Of = (value) => createHash('sha256').update(value).digest('hex');
 
+test('managed player observations are positive only with position and dimension, and offline only when explicit', () => {
+  const complete = managedServerModule.parseManagedPlayerPositionLogs([
+    '[12:00:00 INFO]: phixxation has the following entity data: [1.5d, 64.0d, -3.25d]',
+    '[12:00:00 INFO]: phixxation has the following entity data: "minecraft:overworld"',
+  ], 'phixxation');
+  assert.deepEqual(complete, {
+    success: true,
+    found: true,
+    code: 'player_position_found',
+    player: 'phixxation',
+    position: { x: 1.5, y: 64, z: -3.25 },
+    dimension: 'minecraft:overworld',
+  });
+
+  const partial = managedServerModule.parseManagedPlayerPositionLogs([
+    '[12:00:00 INFO]: phixxation has the following entity data: [1.5d, 64.0d, -3.25d]',
+  ], 'phixxation');
+  assert.equal(partial.success, false);
+  assert.equal(partial.found, null);
+  assert.equal(partial.code, 'player_position_incomplete');
+
+  const delayed = managedServerModule.parseManagedPlayerPositionLogs([], 'phixxation');
+  assert.equal(delayed.success, false);
+  assert.equal(delayed.found, null);
+  assert.equal(delayed.code, 'player_position_unavailable');
+
+  const offline = managedServerModule.parseManagedPlayerPositionLogs([
+    '[12:00:00 INFO]: No entity was found',
+  ], 'phixxation');
+  assert.equal(offline.success, true);
+  assert.equal(offline.found, false);
+  assert.equal(offline.code, 'player_not_found');
+});
+
+test('managed player lookups serialize unqualified console results and preserve Floodgate-safe names', async () => {
+  const manager = new managedServerModule.ManagedMinecraftServer();
+  const stdin = new PassThrough();
+  const commands = [];
+  manager.child = { stdin };
+  manager.phase = 'running';
+  stdin.on('data', (chunk) => {
+    const command = String(chunk).trim();
+    commands.push(command);
+    queueMicrotask(() => {
+      if (command === 'data get entity Missing Pos') {
+        manager.appendLog('[12:00:00 INFO]: No entity was found\n');
+      } else if (command === 'data get entity .Bubby Pos') {
+        manager.appendLog('[12:00:00 INFO]: .Bubby has the following entity data: [8.0d, 70.0d, -4.0d]\n');
+      } else if (command === 'data get entity .Bubby Dimension') {
+        manager.appendLog('[12:00:00 INFO]: .Bubby has the following entity data: "minecraft:overworld"\n');
+      }
+    });
+  });
+
+  const [missing, present] = await Promise.all([
+    manager.locatePlayerPosition('Missing'),
+    manager.locatePlayerPosition('.Bubby'),
+  ]);
+
+  assert.equal(missing.success, true);
+  assert.equal(missing.found, false);
+  assert.equal(present.success, true);
+  assert.equal(present.found, true);
+  assert.deepEqual(present.position, { x: 8, y: 70, z: -4 });
+  assert.equal(present.dimension, 'minecraft:overworld');
+  assert.deepEqual(commands, [
+    'data get entity Missing Pos',
+    'data get entity .Bubby Pos',
+    'data get entity .Bubby Dimension',
+  ]);
+  await assert.rejects(
+    () => manager.locatePlayerPosition('seventeen_lettersx'),
+    /not valid/i,
+  );
+});
+
 function requestJson(server, requestPath, { method = 'GET', body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : JSON.stringify(body);

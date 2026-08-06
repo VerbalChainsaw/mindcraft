@@ -37,6 +37,7 @@ test('Given installed Ollama models, when local quickstart is planned, then it c
   assert.equal(plan.profile.runtime.jobs.mode, 'resumable');
   assert.equal(plan.profile.runtime.reactions.mode, 'natural');
   assert.equal(plan.profile.modes.self_preservation, true);
+  assert.equal(plan.profile.modes.hunting, false);
   assert.equal(plan.profile.modes.item_collecting, true);
   assert.deepEqual(plan.configUpdate.profiles, [LOCAL_QUICKSTART_PROFILE]);
   assert.equal(plan.configUpdate.auto_open_ui, true);

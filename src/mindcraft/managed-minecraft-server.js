@@ -66,6 +66,9 @@ const BOOLEAN_SERVER_SETTINGS = Object.freeze([
 const MAX_CONSOLE_COMMAND_CHARS = 2_048;
 const MAX_CONSOLE_COMMAND_BATCH = 128;
 const MAX_CONSOLE_COMMAND_SETTLE_MS = 2_000;
+const MANAGED_PLAYER_RESPONSE_TIMEOUT_MS = 750;
+const MANAGED_PLAYER_RESPONSE_POLL_MS = 20;
+const MANAGED_PLAYER_NAME = /^(?:[A-Za-z0-9_]{1,16}|\.[A-Za-z0-9_]{1,15})$/;
 const BLOCKED_CONSOLE_COMMANDS = new Set([
   'stop',
   'minecraft:stop',
@@ -321,18 +324,42 @@ export function parseManagedPlayerPositionLogs(logs, playerName) {
   const prefix = new RegExp(`${escapedName} has the following entity data:\\s*`, 'i');
   let position = null;
   let dimension = null;
+  let explicitlyMissing = false;
   for (const line of lines) {
-    if (!prefix.test(line)) continue;
-    const vector = line.match(/\[\s*(-?\d+(?:\.\d+)?)[dDfF]?,\s*(-?\d+(?:\.\d+)?)[dDfF]?,\s*(-?\d+(?:\.\d+)?)[dDfF]?\s*\]/);
+    if (/\bNo entity was found\b/i.test(line)) {
+      explicitlyMissing = true;
+      continue;
+    }
+    const prefixed = line.match(prefix);
+    if (!prefixed) continue;
+    const payload = line.slice((prefixed.index || 0) + prefixed[0].length).trim();
+    const vector = payload.match(/\[\s*(-?\d+(?:\.\d+)?)[dDfF]?,\s*(-?\d+(?:\.\d+)?)[dDfF]?,\s*(-?\d+(?:\.\d+)?)[dDfF]?\s*\]/);
     if (vector) {
       position = { x: Number(vector[1]), y: Number(vector[2]), z: Number(vector[3]) };
       continue;
     }
-    const dimensionMatch = line.match(/"?(minecraft:[a-z0-9_.-]+)"?/i);
+    const dimensionMatch = payload.match(/^"?([a-z0-9_.-]+:[a-z0-9_./-]+)"?$/i);
     if (dimensionMatch) dimension = dimensionMatch[1].toLowerCase();
   }
+  if (explicitlyMissing) {
+    return {
+      success: true,
+      found: false,
+      code: 'player_not_found',
+      player: name,
+      position: null,
+      dimension: null,
+    };
+  }
+  const complete = Boolean(position && dimension);
   return {
-    found: Boolean(position),
+    success: complete,
+    found: complete ? true : null,
+    code: complete
+      ? 'player_position_found'
+      : position || dimension
+        ? 'player_position_incomplete'
+        : 'player_position_unavailable',
     player: name,
     position,
     dimension,
@@ -530,6 +557,8 @@ export class ManagedMinecraftServer {
     this.child = null;
     this.startedAt = null;
     this.logs = [];
+    this.logSequence = 0;
+    this.logRecords = [];
     this.outputBuffers = { stdout: '', stderr: '' };
     this.crossplayRuntimeReady = false;
     this.geyserRuntimeEndpoint = null;
@@ -538,6 +567,7 @@ export class ManagedMinecraftServer {
     this.startGeneration = 0;
     this.writeSequence = 0;
     this.configWriteQueue = Promise.resolve();
+    this.playerLocationQueue = Promise.resolve();
     this.readinessPromise = null;
   }
 
@@ -1448,8 +1478,15 @@ export class ManagedMinecraftServer {
   }
 
   pushLog(line) {
-    this.logs.push(String(line));
+    const text = String(line);
+    this.logs.push(text);
     if (this.logs.length > MAX_LOG_LINES) this.logs.splice(0, this.logs.length - MAX_LOG_LINES);
+    const record = { sequence: ++this.logSequence, line: text };
+    this.logRecords.push(record);
+    if (this.logRecords.length > MAX_LOG_LINES) {
+      this.logRecords.splice(0, this.logRecords.length - MAX_LOG_LINES);
+    }
+    return record;
   }
 
   async start() {
@@ -1508,6 +1545,7 @@ export class ManagedMinecraftServer {
     this.phase = 'starting';
     this.error = null;
     this.logs = [];
+    this.logRecords = [];
     this.outputBuffers = { stdout: '', stderr: '' };
     this.crossplayRuntimeReady = false;
     this.geyserRuntimeEndpoint = null;
@@ -1670,24 +1708,91 @@ export class ManagedMinecraftServer {
     return this.getStatus();
   }
 
+  async waitForManagedPlayerCommand(markerSequence, playerName, expected) {
+    const deadline = Date.now() + MANAGED_PLAYER_RESPONSE_TIMEOUT_MS;
+    while (Date.now() <= deadline) {
+      const records = this.logRecords.filter(record => record.sequence > markerSequence);
+      const nextCommandIndex = records.findIndex(record => record.line.startsWith('[command] > '));
+      const responseRecords = nextCommandIndex >= 0 ? records.slice(0, nextCommandIndex) : records;
+      const lines = responseRecords.map(record => record.line);
+      const parsed = parseManagedPlayerPositionLogs(lines, playerName);
+      if (parsed.found === false) return { status: 'not_found', lines };
+      if (expected === 'position' && parsed.position) return { status: 'observed', lines };
+      if (expected === 'dimension' && parsed.dimension) return { status: 'observed', lines };
+      if (nextCommandIndex >= 0) return { status: 'interleaved', lines };
+      await new Promise(resolve => setTimeout(resolve, MANAGED_PLAYER_RESPONSE_POLL_MS));
+    }
+    return { status: 'timeout', lines: [] };
+  }
+
+  async locatePlayerPositionNow(name) {
+    const observe = (command, expected) => {
+      this.assertCommandConsoleReady();
+      this.child.stdin.write(`${command}\n`);
+      const marker = this.pushLog(`[command] > ${redactCommandForLog(command)}`);
+      return this.waitForManagedPlayerCommand(marker.sequence, name, expected);
+    };
+    const position = await observe(`data get entity ${name} Pos`, 'position');
+    if (position.status === 'not_found') {
+      return {
+        success: true,
+        found: false,
+        code: 'player_not_found',
+        player: name,
+        position: null,
+        dimension: null,
+      };
+    }
+    if (position.status !== 'observed') {
+      return {
+        success: false,
+        found: null,
+        code: position.status === 'timeout'
+          ? 'player_position_timeout'
+          : 'player_position_unavailable',
+        player: name,
+        position: null,
+        dimension: null,
+      };
+    }
+    const dimension = await observe(`data get entity ${name} Dimension`, 'dimension');
+    if (dimension.status === 'not_found') {
+      return {
+        success: true,
+        found: false,
+        code: 'player_not_found',
+        player: name,
+        position: null,
+        dimension: null,
+      };
+    }
+    if (dimension.status !== 'observed') {
+      return {
+        success: false,
+        found: null,
+        code: dimension.status === 'timeout'
+          ? 'player_position_incomplete'
+          : 'player_position_unavailable',
+        player: name,
+        position: null,
+        dimension: null,
+      };
+    }
+    return parseManagedPlayerPositionLogs([...position.lines, ...dimension.lines], name);
+  }
+
   async locatePlayerPosition(playerName) {
     const name = String(playerName || '').trim();
-    if (!/^\.?[A-Za-z0-9_]{1,32}$/.test(name)) {
+    if (!MANAGED_PLAYER_NAME.test(name)) {
       throw new ManagedMinecraftServerError('Player name is not valid for an authoritative position lookup.');
     }
-    const positionCommand = `data get entity ${name} Pos`;
-    await this.sendCommands([
-      positionCommand,
-      `data get entity ${name} Dimension`,
-    ], { settleMs: 150 });
-    const marker = `[command] > ${positionCommand}`;
-    const markerIndex = this.logs.findLastIndex(line => String(line).includes(marker));
-    const observation = parseManagedPlayerPositionLogs(
-      markerIndex >= 0 ? this.logs.slice(markerIndex) : this.logs.slice(-12),
-      name,
+    const operation = this.playerLocationQueue.then(
+      () => this.locatePlayerPositionNow(name),
+      () => this.locatePlayerPositionNow(name),
     );
+    this.playerLocationQueue = operation.catch(() => {});
+    const observation = await operation;
     return {
-      success: true,
       source: 'managed_paper',
       observedAt: Date.now(),
       ...observation,

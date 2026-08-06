@@ -4,7 +4,10 @@ import test from 'node:test';
 
 import { ActionManager } from '../../src/agent/action_manager.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
-import { BehaviorArbiter } from '../../src/agent/runtime/behavior-arbiter.js';
+import {
+  authoritativePlayerRefreshMs,
+  BehaviorArbiter,
+} from '../../src/agent/runtime/behavior-arbiter.js';
 import {
   DecisionTraceRecorder,
   extractDecisionTraces,
@@ -42,6 +45,16 @@ function fakeAgent({ emergency = false, held = false, survival = null, job = nul
     calls,
   };
 }
+
+test('authoritative player polling is held-safe, owner-responsive, and idle-backed-off', () => {
+  assert.equal(authoritativePlayerRefreshMs({ isOperatorHeld: () => true }, {}), null);
+  assert.equal(authoritativePlayerRefreshMs({
+    isOperatorHeld: () => false,
+    goal_director: { activeGoal: { phase: 'deliver', destination: { kind: 'player' } } },
+  }, {}), 5_000);
+  assert.equal(authoritativePlayerRefreshMs({ isOperatorHeld: () => false }, { directive: 'follow' }), 5_000);
+  assert.equal(authoritativePlayerRefreshMs({ isOperatorHeld: () => false }, {}), 30_000);
+});
 
 test('trace enablement preserves the emergency selection and side-effect order', async () => {
   const traced = fakeAgent({ emergency: true });

@@ -2209,7 +2209,7 @@ async function createMindServerAtPort(port, dependencies = {}) {
                 return;
             }
             const requested = typeof playerName === 'string' ? playerName.trim() : '';
-            if (!/^\.?[A-Za-z0-9_]{1,32}$/.test(requested)) {
+            if (!/^(?:[A-Za-z0-9_]{1,16}|\.[A-Za-z0-9_]{1,15})$/.test(requested)) {
                 reply({ success: false, error: 'Player name is invalid.' });
                 return;
             }
@@ -2218,6 +2218,8 @@ async function createMindServerAtPort(port, dependencies = {}) {
             } catch (error) {
                 reply({
                     success: false,
+                    found: null,
+                    code: 'player_position_unavailable',
                     error: String(error?.message || error || 'Player position lookup failed.').slice(0, 240),
                 });
             }

@@ -78,7 +78,7 @@ export function createLocalQuickstartPlan(input, models, existingConfig = {}) {
       unstuck: true,
       cowardice: false,
       self_defense: true,
-      hunting: true,
+      hunting: false,
       item_collecting: true,
       torch_placing: true,
       elbow_room: true,

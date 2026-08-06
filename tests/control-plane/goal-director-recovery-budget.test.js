@@ -14,6 +14,20 @@ function subgoal(kind, index, state = 'succeeded') {
   };
 }
 
+function settle() {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createDirector() {
   const store = { load: () => ({ activeGoal: null, lastGoal: null }), save() {} };
   const procedures = { find: () => null, record: () => null };
@@ -422,6 +436,177 @@ test('delivery preserves attempts, resolves an unloaded player, and returns thro
   assert.equal(director.activeGoal.attempts, 2);
 });
 
+test('delivery routes to the newest complete shared player observation', () => {
+  const director = createDirector();
+  director.now = () => 100_000;
+  director.agent.bot.players = {};
+  director.agent.bot.entities = {};
+  director.agent.bot.entity = { position: { x: 0, y: 64, z: 0 } };
+  director.agent.bot.game = { dimension: 'overworld' };
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'phixxation',
+    destinationPlayer: 'phixxation',
+    target: {
+      requestedName: 'iron_axe',
+      canonicalName: 'iron_axe',
+      inventoryName: 'iron_axe',
+      acquisitionName: 'iron_axe',
+      family: null,
+      acquisitionKind: 'prepare_tool',
+    },
+    quantity: 1,
+    completion: 'delivery',
+  });
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'deliver',
+    memory: {
+      deliveryTarget: {
+        player: 'phixxation',
+        position: { x: 30, y: 64, z: 30 },
+        dimension: 'minecraft:overworld',
+        source: 'managed_paper',
+        observedAt: 96_000,
+      },
+    },
+  });
+  director.agent.companion_context = {
+    snapshot: () => ({
+      canonicalUsername: 'phixxation',
+      requestedName: 'phixxation',
+      lastSeenPosition: { x: 100, y: 70, z: 100 },
+      lastSeenDimension: 'minecraft:overworld',
+      lastSeenSource: 'managed_paper',
+      lastSeenAt: 99_000,
+      authoritativePlayer: 'phixxation',
+      authoritativeFound: true,
+      authoritativeCheckedAt: 99_000,
+      authoritativeCheckAge: 1_000,
+    }),
+  };
+  const commands = [];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+
+  assert.equal(director.waitForPlayer(director.activeGoal), false);
+  assert.deepEqual(commands, ['!goToCoordinates(100, 70, 100, 16)']);
+  assert.deepEqual(director.activeGoal.memory.deliveryTarget.position, { x: 100, y: 70, z: 100 });
+});
+
+test('technical player-locator failure never authorizes movement to an old anchor', () => {
+  const director = createDirector();
+  director.now = () => 100_000;
+  director.agent.bot.players = {};
+  director.agent.bot.entities = {};
+  director.agent.bot.entity = { position: { x: 0, y: 64, z: 0 } };
+  director.agent.bot.game = { dimension: 'overworld' };
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'phixxation',
+    destinationPlayer: 'phixxation',
+    target: {
+      requestedName: 'iron_axe',
+      canonicalName: 'iron_axe',
+      inventoryName: 'iron_axe',
+      acquisitionName: 'iron_axe',
+      family: null,
+      acquisitionKind: 'prepare_tool',
+    },
+    quantity: 1,
+    completion: 'delivery',
+  });
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'deliver',
+    attempts: 2,
+    memory: {
+      deliveryTarget: {
+        player: 'phixxation',
+        position: { x: 100, y: 70, z: 100 },
+        dimension: 'minecraft:overworld',
+        source: 'managed_paper',
+        observedAt: 90_000,
+      },
+    },
+  });
+  director.agent.companion_context = {
+    snapshot: () => ({
+      requestedName: 'phixxation',
+      authoritativePlayer: 'phixxation',
+      authoritativeFound: null,
+      authoritativeCheckedAt: 100_000,
+      authoritativeCheckAge: 0,
+      lastSeenPosition: { x: 100, y: 70, z: 100 },
+      lastSeenDimension: 'minecraft:overworld',
+      lastSeenSource: 'managed_paper',
+      lastSeenAt: 90_000,
+    }),
+  };
+  const commands = [];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+
+  assert.equal(director.waitForPlayer(director.activeGoal), false);
+  assert.deepEqual(commands, []);
+  assert.equal(director.activeGoal.phase, 'deliver');
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.activeGoal.evidence.code, 'delivery_locator_unavailable');
+});
+
+test('dimensionless player observations are never movement authority', () => {
+  const director = createDirector();
+  director.now = () => 100_000;
+  director.agent.bot.players = {};
+  director.agent.bot.entities = {};
+  director.agent.bot.entity = { position: { x: 0, y: 64, z: 0 } };
+  director.agent.bot.game = { dimension: 'overworld' };
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'phixxation',
+    destinationPlayer: 'phixxation',
+    target: {
+      requestedName: 'iron_axe',
+      canonicalName: 'iron_axe',
+      inventoryName: 'iron_axe',
+      acquisitionName: 'iron_axe',
+      family: null,
+      acquisitionKind: 'prepare_tool',
+    },
+    quantity: 1,
+    completion: 'delivery',
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'deliver' });
+  director.agent.companion_context = {
+    snapshot: () => ({
+      requestedName: 'phixxation',
+      canonicalUsername: 'phixxation',
+      lastSeenPosition: { x: 100, y: 70, z: 100 },
+      lastSeenDimension: null,
+      lastSeenSource: 'managed_paper',
+      lastSeenAt: 99_000,
+      authoritativePlayer: 'phixxation',
+      authoritativeFound: true,
+      authoritativeCheckedAt: 99_000,
+      authoritativeCheckAge: 1_000,
+    }),
+  };
+  const commands = [];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+
+  assert.equal(director.waitForPlayer(director.activeGoal), false);
+  assert.deepEqual(commands, []);
+  assert.equal(director.activeGoal.phase, 'deliver');
+  assert.equal(director.activeGoal.evidence.code, 'delivery_player_absent');
+});
+
 test('one no-progress concrete failure relocates before the same regional signature can spend another attempt', async () => {
   const director = createDirector();
   const now = Date.now();
@@ -631,4 +816,87 @@ test('verified supported ascent stays latched below the old target-gap threshold
   assert.equal(director.activeGoal.phase, 'recover');
   assert.equal(director.activeGoal.attempts, 2);
   assert.equal(director.status.code, 'verified_surface_progress');
+});
+
+test('late settlement cannot reopen or mutate a cancelled typed goal', async () => {
+  const director = createDirector();
+  const execution = deferred();
+  director.executeGoalCommand = () => execution.promise;
+  assert.equal(director.submit(boundaryGoal([])).accepted, true);
+
+  assert.equal(director.dispatch('recover', '!moveAway(4)'), true);
+  assert.equal(director.inFlight, true);
+  assert.equal(director.cancel('Operator Stop.'), true);
+  const cancelled = director.lastGoal;
+
+  director.agent.last_action_result = {
+    actionId: 'late-goal-a',
+    phase: 'succeeded',
+    code: 'skill_retreated',
+    detail: 'This result arrived after cancellation.',
+    retryable: false,
+  };
+  execution.resolve(true);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal, cancelled);
+  assert.equal(director.lastGoal.phase, 'cancelled');
+  assert.equal(director.status.code, 'goal_cancelled');
+  assert.equal(director.inFlight, false);
+  assert.equal(director.activeDispatch, null);
+});
+
+test('late Goal A settlement cannot mutate or release replacement Goal B', async () => {
+  const director = createDirector();
+  const executionA = deferred();
+  const executionB = deferred();
+  let dispatchCount = 0;
+  director.executeGoalCommand = () => {
+    dispatchCount += 1;
+    return dispatchCount === 1 ? executionA.promise : executionB.promise;
+  };
+
+  assert.equal(director.submit(boundaryGoal([])).accepted, true);
+  assert.equal(director.dispatch('recover', '!moveAway(4)'), true);
+  director.cancel('Replace Goal A.');
+
+  assert.equal(director.submit(boundaryGoal([])).accepted, true);
+  assert.equal(director.dispatch('recover', '!moveAway(4)'), true);
+  const dispatchB = director.activeDispatch;
+  const goalBId = director.activeGoal.id;
+  const goalBSubgoals = director.activeGoal.subgoals;
+
+  director.agent.last_action_result = {
+    actionId: 'late-goal-a',
+    phase: 'failed',
+    code: 'skill_path_stalled',
+    detail: 'Goal A settled after Goal B started.',
+    retryable: true,
+  };
+  executionA.resolve(false);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeGoal.id, goalBId);
+  assert.equal(director.activeGoal.subgoals, goalBSubgoals);
+  assert.equal(director.activeDispatch, dispatchB);
+  assert.equal(director.inFlight, true);
+
+  director.agent.last_action_result = {
+    actionId: 'goal-b',
+    phase: 'succeeded',
+    code: 'skill_retreated',
+    detail: 'Goal B settled normally.',
+    retryable: false,
+  };
+  executionB.resolve(true);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeGoal.id, goalBId);
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.inFlight, false);
+  assert.equal(director.activeDispatch, null);
 });

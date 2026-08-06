@@ -549,7 +549,12 @@ export function requestPlayerPosition(playerName) {
     return new Promise((resolve) => {
         const socket = serverProxy.getSocket();
         if (!socket?.connected) {
-            resolve({ success: false, error: 'MindServer is not connected.' });
+            resolve({
+                success: false,
+                found: null,
+                code: 'player_position_unavailable',
+                error: 'MindServer is not connected.',
+            });
             return;
         }
         let settled = false;
@@ -557,16 +562,31 @@ export function requestPlayerPosition(playerName) {
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
-            resolve(result || { success: false, error: 'Player position lookup returned no response.' });
+            resolve(result || {
+                success: false,
+                found: null,
+                code: 'player_position_unavailable',
+                error: 'Player position lookup returned no response.',
+            });
         };
         const timeout = setTimeout(
-            () => finish({ success: false, error: 'Player position lookup timed out after 2 seconds.' }),
-            2_000,
+            () => finish({
+                success: false,
+                found: null,
+                code: 'player_position_unavailable',
+                error: 'Player position lookup timed out after 4 seconds.',
+            }),
+            4_000,
         );
         try {
-            socket.emit('agent-player-position-request', String(playerName || '').slice(0, 32), finish);
+            socket.emit('agent-player-position-request', String(playerName || '').slice(0, 16), finish);
         } catch (error) {
-            finish({ success: false, error: String(error?.message || error || 'Player position lookup failed.').slice(0, 240) });
+            finish({
+                success: false,
+                found: null,
+                code: 'player_position_unavailable',
+                error: String(error?.message || error || 'Player position lookup failed.').slice(0, 240),
+            });
         }
     });
 }
