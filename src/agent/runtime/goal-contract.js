@@ -403,6 +403,31 @@ function normalizeWorkstationRequirement(raw) {
   });
 }
 
+function normalizeWorkstationConstraint(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const name = canonicalName(raw.name);
+  const position = raw.position && typeof raw.position === 'object' && !Array.isArray(raw.position)
+    ? raw.position
+    : null;
+  const coordinates = position ? ['x', 'y', 'z'].map(axis => Number(position[axis])) : [];
+  const dimension = boundedText(raw.dimension, 64).toLowerCase();
+  if (!['furnace', 'crafting_table'].includes(name)
+    || coordinates.length !== 3
+    || !coordinates.every(Number.isFinite)
+    || !dimension) return null;
+  return Object.freeze({
+    name,
+    position: Object.freeze({
+      x: Math.floor(coordinates[0]),
+      y: Math.floor(coordinates[1]),
+      z: Math.floor(coordinates[2]),
+    }),
+    dimension,
+    source: boundedText(raw.source, 48) || 'player_explicit_here',
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
 function normalizeActiveCollectionTarget(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const name = canonicalName(raw.name);
@@ -560,6 +585,7 @@ export function normalizeGoalContract(raw) {
     maxSubgoals,
     subgoals: Object.freeze(subgoals),
     checkpoint,
+    workstationConstraint: normalizeWorkstationConstraint(raw.workstationConstraint),
     memory: normalizeOperationalMemory(raw.memory),
     evidence: normalizeEvidence(raw.evidence),
     procedureId: boundedText(raw.procedureId, 96) || null,
@@ -578,6 +604,7 @@ export function createItemGoalContract({
   source = 'player',
   baselineInventory = 0,
   completion = 'inventory',
+  workstationConstraint = null,
 } = {}) {
   const numericQuantity = finiteInteger(quantity, 1, 1, MAX_QUANTITY);
   const completionKind = normalizeCompletion(completion, kind, numericQuantity).kind;
@@ -603,6 +630,7 @@ export function createItemGoalContract({
     // a still-converging player goal.
     maxSubgoals: MAX_SUBGOALS,
     subgoals: [],
+    workstationConstraint,
     memory: { failedTargets: [] },
     checkpoint: {
       baselineInventory,
@@ -638,6 +666,11 @@ export function parseItemGoalRequest(requester, message, bot) {
   if (!selected) return null;
   const target = resolveItemGoalTarget(bot, selected);
   if (!target || target.acquisitionKind === 'unsupported') return null;
+  const explicitWorkstation = /\buse\s+(?:(?:the|my)\s+)?furnace\s+here\b|\buse\s+this\s+furnace\b/.test(normalized)
+    ? 'furnace'
+    : /\buse\s+(?:(?:the|my)\s+)?(?:crafting\s+table|workbench)\s+here\b|\buse\s+this\s+(?:crafting\s+table|workbench)\b/.test(normalized)
+      ? 'crafting_table'
+      : null;
 
   return Object.freeze({
     kind: delivery ? 'deliver' : 'acquire',
@@ -653,6 +686,7 @@ export function parseItemGoalRequest(requester, message, bot) {
           : 'inventory',
     }),
     request: boundedText(message, 500),
+    workstationName: explicitWorkstation,
   });
 }
 

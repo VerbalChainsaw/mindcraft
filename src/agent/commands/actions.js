@@ -154,6 +154,85 @@ function persistentGoalCommand(commandFn) {
     return commandFn;
 }
 
+function canonicalDimension(value) {
+    const normalized = String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^minecraft:/, '')
+        .replace(/^the_nether$/, 'nether')
+        .replace(/^the_end$/, 'end');
+    return normalized ? `minecraft:${normalized}` : null;
+}
+
+function exactWorkstationArguments(name, x, y, z, dimension) {
+    const coordinates = [x, y, z].map(Number);
+    const normalizedName = String(name || '').trim().toLowerCase();
+    const normalizedDimension = canonicalDimension(dimension);
+    if (!['furnace', 'crafting_table'].includes(normalizedName)
+        || !coordinates.every(Number.isFinite)
+        || !normalizedDimension) return null;
+    return {
+        name: normalizedName,
+        position: {
+            x: Math.floor(coordinates[0]),
+            y: Math.floor(coordinates[1]),
+            z: Math.floor(coordinates[2]),
+        },
+        dimension: normalizedDimension,
+        source: 'player_explicit_here',
+        observedAt: Date.now(),
+    };
+}
+
+function resolveExplicitWorkstation(agent, resolution, workstationName) {
+    const name = String(workstationName || '').trim().toLowerCase();
+    if (!name) return { constraint: null };
+    if (!['furnace', 'crafting_table'].includes(name)) {
+        return { error: `Typed item goal was not accepted: '${name}' is not a supported explicit workstation.` };
+    }
+    const playerPosition = resolution?.entity?.position;
+    if (!playerPosition) {
+        return { error: 'Typed item goal was not accepted: the requesting player must be visible to bind “here” to a workstation.' };
+    }
+    const blockId = agent.bot?.registry?.blocksByName?.[name]?.id;
+    if (!Number.isInteger(blockId) || typeof agent.bot?.findBlocks !== 'function') {
+        return { error: `Typed item goal was not accepted: ${name} is unavailable in the connected registry.` };
+    }
+    let candidates = [];
+    try {
+        candidates = agent.bot.findBlocks({
+            point: playerPosition,
+            matching: blockId,
+            maxDistance: 8,
+            count: 8,
+        }) || [];
+    } catch {
+        candidates = [];
+    }
+    const ranked = candidates
+        .filter(position => position && [position.x, position.y, position.z].every(Number.isFinite))
+        .map(position => ({
+            position,
+            distanceSquared: playerPosition.distanceSquared(position),
+        }))
+        .sort((left, right) => left.distanceSquared - right.distanceSquared);
+    if (ranked.length === 0) {
+        return { error: `Typed item goal was not accepted: no ${name.replaceAll('_', ' ')} is visible within 8 blocks of the requesting player.` };
+    }
+    if (ranked.length > 1 && ranked[0].distanceSquared === ranked[1].distanceSquared) {
+        return { error: `Typed item goal was not accepted: the nearest ${name.replaceAll('_', ' ')} is ambiguous.` };
+    }
+    return {
+        constraint: exactWorkstationArguments(
+            name,
+            ranked[0].position.x,
+            ranked[0].position.y,
+            ranked[0].position.z,
+            agent.bot?.game?.dimension,
+        ),
+    };
+}
+
 async function runVisionAction(agent, actionLabel, request) {
     if (!agent.vision_interpreter) {
         return 'Vision has not initialized yet. Structured game-state sensing is still available.';
@@ -786,10 +865,19 @@ export const actionsList = [
         description: 'Craft the given recipe a given number of times.',
         params: {
             'recipe_name': { type: 'ItemName', description: 'The name of the output item to craft.' },
-            'num': { type: 'int', description: 'The number of times to craft the recipe. This is NOT the number of output items, as it may craft many more items depending on the recipe.', domain: [1, Number.MAX_SAFE_INTEGER] }
+            'num': { type: 'int', description: 'The number of times to craft the recipe. This is NOT the number of output items, as it may craft many more items depending on the recipe.', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'workstation_x': { type: 'float', description: 'Optional exact crafting table X coordinate.', optional: true },
+            'workstation_y': { type: 'float', description: 'Optional exact crafting table Y coordinate.', optional: true },
+            'workstation_z': { type: 'float', description: 'Optional exact crafting table Z coordinate.', optional: true },
+            'workstation_dimension': { type: 'string', description: 'Optional exact crafting table dimension.', optional: true },
         },
-        perform: runAsAction(async (agent, recipe_name, num) => {
-            return await skills.craftRecipe(agent.bot, recipe_name, num);
+        perform: runAsAction(async (agent, recipe_name, num, x, y, z, dimension) => {
+            return await skills.craftRecipe(
+                agent.bot,
+                recipe_name,
+                num,
+                exactWorkstationArguments('crafting_table', x, y, z, dimension),
+            );
         })
     },
     {
@@ -801,8 +889,10 @@ export const actionsList = [
             'quantity': { type: 'int', description: 'Exact requested quantity.', domain: [1, 2304, '[]'] },
             'requester_or_recipient': { type: 'string', description: 'Canonical requesting player name. For deliver goals this is also the recipient.' },
             'completion': { type: 'string', description: 'Optional completion requirement: inventory, main_hand, or off_hand. Delivery goals always verify delivery.', optional: true, default: 'inventory' },
+            'workstation_name': { type: 'string', description: 'Optional explicit workstation named by the player: furnace or crafting_table.', optional: true, default: '' },
+            'original_request': { type: 'string', description: 'Optional original natural-language request retained for durable intent.', optional: true, default: '' },
         },
-        perform: persistentGoalCommand(function (agent, kind, targetName, quantity, requesterOrRecipient, completion = 'inventory') {
+        perform: persistentGoalCommand(function (agent, kind, targetName, quantity, requesterOrRecipient, completion = 'inventory', workstationName = '', originalRequest = '') {
             const normalizedKind = String(kind || '').trim().toLowerCase();
             if (!['acquire', 'deliver'].includes(normalizedKind)) {
                 return 'Typed item goal was not accepted: kind must be acquire or deliver.';
@@ -836,6 +926,8 @@ export const actionsList = [
             if (resolution.canonical && resolution.canonical !== canonicalRequester) {
                 return `Typed item goal was not accepted: use canonical player '${resolution.canonical}'.`;
             }
+            const workstationResolution = resolveExplicitWorkstation(agent, resolution, workstationName);
+            if (workstationResolution.error) return workstationResolution.error;
             const baselineInventory = inventoryCountForGoalTarget(agent.bot, target);
             const goal = createItemGoalContract({
                 kind: normalizedKind,
@@ -843,12 +935,13 @@ export const actionsList = [
                 target,
                 quantity,
                 destinationPlayer: normalizedKind === 'deliver' ? canonicalRequester : null,
-                request: normalizedKind === 'deliver'
+                request: String(originalRequest || '').trim() || (normalizedKind === 'deliver'
                     ? `deliver ${quantity} ${target.requestedName} to ${canonicalRequester}`
-                    : `acquire ${quantity} ${target.requestedName}`,
+                    : `acquire ${quantity} ${target.requestedName}`),
                 source: 'player',
                 baselineInventory,
                 completion: completionKind,
+                workstationConstraint: workstationResolution.constraint,
             });
             const accepted = agent.goal_director?.submit?.(goal);
             if (!accepted?.accepted) {
@@ -1197,10 +1290,19 @@ export const actionsList = [
         description: 'Smelt the given item the given number of times.',
         params: {
             'item_name': { type: 'ItemName', description: 'The name of the input item to smelt.' },
-            'num': { type: 'int', description: 'The number of times to smelt the item.', domain: [1, Number.MAX_SAFE_INTEGER] }
+            'num': { type: 'int', description: 'The number of times to smelt the item.', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'workstation_x': { type: 'float', description: 'Optional exact furnace X coordinate.', optional: true },
+            'workstation_y': { type: 'float', description: 'Optional exact furnace Y coordinate.', optional: true },
+            'workstation_z': { type: 'float', description: 'Optional exact furnace Z coordinate.', optional: true },
+            'workstation_dimension': { type: 'string', description: 'Optional exact furnace dimension.', optional: true },
         },
-        perform: runAsAction(async (agent, item_name, num) => {
-            let success = await skills.smeltItem(agent.bot, item_name, num);
+        perform: runAsAction(async (agent, item_name, num, x, y, z, dimension) => {
+            let success = await skills.smeltItem(
+                agent.bot,
+                item_name,
+                num,
+                exactWorkstationArguments('furnace', x, y, z, dimension),
+            );
             return success;
         })
     },

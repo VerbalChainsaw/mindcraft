@@ -572,7 +572,75 @@ function directlyUsableWorkstation(bot, block, range = 4.5) {
     }
 }
 
-async function bindExistingWorkstation(bot, itemName, range = 64, navigate = null) {
+async function bindExistingWorkstation(bot, itemName, range = 64, navigate = null, exactTarget = null) {
+    if (exactTarget?.position) {
+        const expectedDimension = normalizedDimension(exactTarget.dimension);
+        const observedDimension = normalizedDimension(bot.game?.dimension);
+        const position = new Vec3(
+            Math.floor(Number(exactTarget.position.x)),
+            Math.floor(Number(exactTarget.position.y)),
+            Math.floor(Number(exactTarget.position.z)),
+        );
+        if (!expectedDimension || expectedDimension !== observedDimension) {
+            return {
+                block: null,
+                outcome: 'wrong_dimension',
+                position,
+                expectedDimension,
+                observedDimension,
+                exact: true,
+            };
+        }
+
+        let observed = bot.blockAt(position);
+        if (observed && observed.name !== itemName) {
+            return {
+                block: null,
+                outcome: 'target_changed',
+                position,
+                observed: observed.name,
+                exact: true,
+            };
+        }
+        if (observed?.name === itemName && directlyUsableWorkstation(bot, observed)) {
+            return { block: observed, outcome: 'ready', position, exact: true };
+        }
+
+        const approached = typeof navigate === 'function'
+            ? await navigate(bot, position.x, position.y, position.z, 2)
+            : await goToGoal(bot, new pf.goals.GoalNear(position.x, position.y, position.z, 2));
+        if (bot.interrupt_code) return { block: null, outcome: 'interrupted', position, exact: true };
+        observed = bot.blockAt(position);
+        if (observed?.name !== itemName) {
+            return {
+                block: null,
+                outcome: 'target_changed',
+                position,
+                observed: observed?.name || 'unloaded',
+                exact: true,
+            };
+        }
+        if (!approached) {
+            return { block: null, outcome: 'unreachable', position, exact: true };
+        }
+        const settled = directlyUsableWorkstation(bot, observed)
+            || await goToGoal(bot, new pf.goals.GoalLookAtBlock(position, bot.world, { reach: 4 }));
+        if (bot.interrupt_code) return { block: null, outcome: 'interrupted', position, exact: true };
+        const verified = bot.blockAt(position);
+        if (verified?.name !== itemName) {
+            return {
+                block: null,
+                outcome: 'target_changed',
+                position,
+                observed: verified?.name || 'unloaded',
+                exact: true,
+            };
+        }
+        return settled
+            ? { block: verified, outcome: 'ready', position, exact: true }
+            : { block: null, outcome: 'unreachable', position, exact: true };
+    }
+
     let block = null;
     try {
         block = world.getNearestBlock(bot, itemName, range);
@@ -1836,7 +1904,7 @@ async function equipHighestAttack(bot) {
         await bot.equip(weapon, 'hand');
 }
 
-export async function craftRecipe(bot, itemName, num=1) {
+export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
     /**
      * Attempt to craft the given item name from a recipe. May craft many items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -1870,7 +1938,9 @@ export async function craftRecipe(bot, itemName, num=1) {
         if (!Number.isInteger(itemId)) {
             return finish(false, { kind: 'craft', outcome: 'invalid_recipe', target, retryable: false }, `${itemName} is not a craftable Minecraft item.`);
         }
-        let recipes = bot.recipesFor(itemId, null, 1, null);
+        let recipes = exactWorkstation
+            ? []
+            : bot.recipesFor(itemId, null, 1, null);
         let craftingTable = null;
         const craftingTableRange = 64;
 
@@ -1885,11 +1955,30 @@ export async function craftRecipe(bot, itemName, num=1) {
                 bot,
                 'crafting_table',
                 craftingTableRange,
+                null,
+                exactWorkstation,
             );
             if (tableBinding.outcome === 'interrupted') {
                 return finish(false, { kind: 'craft', outcome: 'interrupted', target, retryable: false }, 'Crafting was interrupted while approaching the crafting table.');
             }
             craftingTable = tableBinding.block;
+            if (exactWorkstation && !craftingTable) {
+                const outcome = tableBinding.outcome === 'wrong_dimension'
+                    ? 'exact_table_wrong_dimension'
+                    : tableBinding.outcome === 'target_changed'
+                        ? 'exact_table_changed'
+                        : tableBinding.outcome === 'unreachable'
+                            ? 'exact_table_unreachable'
+                            : 'exact_table_missing';
+                return finish(false, {
+                    kind: 'craft',
+                    outcome,
+                    target,
+                    workstation: exactWorkstation,
+                    observed: tableBinding.observed || null,
+                    retryable: false,
+                }, `The exact crafting table at ${exactWorkstation.position.x}, ${exactWorkstation.position.y}, ${exactWorkstation.position.z} is not usable (${tableBinding.outcome}); no substitute was used.`);
+            }
             const worldTableRouteFailed = ['unreachable', 'target_changed'].includes(tableBinding.outcome);
             if (worldTableRouteFailed) {
                 log(bot, 'The nearest world crafting table has no non-destructive native route; using a carried local fallback if available.');
@@ -1998,6 +2087,7 @@ export async function craftRecipe(bot, itemName, num=1) {
             requestedCrafts,
             craftAttempts,
             outputCount,
+            workstation: exactWorkstation,
             retryable: false,
         }, `Crafted ${outputCount} ${itemName}.`);
     } finally {
@@ -2935,7 +3025,7 @@ export async function wait(bot, milliseconds) {
     return true;
 }
 
-export async function smeltItem(bot, itemName, num=1) {
+export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
     /**
      * Puts 1 coal in furnace and smelts the given item name, waits until the furnace runs out of fuel or input items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -2963,6 +3053,7 @@ export async function smeltItem(bot, itemName, num=1) {
             target,
             output: outputName,
             requested: amount,
+            workstation: exactWorkstation,
             retryable: !success,
             ...detail,
         };
@@ -2980,11 +3071,25 @@ export async function smeltItem(bot, itemName, num=1) {
     }
 
     try {
-        const furnaceBinding = await bindExistingWorkstation(bot, 'furnace', 64);
+        const furnaceBinding = await bindExistingWorkstation(bot, 'furnace', 64, null, exactWorkstation);
         if (furnaceBinding.outcome === 'interrupted') {
             return finish(false, 'interrupted', { retryable: false });
         }
         furnaceBlock = furnaceBinding.block;
+        if (exactWorkstation && !furnaceBlock) {
+            const outcome = furnaceBinding.outcome === 'wrong_dimension'
+                ? 'exact_furnace_wrong_dimension'
+                : furnaceBinding.outcome === 'target_changed'
+                    ? 'exact_furnace_changed'
+                    : furnaceBinding.outcome === 'unreachable'
+                        ? 'exact_furnace_unreachable'
+                        : 'exact_furnace_missing';
+            log(bot, `The exact furnace at ${exactWorkstation.position.x}, ${exactWorkstation.position.y}, ${exactWorkstation.position.z} is not usable (${furnaceBinding.outcome}); no substitute was used.`);
+            return finish(false, outcome, {
+                observed: furnaceBinding.observed || null,
+                retryable: false,
+            });
+        }
         worldFurnaceRouteFailed = ['unreachable', 'target_changed'].includes(furnaceBinding.outcome);
         if (worldFurnaceRouteFailed) {
             log(bot, 'The nearest world furnace has no non-destructive native route; using a carried local fallback if available.');

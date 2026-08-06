@@ -638,8 +638,11 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     const typedGoal = parseItemGoalRequest(playerName, message, context.bot);
     if (typedGoal) {
         const target = typedGoal.target.family || typedGoal.target.requestedName;
+        const workstationArguments = typedGoal.workstationName
+            ? `, ${commandString(typedGoal.workstationName)}, ${commandString(typedGoal.request)}`
+            : '';
         return {
-            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)}, ${commandString(typedGoal.completion.kind)})`,
+            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)}, ${commandString(typedGoal.completion.kind)}${workstationArguments})`,
             response: typedGoal.kind === 'deliver'
                 ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
                 : typedGoal.completion.kind === 'inventory'

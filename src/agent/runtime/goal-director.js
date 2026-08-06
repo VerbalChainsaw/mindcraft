@@ -1844,6 +1844,7 @@ export class GoalDirector {
             experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
             toolRequirement: goal.memory?.toolRequirement,
             workstationRequirement: goal.memory?.workstationRequirement,
+            workstationConstraint: goal.workstationConstraint,
           });
           const planSignature = JSON.stringify(
             (plan.actions || []).map(action => [

@@ -478,6 +478,7 @@ function reserveFuel(bot, context, amount, trail) {
 }
 
 function ensurePersistentItem(bot, context, name, trail) {
+  if (context.workstationConstraint?.name === name) return null;
   const carriedRequired = context.workstationRequirement?.carried === true
     && context.workstationRequirement.name === name;
   if (
@@ -521,6 +522,9 @@ function planFromRecipe(bot, context, target, amount, recipe, trail) {
     item: target,
     batches,
     expectedIncrease: produced,
+    workstation: context.workstationConstraint?.name === 'crafting_table'
+      ? context.workstationConstraint
+      : null,
   }, {
     kind: 'craft',
     target,
@@ -548,6 +552,9 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
     output: target,
     count: amount,
     expectedIncrease: amount,
+    workstation: context.workstationConstraint?.name === 'furnace'
+      ? context.workstationConstraint
+      : null,
   }, {
     kind: 'smelt',
     target,
@@ -722,6 +729,7 @@ export function buildPrerequisitePlan(bot, {
   experience = null,
   toolRequirement = null,
   workstationRequirement = null,
+  workstationConstraint = null,
 } = {}) {
   const canonicalTarget = canonicalName(target);
   const desired = boundedInteger(quantity, 1, 1, 100_000);
@@ -801,6 +809,21 @@ export function buildPrerequisitePlan(bot, {
       name: canonicalName(workstationRequirement?.name),
       carried: workstationRequirement?.carried === true,
     },
+    workstationConstraint: workstationConstraint?.position
+      ? {
+          name: canonicalName(workstationConstraint.name),
+          position: {
+            x: Math.floor(Number(workstationConstraint.position.x)),
+            y: Math.floor(Number(workstationConstraint.position.y)),
+            z: Math.floor(Number(workstationConstraint.position.z)),
+          },
+          dimension: String(workstationConstraint.dimension || '').slice(0, 64),
+          source: String(workstationConstraint.source || 'player_explicit_here').slice(0, 48),
+          observedAt: Number.isFinite(workstationConstraint.observedAt)
+            ? workstationConstraint.observedAt
+            : Date.now(),
+        }
+      : null,
   };
   const requiredTool = canonicalName(toolRequirement?.name);
   const minimumUsableDurability = boundedInteger(

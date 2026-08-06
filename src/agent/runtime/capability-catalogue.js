@@ -31,6 +31,31 @@ function commandString(value) {
   return JSON.stringify(String(value || ''));
 }
 
+function normalizeWorkstationConstraint(value, expectedName) {
+  if (!value || typeof value !== 'object' || !value.position) return null;
+  const name = canonicalName(value.name);
+  const coordinates = ['x', 'y', 'z'].map(axis => Number(value.position[axis]));
+  const dimension = String(value.dimension || '').trim().slice(0, 64);
+  if (name !== expectedName || !coordinates.every(Number.isFinite) || !dimension) return null;
+  return immutable({
+    name,
+    position: {
+      x: Math.floor(coordinates[0]),
+      y: Math.floor(coordinates[1]),
+      z: Math.floor(coordinates[2]),
+    },
+    dimension,
+    source: String(value.source || 'player_explicit_here').slice(0, 48),
+    observedAt: Number.isFinite(value.observedAt) ? value.observedAt : null,
+  });
+}
+
+function workstationCommandSuffix(workstation) {
+  if (!workstation) return '';
+  const { x, y, z } = workstation.position;
+  return `, ${x}, ${y}, ${z}, ${commandString(workstation.dimension)}`;
+}
+
 function playerIdentity(value) {
   return String(value || '')
     // eslint-disable-next-line no-control-regex
@@ -263,6 +288,7 @@ defineCapability({
     item: canonicalName(args?.item),
     batches: boundedInteger(args?.batches, 1, 1, 100_000),
     expectedIncrease: boundedInteger(args?.expectedIncrease, 1, 1, 100_000),
+    workstation: normalizeWorkstationConstraint(args?.workstation, 'crafting_table'),
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: `registered craft output ${args.item}`, satisfied: validName(args.item) && snapshot.hasItem(args.item) },
@@ -272,7 +298,8 @@ defineCapability({
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!craftRecipe',
-    command: `!craftRecipe(${commandString(args.item)}, ${args.batches})`,
+    command: `!craftRecipe(${commandString(args.item)}, ${args.batches}${workstationCommandSuffix(args.workstation)})`,
+    workstation: args.workstation,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,
@@ -292,6 +319,7 @@ defineCapability({
     output: canonicalName(args?.output),
     count: boundedInteger(args?.count, 1, 1, 100_000),
     expectedIncrease: boundedInteger(args?.expectedIncrease ?? args?.count, 1, 1, 100_000),
+    workstation: normalizeWorkstationConstraint(args?.workstation, 'furnace'),
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: `registered smelting input ${args.input}`, satisfied: validName(args.input) && snapshot.hasItem(args.input) },
@@ -302,7 +330,8 @@ defineCapability({
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!smeltItem',
-    command: `!smeltItem(${commandString(args.input)}, ${args.count})`,
+    command: `!smeltItem(${commandString(args.input)}, ${args.count}${workstationCommandSuffix(args.workstation)})`,
+    workstation: args.workstation,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,
@@ -616,6 +645,7 @@ function bindingEvidence(binding) {
   if (Object.prototype.hasOwnProperty.call(binding, 'family')) evidence.family = binding.family || null;
   evidence.requestedQuantity = binding.quantity ?? null;
   if (Array.isArray(binding.manifest)) evidence.manifest = binding.manifest;
+  if (binding.workstation) evidence.workstation = binding.workstation;
   return immutable(evidence);
 }
 

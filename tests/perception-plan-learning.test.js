@@ -319,6 +319,57 @@ test('The causal planner uses carried smelting inputs before scavenging a placed
   );
 });
 
+test('An explicit workstation survives restart and binds only the matching planner action', () => {
+  const workstationConstraint = {
+    name: 'furnace',
+    position: { x: -659, y: 71, z: -459 },
+    dimension: 'minecraft:overworld',
+    source: 'player_explicit_here',
+    observedAt: 1_786_010_000_000,
+  };
+  const originalRequest = 'Bring me 16 stone bricks and use the furnace here.';
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'WorksitePlayer',
+    target: {
+      requestedName: 'stone_bricks',
+      canonicalName: 'stone_bricks',
+      inventoryName: 'stone_bricks',
+      acquisitionName: 'stone_bricks',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 16,
+    request: originalRequest,
+    completion: 'delivery',
+    workstationConstraint,
+  });
+  const restored = normalizeGoalContract(JSON.parse(JSON.stringify(goal)));
+
+  assert.equal(restored.request, originalRequest);
+  assert.deepEqual(restored.workstationConstraint, workstationConstraint);
+
+  const plan = buildPrerequisitePlan(carriedStoneBrickBot(), {
+    target: 'stone_bricks',
+    quantity: 16,
+    workstationConstraint: restored.workstationConstraint,
+  });
+  assert.equal(plan.status, 'ready');
+  const smelt = plan.actions.find(action => action.capability.id === 'smelt');
+  const craft = plan.actions.find(action => action.capability.id === 'craft');
+  assert.equal(
+    smelt.capability.binding.command,
+    '!smeltItem("cobblestone", 16, -659, 71, -459, "minecraft:overworld")',
+  );
+  assert.deepEqual(smelt.capability.binding.workstation, workstationConstraint);
+  assert.equal(craft.capability.binding.command, '!craftRecipe("stone_bricks", 4)');
+  assert.equal(
+    plan.actions.filter(action => action.capability.id !== 'smelt')
+      .some(action => action.capability.binding.command.includes('-659')),
+    false,
+  );
+});
+
 test('The causal planner acquires remote recipe ingredients before provisioning the final workstation', () => {
   const plan = buildPrerequisitePlan(remoteTableRecipeBot(), {
     target: 'test_machine',
