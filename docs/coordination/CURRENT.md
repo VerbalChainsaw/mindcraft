@@ -1,6 +1,6 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: 705a327; current documentation checkpoint: e19562d
+Functional source checkpoint: 705a327 (unchanged; this campaign required no production patch)
 Milestone: natural Follow -> attributed hostile defense -> deterministic Follow resumption -> settled tracked-player gaze -> Stop passed in Paper
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: product-scale capability engine, companion behavior, and world stewardship
