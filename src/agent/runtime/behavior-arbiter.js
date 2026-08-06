@@ -757,6 +757,7 @@ export class BehaviorArbiter {
       this.traceRecorder.finishLane('survival_job', { status: 'ineligible', reasonCode: 'no_survival_job' });
 
       const goal = this.agent.goal_director;
+      const agenda = this.agent.agenda_director;
       const explicitPlayerJob = Boolean(
         job?.activeOrder && PLAYER_JOB_SOURCES.has(job.activeOrder.source)
       );
@@ -764,6 +765,16 @@ export class BehaviorArbiter {
         this.releaseTerminalHandoff('Fresh player-authorized work superseded the terminal handoff.', false);
       } else if (goal?.hasProtectedCompletion?.()) {
         this.traceRecorder.startLane('player_goal');
+        const agendaSettlement = agenda?.settleProtectedGoalCompletion?.();
+        if (agendaSettlement?.settled) {
+          return this.select(
+            'player_goal',
+            'agenda_goal_completion_consumed',
+            'The matching player agenda step persisted the verified goal result; lower-priority work remains suppressed during handoff.',
+            true,
+            perception,
+          );
+        }
         return this.select(
           'player_goal',
           'player_goal_output_reserved',
@@ -803,7 +814,6 @@ export class BehaviorArbiter {
         }
       }
 
-      const agenda = this.agent.agenda_director;
       if (agenda?.update) {
         this.traceRecorder.startStage('agenda_dispatch');
         try {
@@ -813,6 +823,26 @@ export class BehaviorArbiter {
         } finally {
           this.traceRecorder.finishStage('agenda_dispatch');
         }
+      }
+
+      // A queued player plan retains authority between executor steps. This
+      // covers the short persisted settlement/cooldown window without letting
+      // opportunity, role, progression, reactions, or idle embodiment steal a
+      // tick before the next already-authorized step can dispatch.
+      if (
+        agenda?.hasUnfinished?.()
+        && !goal?.activeGoal
+        && !job?.activeOrder
+        && !this.agent.actions?.executing
+      ) {
+        this.traceRecorder.startLane('player_goal');
+        return this.select(
+          'player_goal',
+          'agenda_handoff_pending',
+          'The existing player agenda is settling or waiting to dispatch its next authorized step.',
+          true,
+          perception,
+        );
       }
 
       this.traceRecorder.startLane('player_goal');

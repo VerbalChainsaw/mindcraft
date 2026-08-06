@@ -162,6 +162,11 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     z: point ? point.z : 0,
     note: boundedText(raw.note),
     state,
+    // Correlates a durable agenda entry with the exact GoalDirector or
+    // JobDirector outcome it launched. Older stores do not contain this field;
+    // AgendaDirector has a strict contract fallback for that one migration
+    // case, then every newly dispatched executor records its id here.
+    executorId: boundedText(raw.executorId, 96),
     createdAt,
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
@@ -221,12 +226,11 @@ export class AgendaStore {
       for (const raw of document.entries.slice(0, MAX_ENTRIES)) {
         try {
           const entry = normalizeAgendaEntry(raw);
-          // An entry that was mid-flight when the process died cannot be
-          // trusted to have finished, so it returns to the queue for a fresh
-          // attempt rather than being reported as done.
-          restored.push(entry.state === 'active'
-            ? normalizeAgendaEntry({ ...entry, state: 'pending', startedAt: null })
-            : entry);
+          // Preserve an active entry so AgendaDirector can reconcile it with
+          // GoalDirector/JobDirector's independently persisted executor state.
+          // Blindly returning it to pending loses a terminal result that landed
+          // just before a process interruption and can repeat delivered work.
+          restored.push(entry);
         } catch {
           // One malformed entry must not discard an otherwise valid plan.
         }

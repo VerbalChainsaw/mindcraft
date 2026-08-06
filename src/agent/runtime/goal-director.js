@@ -467,8 +467,13 @@ export class GoalDirector {
     );
   }
 
-  releaseProtectedCompletion(_reason = 'Released by later player-authorized work.') {
-    this.agent.behavior_arbiter?.releaseTerminalHandoff?.(_reason);
+  releaseProtectedCompletion(
+    _reason = 'Released by later player-authorized work.',
+    { preserveTerminalHandoff = false } = {},
+  ) {
+    if (!preserveTerminalHandoff) {
+      this.agent.behavior_arbiter?.releaseTerminalHandoff?.(_reason);
+    }
     if (!this.hasProtectedCompletion()) return false;
     this.protectedGoalId = null;
     this.store.save(this.activeGoal, this.lastGoal, null);

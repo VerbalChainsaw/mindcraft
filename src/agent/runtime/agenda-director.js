@@ -207,10 +207,35 @@ export class AgendaDirector {
     );
   }
 
+  goalResultMatches(entry, goal) {
+    if (!entry || entry.executor !== 'goal' || !goal) return false;
+    if (entry.executorId) return goal.id === entry.executorId;
+
+    // Compatibility for agenda entries written before executorId existed.
+    // Match the complete typed contract, not merely the item name, so an old
+    // unrelated GoalDirector result cannot settle newly queued work.
+    const target = goal.target?.requestedName || goal.target?.canonicalName || '';
+    const completion = goal.completion?.kind || goal.completion || '';
+    const destination = goal.destination?.player || '';
+    return goal.kind === entry.kind
+      && target === entry.target
+      && goal.quantity === entry.quantity
+      && goal.requester === entry.requester
+      && completion === entry.completion
+      && (entry.kind !== 'deliver' || destination === entry.recipient);
+  }
+
   /** Resolve a finished step from whichever executor was carrying it. */
   settleActive(entry) {
     if (entry.executor === 'goal') {
       const last = this.agent.goal_director?.lastGoal;
+      if (!this.goalResultMatches(entry, last)) {
+        return {
+          state: 'failed',
+          code: 'agenda_goal_result_mismatch',
+          detail: 'The idle GoalDirector result did not match this agenda step.',
+        };
+      }
       const succeeded = last?.phase === 'complete';
       return {
         state: succeeded ? 'complete' : 'failed',
@@ -233,6 +258,51 @@ export class AgendaDirector {
       code: result?.code || 'action_ended',
       detail: result?.detail || '',
     };
+  }
+
+  commitSettlement(active, settled) {
+    const attempts = active.attempts + 1;
+    const retryable = settled.state === 'failed' && attempts < MAX_ENTRY_ATTEMPTS;
+    this.replace(active.id, retryable
+      ? { state: 'pending', startedAt: null, executorId: '', attempts, evidence: settled }
+      : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled });
+    this.setStatus(
+      settled.state === 'complete' ? 'succeeded' : retryable ? 'recovering' : 'failed',
+      settled.code,
+      `${describeAgendaEntry(active)}: ${settled.state === 'complete' ? 'done' : settled.detail || settled.code}`,
+    );
+    this.nextEligibleAt = this.now() + (settled.state === 'complete' ? DISPATCH_COOLDOWN_MS : REJECTED_COOLDOWN_MS);
+    if (settled.state === 'complete') {
+      void Promise.resolve(this.agent.openChat?.(`Agenda step done: ${describeAgendaEntry(active)}.`))
+        .catch(() => { /* chat is best effort */ });
+    }
+    return { settled: true, state: settled.state, retryable, code: settled.code };
+  }
+
+  /**
+   * Consume a protected GoalDirector completion only when it belongs to the
+   * active player agenda step. This is called from the arbiter before its
+   * protected-output gate, and deliberately settles/persists before releasing
+   * the reservation. The bounded conversational handoff remains intact.
+   */
+  settleProtectedGoalCompletion() {
+    const active = this.activeEntry();
+    const goal = this.agent.goal_director;
+    if (
+      !active
+      || active.executor !== 'goal'
+      || !goal?.hasProtectedCompletion?.()
+      || !this.executorsIdle()
+      || !this.goalResultMatches(active, goal.lastGoal)
+      || goal.lastGoal?.phase !== 'complete'
+    ) return { settled: false };
+
+    const result = this.commitSettlement(active, this.settleActive(active));
+    const released = goal.releaseProtectedCompletion?.(
+      'Consumed by the matching player agenda continuation.',
+      { preserveTerminalHandoff: true },
+    );
+    return { ...result, released: Boolean(released), entryId: active.id };
   }
 
   dispatch(entry) {
@@ -268,7 +338,7 @@ export class AgendaDirector {
       }
       const result = this.agent.goal_director?.submit?.(goal);
       return result?.accepted
-        ? { accepted: true }
+        ? { accepted: true, ...(result.id ? { executorId: result.id } : {}) }
         : { accepted: false, code: result?.code || 'goal_director_unavailable', detail: result?.detail || '' };
     }
 
@@ -304,7 +374,7 @@ export class AgendaDirector {
       }
       const result = this.agent.job_director?.submit?.(order);
       return result?.accepted
-        ? { accepted: true }
+        ? { accepted: true, ...(result.id ? { executorId: result.id } : {}) }
         : { accepted: false, code: result?.code || 'job_director_unavailable', detail: result?.detail || '' };
     }
 
@@ -344,21 +414,7 @@ export class AgendaDirector {
         return;
       }
       const settled = this.settleActive(active);
-      const attempts = active.attempts + 1;
-      const retryable = settled.state === 'failed' && attempts < MAX_ENTRY_ATTEMPTS;
-      this.replace(active.id, retryable
-        ? { state: 'pending', startedAt: null, attempts, evidence: settled }
-        : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled });
-      this.setStatus(
-        settled.state === 'complete' ? 'succeeded' : retryable ? 'recovering' : 'failed',
-        settled.code,
-        `${describeAgendaEntry(active)}: ${settled.state === 'complete' ? 'done' : settled.detail || settled.code}`,
-      );
-      this.nextEligibleAt = this.now() + (settled.state === 'complete' ? DISPATCH_COOLDOWN_MS : REJECTED_COOLDOWN_MS);
-      if (settled.state === 'complete') {
-        void Promise.resolve(this.agent.openChat?.(`Agenda step done: ${describeAgendaEntry(active)}.`))
-          .catch(() => { /* chat is best effort */ });
-      }
+      this.commitSettlement(active, settled);
       return;
     }
 
@@ -382,7 +438,7 @@ export class AgendaDirector {
       this.setStatus('failed', outcome.code, `${describeAgendaEntry(next)}: ${outcome.detail || outcome.code}`);
       return;
     }
-    this.replace(next.id, { state: 'active', startedAt: this.now() });
+    this.replace(next.id, { state: 'active', startedAt: this.now(), executorId: outcome.executorId || '' });
     this.setStatus('acting', 'agenda_step_started', `Starting: ${describeAgendaEntry(next)}.`, next.id);
   }
 }

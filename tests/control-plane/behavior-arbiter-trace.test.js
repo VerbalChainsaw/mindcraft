@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 import { ActionManager } from '../../src/agent/action_manager.js';
+import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import { BehaviorArbiter } from '../../src/agent/runtime/behavior-arbiter.js';
 import {
   DecisionTraceRecorder,
@@ -257,6 +258,103 @@ test('a typed goal terminal transition retains the player-goal lane for the whol
   const releasedStatus = await arbiter.update(25);
   assert.equal(releasedStatus.selectedLane, 'self_progression');
   assert.equal(progressionUpdates, 1);
+});
+
+test('a matching active agenda step consumes protected goal completion before queued handoff', async () => {
+  let now = 20_000;
+  let protectedCompletion = true;
+  let progressionUpdates = 0;
+  const persisted = [];
+  const store = {
+    lastError: null,
+    load: () => [],
+    save(entries) { persisted.push(entries.map(entry => ({ ...entry }))); },
+  };
+  const { agent } = fakeAgent();
+  agent.bot.inventory = { slots: [] };
+  agent.job_director = { activeOrder: null };
+  agent.openChat = () => Promise.resolve();
+  agent.progression_director = {
+    permitted: () => true,
+    update() { progressionUpdates += 1; },
+    inFlight: false,
+  };
+  agent.goal_director = {
+    activeGoal: null,
+    inFlight: false,
+    protectedGoalId: 'goal-pickaxe',
+    lastGoal: {
+      id: 'goal-pickaxe',
+      kind: 'deliver',
+      requester: 'phixxation',
+      target: { requestedName: 'iron_pickaxe' },
+      quantity: 1,
+      completion: { kind: 'delivery' },
+      destination: { player: 'phixxation' },
+      phase: 'complete',
+      evidence: { code: 'delivery_verified', detail: 'Minecraft verified delivery.' },
+    },
+    status: { code: 'goal_idle' },
+    hasProtectedCompletion: () => protectedCompletion,
+    releaseProtectedCompletion(_reason, options) {
+      assert.deepEqual(options, { preserveTerminalHandoff: true });
+      protectedCompletion = false;
+      this.protectedGoalId = null;
+      return true;
+    },
+    submit(goal) {
+      this.activeGoal = goal;
+      this.lastGoal = null;
+      this.status = { code: 'goal_accepted' };
+      return { accepted: true, id: 'goal-axe' };
+    },
+    update() {},
+  };
+  const agenda = new AgendaDirector(agent, {
+    store,
+    now: () => now,
+    resolveTarget: (_bot, name) => ({
+      requestedName: name,
+      canonicalName: name,
+      inventoryName: name,
+      acquisitionName: name,
+      family: null,
+      acquisitionKind: 'prepare_tool',
+    }),
+  });
+  const pickaxe = agenda.add({
+    kind: 'deliver', requester: 'phixxation', recipient: 'phixxation', target: 'iron_pickaxe', quantity: 1,
+  });
+  const axe = agenda.add({
+    kind: 'deliver', requester: 'phixxation', recipient: 'phixxation', target: 'iron_axe', quantity: 1,
+  });
+  agenda.replace(pickaxe.id, { state: 'active', startedAt: now - 1_000, executorId: 'goal-pickaxe' });
+  agent.agenda_director = agenda;
+  const arbiter = new BehaviorArbiter(agent, { now: () => now, trace: { enabled: true, retention: 6 } });
+  agent.behavior_arbiter = arbiter;
+
+  const settled = await arbiter.update(25);
+  assert.equal(settled.selectedLane, 'player_goal');
+  assert.equal(settled.code, 'agenda_goal_completion_consumed');
+  assert.equal(protectedCompletion, false);
+  assert.equal(agenda.entries.find(entry => entry.id === pickaxe.id)?.state, 'complete');
+  assert.equal(agenda.entries.find(entry => entry.id === axe.id)?.state, 'pending');
+  assert.equal(persisted.at(-1).find(entry => entry.id === pickaxe.id)?.state, 'complete');
+  assert.equal(progressionUpdates, 0);
+
+  now += 200;
+  const coolingDown = await arbiter.update(25);
+  assert.equal(coolingDown.code, 'agenda_handoff_pending');
+  assert.equal(progressionUpdates, 0, 'lower autonomy must not run between agenda steps');
+
+  now += 800;
+  const continued = await arbiter.update(25);
+  assert.equal(continued.selectedLane, 'player_goal');
+  assert.equal(agent.goal_director.activeGoal?.target?.canonicalName, 'iron_axe');
+  const activeAxe = agenda.entries.find(entry => entry.id === axe.id);
+  assert.equal(activeAxe?.state, 'active');
+  assert.equal(activeAxe?.executorId, 'goal-axe');
+  assert.equal(progressionUpdates, 0);
 });
 
 test('bounded terminal handoff suppresses autonomy but yields to every higher companion owner', async () => {
