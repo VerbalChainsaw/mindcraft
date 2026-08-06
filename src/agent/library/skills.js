@@ -1941,9 +1941,10 @@ export async function craftRecipe(bot, itemName, num=1) {
         const expectedOutputCount = craftAttempts * outputPerCraft;
         let outputCapacity = carriedOutputCapacity(bot, itemName);
         if (outputCapacity.capacity < expectedOutputCount) {
-            const requiredFreeSlots = Math.ceil(
+            const requiredAdditionalSlots = Math.ceil(
                 (expectedOutputCount - outputCapacity.capacity) / outputCapacity.stackSize,
             );
+            const requiredFreeSlots = bot.inventory.emptySlotCount() + requiredAdditionalSlots;
             const protectedNames = new Set([
                 itemName,
                 ...Object.keys(requiredIngredients),
@@ -1958,8 +1959,9 @@ export async function craftRecipe(bot, itemName, num=1) {
                     expectedOutputCount,
                     availableOutputCapacity: outputCapacity.capacity,
                     requiredFreeSlots,
+                    requiredAdditionalSlots,
                     observedFreeSlots: bot.inventory.emptySlotCount(),
-                    retryable: true,
+                    retryable: false,
                 }, `Cannot craft ${itemName}: inventory has no safe capacity for the verified output.`);
             }
         }
@@ -4230,8 +4232,15 @@ export async function defendPlayer(bot, username, range=10) {
 }
 
 async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1) {
+    const inventoryStart = Number(bot.inventory?.inventoryStart);
+    const inventoryEnd = Number(bot.inventory?.inventoryEnd);
+    const carriedSlotCount = Number.isInteger(inventoryStart)
+        && Number.isInteger(inventoryEnd)
+        && inventoryEnd > inventoryStart
+        ? inventoryEnd - inventoryStart
+        : 36;
     const desiredSlots = Math.max(1, Math.min(
-        MINING_COLLECTION_SLOT_RESERVE,
+        carriedSlotCount,
         Math.floor(Number(requestedSlots) || 1),
     ));
     let releaseActions = 0;
