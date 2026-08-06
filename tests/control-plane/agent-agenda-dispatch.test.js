@@ -127,3 +127,41 @@ test('agenda acquire snapshots current family inventory for each dispatched step
   assert.equal(submittedGoal.checkpoint.baselineInventory, 5);
   assert.equal(submittedGoal.checkpoint.targetInventory, 7);
 });
+
+test('a stale unrelated job result cannot settle a correlated active agenda job', () => {
+  const saved = [];
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: {
+      activeOrder: null,
+      lastOrder: {
+        id: 'job-stale-unrelated',
+        phase: 'complete',
+        evidence: { code: 'job_verified', detail: 'A different order completed.' },
+      },
+    },
+  };
+  const store = {
+    lastError: null,
+    load: () => [],
+    save(entries) { saved.push(entries.map(entry => ({ ...entry }))); },
+  };
+  const director = new AgendaDirector(agent, { store, now: () => 42_000 });
+  const added = director.add({ kind: 'mine', requester: 'Gabriel', target: 'iron_ore', quantity: 10 });
+  director.replace(added.id, {
+    state: 'active',
+    startedAt: 41_000,
+    executorId: 'job-current-agenda-entry',
+  });
+
+  director.update();
+
+  const settled = director.entries.find(entry => entry.id === added.id);
+  assert.equal(settled.state, 'failed');
+  assert.equal(settled.attempts, 1);
+  assert.equal(settled.evidence.code, 'agenda_job_result_mismatch');
+  assert.equal(director.pending().length, 0, 'stale evidence must not trigger a retry');
+  assert.equal(saved.at(-1).find(entry => entry.id === added.id)?.state, 'failed');
+});

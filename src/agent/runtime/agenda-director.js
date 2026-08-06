@@ -225,6 +225,19 @@ export class AgendaDirector {
       && (entry.kind !== 'deliver' || destination === entry.recipient);
   }
 
+  jobResultMatches(entry, order) {
+    // There is no live pre-executorId job migration to recover. Without an
+    // exact persisted ID, an idle lastOrder is not authoritative for this
+    // agenda entry and must fail closed rather than repeat or misreport work.
+    return Boolean(
+      entry
+      && entry.executor === 'job'
+      && entry.executorId
+      && order
+      && order.id === entry.executorId
+    );
+  }
+
   /** Resolve a finished step from whichever executor was carrying it. */
   settleActive(entry) {
     if (entry.executor === 'goal') {
@@ -234,6 +247,7 @@ export class AgendaDirector {
           state: 'failed',
           code: 'agenda_goal_result_mismatch',
           detail: 'The idle GoalDirector result did not match this agenda step.',
+          retryable: false,
         };
       }
       const succeeded = last?.phase === 'complete';
@@ -245,6 +259,14 @@ export class AgendaDirector {
     }
     if (entry.executor === 'job') {
       const last = this.agent.job_director?.lastOrder;
+      if (!this.jobResultMatches(entry, last)) {
+        return {
+          state: 'failed',
+          code: 'agenda_job_result_mismatch',
+          detail: 'The idle JobDirector result did not match this agenda step.',
+          retryable: false,
+        };
+      }
       const succeeded = last?.phase === 'complete';
       return {
         state: succeeded ? 'complete' : 'failed',
@@ -262,7 +284,9 @@ export class AgendaDirector {
 
   commitSettlement(active, settled) {
     const attempts = active.attempts + 1;
-    const retryable = settled.state === 'failed' && attempts < MAX_ENTRY_ATTEMPTS;
+    const retryable = settled.state === 'failed'
+      && settled.retryable !== false
+      && attempts < MAX_ENTRY_ATTEMPTS;
     this.replace(active.id, retryable
       ? { state: 'pending', startedAt: null, executorId: '', attempts, evidence: settled }
       : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled });
