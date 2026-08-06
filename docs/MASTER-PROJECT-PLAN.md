@@ -36,6 +36,7 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] Owned Pathfinder now handles ordinary locomotion through policy, including the corrected one-block descent contract. Custom controls remain only for mechanics Pathfinder cannot express safely.
 - [x] Checkpoint `4fa25d5` gives V2 an independent exact dependency tree and lock, and moves canceled chest-window ownership into a single-generation Mineflayer gate. Paper proved prompt Stop, full response-horizon quarantine, later fresh transfer, and exact chest/inventory restoration.
 - [x] Direct Agenda terminal results are persisted before dispatch ownership is released; a Paper Stop-plus-restart proof retained the completed step exactly once and did not replay it.
+- [x] The broad farm companion session now passes in one run: natural Follow, attributed hostile damage, player defense within 50 ms, hostile defeat, deterministic Follow resumption without another order, stationary `0.9995` gaze alignment, authoritative Stop, and hold-safe runtime configuration.
 - [ ] P1 package debt: table crafting still opens its window outside the `openBlock`/`openEntity` gate. Route that raw opener through the package generation boundary before a broad outcome requires crafting immediately after aborted container work; do not claim global UI serialization meanwhile.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
@@ -53,10 +54,10 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 
 ### 1. Companion presence and player authority
 
-- Run the approved broad farm companion session: Follow, attributed hostile preemption, defend the player, resume Follow without model restoration, and settle nearby gaze.
+- [x] Run the approved broad farm companion session: Follow, attributed hostile preemption, defend the player, resume Follow without model restoration, and settle nearby gaze.
 - Finish reliable swimming/follow settlement without oscillating through the player.
 - Distinguish orders addressed to the bot from nearby player conversation.
-- Keep nearby gaze on the player without stealing active-action control.
+- [x] Keep nearby gaze on the player without stealing active-action control during the integrated farm companion session.
 - Preserve self-defense and player-defense while idle; never resume stale or terminal work.
 
 ### 2. World stewardship and shared infrastructure
