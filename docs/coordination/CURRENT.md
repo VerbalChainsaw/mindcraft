@@ -1,11 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: 8e7f70b (companion control, dynamic Follow settlement, and whole-utterance speech authority)
-Milestone: escort survives water, combat preemption, restart, moving-target settlement, and self-assignment cannot leak into Agenda work
+Functional source checkpoint: bd2bd12 (shared progression recovery, owned Pathfinder descent, and workstation binding)
+Milestone: broad natural iron-sword request completed from deep-mine state through surface, fuel, smelt, craft, and equip
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: broad companion escort, protection, attention, and player-authority campaign
-Live blocker: player-defense attribution remains unverified because phixxation is Creative; shoreline exit still has one bounded-recovery debt
-Last physical result: Paper verified self-defense/resumption, stable 2.56-block spacing, exact nearby gaze, and stale Follow-path cancellation
+Owned subsystem: product-scale capability engine, companion behavior, and world stewardship
+Live blocker: none for the iron-sword campaign; shared-structure preference and companion swimming remain broader product gaps
+Last physical result: Paper verified iron_sword selected, full health, fixtures intact, temporary table reclaimed, and bot Stop-held
 Repository: frozen control remains 4a94cdc; protected untracked files untouched; accidental nested C: path absent
-Next campaign: structure-safe shared-worksite/resource campaign; defer player-defense physical proof until a safe attackable fixture exists
+Next campaign: broad structure-safe shared-worksite/resource outcome; descend only when its first shared blocker is physical
 Jordan review: requested as C2J-20260806-0000-companion-control-swimming; do not overwrite pending mailbox

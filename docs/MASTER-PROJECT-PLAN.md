@@ -1,9 +1,13 @@
 # Minecraft Companion Master Project Plan
 
-**Last updated:** 2026-07-28  
-**Canonical workspace:** `C:\Users\zerop\Development\minecraft-companion`  
-**Active branch:** `develop`  
-**Current delivery scope:** one primary companion bot  
+**Last updated:** 2026-08-06
+
+**Canonical workspace:** `/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2`
+
+**Active branch:** `recovery/iron-pickaxe-20260803`
+
+**Current delivery scope:** one primary companion bot
+
 **Authority:** this file is the project-level roadmap and status index.
 
 ## How to read and maintain this plan
@@ -22,13 +26,53 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 
 ## Current truth
 
-- [x] The five primary source slices are installed: world-ready spawn, deterministic action ownership, evidence-backed cognition, core gameplay hardening, and lifecycle/result cleanup.
-- [x] MP-001 through MP-006 are complete under the user-directed critical-only acceptance scope.
-- [x] The critical source/output gate passed: nine focused tests, lint, syntax, and direct format checks across tracked and untracked critical files.
-- [x] The selected stopped bot reached authenticated `world_ready` state with the configured local provider, produced a structured successful `stay` action result, and returned to stopped state.
-- [x] The verifier-created dashboard, Minecraft server, and Ollama processes were shut down after evidence capture; their ports were closed.
-- [~] Broad gameplay, behavior, control-plane, repair, restart, and browser/dashboard suites remain intentionally deferred. They are not evidence for the completed critical gate.
-- [ ] The companion must not be called release-ready or production-ready until the remaining P1 and release work below is completed.
+- [x] The hybrid architecture is locked: GoalDirector owns durable player outcomes, ActionManager owns one physical lease, and deterministic Mineflayer skills execute and verify Minecraft effects.
+- [x] The planner consumes a typed capability catalogue for collect, craft, smelt, fuel, equip, and delivery operations; it is not an item-specific route table.
+- [x] Broad physical campaigns have crossed stone, iron, bucket, shield, clock, interruption/resumption, exact/family delivery, glass, escort, and companion-control boundaries.
+- [x] Checkpoint `bd2bd12` physically completed the natural request `Please make and equip an iron sword.` from a deep mine: surfaced, collected fuel, reused an existing furnace, smelted, crafted, reclaimed a temporary table, equipped, and passed Paper verification.
+- [x] Owned Pathfinder now handles ordinary locomotion through policy, including the corrected one-block descent contract. Custom controls remain only for mechanics Pathfinder cannot express safely.
+- [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
+- [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
+
+## Locked product-scale operating plan
+
+1. Start with a broad, useful, unfamiliar player outcome. Do not invent a microscopic campaign before gameplay demands one.
+2. Keep that exact scenario active: run, observe the first material blocker, repair the underlying shared primitive or owned dependency, and rerun.
+3. Continue through directly encountered blockers until the complete outcome works, a safety boundary stops it, or a named external blocker remains.
+4. Add at most one focused regression test for the exposed contract. A passing test never substitutes for physical completion.
+5. Verify inventory, equipment, delivery, and world mutations independently through Paper; then commit and push one meaningful functional checkpoint.
+6. Do not create a second executor, direct LLM body control, item-specific routes, speculative world-state frameworks, dashboards, or evidence projects to avoid the active gameplay failure.
+
+## Remaining product tranches
+
+### 1. Companion presence and player authority
+
+- Finish reliable swimming/follow settlement without oscillating through the player.
+- Distinguish orders addressed to the bot from nearby player conversation.
+- Keep nearby gaze on the player without stealing active-action control.
+- Preserve self-defense and player-defense while idle; never resume stale or terminal work.
+
+### 2. World stewardship and shared infrastructure
+
+- Protect player and foreign structures from unauthorized digging, placement, shelter construction, and route excavation.
+- Prefer non-destructive native routes; do not tear up terrain, paths, or buildings for convenience.
+- Discover and reuse reachable furnaces, crafting tables, storage, farms, shelters, and player-designated shared structures.
+- Bind building work to an explicit player-owned site and cleanup contract instead of ad-hoc block placement.
+
+### 3. Repeatable capability engine
+
+- Grow the typed capability catalogue only when broad scenarios expose a missing composable operation.
+- Give planner-visible operations explicit preconditions, binding, effects, execution, verification, cancellation, and failure evidence.
+- Move strategy and retry policy out of `skills.js` incrementally; retain its hard-won safety mechanics in bounded execution adapters.
+- Prove second-run repeatability and interruption/resumption across resource, crafting, home, farming, exploration, and combat campaigns.
+
+### 4. Owned dependency strategy
+
+- Treat the repository-owned Mineflayer, Pathfinder, CollectBlock, PvP, and Prismarine packages as maintained product code.
+- Put generic physics, locomotion, cancellation, and plugin truth defects in the owned packages; keep Minecraft-companion policy in orchestration.
+- Replace orchestration compensations only when a broad live failure proves the lower-level primitive and a rollback-safe package repair exists.
+
+The detailed July 2026 completion record below is retained as historical implementation evidence. Where it conflicts with this section, this active V2 plan governs.
 
 ## Completed and source-installed changes
 
