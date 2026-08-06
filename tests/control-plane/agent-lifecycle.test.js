@@ -989,3 +989,23 @@ test('a delayed player-A lookup cannot overwrite the newer authorized player-B o
   assert.deepEqual(observed.map(entry => entry.name), ['PlayerB']);
   assert.equal(harness._playerPositionLookup, null);
 });
+
+test('dashboard commands cannot replace the tracked Minecraft companion', async () => {
+  const observed = [];
+  const harness = {
+    name: 'MindcraftBot',
+    checkTaskDone: async () => {},
+    companion_context: {
+      observeChat(name) {
+        observed.push(name);
+        return { canonical: name };
+      },
+    },
+    routeResponse: () => {},
+  };
+
+  await Agent.prototype.handleMessage.call(harness, 'ADMIN', '!unavailableDashboardCommand', 1);
+  await Agent.prototype.handleMessage.call(harness, 'phixxation', '!unavailablePlayerCommand', 1);
+
+  assert.deepEqual(observed, ['phixxation']);
+});

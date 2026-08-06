@@ -875,7 +875,10 @@ export class Agent {
 
         const self_prompt = source === 'system' || source === this.name;
         const from_other_bot = convoManager.isOtherAgent(source);
-        const companionResolution = !self_prompt && !from_other_bot
+        // ADMIN is the authenticated dashboard transport identity, not a
+        // Minecraft player. Let it issue explicit commands, but never let it
+        // replace the tracked companion or start authoritative player polling.
+        const companionResolution = !self_prompt && !from_other_bot && source !== 'ADMIN'
             ? this.companion_context?.observeChat?.(source)
             : null;
 
