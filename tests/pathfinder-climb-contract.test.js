@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import Vec3 from 'vec3';
 
 import Movements from '../packages/minecraft-runtime/mineflayer-pathfinder/lib/movements.js';
 
@@ -86,4 +87,31 @@ test('Pathfinder represents open submerged ascent as a native swim edge', () => 
   const obstructed = [];
   assert.equal(movement.getMoveSwimUp(node, obstructed), false);
   assert.deepEqual(obstructed, []);
+});
+
+test('Pathfinder counts drop depth between standing cells rather than destination support', () => {
+  const movement = Object.create(Movements.prototype);
+  movement.bot = { game: { minY: -64 } };
+  movement.maxDropDown = 1;
+  movement.getBlock = (origin, x, y, z) => {
+    const position = new Vec3(origin.x + x, origin.y + y, origin.z + z);
+    return {
+      position,
+      physical: position.y === 68,
+      liquid: false,
+      safe: true,
+    };
+  };
+
+  const landing = movement.getLandingBlock(
+    { x: 4, y: 70, z: 7 },
+    { x: 1, z: 0 },
+  );
+  assert.deepEqual(landing.position, new Vec3(5, 69, 7));
+
+  movement.maxDropDown = 0;
+  assert.equal(movement.getLandingBlock(
+    { x: 4, y: 70, z: 7 },
+    { x: 1, z: 0 },
+  ), null);
 });

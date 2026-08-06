@@ -575,6 +575,43 @@ function directlyUsableWorkstation(bot, block, range = 4.5) {
     }
 }
 
+async function bindExistingWorkstation(bot, itemName, range = 64, navigate = null) {
+    let block = null;
+    try {
+        block = world.getNearestBlock(bot, itemName, range);
+    } catch {
+        block = null;
+    }
+    if (!block?.position) return { block: null, outcome: 'not_found' };
+
+    const position = block.position.clone();
+    if (directlyUsableWorkstation(bot, block)) {
+        return { block, outcome: 'ready', position };
+    }
+
+    const reached = typeof navigate === 'function'
+        ? await navigate(bot, position.x, position.y, position.z, 2)
+        : await goToGoal(
+            bot,
+            new pf.goals.GoalLookAtBlock(position, bot.world, { reach: 4 }),
+        );
+    if (bot.interrupt_code) return { block: null, outcome: 'interrupted', position };
+
+    const observed = bot.blockAt(position);
+    if (observed?.name !== itemName) {
+        return {
+            block: null,
+            outcome: 'target_changed',
+            position,
+            observed: observed?.name || 'unloaded',
+        };
+    }
+    if (!reached || !directlyUsableWorkstation(bot, observed)) {
+        return { block: null, outcome: 'unreachable', position };
+    }
+    return { block: observed, outcome: 'ready', position };
+}
+
 async function recoverLocalWorkstation(bot, temporaryWorkstation) {
     const {
         position,
@@ -1842,52 +1879,18 @@ export async function craftRecipe(bot, itemName, num=1) {
                 return finish(false, { kind: 'craft', outcome: 'missing_material', target, retryable: true }, `You do not have the resources to craft ${itemName}${ingredients ? `. It requires: ${ingredients}.` : '.'}`);
             }
 
-            craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
-            let worldTableRouteFailed = false;
-            // A carried table is a deterministic local capability. Do not
-            // tunnel toward a merely loaded remote workstation before using
-            // the one already owned by this action.
-            if (
-                craftingTable
-                && !directlyUsableWorkstation(bot, craftingTable)
-                && inventoryCount(bot, 'crafting_table') > 0
-            ) craftingTable = null;
-            if (craftingTable && bot.entity.position.distanceTo(craftingTable.position) > 4) {
-                const reached = await goToPosition(bot, craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 4);
-                if (!reached || bot.entity.position.distanceTo(craftingTable.position) > 4.5) {
-                    if (bot.interrupt_code) {
-                        return finish(false, { kind: 'craft', outcome: 'interrupted', target, retryable: false }, 'Crafting was interrupted while approaching the crafting table.');
-                    }
-                    let access = await reachKnownBlockByVoxelCorridor(
-                        bot,
-                        craftingTable,
-                        craftingTableRange,
-                    );
-                    if (
-                        !access.success
-                        && access.outcome === 'insufficient_tool_durability'
-                        && access.replacementTool === itemName
-                        && TOOL_PREPARATION_SPECS[itemName]
-                    ) {
-                        log(
-                            bot,
-                            `Using the protected ${itemName} reserve only to reach the workstation that replaces it.`,
-                        );
-                        access = await reachKnownBlockByVoxelCorridor(
-                            bot,
-                            craftingTable,
-                            craftingTableRange,
-                            { allowReplacementBootstrapReserve: true },
-                        );
-                    }
-                    if (!access.success || bot.entity.position.distanceTo(craftingTable.position) > 4.5) {
-                        log(bot, `Exact crafting-table approach stopped: ${String(access.outcome).replace(/_/g, ' ')}.`);
-                        worldTableRouteFailed = true;
-                        craftingTable = null;
-                    } else {
-                        craftingTable = bot.blockAt(craftingTable.position);
-                    }
-                }
+            const tableBinding = await bindExistingWorkstation(
+                bot,
+                'crafting_table',
+                craftingTableRange,
+            );
+            if (tableBinding.outcome === 'interrupted') {
+                return finish(false, { kind: 'craft', outcome: 'interrupted', target, retryable: false }, 'Crafting was interrupted while approaching the crafting table.');
+            }
+            craftingTable = tableBinding.block;
+            const worldTableRouteFailed = ['unreachable', 'target_changed'].includes(tableBinding.outcome);
+            if (worldTableRouteFailed) {
+                log(bot, 'The nearest world crafting table has no non-destructive native route; using a carried local fallback if available.');
             }
             if (!craftingTable) {
                 const localTable = await placeLocalCraftingTable(bot);
@@ -2949,6 +2952,7 @@ export async function smeltItem(bot, itemName, num=1) {
     let furnace = null;
     let furnaceBlock = null;
     let temporaryFurnace = null;
+    let worldFurnaceRouteFailed = false;
     const finish = (success, outcome, detail = {}) => {
         finalEvidence = {
             kind: 'smelt',
@@ -2973,15 +2977,15 @@ export async function smeltItem(bot, itemName, num=1) {
     }
 
     try {
-        furnaceBlock = world.getNearestBlock(bot, 'furnace', 64);
-        // Prefer a carried furnace over excavating toward a merely loaded
-        // remote one. The carried block can be bound to verified local space
-        // and remains under the current action's placement/cleanup contract.
-        if (
-            furnaceBlock
-            && !directlyUsableWorkstation(bot, furnaceBlock)
-            && inventoryCount(bot, 'furnace') > 0
-        ) furnaceBlock = null;
+        const furnaceBinding = await bindExistingWorkstation(bot, 'furnace', 64);
+        if (furnaceBinding.outcome === 'interrupted') {
+            return finish(false, 'interrupted', { retryable: false });
+        }
+        furnaceBlock = furnaceBinding.block;
+        worldFurnaceRouteFailed = ['unreachable', 'target_changed'].includes(furnaceBinding.outcome);
+        if (worldFurnaceRouteFailed) {
+            log(bot, 'The nearest world furnace has no non-destructive native route; using a carried local fallback if available.');
+        }
         if (!furnaceBlock && inventoryCount(bot, 'furnace') > 0) {
             const localFurnace = await placeLocalWorkstation(bot, 'furnace', 8);
             if (!localFurnace.ok && localFurnace.outcome === 'no_workstation_space') {
@@ -3009,38 +3013,12 @@ export async function smeltItem(bot, itemName, num=1) {
             temporaryFurnace.position = furnaceBlock.position.clone();
         }
         if (!furnaceBlock) {
-            log(bot, 'There is no reachable furnace and no carried furnace.');
-            return finish(false, 'missing_furnace');
-        }
-
-        if (bot.entity.position.distanceTo(furnaceBlock.position) > 4.5) {
-            const reached = await goToPosition(
-                bot,
-                furnaceBlock.position.x,
-                furnaceBlock.position.y,
-                furnaceBlock.position.z,
-                3,
-            );
-            if (!reached || bot.entity.position.distanceTo(furnaceBlock.position) > 4.5) {
-                if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
-                const access = await reachKnownBlockByVoxelCorridor(bot, furnaceBlock, 64);
-                if (!access.success || bot.entity.position.distanceTo(furnaceBlock.position) > 4.5) {
-                    const at = bot.entity?.position?.floored?.();
-                    const step = access.step;
-                    log(bot, `Exact furnace approach stopped: ${String(access.outcome).replace(/_/g, ' ')}${Number.isInteger(access.stepIndex) ? ` on step ${access.stepIndex + 1}` : ''}${step ? ` toward (${step.x}, ${step.y}, ${step.z})` : ''}${at ? ` from (${at.x}, ${at.y}, ${at.z})` : ''}.`);
-                    return finish(false, 'furnace_unreachable', {
-                        access,
-                        workstationRequirement: {
-                            name: 'furnace',
-                            carried: true,
-                        },
-                    });
-                }
-                furnaceBlock = bot.blockAt(furnaceBlock.position);
-                if (furnaceBlock?.name !== 'furnace') {
-                    return finish(false, 'furnace_changed', { access });
-                }
-            }
+            log(bot, worldFurnaceRouteFailed
+                ? 'The world furnace is unreachable without excavation, and no carried furnace is available.'
+                : 'There is no reachable furnace and no carried furnace.');
+            return finish(false, worldFurnaceRouteFailed ? 'furnace_unreachable' : 'missing_furnace', worldFurnaceRouteFailed
+                ? { workstationRequirement: { name: 'furnace', carried: true } }
+                : {});
         }
         if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
 
@@ -3225,7 +3203,11 @@ export async function brewPotion(bot, requestedTarget, num=1) {
     }
 
     try {
-        standBlock = world.getNearestBlock(bot, 'brewing_stand', 16);
+        const standBinding = await bindExistingWorkstation(bot, 'brewing_stand', 16);
+        if (standBinding.outcome === 'interrupted') {
+            return finish(false, 'interrupted', { retryable: false });
+        }
+        standBlock = standBinding.block;
         if (!standBlock && inventoryCount(bot, 'brewing_stand') < 1) {
             await craftRecipe(bot, 'brewing_stand', 1);
         }
@@ -3254,21 +3236,11 @@ export async function brewPotion(bot, requestedTarget, num=1) {
             };
         }
         if (!standBlock) {
-            log(bot, 'There is no reachable brewing stand and no carried stand could be prepared.');
-            return finish(false, 'missing_brewing_stand');
-        }
-
-        if (bot.entity.position.distanceTo(standBlock.position) > 4.5) {
-            const reached = await goToPosition(
-                bot,
-                standBlock.position.x,
-                standBlock.position.y,
-                standBlock.position.z,
-                3,
-            );
-            if (!reached || bot.entity.position.distanceTo(standBlock.position) > 4.5) {
-                return finish(false, 'brewing_stand_unreachable');
-            }
+            const worldStandUnreachable = ['unreachable', 'target_changed'].includes(standBinding.outcome);
+            log(bot, worldStandUnreachable
+                ? 'The world brewing stand is unreachable without excavation, and no carried stand could be prepared.'
+                : 'There is no reachable brewing stand and no carried stand could be prepared.');
+            return finish(false, worldStandUnreachable ? 'brewing_stand_unreachable' : 'missing_brewing_stand');
         }
         if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
 
@@ -3427,25 +3399,26 @@ export async function clearNearestFurnace(bot) {
      * @example
      * await skills.clearNearestFurnace(bot);
      **/
-    let furnaceBlock = world.getNearestBlock(bot, 'furnace', 32);
+    const furnaceBinding = await bindExistingWorkstation(bot, 'furnace', 32);
+    let furnaceBlock = furnaceBinding.block;
     const target = furnaceBlock?.position
         ? { name: 'furnace', x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z }
-        : { name: 'furnace' };
+        : furnaceBinding.position
+            ? { name: 'furnace', x: furnaceBinding.position.x, y: furnaceBinding.position.y, z: furnaceBinding.position.z }
+            : { name: 'furnace' };
     if (!furnaceBlock) {
-        setActionEvidence(bot, { kind: 'furnace', outcome: 'not_found', target, retryable: true });
-        log(bot, `No furnace nearby to clear.`);
+        const outcome = furnaceBinding.outcome === 'interrupted'
+            ? 'interrupted'
+            : furnaceBinding.outcome === 'not_found'
+                ? 'not_found'
+                : 'unreachable';
+        setActionEvidence(bot, { kind: 'furnace', outcome, target, retryable: outcome !== 'interrupted' });
+        log(bot, outcome === 'not_found'
+            ? 'No furnace nearby to clear.'
+            : outcome === 'interrupted'
+                ? 'Stopped before clearing the furnace.'
+                : 'The nearest furnace has no non-destructive native route.');
         return false;
-    }
-    if (bot.entity.position.distanceTo(furnaceBlock.position) > 4) {
-        if (!await goToPosition(bot, furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 4)) {
-            setActionEvidence(bot, { kind: 'furnace', outcome: 'unreachable', target, retryable: true });
-            return false;
-        }
-        furnaceBlock = bot.blockAt(furnaceBlock.position);
-        if (furnaceBlock?.name !== 'furnace') {
-            setActionEvidence(bot, { kind: 'furnace', outcome: 'target_changed', target, observed: furnaceBlock?.name || 'unloaded', retryable: true });
-            return false;
-        }
     }
 
     let furnace = null;
@@ -5828,9 +5801,45 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             );
             remaining = bot.blockAt(Vec3(x, y, z));
         }
-        if (!remaining || (remaining.name === block.name && !fallingLayerCleared)) {
-            setActionEvidence(bot, { kind: 'break', outcome: !remaining ? 'unverified' : 'not_broken', target, retryable: true });
-            log(bot, `Could not verify that ${block.name} was broken.`);
+        let replacementPassable = Boolean(
+            remaining
+            && remaining.boundingBox === 'empty'
+            && !isHazardousGameplayBlock(remaining),
+        );
+        if (replacementPassable && !fallingLayerCleared) {
+            // A local block update can briefly advertise air before Paper
+            // corrects a stale dig target to the authoritative solid block.
+            // Do not hand locomotion a cell until the replacement remains
+            // physically passable across a bounded settlement interval.
+            await interruptibleDelay(bot, INVENTORY_POLL_MS);
+            remaining = bot.blockAt(Vec3(x, y, z));
+            replacementPassable = Boolean(
+                remaining
+                && remaining.boundingBox === 'empty'
+                && !isHazardousGameplayBlock(remaining),
+            );
+        }
+        if (bot.interrupt_code) {
+            setActionEvidence(bot, { kind: 'break', outcome: 'interrupted', target, retryable: false });
+            log(bot, `Stopped before confirming that ${block.name} was broken.`);
+            return false;
+        }
+        if (!remaining || (!replacementPassable && !fallingLayerCleared)) {
+            const outcome = !remaining
+                ? 'unverified'
+                : remaining.name === block.name
+                    ? 'not_broken'
+                    : 'solid_replacement';
+            setActionEvidence(bot, {
+                kind: 'break',
+                outcome,
+                target,
+                ...(remaining ? { observed: remaining.name } : {}),
+                retryable: true,
+            });
+            log(bot, remaining && remaining.name !== block.name
+                ? `Could not clear ${block.name}: ${remaining.name} still occupies x:${x}, y:${y}, z:${z}.`
+                : `Could not verify that ${block.name} was broken.`);
             return false;
         }
         setActionEvidence(bot, {
@@ -15033,22 +15042,18 @@ async function closeWindowQuietly(bot, window) {
 }
 
 async function reachWorkstation(bot, blockName, navigate) {
-    let block = null;
-    try {
-        block = bot.findBlock({
-            matching: bot.registry?.blocksByName?.[blockName]?.id,
-            maxDistance: WORKSTATION_SEARCH_RANGE,
-        });
-    } catch {
-        block = null;
-    }
-    if (!block) return { block: null, code: `${blockName}_not_found` };
-    if (bot.entity.position.distanceTo(block.position) > 3.5) {
-        const reached = await navigate(bot, block.position.x, block.position.y, block.position.z, 2);
-        if (!reached) return { block, code: `${blockName}_unreachable` };
-    }
-    if (bot.interrupt_code) return { block, code: 'interrupted' };
-    return { block, code: null };
+    const binding = await bindExistingWorkstation(
+        bot,
+        blockName,
+        WORKSTATION_SEARCH_RANGE,
+        navigate === goToPosition ? null : navigate,
+    );
+    if (binding.outcome === 'ready') return { block: binding.block, code: null };
+    if (binding.outcome === 'interrupted') return { block: null, code: 'interrupted' };
+    return {
+        block: null,
+        code: `${blockName}_${binding.outcome === 'not_found' ? 'not_found' : 'unreachable'}`,
+    };
 }
 
 function totalInventoryCount(bot) {

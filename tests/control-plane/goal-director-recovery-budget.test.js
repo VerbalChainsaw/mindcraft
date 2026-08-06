@@ -755,12 +755,14 @@ test('one no-progress concrete failure relocates before the same regional signat
   assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
 });
 
-test('a deep bot surfaces before retrying a concrete target materially above it', async () => {
+test('a bot below an unreachable surface resource recovers before retrying it', async () => {
   const director = createDirector();
   const now = Date.now();
   const commands = [];
   director.agent.bot.game = { dimension: 'overworld' };
-  director.agent.bot.entity = { position: { y: 31 } };
+  // This is the live corridor shape that exposed the old 12-block cutoff:
+  // the bot stood at y=60 while the known tree base was at y=71.
+  director.agent.bot.entity = { position: { y: 60 } };
   director.executeGoalCommand = async (agent, command) => {
     commands.push(command);
     agent.last_action_result = {
@@ -803,7 +805,7 @@ test('a deep bot surfaces before retrying a concrete target materially above it'
       failedTargets: [{
         kind: 'collect',
         name: 'jungle_log',
-        position: { x: -763, y: 64, z: -398 },
+        position: { x: -763, y: 71, z: -398 },
         code: 'skill_unreachable',
         failures: 1,
         firstFailedAt: now - 145,

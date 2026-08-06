@@ -499,7 +499,12 @@ class Movements {
     while (blockLand.position && blockLand.position.y > this.bot.game.minY) {
       if (blockLand.liquid && blockLand.safe) return blockLand
       if (blockLand.physical) {
-        if (node.y - blockLand.position.y <= this.maxDropDown) return this.getBlock(blockLand.position, 0, 1, 0)
+        const standingBlock = this.getBlock(blockLand.position, 0, 1, 0)
+        // maxDropDown is a locomotion limit between standing cells, not a
+        // distance to the destination's support block. Comparing against the
+        // support made a one-block descent consume two blocks of budget and
+        // silently removed ordinary stair steps when maxDropDown was 1.
+        if (node.y - standingBlock.position.y <= this.maxDropDown) return standingBlock
         return null
       }
       if (!blockLand.safe) return null

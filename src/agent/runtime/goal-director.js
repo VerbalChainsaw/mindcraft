@@ -41,7 +41,12 @@ const FAILED_TARGET_EXCLUSION_RADIUS = 4;
 const ACQUISITION_REGION_RELOCATION_DISTANCE = 64;
 const UNDERGROUND_SURFACE_RECOVERY_Y = 48;
 const SURFACE_ACCESS_TARGET_Y = 56;
-const SURFACE_ACCESS_MIN_VERTICAL_GAP = 12;
+// A failed target above ordinary block-interaction reach is not another local
+// collection attempt. It is evidence that the current standing region cannot
+// access the target and must first hand off to the shared surface capability.
+// The old 12-block altitude cutoff stranded the bot 11 blocks below known
+// trees and spent the whole productive budget repeating the same fuel action.
+const MAX_LOCAL_VERTICAL_INTERACTION_REACH = 4.5;
 // A concrete acquisition failure already excludes that source. Trying a
 // second source with the same failure signature in the same search region
 // spends productive budget without changing strategy; relocate once and let
@@ -314,11 +319,15 @@ function needsSurfaceRecovery(goal, bot) {
   const code = `${goal?.evidence?.code || ''} ${latestPlan?.code || ''}`;
   const failedTarget = latestPlanFailedTarget(goal);
   const targetY = Number(failedTarget?.position?.y);
+  const targetAboveLocalInteraction = (
+    Number.isFinite(targetY)
+    && targetY - y > MAX_LOCAL_VERTICAL_INTERACTION_REACH
+  );
   const failedAboveGroundAccess = (
     /(?:unreachable|no_path|path_|stuck)/.test(code)
     && Number.isFinite(targetY)
     && targetY >= SURFACE_ACCESS_TARGET_Y
-    && targetY - y >= SURFACE_ACCESS_MIN_VERTICAL_GAP
+    && targetAboveLocalInteraction
   );
   return dimension === 'overworld'
     && Number.isFinite(y)
