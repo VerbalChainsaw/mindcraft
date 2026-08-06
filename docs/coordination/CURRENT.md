@@ -1,6 +1,6 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: 2bca9c6 (local; push with this checkpoint)
+Active checkpoint: 5406794 (pushed); functional source: 2bca9c6
 Milestone: explicit player-worksite identity now survives the durable goal and binds the matching craft/smelt capability without substitution
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: product-scale capability engine, companion behavior, and world stewardship
