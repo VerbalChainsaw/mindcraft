@@ -403,6 +403,25 @@ export const actionsList = [
         }, true)
     },
     {
+        name: '!followPlayerUntilNearBlock',
+        description: 'Follow a player until both the player and bot are settled near the same named world block, then yield for the next queued action.',
+        params: {
+            'player_name': { type: 'string', description: 'Name of the player to follow.' },
+            'block_name': { type: 'BlockName', description: 'World block that marks the requested destination capability.' },
+            'radius': { type: 'float', description: 'Maximum distance both companions may be from the block.', domain: [2, 32] },
+        },
+        perform: runAsAction(async (agent, player_name, block_name, radius) => {
+            setCompanionDirective(agent, 'follow', player_name);
+            return await skills.followPlayerUntilNearBlock(
+                agent.bot,
+                player_name,
+                block_name,
+                radius,
+                3,
+            );
+        })
+    },
+    {
         name: '!guardPlayer',
         description: 'Stay close to a player and keep the existing self-defense reflex enabled while following them.',
         params: {

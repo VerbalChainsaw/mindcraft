@@ -15,14 +15,6 @@ const TOOL_TIER = Object.freeze({
   diamond: 5,
   netherite: 6,
 });
-const FUEL_OUTPUT = Object.freeze({
-  coal: 8,
-  charcoal: 8,
-  blaze_rod: 12,
-  coal_block: 80,
-  lava_bucket: 100,
-});
-
 function boundedInteger(value, fallback, minimum, maximum) {
   const number = Number.isFinite(Number(value)) ? Math.floor(Number(value)) : fallback;
   return Math.max(minimum, Math.min(maximum, number));
@@ -107,9 +99,7 @@ function isLog(name) {
 }
 
 function fuelOutput(name) {
-  if (Object.hasOwn(FUEL_OUTPUT, name)) return FUEL_OUTPUT[name];
-  if (isLog(name) || name.endsWith('_planks')) return 1.5;
-  return 0;
+  return mc.getFuelSmeltOutput(name);
 }
 
 export function plannedInventoryCount(bot, name, family = null) {

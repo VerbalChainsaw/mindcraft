@@ -854,6 +854,20 @@ export class BehaviorArbiter {
         }
       }
 
+      // A completed bounded agenda may release an explicitly preserved Follow
+      // continuation. Hold this tick for that player-authorized handoff; the
+      // next tick resumes the directive through the normal ActionManager path.
+      if (this.directiveResumeRequested && companion?.directive) {
+        this.traceRecorder.startLane('player_directive');
+        return this.select(
+          'player_directive',
+          'agenda_continuation_pending',
+          'The completed player agenda is handing control back to the standing companion directive.',
+          true,
+          perception,
+        );
+      }
+
       // A queued player plan retains authority between executor steps. This
       // covers the short persisted settlement/cooldown window without letting
       // opportunity, role, progression, reactions, or idle embodiment steal a

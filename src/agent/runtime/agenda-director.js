@@ -436,6 +436,7 @@ export class AgendaDirector {
       craft: () => `!craftRecipe("${entry.target}", ${entry.quantity})`,
       smelt: () => `!smeltItem("${entry.target}", ${entry.quantity})`,
       goto: () => `!goToPlayer("${entry.recipient}", 3)`,
+      follow_until: () => `!followPlayerUntilNearBlock("${entry.recipient}", "${entry.target}", ${entry.radius})`,
       farm_visit: () => '!goToFarm',
       maintain_farm: () => '!maintainFarm',
       deposit: () => `!putInChest("${entry.target}", ${entry.quantity})`,
@@ -510,6 +511,9 @@ export class AgendaDirector {
     if (!next) {
       if (this.status.code !== 'agenda_complete' && this.entries.length) {
         this.setStatus('idle', 'agenda_complete', 'Every queued agenda step is finished.');
+        if (this.agent.companion_context?.snapshot?.().directive) {
+          this.agent.behavior_arbiter?.requestDirectiveResume?.();
+        }
       }
       return;
     }

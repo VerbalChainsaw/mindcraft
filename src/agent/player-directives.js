@@ -92,6 +92,14 @@ function canonicalItem(raw, bot) {
     return singular && registry[singular] ? singular : null;
 }
 
+function carriedItemCount(bot, itemName) {
+    const items = bot?.inventory?.items?.();
+    if (!Array.isArray(items)) return 0;
+    return items.reduce((total, item) => (
+        item?.name === itemName ? total + Math.max(0, Number(item.count) || 0) : total
+    ), 0);
+}
+
 /** Pull the object of a verb: "smelt 5 raw iron" -> "raw iron". */
 function objectOf(text, verbs, stopWords = '') {
     const tail = stopWords ? `(?=\\s+(?:${stopWords})\\b|$)` : '$';
@@ -154,7 +162,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     }
 
     if (/^(?:please\s+)?(?:just\s+)?(?:follow|trail)\s+me\b/.test(text)
-        || /^(?:please\s+)?come\s+with\s+me\b/.test(text)) {
+        || /^(?:please\s+)?come(?:\s+back)?\s+with\s+me\b/.test(text)) {
         return {
             command: `!followPlayer(${commandString(playerName)}, 3)`,
             response: 'I will follow you now.',
@@ -307,11 +315,19 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         }
     }
 
-    const smelted = objectOf(text, 'smelt|cook|melt|refine');
+    const smelted = objectOf(
+        text,
+        'smelt|cook|melt|refine',
+        `you(?:'re| are) carrying|you (?:have|brought)|in your inventory`,
+    );
     if (smelted) {
         const item = canonicalItem(smelted, context.bot);
         if (item) {
-            const count = clampInt(firstNumber(text, 8), 1, 2304, 8);
+            const carryingReference = /\b(?:you(?:'re| are) carrying|you (?:have|brought)|in your inventory)\b/.test(text);
+            const fallback = carryingReference
+                ? Math.max(1, carriedItemCount(context.bot, item))
+                : 8;
+            const count = clampInt(firstNumber(text, fallback), 1, 2304, fallback);
             return {
                 command: `!smeltItem("${item}", ${count})`,
                 response: `Smelting ${count} ${item.replaceAll('_', ' ')}.`,

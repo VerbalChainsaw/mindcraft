@@ -19,6 +19,22 @@ const { plugin: collectblock } = collectBlockRuntime;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
 let Item = null;
+const FUEL_SMELT_OUTPUT = Object.freeze({
+    coal: 8,
+    charcoal: 8,
+    blaze_rod: 12,
+    coal_block: 80,
+    lava_bucket: 100,
+    dried_kelp_block: 20,
+    bamboo: 0.25,
+    scaffolding: 0.25,
+    stick: 0.5,
+    bowl: 0.5,
+    dead_bush: 0.5,
+    azalea: 0.5,
+    flowering_azalea: 0.5,
+    mangrove_propagule: 0.5,
+});
 
 /**
  * @typedef {string} ItemName
@@ -299,26 +315,19 @@ export function isSmeltable(itemName) {
 }
 
 export function getSmeltingFuel(bot) {
-    let fuel = bot.inventory.items().find(i => i.name === 'coal' || i.name === 'charcoal' || i.name === 'blaze_rod')
-    if (fuel)
-        return fuel;
-    fuel = bot.inventory.items().find(i => i.name.includes('log') || i.name.includes('planks'))
-    if (fuel)
-        return fuel;
-    return bot.inventory.items().find(i => i.name === 'coal_block' || i.name === 'lava_bucket');
+    return bot.inventory.items()
+        .filter(item => getFuelSmeltOutput(item?.name) > 0)
+        .sort((left, right) => (
+            getFuelSmeltOutput(right.name) - getFuelSmeltOutput(left.name)
+            || left.name.localeCompare(right.name)
+        ))[0] || null;
 }
 
 export function getFuelSmeltOutput(fuelName) {
-    if (fuelName === 'coal' || fuelName === 'charcoal')
-        return 8;
-    if (fuelName === 'blaze_rod')
-        return 12;
-    if (fuelName.includes('log') || fuelName.includes('planks'))
-        return 1.5
-    if (fuelName === 'coal_block')
-        return 80;
-    if (fuelName === 'lava_bucket')
-        return 100;
+    const name = String(fuelName || '').replace(/^minecraft:/, '');
+    if (Object.hasOwn(FUEL_SMELT_OUTPUT, name)) return FUEL_SMELT_OUTPUT[name];
+    if (name.endsWith('_sapling')) return 0.5;
+    if (/_(?:log|wood|stem|hyphae|planks)$/.test(name)) return 1.5;
     return 0;
 }
 

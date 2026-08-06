@@ -33,6 +33,10 @@ export const AGENDA_KINDS = Object.freeze({
   // 'direct' runs a single bounded command the dispatcher builds in code from a
   // validated player name. The command text is never stored or replayed.
   goto: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsRecipient: true }),
+  // A standing follow is unbounded and cannot safely sit ahead of later work.
+  // This bounded form keeps native GoalFollow active until both companions are
+  // settled beside a named world capability, then yields to the next step.
+  follow_until: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: false, needsRecipient: true, needsRadius: true }),
   // Crafting and smelting are the middle of most real plans -- "get the iron,
   // smelt it, then make a pickaxe" -- and without them a chain had to stop at
   // the gathering step. The target is a canonical registry name validated on the
@@ -160,6 +164,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     completion,
     recipient: spec.needsRecipient ? recipient : '',
     requester,
+    radius: spec.needsRadius ? finiteInteger(raw.radius, 8, 2, 32) : 0,
     x: point ? point.x : 0,
     y: point ? point.y : 0,
     z: point ? point.z : 0,
@@ -200,6 +205,7 @@ export function describeAgendaEntry(entry) {
     case 'deposit': return `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
     case 'shelter': return 'build a shelter';
     case 'goto': return `go to ${entry.recipient}`;
+    case 'follow_until': return `follow ${entry.recipient} until both are near ${readable}`;
     case 'visit': return `patrol to ${entry.x}, ${entry.y}, ${entry.z}`;
     default: return entry.kind;
   }

@@ -54,7 +54,7 @@ const CONNECTIVE_PATTERNS = [
   /\balso\b/gi,
   /\s*;\s*/g,
   /,\s+and\b/gi,
-  /,\s+(?=(?:go|walk|head|travel|run|harvest|replant|put|store|stash|deposit|come|return)\b)/gi,
+  /,\s+(?=(?:go|walk|head|travel|run|use|smelt|craft|harvest|replant|put|store|stash|deposit|come|return)\b)/gi,
 ];
 
 const SEGMENT_DELIMITER = '\u0000';
@@ -175,6 +175,47 @@ function parseCommandCall(command) {
   return { name: match[1], args };
 }
 
+function companionDirective(command, segmentIndex) {
+  const call = parseCommandCall(command);
+  if (!call || !['followPlayer', 'guardPlayer'].includes(call.name)) return null;
+  const recipient = unquote(call.args[0]);
+  if (!recipient) return null;
+  return {
+    command,
+    kind: call.name === 'guardPlayer' ? 'guard' : 'follow',
+    recipient,
+    segmentIndex,
+  };
+}
+
+function followedWorkstationStep(playerName, standing, steps) {
+  const first = steps[0];
+  const lead = standing.find(candidate => (
+    candidate.kind === 'follow'
+    && candidate.recipient === playerName
+    && candidate.segmentIndex < first?.segmentIndex
+  ));
+  if (!lead || first?.entry?.kind !== 'smelt' || !/\bfurnace\b/i.test(first.segment)) return null;
+  return {
+    consumed: standing.filter(candidate => (
+      candidate.kind === 'follow' && candidate.recipient === playerName
+    )),
+    step: {
+      segment: 'follow the player to the requested furnace',
+      command: `!followPlayerUntilNearBlock(${JSON.stringify(playerName)}, "furnace", 8)`,
+      response: 'I will follow you until we are both settled beside the furnace.',
+      segmentIndex: lead.segmentIndex,
+      entry: {
+        kind: 'follow_until',
+        requester: playerName,
+        target: 'furnace',
+        recipient: playerName,
+        radius: 8,
+      },
+    },
+  };
+}
+
 /**
  * Map a resolved directive command to a typed agenda entry, or null when the
  * command is not agenda-worthy. Standing directives (follow/guard/stay), one-off
@@ -273,7 +314,8 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
 
   const steps = [];
   const unresolved = [];
-  for (const segment of segments) {
+  const standing = [];
+  for (const [segmentIndex, segment] of segments.entries()) {
     const directive = resolveDirective(playerName, segment, context);
     const agendaEntry = directive ? directiveToAgendaEntry(directive.command, { requester: playerName }) : null;
     if (agendaEntry) {
@@ -283,14 +325,22 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
         && previous.target === agendaEntry.target
         && previous.recipient === agendaEntry.recipient;
       if (!duplicate) {
-        steps.push({ segment, command: directive.command, response: directive.response, entry: agendaEntry });
+        steps.push({ segment, command: directive.command, response: directive.response, entry: agendaEntry, segmentIndex });
       }
     } else {
-      unresolved.push({ segment, directive: directive || null });
+      const companion = directive ? companionDirective(directive.command, segmentIndex) : null;
+      if (companion) standing.push({ ...companion, segment, directive });
+      else unresolved.push({ segment, directive: directive || null });
     }
   }
 
   if (steps.length === 0) return null;
+  const followedWorkstation = followedWorkstationStep(playerName, standing, steps);
+  if (followedWorkstation) steps.unshift(followedWorkstation.step);
+  const consumedStanding = new Set(followedWorkstation?.consumed || []);
+  unresolved.push(...standing
+    .filter(candidate => !consumedStanding.has(candidate))
+    .map(candidate => ({ segment: candidate.segment, directive: candidate.directive })));
   return {
     disposition,
     multiStep: steps.length > 1,

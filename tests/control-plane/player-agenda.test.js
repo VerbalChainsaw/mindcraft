@@ -146,6 +146,29 @@ test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed st
   assert.deepEqual(plan.unresolved, []);
 });
 
+test('parsePlayerAgenda preserves an escorted furnace operation as bounded follow then smelt', () => {
+  const message = "Come with me across the river to my workshop, use my furnace there to smelt the raw iron you're carrying, then come back with me.";
+  const bot = {
+    registry: { itemsByName: { raw_iron: { name: 'raw_iron' } } },
+    inventory: { items: () => [{ name: 'raw_iron', count: 1 }] },
+  };
+  const plan = parsePlayerAgenda('WorksiteGuide', message, { bot });
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => step.entry), [
+    {
+      kind: 'follow_until',
+      requester: 'WorksiteGuide',
+      target: 'furnace',
+      recipient: 'WorksiteGuide',
+      radius: 8,
+    },
+    { kind: 'smelt', requester: 'WorksiteGuide', target: 'raw_iron', quantity: 1 },
+  ]);
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda carries interrupt disposition and drops non-agenda segments', () => {
   const plan = parsePlayerAgenda('Gabriel', 'stop, follow me then come here', {}, { resolveDirective: stubResolver });
   assert.ok(plan);

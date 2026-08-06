@@ -60,6 +60,8 @@ const FOLLOW_STUCK_AFTER_MS = 3_000;
 const MAX_FOLLOW_RECOVERY_ATTEMPTS = 2;
 const FOLLOW_RECOVERY_COOLDOWN_MS = 3_000;
 const FOLLOW_REPLAN_DISTANCE = 1.25;
+const FOLLOW_DESTINATION_SETTLE_MS = 1_500;
+const FOLLOW_DESTINATION_POSITION_EPSILON = 0.75;
 const MAX_AVOID_RETREAT_ATTEMPTS = 3;
 const MIN_MOVEMENT_PROGRESS = 0.1;
 const MAX_DEFENSE_SWINGS = 14;
@@ -12388,7 +12390,91 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
 }
 
 
-export async function followPlayer(bot, username, distance=4) {
+export async function followPlayerUntilNearBlock(bot, username, blockName, radius=8, distance=3) {
+    const canonicalBlock = String(blockName || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^minecraft:/, '')
+        .replace(/[\s-]+/g, '_');
+    const blockType = bot.registry?.blocksByName?.[canonicalBlock];
+    if (!blockType) {
+        setActionEvidence(bot, {
+            kind: 'follow',
+            outcome: 'unsupported_destination_block',
+            target: { name: canonicalBlock || 'unknown' },
+            retryable: false,
+        });
+        log(bot, `${blockName || 'That destination block'} is not a known block in this world.`);
+        return false;
+    }
+
+    const sharedRadius = Math.max(2, Math.min(32, Number(radius) || 8));
+    let candidateKey = null;
+    let candidateSince = 0;
+    let playerAnchor = null;
+    return await followPlayer(bot, username, distance, {
+        completionDescription: `Reached ${canonicalBlock.replaceAll('_', ' ')} with ${username}.`,
+        until: ({ player }) => {
+            let positions;
+            try {
+                positions = bot.findBlocks({
+                    matching: blockType.id,
+                    maxDistance: Math.ceil(sharedRadius),
+                    count: 16,
+                });
+            } catch {
+                positions = [];
+            }
+            const candidate = positions
+                .map(position => ({
+                    position,
+                    botDistance: bot.entity.position.distanceTo(position),
+                    playerDistance: player.position.distanceTo(position),
+                }))
+                .filter(observation => (
+                    observation.botDistance <= sharedRadius
+                    && observation.playerDistance <= sharedRadius
+                ))
+                .sort((left, right) => (
+                    left.botDistance + left.playerDistance - right.botDistance - right.playerDistance
+                ))[0];
+            if (!candidate) {
+                candidateKey = null;
+                candidateSince = 0;
+                playerAnchor = null;
+                return null;
+            }
+
+            const key = `${candidate.position.x},${candidate.position.y},${candidate.position.z}`;
+            if (
+                key !== candidateKey
+                || !playerAnchor
+                || player.position.distanceTo(playerAnchor) > FOLLOW_DESTINATION_POSITION_EPSILON
+            ) {
+                candidateKey = key;
+                candidateSince = Date.now();
+                playerAnchor = player.position.clone();
+                return null;
+            }
+            const settledMs = Date.now() - candidateSince;
+            if (settledMs < FOLLOW_DESTINATION_SETTLE_MS) return null;
+            return {
+                kind: 'shared_world_block',
+                name: canonicalBlock,
+                position: {
+                    x: candidate.position.x,
+                    y: candidate.position.y,
+                    z: candidate.position.z,
+                },
+                radius: sharedRadius,
+                settledMs,
+            };
+        },
+    });
+}
+
+
+export async function followPlayer(bot, username, distance=4, options={}) {
     /**
      * Follow the given player endlessly. Will not return until the code is manually stopped.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -12415,6 +12501,8 @@ export async function followPlayer(bot, username, distance=4) {
     let noProgressMs = 0;
     let recoveryAttempts = 0;
     let recoveryCooldownUntil = 0;
+    let bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
+    let liquidNoConvergenceMs = 0;
     let lastPathStatus = null;
     let followedEntityId = player.id;
     let lastSeenPosition = player.position.clone();
@@ -12499,6 +12587,8 @@ export async function followPlayer(bot, username, distance=4) {
             noProgressMs = 0;
             recoveryAttempts = 0;
             recoveryCooldownUntil = 0;
+            bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
+            liquidNoConvergenceMs = 0;
             lastPathStatus = null;
             targetMissingSince = null;
             log(bot, `Reacquired ${canonicalUsername}; continuing the same follow order.`);
@@ -12506,60 +12596,142 @@ export async function followPlayer(bot, username, distance=4) {
         // in cheat mode, if the distance is too far, teleport to the player
         const distance_from_player = bot.entity.position.distanceTo(player.position);
 
+        if (typeof options.until === 'function') {
+            let completion;
+            try {
+                completion = options.until({ bot, player, distance: distance_from_player });
+            } catch (error) {
+                setActionEvidence(bot, {
+                    kind: 'follow',
+                    outcome: 'completion_check_failed',
+                    target,
+                    error: error.message,
+                    retryable: true,
+                });
+                log(bot, `Could not verify the requested follow destination: ${error.message}`);
+                return false;
+            }
+            if (completion) {
+                setActionEvidence(bot, {
+                    kind: 'follow',
+                    outcome: 'condition_reached',
+                    target,
+                    distance: distance_from_player,
+                    completion,
+                    retryable: false,
+                });
+                log(bot, options.completionDescription || `Reached the requested destination with ${username}.`);
+                return true;
+            }
+        }
+
         const teleport_distance = 100;
         const ignore_modes_distance = 30; 
         const nearby_distance = distance + 2;
 
         if (distance_from_player > nearby_distance) {
-            const progress = bot.entity.position.distanceTo(lastPosition);
-            if (Date.now() < recoveryCooldownUntil) {
+            const botFeetPosition = bot.entity.position.floored();
+            const playerFeetPosition = player.position.floored();
+            const botFeet = bot.blockAt(botFeetPosition);
+            const playerFeet = bot.blockAt(playerFeetPosition);
+            const playerSupport = bot.blockAt(playerFeetPosition.offset(0, -1, 0));
+            const botInLiquid = Boolean(
+                bot.entity?.isInWater
+                || bot.entity?.isInLava
+                || isLiquidGameplayBlock(botFeet)
+            );
+            const playerDryAndSupported = Boolean(
+                playerFeet
+                && !isLiquidGameplayBlock(playerFeet)
+                && isTraversableShoreSupport(playerSupport)
+            );
+            const needsShoreRecovery = botInLiquid && playerDryAndSupported;
+
+            if (needsShoreRecovery) {
                 noProgressMs = 0;
-            } else if (progress < MIN_MOVEMENT_PROGRESS) {
-                noProgressMs += FOLLOW_SAMPLE_MS;
-            } else {
-                noProgressMs = 0;
-                if (progress >= NAVIGATION_PROGRESS_DISTANCE) recoveryAttempts = 0;
-            }
-            if (noProgressMs >= FOLLOW_STUCK_AFTER_MS) {
-                if (recoveryAttempts >= MAX_FOLLOW_RECOVERY_ATTEMPTS) {
-                    recoveryCooldownUntil = Date.now() + FOLLOW_RECOVERY_COOLDOWN_MS;
-                    setActionEvidence(bot, {
-                        kind: 'follow',
-                        outcome: 'blocked_waiting',
-                        target,
-                        distance: distance_from_player,
-                        recoveryAttempts,
-                        pathStatus: lastPathStatus,
-                        retryable: true,
-                    });
-                    log(bot, `Path to ${canonicalUsername} is still obstructed after ${recoveryAttempts} local escape attempts; follow remains active and will retry after the route can change.`);
-                } else {
-                    recoveryAttempts += 1;
-                    const recovery = await attemptLocalNavigationEscape(bot);
+                if (distance_from_player <= bestLiquidFollowDistance - NAVIGATION_GOAL_PROGRESS_DELTA) {
+                    bestLiquidFollowDistance = distance_from_player;
+                    liquidNoConvergenceMs = 0;
+                } else if (Date.now() >= recoveryCooldownUntil) {
+                    liquidNoConvergenceMs += FOLLOW_SAMPLE_MS;
+                }
+                if (liquidNoConvergenceMs >= FOLLOW_STUCK_AFTER_MS) {
+                    const recovery = await attemptShallowWaterExit(bot);
                     if (bot.interrupt_code) break;
                     bot.pathfinder.setMovements(safeMovements(bot));
                     bot.pathfinder.setGoal(new ResponsiveFollowGoal(player, distance), true);
                     setActionEvidence(bot, {
                         kind: 'follow',
-                        outcome: recovery.success ? 'recovering' : 'recovery_blocked',
+                        outcome: recovery.success ? 'shore_recovering' : 'shore_recovery_blocked',
                         target,
                         distance: distance_from_player,
-                        recoveryAttempts,
                         pathStatus: lastPathStatus,
                         recovery,
                         retryable: true,
                     });
                     log(bot, recovery.success
-                        ? `Following ${username}: completed local escape ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} and replanned the route.`
-                        : `Following ${username}: local escape ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} was blocked; keeping the dynamic follow route active.`);
+                        ? `Following ${username}: reached a dry shoreline with Pathfinder and resumed the dynamic follow route.`
+                        : `Following ${username}: Pathfinder could not bind a dry shoreline yet; keeping the dynamic follow route active.`);
+                    recoveryCooldownUntil = Date.now() + FOLLOW_RECOVERY_COOLDOWN_MS;
+                    bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
+                    liquidNoConvergenceMs = 0;
+                    lastPathStatus = null;
                 }
-                noProgressMs = 0;
-                lastPathStatus = null;
+            } else {
+                bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
+                liquidNoConvergenceMs = 0;
+                const progress = bot.entity.position.distanceTo(lastPosition);
+                if (Date.now() < recoveryCooldownUntil) {
+                    noProgressMs = 0;
+                } else if (progress < MIN_MOVEMENT_PROGRESS) {
+                    noProgressMs += FOLLOW_SAMPLE_MS;
+                } else {
+                    noProgressMs = 0;
+                    if (progress >= NAVIGATION_PROGRESS_DISTANCE) recoveryAttempts = 0;
+                }
+                if (noProgressMs >= FOLLOW_STUCK_AFTER_MS) {
+                    if (recoveryAttempts >= MAX_FOLLOW_RECOVERY_ATTEMPTS) {
+                        recoveryCooldownUntil = Date.now() + FOLLOW_RECOVERY_COOLDOWN_MS;
+                        setActionEvidence(bot, {
+                            kind: 'follow',
+                            outcome: 'blocked_waiting',
+                            target,
+                            distance: distance_from_player,
+                            recoveryAttempts,
+                            pathStatus: lastPathStatus,
+                            retryable: true,
+                        });
+                        log(bot, `Path to ${canonicalUsername} is still obstructed after ${recoveryAttempts} local escape attempts; follow remains active and will retry after the route can change.`);
+                    } else {
+                        recoveryAttempts += 1;
+                        const recovery = await attemptLocalNavigationEscape(bot);
+                        if (bot.interrupt_code) break;
+                        bot.pathfinder.setMovements(safeMovements(bot));
+                        bot.pathfinder.setGoal(new ResponsiveFollowGoal(player, distance), true);
+                        setActionEvidence(bot, {
+                            kind: 'follow',
+                            outcome: recovery.success ? 'recovering' : 'recovery_blocked',
+                            target,
+                            distance: distance_from_player,
+                            recoveryAttempts,
+                            pathStatus: lastPathStatus,
+                            recovery,
+                            retryable: true,
+                        });
+                        log(bot, recovery.success
+                            ? `Following ${username}: completed local escape ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} and replanned the route.`
+                            : `Following ${username}: local escape ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} was blocked; keeping the dynamic follow route active.`);
+                    }
+                    noProgressMs = 0;
+                    lastPathStatus = null;
+                }
             }
         } else {
             noProgressMs = 0;
             recoveryAttempts = 0;
             recoveryCooldownUntil = 0;
+            bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
+            liquidNoConvergenceMs = 0;
             lastPathStatus = null;
         }
 
