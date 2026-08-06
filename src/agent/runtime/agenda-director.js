@@ -58,7 +58,6 @@ export class AgendaDirector {
     this.nextEligibleAt = 0;
     this.dispatching = false;
     this.directDispatchGeneration = 0;
-    this.directResults = new Map();
     this.sequence = 0;
     this.status = {
       phase: 'idle',
@@ -149,7 +148,6 @@ export class AgendaDirector {
       try { this.agent.job_director?.cancel?.(reason); } catch { /* executor may be absent */ }
     }
     this.directDispatchGeneration += 1;
-    this.directResults.clear();
     this.dispatching = false;
     this.entries = this.entries.map(entry => (
       isTerminalAgendaState(entry.state)
@@ -169,7 +167,6 @@ export class AgendaDirector {
       try { this.agent.job_director?.cancel?.(reason); } catch { /* executor may be absent */ }
     }
     this.directDispatchGeneration += 1;
-    this.directResults.delete(entry.id);
     this.dispatching = false;
     this.replace(entry.id, { state: 'skipped', finishedAt: this.now(), evidence: { code: 'agenda_skipped', detail: reason } });
     this.nextEligibleAt = 0;
@@ -282,22 +279,33 @@ export class AgendaDirector {
         detail: last?.evidence?.detail || '',
       };
     }
-    const result = this.directResults.get(entry.id);
-    this.directResults.delete(entry.id);
-    if (!result) {
-      return {
-        state: 'failed',
-        code: 'agenda_action_result_missing',
-        detail: 'The direct agenda command ended without a correlated action result.',
-        retryable: true,
-      };
-    }
+    return {
+      state: 'failed',
+      code: 'agenda_action_result_missing',
+      detail: 'The restored direct agenda step has no durable terminal result and cannot be assumed complete.',
+      retryable: true,
+    };
+  }
+
+  directSettlement(result) {
     return {
       state: result?.phase === 'succeeded' ? 'complete' : 'failed',
       code: result?.code || 'action_ended',
       detail: result?.detail || '',
       retryable: result?.retryable === true,
     };
+  }
+
+  commitDirectResult(entry, dispatchGeneration, result) {
+    if (this.directDispatchGeneration !== dispatchGeneration) return false;
+    const active = this.activeEntry();
+    if (!active || active.id !== entry.id || active.executor !== 'direct') return false;
+    // This synchronous store write is the durable executor handoff. It occurs
+    // inside the terminal callback, before `dispatching` is released, and is
+    // allowed while Operator Stop is held because it records an effect already
+    // produced; it never starts another action.
+    this.commitSettlement(active, this.directSettlement(result));
+    return true;
   }
 
   commitSettlement(active, settled) {
@@ -457,12 +465,12 @@ export class AgendaDirector {
             retryable: true,
           };
         }
-        this.directResults.set(entry.id, result);
+        this.commitDirectResult(entry, dispatchGeneration, result);
       })
       .catch(error => {
         console.warn(`[agenda] Direct step failed: ${boundedText(error?.message || error)}`);
         if (this.directDispatchGeneration !== dispatchGeneration) return;
-        this.directResults.set(entry.id, {
+        this.commitDirectResult(entry, dispatchGeneration, {
           actionId: `error-${this.now()}`,
           phase: 'failed',
           code: 'agenda_command_error',

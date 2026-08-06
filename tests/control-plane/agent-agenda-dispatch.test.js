@@ -204,3 +204,67 @@ test('an unrelated later action cannot replace the direct result captured for an
   assert.equal(settled.evidence.code, 'skill_player_unreachable');
   assert.notEqual(settled.evidence.code, 'skill_fall_landed');
 });
+
+test('a direct Agenda result persists while Stop is held and is not repeated after restart', async () => {
+  let held = false;
+  let dispatches = 0;
+  let persisted = [];
+  let director = null;
+  let terminalSavedWhileDispatching = false;
+  const store = {
+    lastError: null,
+    load: () => persisted.map(entry => ({ ...entry })),
+    save(entries) {
+      persisted = entries.map(entry => ({ ...entry, evidence: { ...entry.evidence } }));
+      if (persisted.some(entry => entry.state === 'complete')) {
+        terminalSavedWhileDispatching = director?.dispatching === true;
+      }
+      return true;
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    last_action_result: { actionId: 'before', phase: 'succeeded', code: 'old_result' },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => held,
+  };
+  const executeCommand = () => {
+    dispatches += 1;
+    agent.last_action_result = {
+      actionId: 'agenda-deposit-terminal',
+      phase: 'succeeded',
+      code: 'skill_deposited',
+      detail: 'The exact deposit completed.',
+      retryable: false,
+      evidence: { request: { routeOrigin: 'agenda-director' } },
+    };
+    held = true;
+    return Promise.resolve();
+  };
+
+  director = new AgendaDirector(agent, { store, executeCommand });
+  director.add({ kind: 'deposit', requester: 'Gabriel', target: 'wheat', quantity: 12 });
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(dispatches, 1);
+  assert.equal(terminalSavedWhileDispatching, true, 'terminal state must be durable before dispatch ownership is released');
+  assert.equal(persisted[0].state, 'complete');
+  assert.equal(persisted[0].evidence.code, 'skill_deposited');
+
+  held = false;
+  director = new AgendaDirector(agent, {
+    store,
+    executeCommand: () => {
+      dispatches += 1;
+      throw new Error('A terminal direct step must not be replayed after restart.');
+    },
+  });
+  director.update();
+
+  assert.equal(dispatches, 1);
+  assert.equal(director.entries[0].state, 'complete');
+  assert.equal(director.entries[0].attempts, 1);
+});

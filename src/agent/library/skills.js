@@ -209,6 +209,7 @@ const PORTAL_DESTINATION_SETTLE_MS = 5_000;
 const PORTAL_EXIT_TIMEOUT_MS = 5_000;
 const EXPLORATION_STALL_TIMEOUT_MS = 20_000;
 const EXPLORATION_LEG_TIMEOUT_MS = 90_000;
+const CONTAINER_OPEN_TIMEOUT_MS = 20_000;
 const BREW_STAGE_TIMEOUT_MS = 28_000;
 const BREW_POLL_MS = 100;
 const EXPLORATION_LANDMARK_BLOCKS = Object.freeze([
@@ -956,6 +957,32 @@ async function closeContainerQuietly(container) {
     } catch (error) {
         console.warn(`[inventory] Failed to close container: ${String(error?.message || error).slice(0, 240)}`);
     }
+}
+
+async function openContainerForAction(bot, container, {
+    signal = actionCancellationSignal(),
+    openTimeoutMs = remainingActionTimeMs(CONTAINER_OPEN_TIMEOUT_MS),
+} = {}) {
+    if (!bot?.openContainer) {
+        throw new TypeError('Mineflayer container API is unavailable.');
+    }
+    if (signal?.aborted || bot.interrupt_code || openTimeoutMs <= 0) {
+        const error = new Error('Container opening was interrupted before activation.');
+        error.name = 'AbortError';
+        throw error;
+    }
+
+    const opened = await bot.openContainer(container, {
+        signal,
+        timeoutMs: Math.max(1, Math.min(CONTAINER_OPEN_TIMEOUT_MS, Number(openTimeoutMs) || CONTAINER_OPEN_TIMEOUT_MS)),
+    });
+    if (signal?.aborted || bot.interrupt_code) {
+        await closeContainerQuietly(opened);
+        const error = new Error('Container opening was interrupted before transfer.');
+        error.name = 'AbortError';
+        throw error;
+    }
+    return opened;
 }
 
 function containerItemCounts(container) {
@@ -8030,7 +8057,7 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
     let containerBefore = null;
     let beforeContainerCount = 0;
     try {
-        chestContainer = await bot.openContainer(chest);
+        chestContainer = await openContainerForAction(bot, chest);
         containerBefore = containerItemCounts(chestContainer);
         beforeContainerCount = containerBefore[itemName] || 0;
         await chestContainer.deposit(item.type, null, toPut);
@@ -8329,7 +8356,7 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
     let chestContainer = null;
     let intended = 0;
     try {
-        chestContainer = await bot.openContainer(chest);
+        chestContainer = await openContainerForAction(bot, chest);
         const matchingItems = chestContainer.containerItems().filter(item => item.name === itemName);
         if (!matchingItems.length) {
             setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'item_not_found', target, item: itemName, retryable: true });
@@ -8414,7 +8441,7 @@ export async function viewChest(bot) {
     chest = approach.block;
     let chestContainer = null;
     try {
-        chestContainer = await bot.openContainer(chest);
+        chestContainer = await openContainerForAction(bot, chest);
         const items = chestContainer.containerItems();
         if (!items.length) {
             log(bot, 'The chest is empty.');

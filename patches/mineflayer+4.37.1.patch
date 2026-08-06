@@ -1,3 +1,240 @@
+diff --git a/node_modules/mineflayer/index.d.ts b/node_modules/mineflayer/index.d.ts
+index e75e90c..1fa5ac8 100644
+--- a/node_modules/mineflayer/index.d.ts
++++ b/node_modules/mineflayer/index.d.ts
+@@ -39,6 +39,11 @@ export type ChatLevel = 'enabled' | 'commandsOnly' | 'disabled'
+ export type ViewDistance = 'far' | 'normal' | 'short' | 'tiny' | number
+ export type MainHands = 'left' | 'right'
+ 
++export interface ContainerOpenOptions {
++  signal?: AbortSignal
++  timeoutMs?: number
++}
++
+ export interface PluginOptions {
+   [plugin: string]: boolean | Plugin
+ }
+@@ -365,7 +370,10 @@ export interface Bot extends TypedEmitter<BotEvents> {
+     pages: string[]
+   ) => Promise<void>
+ 
+-  openContainer: (chest: Block | Entity, direction?: Vec3, cursorPos?: Vec3) => Promise<Chest | Dispenser>
++  openContainer: {
++    (chest: Block | Entity, options?: ContainerOpenOptions): Promise<Chest | Dispenser>
++    (chest: Block | Entity, direction?: Vec3, cursorPos?: Vec3, options?: ContainerOpenOptions): Promise<Chest | Dispenser>
++  }
+ 
+   openChest: (chest: Block | Entity, direction?: number, cursorPos?: Vec3) => Promise<Chest>
+ 
+@@ -410,9 +418,9 @@ export interface Bot extends TypedEmitter<BotEvents> {
+ 
+   transfer: (options: TransferOptions) => Promise<void>
+ 
+-  openBlock: (block: Block, direction?: Vec3, cursorPos?: Vec3) => Promise<Window>
++  openBlock: (block: Block, direction?: Vec3, cursorPos?: Vec3, options?: ContainerOpenOptions) => Promise<Window>
+ 
+-  openEntity: (block: Entity, Class: new () => EventEmitter) => Promise<Window>
++  openEntity: (entity: Entity, options?: ContainerOpenOptions) => Promise<Window>
+ 
+   moveSlotItem: (
+     sourceSlot: number,
+diff --git a/node_modules/mineflayer/lib/container_open_gate.js b/node_modules/mineflayer/lib/container_open_gate.js
+new file mode 100644
+index 0000000..b07cd65
+--- /dev/null
++++ b/node_modules/mineflayer/lib/container_open_gate.js
+@@ -0,0 +1,156 @@
++'use strict'
++
++const DEFAULT_RESPONSE_HORIZON_MS = 20000
++
++function operationError (message, name, code) {
++  const error = new Error(message)
++  error.name = name
++  error.code = code
++  return error
++}
++
++function abortError () {
++  return operationError(
++    'Container opening was interrupted before a usable window was established.',
++    'AbortError',
++    'CONTAINER_OPEN_ABORTED'
++  )
++}
++
++function timeoutError (timeoutMs) {
++  return operationError(
++    `Container window did not open within ${Math.round(timeoutMs)}ms.`,
++    'TimeoutError',
++    'CONTAINER_OPEN_TIMEOUT'
++  )
++}
++
++function quarantinedError () {
++  return operationError(
++    'A previous container activation is still awaiting or disposing of its server response.',
++    'ContainerOpenQuarantinedError',
++    'CONTAINER_OPEN_QUARANTINED'
++  )
++}
++
++class ContainerOpenGate {
++  constructor (bot, {
++    responseHorizonMs = DEFAULT_RESPONSE_HORIZON_MS,
++    closeLateWindow = () => {}
++  } = {}) {
++    this.bot = bot
++    this.responseHorizonMs = Math.max(1, Number(responseHorizonMs) || DEFAULT_RESPONSE_HORIZON_MS)
++    this.closeLateWindow = closeLateWindow
++    this.generation = 0
++    this.active = null
++  }
++
++  get isQuarantined () {
++    return Boolean(this.active?.publicSettled)
++  }
++
++  open (activate, { signal, timeoutMs = this.responseHorizonMs } = {}) {
++    if (typeof activate !== 'function') {
++      return Promise.reject(new TypeError('Container activation must be a function.'))
++    }
++    if (this.active) return Promise.reject(quarantinedError())
++    if (signal?.aborted) return Promise.reject(abortError())
++
++    const publicTimeoutMs = Math.max(
++      1,
++      Math.min(this.responseHorizonMs, Number(timeoutMs) || this.responseHorizonMs)
++    )
++    const operation = {
++      generation: ++this.generation,
++      publicSettled: false,
++      publicTimer: null,
++      horizonTimer: null,
++      signal,
++      onAbort: null,
++      onWindowOpen: null,
++      resolve: null,
++      reject: null
++    }
++
++    const publicPromise = new Promise((resolve, reject) => {
++      operation.resolve = resolve
++      operation.reject = reject
++    })
++
++    const isCurrent = () => this.active === operation && this.active?.generation === operation.generation
++    const settlePublic = (method, value) => {
++      if (operation.publicSettled) return
++      operation.publicSettled = true
++      if (operation.publicTimer) {
++        clearTimeout(operation.publicTimer)
++        operation.publicTimer = null
++      }
++      signal?.removeEventListener?.('abort', operation.onAbort)
++      operation[method](value)
++    }
++    const release = () => {
++      if (!isCurrent()) return
++      if (operation.publicTimer) clearTimeout(operation.publicTimer)
++      if (operation.horizonTimer) clearTimeout(operation.horizonTimer)
++      signal?.removeEventListener?.('abort', operation.onAbort)
++      this.bot.removeListener('windowOpen', operation.onWindowOpen)
++      this.active = null
++    }
++
++    operation.onAbort = () => {
++      if (!isCurrent()) return
++      // The action may settle immediately, but the channel remains owned by
++      // this generation until its response arrives or the server horizon ends.
++      settlePublic('reject', abortError())
++    }
++    operation.onWindowOpen = (window) => {
++      if (!isCurrent()) return
++      if (!operation.publicSettled) {
++        settlePublic('resolve', window)
++        release()
++        return
++      }
++
++      // A response for an aborted/timed-out activation cannot become a usable
++      // window. Keep the channel quarantined until disposal has completed.
++      Promise.resolve()
++        .then(() => this.closeLateWindow(window))
++        .catch(() => {})
++        .finally(release)
++    }
++
++    this.active = operation
++    this.bot.on('windowOpen', operation.onWindowOpen)
++    signal?.addEventListener?.('abort', operation.onAbort, { once: true })
++
++    if (publicTimeoutMs < this.responseHorizonMs) {
++      operation.publicTimer = setTimeout(() => {
++        if (isCurrent()) settlePublic('reject', timeoutError(publicTimeoutMs))
++      }, publicTimeoutMs)
++    }
++    operation.horizonTimer = setTimeout(() => {
++      if (!isCurrent()) return
++      settlePublic('reject', timeoutError(publicTimeoutMs))
++      release()
++    }, this.responseHorizonMs)
++
++    try {
++      const activation = activate()
++      Promise.resolve(activation).catch(error => {
++        if (!isCurrent()) return
++        settlePublic('reject', error)
++        release()
++      })
++    } catch (error) {
++      settlePublic('reject', error)
++      release()
++    }
++
++    return publicPromise
++  }
++}
++
++module.exports = {
++  ContainerOpenGate,
++  DEFAULT_RESPONSE_HORIZON_MS
++}
+diff --git a/node_modules/mineflayer/lib/plugins/chest.js b/node_modules/mineflayer/lib/plugins/chest.js
+index 82e85ff..1a765a4 100644
+--- a/node_modules/mineflayer/lib/plugins/chest.js
++++ b/node_modules/mineflayer/lib/plugins/chest.js
+@@ -11,14 +11,27 @@ function inject (bot) {
+     return false
+   }
+ 
+-  async function openContainer (containerToOpen, direction, cursorPos) {
++  function isOpenOptions (value) {
++    return value != null && typeof value === 'object' &&
++      !(Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z))
++  }
++
++  async function openContainer (containerToOpen, direction, cursorPos, options) {
++    if (isOpenOptions(direction)) {
++      options = direction
++      direction = undefined
++      cursorPos = undefined
++    } else if (isOpenOptions(cursorPos)) {
++      options = cursorPos
++      cursorPos = undefined
++    }
+     direction = direction ?? new Vec3(0, 1, 0)
+     cursorPos = cursorPos ?? new Vec3(0.5, 0.5, 0.5)
+     let chest
+     if (containerToOpen.constructor.name === 'Block' && allowedWindowTypes.map(name => name.replace('minecraft:', '')).includes(containerToOpen.name)) {
+-      chest = await bot.openBlock(containerToOpen, direction, cursorPos)
++      chest = await bot.openBlock(containerToOpen, direction, cursorPos, options)
+     } else if (containerToOpen.constructor.name === 'Entity') {
+-      chest = await bot.openEntity(containerToOpen)
++      chest = await bot.openEntity(containerToOpen, options)
+     } else {
+       throw new Error('containerToOpen is neither a block nor an entity')
+     }
 diff --git a/node_modules/mineflayer/lib/plugins/craft.js b/node_modules/mineflayer/lib/plugins/craft.js
 index a5fe563..3ecd881 100644
 --- a/node_modules/mineflayer/lib/plugins/craft.js
@@ -42,6 +279,68 @@ index a5fe563..3ecd881 100644
            await bot.clickWindow(sourceItem.slot, 0, 0)
          }
          await bot.clickWindow(destSlot, 1, 0)
+diff --git a/node_modules/mineflayer/lib/plugins/game.js b/node_modules/mineflayer/lib/plugins/game.js
+index d3291b0..dd88803 100644
+--- a/node_modules/mineflayer/lib/plugins/game.js
++++ b/node_modules/mineflayer/lib/plugins/game.js
+@@ -82,7 +82,7 @@ function inject (bot, options) {
+       bot.game.height = dimensionData.height
+     }
+ 
+-    if (packet.difficulty) {
++    if (packet.difficulty != null) {
+       bot.game.difficulty = difficultyNames[packet.difficulty]
+     }
+   }
+diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
+index 0636faa..9f8304d 100644
+--- a/node_modules/mineflayer/lib/plugins/inventory.js
++++ b/node_modules/mineflayer/lib/plugins/inventory.js
+@@ -2,6 +2,7 @@ const assert = require('assert')
+ const { Vec3 } = require('vec3')
+ const { once, sleep, createDoneTask, createTask, withTimeout } = require('../promise_utils')
+ const { toNotchianYaw, toNotchianPitch } = require('../conversions')
++const { ContainerOpenGate } = require('../container_open_gate')
+ 
+ module.exports = inject
+ 
+@@ -30,6 +31,9 @@ function inject (bot, { hideErrors }) {
+   let sequence = 0
+ 
+   let nextActionNumber = 0 // < 1.17
++  const containerOpenGate = new ContainerOpenGate(bot, {
++    closeLateWindow: window => closeWindow(window)
++  })
+   let stateId = -1
+   if (bot.supportFeature('stateIdUsed')) {
+     const listener = packet => { stateId = packet.stateId }
+@@ -382,16 +386,20 @@ function inject (bot, { hideErrors }) {
+     }
+   }
+ 
+-  async function openBlock (block, direction, cursorPos) {
+-    bot.activateBlock(block, direction, cursorPos)
+-    const [window] = await once(bot, 'windowOpen')
++  async function openBlock (block, direction, cursorPos, options) {
++    const window = await containerOpenGate.open(
++      () => bot.activateBlock(block, direction, cursorPos),
++      options
++    )
+     extendWindow(window)
+     return window
+   }
+ 
+-  async function openEntity (entity) {
+-    bot.activateEntity(entity)
+-    const [window] = await once(bot, 'windowOpen')
++  async function openEntity (entity, options) {
++    const window = await containerOpenGate.open(
++      () => bot.activateEntity(entity),
++      options
++    )
+     extendWindow(window)
+     return window
+   }
 diff --git a/node_modules/mineflayer/lib/plugins/place_block.js b/node_modules/mineflayer/lib/plugins/place_block.js
 index fdaec6b..08983b6 100644
 --- a/node_modules/mineflayer/lib/plugins/place_block.js
@@ -55,11 +354,3 @@ index fdaec6b..08983b6 100644
          // Condition to wait to receive block update actually changing the block type, in case the bot receives block updates with no changes
          // oldBlock and newBlock will both be null when the world unloads
          checkCondition: (oldBlock, newBlock) => !oldBlock || !newBlock || oldBlock.type !== newBlock.type
-diff --git a/node_modules/mineflayer/lib/plugins/game.js b/node_modules/mineflayer/lib/plugins/game.js
---- a/node_modules/mineflayer/lib/plugins/game.js
-+++ b/node_modules/mineflayer/lib/plugins/game.js
-@@ -85,3 +85,3 @@ function inject (bot, options) {
--    if (packet.difficulty) {
-+    if (packet.difficulty != null) {
-       bot.game.difficulty = difficultyNames[packet.difficulty]
-     }
