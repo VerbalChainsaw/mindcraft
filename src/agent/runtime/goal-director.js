@@ -1393,19 +1393,13 @@ export class GoalDirector {
       knownBotNames: this.agent.getKnownAgentNames?.() || [],
     });
     if (resolution.entity && resolution.canonical) return true;
-    const attempts = goal.attempts + 1;
-    if (attempts > goal.maxAttempts) {
-      this.fail(
-        resolution.ambiguous ? 'delivery_player_ambiguous' : 'delivery_player_absent',
-        resolution.ambiguous
-          ? `Delivery target '${goal.destination.player}' is ambiguous.`
-          : `Delivery target '${goal.destination.player}' did not become physically available within the bounded wait budget.`,
-      );
-      return false;
-    }
+    // Player presence is an external delivery precondition, not a productive
+    // action or recovery failure. Charging this wait to `attempts` made a fully
+    // crafted output terminally fail after four five-second presence checks.
+    // Keep the typed goal durably in its delivery phase until the exact player
+    // returns, Operator Stop cancels it, or a later player command supersedes it.
     this.persist({
       ...goal,
-      attempts,
       evidence: {
         actionId: '',
         phase: 'blocked',

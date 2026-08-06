@@ -358,6 +358,42 @@ test('recovery history does not spend the productive-step ceiling, which still f
   ]);
 });
 
+test('delivery player absence remains a durable non-productive wait until the exact player returns', () => {
+  const director = createDirector();
+  director.agent.bot.players = {};
+  director.agent.bot.entities = {};
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'phixxation',
+    destinationPlayer: 'phixxation',
+    target: {
+      requestedName: 'iron_axe',
+      canonicalName: 'iron_axe',
+      inventoryName: 'iron_axe',
+      acquisitionName: 'iron_axe',
+      family: null,
+      acquisitionKind: 'prepare_tool',
+    },
+    quantity: 1,
+    completion: 'delivery',
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'deliver', attempts: 2 });
+
+  for (let check = 0; check < goal.maxAttempts + 2; check += 1) {
+    assert.equal(director.waitForPlayer(director.activeGoal), false);
+    assert.equal(director.activeGoal.phase, 'deliver');
+    assert.equal(director.activeGoal.attempts, 2);
+    assert.equal(director.activeGoal.evidence.code, 'delivery_player_absent');
+    assert.equal(director.lastGoal, null);
+  }
+
+  const player = { type: 'player', username: 'phixxation' };
+  director.agent.bot.players.phixxation = { username: 'phixxation', entity: player };
+  director.agent.bot.entities[42] = player;
+  assert.equal(director.waitForPlayer(director.activeGoal), true);
+  assert.equal(director.activeGoal.attempts, 2);
+});
+
 test('one no-progress concrete failure relocates before the same regional signature can spend another attempt', async () => {
   const director = createDirector();
   const now = Date.now();
