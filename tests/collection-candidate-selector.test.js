@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { rankCollectionCandidates } from '../src/agent/runtime/collection-candidate-selector.js';
+import {
+    bindRejectedCollectionTarget,
+    rankCollectionCandidates,
+} from '../src/agent/runtime/collection-candidate-selector.js';
 
 function candidate(overrides={}) {
     return {
@@ -79,5 +82,27 @@ test('coordinate tie-breaks keep equivalent rankings deterministic', () => {
     assert.deepEqual(
         ranked.map(entry => [entry.position.x, entry.position.z]),
         [[3, 3], [4, 2]],
+    );
+});
+
+test('a fully rejected candidate set preserves one exact target for recovery memory', () => {
+    const ranked = rankCollectionCandidates([
+        candidate({
+            position: { x: 9, y: 12, z: 4 },
+            distance: 7,
+            routeStatus: 'no_safe_stance',
+            name: 'deepslate_iron_ore',
+        }),
+        candidate({
+            position: { x: 4, y: 12, z: 8 },
+            distance: 3,
+            routeStatus: 'no_safe_stance',
+            name: 'iron_ore',
+        }),
+    ]);
+
+    assert.deepEqual(
+        bindRejectedCollectionTarget({ ranked }, 'iron_ore'),
+        { name: 'iron_ore', x: 4, y: 12, z: 8 },
     );
 });

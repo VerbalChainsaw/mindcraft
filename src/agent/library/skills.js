@@ -16,7 +16,10 @@ import {
 } from '../runtime/gameplay-safety.js';
 import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-target.js';
 import { companionContextFor, normalizePlayerDistance } from '../runtime/companion-context.js';
-import { rankCollectionCandidates } from '../runtime/collection-candidate-selector.js';
+import {
+    bindRejectedCollectionTarget,
+    rankCollectionCandidates,
+} from '../runtime/collection-candidate-selector.js';
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
@@ -600,7 +603,12 @@ async function bindExistingWorkstation(bot, itemName, range = 64, navigate = nul
             observed: observed?.name || 'unloaded',
         };
     }
-    if (!reached || !directlyUsableWorkstation(bot, observed)) {
+    // GoalLookAtBlock is the native interaction-stance contract used by the
+    // route itself. Do not veto its verified endpoint with canSeeBlock(center):
+    // a neighboring table or wall edge can occlude the block center while an
+    // exposed face remains reachable. The real open/craft call below is the
+    // final physical verification of that native stance.
+    if (!reached) {
         return { block: null, outcome: 'unreachable', position };
     }
     return { block: observed, outcome: 'ready', position };
@@ -4534,7 +4542,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     ...miningFailure.target,
                     decision: collectionDecisionEvidence(selection),
                 } : {
-                    name: blockType,
+                    ...bindRejectedCollectionTarget(selection, blockType),
                     decision: collectionDecisionEvidence(selection),
                 },
                 ...(miningFailure ? { accessOutcome: miningFailure.outcome } : {}),

@@ -89,3 +89,23 @@ export function rankCollectionCandidates(candidates) {
             || left.originalIndex - right.originalIndex
         ));
 }
+
+/**
+ * Preserve one deterministic physical identity when a ranked collection set
+ * has no usable candidate. Recovery memory cannot exclude a failed source if
+ * the executor collapses its evidence back to the requested item name.
+ */
+export function bindRejectedCollectionTarget(selection, fallbackName) {
+    const candidate = selection?.ranked?.find(entry => {
+        const position = entry?.block?.position || entry?.position;
+        return position && [position.x, position.y, position.z].every(Number.isFinite);
+    });
+    const position = candidate?.block?.position || candidate?.position;
+    if (!position) return { name: fallbackName };
+    return {
+        name: candidate?.block?.name || candidate?.name || fallbackName,
+        x: position.x,
+        y: position.y,
+        z: position.z,
+    };
+}
