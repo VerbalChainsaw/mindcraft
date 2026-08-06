@@ -915,7 +915,10 @@ export function isClearableWorksiteBlock(bot, block) {
 function safeMovements(bot) {
     const movements = new pf.Movements(bot);
     const defaultSafeToBreak = movements.safeToBreak.bind(movements);
-    // Natural traversal is allowed; destructive escape behaviors are not.
+    // Ordinary locomotion never owns excavation. Resource collection and the
+    // deterministic mining adapters below may explicitly authorize exact
+    // breaking; following, workstation approaches, pickup, and recovery may
+    // only use native movement through existing space.
     movements.canDig = false;
     movements.allow1by1towers = false;
     movements.allowParkour = false;
@@ -929,17 +932,11 @@ function safeMovements(bot) {
     for (const block of ['glass', 'glass_pane']) movements.blocksCantBreak.add(mc.getBlockId(block));
 
     const policy = traversalPolicy(bot);
-    if (policy !== 'preserve') {
-        // The destructive surface is identical for 'careful' and 'full': natural
-        // fill only. 'full' widens mobility, never what may be broken.
-        movements.canDig = true;
-        movements.safeToBreak = candidate => (
-            defaultSafeToBreak(candidate) && isNaturalFillBlock(bot, candidate)
-        );
-        if (policy === 'full') {
-            movements.allow1by1towers = true;
-            movements.allowParkour = true;
-        }
+    if (policy === 'full') {
+        // Full widens executable locomotion, never what ordinary navigation
+        // may destroy.
+        movements.allow1by1towers = true;
+        movements.allowParkour = true;
     }
     // Collection restores this to authorize an explicitly selected resource,
     // which is deliberately not ordinary terrain.
