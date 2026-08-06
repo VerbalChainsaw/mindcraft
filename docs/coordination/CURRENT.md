@@ -1,12 +1,12 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Active checkpoint: c997486 broad farm companion integration and hold-safe runtime configuration
-Milestone: Follow -> attributed defense -> deterministic resume -> settled gaze complete in one lived-in session
+Active checkpoint: 0615021 escorted river/worksite capability
+Milestone: water Follow -> designated furnace -> live smelt -> Follow home -> Stop passed
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: companion presence/authority complete; next broad tranche is stewardship plus shared infrastructure
-Live blocker: none; full-companion checkpoint requires Jordan review before selecting the next broad outcome
-Last physical result: 50ms attributed defense, verified kill, Follow resumed without a new order, zero-drift 0.9995 gaze, Stop remained held across autonomy restoration
-Runtime: Paper 1.21.11 healthy on Peaceful; bot full-health and Stop-held beside the farm; no temporary player or tagged hostile
-Repository: hold-safe runtime configuration is the only new production change; raw craft/window collision remains bounded P1 debt
-Next campaign: product-scale non-destructive travel/swimming plus reuse of player-designated infrastructure after review
-Jordan review: requested as C2J-20260806-1137-broad-farm-companion
+Owned subsystem: shared Follow convergence, bounded Agenda capability sequencing, and common fuel truth
+Live blocker: none; preserve and request substantial-checkpoint review
+Last physical result: natural two-step Agenda crossed river, smelted 1 raw iron at the designated furnace using two half-smelt saplings, returned home, and Stop held
+Runtime: Paper 1.21.11 healthy on Peaceful; bot health 20 and Stop-held; temporary WorksiteGuide disconnected
+Repository: three shared primitives changed; protected audit files remain untouched; raw craft/window collision remains bounded P1 debt
+Next campaign: one unfamiliar product-scale companion outcome after review, not another river/furnace permutation
+Jordan review: preparing C2J-20260806-1324-escorted-worksite-complete
