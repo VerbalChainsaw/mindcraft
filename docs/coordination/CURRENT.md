@@ -1,12 +1,12 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Active checkpoint: 6c1b169 exact Agenda workstation handoff
-Milestone: escorted worksite accepted after durable A-not-B workstation binding proof
+Active checkpoint: 2d8483c generic rail-batch and capacity recovery
+Milestone: natural `go make some rails` completed as a durable generic 16-rail recipe batch
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: exact Agenda capability handoff complete; active broad tranche is building stewardship
-Live blocker: none yet; observe the Director's complete shelter request before selecting a repair
-Last physical result: furnace A persisted across the executor boundary and smelted while closer B remained empty/unlit; fixture restored and inventory returned to baseline
-Runtime: Paper 1.21.11 healthy; bot health 20; Director is online beside the bot and authorized a shelter work order
-Repository: exact binding correction verified; protected audit files untouched; raw craft/window collision remains bounded P1 debt
-Next campaign: complete the live shelter request, testing explicit site permission and non-destructive stewardship at product scale
-Jordan review: handled J2C-20260806-1349-escorted-worksite-binding-correction; correction proof passed
+Owned subsystem: manufactured-item goal routing, prerequisite execution, and bounded collection capacity
+Live blocker: none for regular rails; broader small redstone loop still needs powered materials and bounded placement
+Last physical result: collected/smelted iron, released only redundant natural fill, crafted 16 rails, attempts 0, Paper health 20
+Runtime: Paper 1.21.11 healthy; bot held by Operator Stop at (-597.7, 69.94, -299.5)
+Repository: functional checkpoint 2d8483c verified; protected audit files untouched
+Next campaign: continue the same small redstone-loop outcome until powered materials and a safe loop are physically complete
+Jordan review: requested C2J-20260806-1445-rail-capacity
