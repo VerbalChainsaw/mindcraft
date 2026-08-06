@@ -12,6 +12,8 @@
 
 **Third implementation checkpoint (2026-08-06):** `4fa25d5` activates an independent V2 dependency tree with a committed 547-package lock while preserving the former frozen-control symlink outside the checkout. The resolved physical-runtime versions are unchanged. The existing Mineflayer patch now owns an abort-aware single-generation container-open gate; no project method replacement remains. A clean published `mineflayer@4.37.1` artifact accepted the complete patch, startup/login/inventory/Stop passed on Paper 1.21.11, and a blocked chest activation proved prompt Stop, full-horizon quarantine, fresh-open recovery, and exact inventory restoration. This completes the active Mineflayer cancellation defect and most of Tranche 1; it does not claim camera parity, removal of the known nested legacy Mineflayer under `mineflayer-utils`, or full owned-package parity.
 
+The accepted gate is scoped to `openBlock` and `openEntity`, not every producer of `windowOpen`. `craft.js` still opens a table with raw activation plus its own event wait, so a craft launched inside an older container quarantine can collide with the gate's listener. This is P1 package debt to close before a broad scenario depends on that cross-UI sequence. It is not permission for a project-side gate or a standalone UI matrix.
+
 This plan replaces the generic “patch, contribute, or fork” choice in the forward plan. External projects remain useful read-only sources and compatibility references. They are not the destination for our changes.
 
 ## Outcome

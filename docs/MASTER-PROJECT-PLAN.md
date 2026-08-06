@@ -36,6 +36,7 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] Owned Pathfinder now handles ordinary locomotion through policy, including the corrected one-block descent contract. Custom controls remain only for mechanics Pathfinder cannot express safely.
 - [x] Checkpoint `4fa25d5` gives V2 an independent exact dependency tree and lock, and moves canceled chest-window ownership into a single-generation Mineflayer gate. Paper proved prompt Stop, full response-horizon quarantine, later fresh transfer, and exact chest/inventory restoration.
 - [x] Direct Agenda terminal results are persisted before dispatch ownership is released; a Paper Stop-plus-restart proof retained the completed step exactly once and did not replay it.
+- [ ] P1 package debt: table crafting still opens its window outside the `openBlock`/`openEntity` gate. Route that raw opener through the package generation boundary before a broad outcome requires crafting immediately after aborted container work; do not claim global UI serialization meanwhile.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
 
