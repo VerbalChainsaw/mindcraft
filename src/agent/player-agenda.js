@@ -1,4 +1,5 @@
 import { resolvePlayerDirective } from './player-directives.js';
+import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import { AGENDA_KINDS } from './runtime/agenda.js';
 
 // Deterministic natural-language front door to the existing Agenda queue.
@@ -239,6 +240,10 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
 } = {}) {
   const text = normalizeMessage(message);
   if (!playerName || !text.trim() || text.includes('!')) return null;
+  // Authority belongs to the player's whole utterance. Splitting first can
+  // strip "I will" from a later clause and turn self-assigned work into a bot
+  // order when an existing agenda makes a single surviving step appendable.
+  if (classifyPlayerSpeechAuthority(text) === 'conversation_only') return null;
 
   const disposition = classifyDisposition(text);
   // Strip a leading interrupt phrase ("stop, …", "now …") so the first step
