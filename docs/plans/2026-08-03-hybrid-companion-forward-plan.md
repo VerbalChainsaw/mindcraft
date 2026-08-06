@@ -441,6 +441,17 @@ The goal system already records proven procedures. Once several live capabilitie
 - Natural-language phrasing coverage for proven goal types.
 - Clear progress and blocker reporting during long work.
 
+### Locked world-stewardship TODO
+
+These are product requirements, not optional polish. Implement them through the existing capability binders, safety policy, native Pathfinder configuration, and verified construction/mining adapters. Do not create a second world-state framework or movement engine.
+
+- [ ] **Protect other people's buildings and existing structures.** Construction, excavation, temporary workstation placement, and cleanup must preflight the affected footprint and revalidate it after every material change. Default to preserving occupied, functional, claimed, remembered, or plausibly player-built cells; never overwrite or dismantle them without explicit player authorization for that exact structure or footprint.
+- [ ] **Reuse and share useful infrastructure.** Resource planning must prefer a reachable existing furnace, crafting table, storage area, shelter, or work site over scattering duplicates. When the player asks to share or work from their structure, bind that structure as the authorized work area and preserve its access, contents, and layout.
+- [ ] **Preserve ordinary terrain and paths during travel.** Native Pathfinder with digging disabled owns normal walking, climbing, and jumping. Destructive navigation is permitted only inside an explicit bounded mining, construction, emergency, or recovery operation; it must minimize block changes, respect destruction/debris limits, protect usable paths and supports, and verify that the resulting route/land remains safe and usable.
+- [ ] **Keep companion vision attentive to the nearby player.** When the tracked player is loaded and nearby, no higher-priority action requires a different gaze, and Operator Stop permits only non-physical observation, the bot should use the existing bounded look/attention mechanic to follow the player naturally. Combat targets, block/entity interaction, navigation safety, and active work retain gaze priority; player attention must be rate-limited and deadbanded so it does not jitter, snap constantly, or steal ActionManager ownership.
+
+Acceptance is product-scale: run broad building, resource-production, nearby-companionship, and remote-return scenarios in a lived-in world. Descend into a narrow regression only when one of those scenarios exposes the first concrete shared blocker.
+
 ### P2
 
 - Procedure selection informed by successful yield and duration.
