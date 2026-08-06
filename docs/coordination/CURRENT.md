@@ -9,4 +9,4 @@ Last physical result: natural two-step Agenda crossed river, smelted 1 raw iron 
 Runtime: Paper 1.21.11 healthy on Peaceful; bot health 20 and Stop-held; temporary WorksiteGuide disconnected
 Repository: three shared primitives changed; protected audit files remain untouched; raw craft/window collision remains bounded P1 debt
 Next campaign: one unfamiliar product-scale companion outcome after review, not another river/furnace permutation
-Jordan review: preparing C2J-20260806-1324-escorted-worksite-complete
+Jordan review: requested as C2J-20260806-1324-escorted-worksite-complete
