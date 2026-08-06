@@ -33,6 +33,38 @@ function boundedDimension(value, label, { minimum = 1, maximum = 16 } = {}) {
   return number;
 }
 
+function unloadedWorksiteApproach(order, snapshot) {
+  const target = order.target;
+  const blueprint = order.blueprint;
+  if (
+    ![target?.x, target?.y, target?.z, snapshot.x, snapshot.y, snapshot.z].every(Number.isFinite)
+    || !Number.isInteger(blueprint?.width)
+    || !Number.isInteger(blueprint?.depth)
+  ) return null;
+
+  const centerX = target.x + (blueprint.width / 2);
+  const centerZ = target.z + (blueprint.depth / 2);
+  const approachRange = Math.max(
+    4,
+    Math.ceil(Math.hypot(blueprint.width, blueprint.depth) / 2) + 2,
+  );
+  const distance = Math.hypot(
+    snapshot.x - centerX,
+    snapshot.y - target.y,
+    snapshot.z - centerZ,
+  );
+  if (distance <= approachRange + 2) return null;
+
+  return {
+    command: `!goToCoordinates(${centerX}, ${target.y}, ${centerZ}, ${approachRange})`,
+    nextPhase: order.phase,
+    code: 'worksite_approach_required',
+    keepAnchor: true,
+    target: { name: 'worksite', x: centerX, y: target.y, z: centerZ },
+    reason: 'Approach the authorized worksite so its complete blueprint can be audited from fresh loaded blocks.',
+  };
+}
+
 export function createConstructionBlueprint({
   shape,
   width,
@@ -361,6 +393,10 @@ export function nextBuilderStep(order, snapshot = {}) {
 
   const audit = snapshot.blueprintAudit;
   if (!audit || audit.valid !== true) {
+    if (audit?.code === 'unloaded') {
+      const approach = unloadedWorksiteApproach(order, snapshot);
+      if (approach) return approach;
+    }
     if (audit?.code === 'occupied') {
       return {
         blocked: true,
@@ -382,15 +418,19 @@ export function nextBuilderStep(order, snapshot = {}) {
     // building anywhere but bare flat ground meant clearing the site by hand
     // first. The bot clears safe natural terrain itself now. Anything outside that
     // narrow safety predicate remains untouched and produces an exact blocker.
-    const clearable = incorrect.find(cell => cell.clearable);
-    if (!clearable) {
+    // The complete footprint is one authorization decision. Never clear an
+    // apparently natural cell first and discover a player-built obstruction
+    // later in the same blueprint; mixed sites fail before any mutation.
+    const protectedCell = incorrect.find(cell => !cell.clearable);
+    if (protectedCell) {
       return {
         terminal: true,
         code: 'blueprint_incorrect_block',
-        detail: `${incorrect[0].observed} at ${incorrect[0].x}, ${incorrect[0].y}, ${incorrect[0].z} is in the way and is not safe natural terrain to clear. Move the site or clear it yourself.`,
+        detail: `${protectedCell.observed} at ${protectedCell.x}, ${protectedCell.y}, ${protectedCell.z} is in the way and is not safe natural terrain to clear. Move the site or clear it yourself.`,
         retryable: false,
       };
     }
+    const clearable = incorrect[0];
     return {
       command: `!breakBlock(${clearable.x}, ${clearable.y}, ${clearable.z})`,
       nextPhase: order.phase,

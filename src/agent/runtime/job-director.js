@@ -307,6 +307,10 @@ function replantSituation(agent, order, inventory) {
 function entityOccupies(bot, x, y, z) {
   return Object.values(bot.entities || {}).some(entity => {
     if (entity?.id === bot.entity?.id) return false;
+    // Dropped stacks and experience orbs do not reserve block space in
+    // Minecraft. Treating them like players or mobs makes a builder wait on
+    // the very drop produced by safely clearing its authorized footprint.
+    if (entity?.name === 'item' || entity?.name === 'experience_orb') return false;
     const position = entity?.position;
     return position
       && Math.floor(position.x) === x

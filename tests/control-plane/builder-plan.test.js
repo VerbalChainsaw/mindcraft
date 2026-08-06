@@ -176,6 +176,63 @@ test('Given a hazardous, occupied, or trapping worksite, Builder chooses the saf
   assert.equal(structuralObstruction.terminal, true);
   assert.equal(structuralObstruction.code, 'blueprint_incorrect_block');
   assert.match(structuralObstruction.detail, /not safe natural terrain/i);
+
+  const mixedSite = nextBuilderStep({ ...order, phase: 'execute' }, {
+    blueprintAudit: {
+      valid: true,
+      missing: [],
+      incorrect: [
+        {
+          x: 1,
+          y: 64,
+          z: 1,
+          expected: 'stone',
+          observed: 'sand',
+          clearable: true,
+        },
+        {
+          x: 2,
+          y: 64,
+          z: 1,
+          expected: 'stone',
+          observed: 'copper_torch',
+          clearable: false,
+        },
+      ],
+    },
+  });
+  assert.equal(mixedSite.terminal, true);
+  assert.equal(mixedSite.code, 'blueprint_incorrect_block');
+  assert.match(mixedSite.detail, /copper_torch at 2, 64, 1/i);
+});
+
+test('Given a far unloaded authorized blueprint, Builder approaches once before auditing it', () => {
+  const order = createWorkOrder({
+    id: 'remote-repair',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'remembered_home', x: -523, y: 63, z: -475 },
+    blueprint: {
+      id: 'remembered_home',
+      width: 5,
+      depth: 5,
+      height: 4,
+      cells: [{ x: 0, y: 0, z: 0, material: 'cobblestone' }],
+    },
+  });
+  const unloaded = { blueprintAudit: { valid: false, code: 'unloaded', missing: [], incorrect: [] } };
+
+  const far = nextBuilderStep(order, { ...unloaded, x: -836, y: 63, z: -515 });
+  assert.equal(far.command, '!goToCoordinates(-520.5, 63, -472.5, 6)');
+  assert.equal(far.nextPhase, 'assess');
+  assert.equal(far.code, 'worksite_approach_required');
+  assert.equal(far.keepAnchor, true);
+
+  const stillUnloadedNearby = nextBuilderStep(order, { ...unloaded, x: -520.5, y: 63, z: -479 });
+  assert.equal(stillUnloadedNearby.terminal, true);
+  assert.equal(stillUnloadedNearby.code, 'unsafe_blueprint_unloaded');
 });
 
 test('Given verified cells and inventory, Builder places only the next missing cell and completes only after an exact audit', () => {
