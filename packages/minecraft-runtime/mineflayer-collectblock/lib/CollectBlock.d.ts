@@ -1,6 +1,7 @@
 import { Bot } from 'mineflayer';
 import { Block } from 'prismarine-block';
-import { Movements } from 'mineflayer-pathfinder';
+import { goals, Movements } from 'mineflayer-pathfinder';
+import { Entity } from 'prismarine-entity';
 import { Vec3 } from 'vec3';
 import { ItemFilter } from './Inventory';
 import { Collectable } from './Targets';
@@ -12,6 +13,7 @@ export interface CollectionToolSelection {
     digTime: number;
 }
 export declare function selectCollectionTool(bot: Bot, block: Block, policy?: CollectionToolPolicy): CollectionToolSelection | null;
+export declare function createDroppedItemPickupGoal(entity: Entity): goals.GoalFollow;
 /**
  * A set of options to apply when collecting the given targets.
  */

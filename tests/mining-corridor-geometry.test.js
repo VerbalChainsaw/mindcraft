@@ -9,7 +9,7 @@ import {
     selectMiningRouteTool,
 } from '../src/agent/library/skills.js';
 
-const { selectCollectionTool } = collectBlockRuntime;
+const { createDroppedItemPickupGoal, selectCollectionTool } = collectBlockRuntime;
 import {
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
@@ -83,6 +83,14 @@ test('ordinary hand-harvestable collection does not consume a tied durable tool'
     };
 
     assert.deepEqual(selectCollectionTool(bot, sand), { kind: 'item', item: dirt, digTime: 10 });
+});
+
+test('dropped-item pursuit accepts a native adjacent pickup stance', () => {
+    const entity = { position: new Vec3(4.5, 8.2, 12.5) };
+    const goal = createDroppedItemPickupGoal(entity);
+
+    assert.equal(goal.isEnd(new Vec3(3, 8, 12)), true);
+    assert.equal(goal.isEnd(new Vec3(2, 8, 12)), false);
 });
 
 test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {

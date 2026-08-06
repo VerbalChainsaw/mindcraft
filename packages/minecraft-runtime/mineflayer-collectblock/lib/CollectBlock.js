@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CollectBlock = exports.selectCollectionTool = void 0;
+exports.CollectBlock = exports.selectCollectionTool = exports.createDroppedItemPickupGoal = void 0;
 const mineflayer_pathfinder_1 = require("../../mineflayer-pathfinder");
 const TemporarySubscriber_1 = require("./TemporarySubscriber");
 const Util_1 = require("./Util");
@@ -20,7 +20,18 @@ const events_1 = require("events");
 const util_1 = require("util");
 const DEFAULT_TARGET_TIMEOUT_MS = 12000;
 const DEFAULT_TARGET_STALL_TIMEOUT_MS = 3000;
+const DROPPED_ITEM_PICKUP_RANGE = 1;
 const SKIPPABLE_TARGET_ERRORS = new Set(['NoPath', 'Timeout', 'TargetStalled', 'TargetTimeout']);
+function createDroppedItemPickupGoal(entity) {
+    // Item voxels are often not standable: drops can rest beneath a low
+    // ceiling, inside a mined block cavity, or against a wall. Minecraft
+    // collects them from an adjacent player body, so requiring Pathfinder to
+    // occupy the entity's exact voxel creates a false no-path result after a
+    // successful break. Native Pathfinder still owns the approach; entity
+    // disappearance and the caller's inventory delta remain authoritative.
+    return new mineflayer_pathfinder_1.goals.GoalFollow(entity, DROPPED_ITEM_PICKUP_RANGE);
+}
+exports.createDroppedItemPickupGoal = createDroppedItemPickupGoal;
 function boundedTargetTimeout(value) {
     const timeout = Number(value);
     if (!Number.isFinite(timeout) || timeout <= 0)
@@ -129,7 +140,7 @@ function collectAll(bot, options) {
                         bot.once('collectBlock_cancelled', cancelPickupWait);
                         let pickupTimeout;
                         try {
-                            const navigation = gotoWithTargetLimits(bot, new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0), options.targetTimeoutMs, options.targetStallTimeoutMs);
+                            const navigation = gotoWithTargetLimits(bot, createDroppedItemPickupGoal(closest), options.targetTimeoutMs, options.targetStallTimeoutMs);
                             const first = yield Promise.race([
                                 navigation.then(() => 'arrived'),
                                 waitForPickup.then(() => 'picked-up')

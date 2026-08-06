@@ -22,7 +22,7 @@ index 445df38..683e44e 100644
 +                    bot.once('collectBlock_cancelled', cancelPickupWait);
 +                    let pickupTimeout;
 +                    try {
-+                        yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
++                        yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 1));
 +                        pickupTimeout = setTimeout(finishPickupWait, 3000);
 +                        yield waitForPickup;
 +                    }
