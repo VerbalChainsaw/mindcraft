@@ -1,11 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional source checkpoint: 972b5eb (native swimming, durable Stop, speech authority, truthful weather)
-Milestone: live companion control survives submerged follow and bot restart
+Functional source checkpoint: 277fe3e (native swimming/control plus dynamic Follow settlement and gaze)
+Milestone: escort survives water, combat preemption, restart, and moving-target path settlement
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: broad companion escort, protection, attention, and player-authority campaign
-Live blocker: shoreline exit may still require one bounded native recovery; no repeated drowning loop
-Last physical result: Paper verified full air and health; bot crossed submerged water, reached phixxation, and Stop survived two restarts
+Live blocker: player-defense attribution remains unverified because phixxation is Creative; shoreline exit still has one bounded-recovery debt
+Last physical result: Paper verified self-defense/resumption, stable 2.56-block spacing, exact nearby gaze, and stale Follow-path cancellation
 Repository: frozen control remains 4a94cdc; protected untracked files untouched; accidental nested C: path absent
-Next campaign: hostile preemption/player defense, deterministic follow resumption, then nearby-player gaze on unchanged code
-Jordan review: request after checkpoint push
+Next campaign: broaden player speech authority without item-specific routing; defer player-defense physical proof until a safe attackable fixture exists
+Jordan review: requested as C2J-20260806-0000-companion-control-swimming; do not overwrite pending mailbox
