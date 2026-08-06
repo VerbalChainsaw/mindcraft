@@ -24,7 +24,7 @@ test('item hunt execution handles the attack result without a ReferenceError', a
         agent: { bot },
         goal: { name: 'different-goal' },
     };
-    const node = new ItemNode(manager, null, 'raw_beef').setHuntable('cow');
+    const node = new ItemNode(manager, null, 'beef').setHuntable('cow');
 
     await node.execute();
 

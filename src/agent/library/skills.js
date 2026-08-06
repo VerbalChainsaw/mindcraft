@@ -1,5 +1,6 @@
 import * as mc from "../../utils/mcdata.js";
 import * as world from "./world.js";
+import { cookingOutputForFood, isCookableFood } from '../../utils/food-semantics.js';
 import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.js';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
@@ -27,7 +28,6 @@ import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import { selectFarmSites, selectRememberedFarmStances } from '../runtime/farm-site-selector.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
 import {
-    COOKABLE_FOOD,
     familyInventoryCount,
     familyInventoryEntries,
     familyTransferManifest,
@@ -310,13 +310,7 @@ const CROP_FOOD_SPECS = Object.freeze({
     beetroots: Object.freeze({ harvest: 'beetroot', seed: 'beetroot_seeds', maxAge: 3 }),
     wheat: Object.freeze({ harvest: 'wheat', seed: 'wheat_seeds', maxAge: 7 }),
 });
-const HUNT_FOOD_SPECS = Object.freeze({
-    cow: 'raw_beef',
-    chicken: 'raw_chicken',
-    pig: 'raw_porkchop',
-    sheep: 'raw_mutton',
-    rabbit: 'raw_rabbit',
-});
+const HUNTABLE_FOOD_ANIMALS = new Set(['chicken', 'cow', 'pig', 'rabbit', 'sheep']);
 
 function setActionEvidence(bot, evidence) {
     bot.lastActionEvidence = { ...evidence, recordedAt: Date.now() };
@@ -411,7 +405,7 @@ function safeFoodPoints(bot) {
         if (
             !food
             || UNSAFE_FOOD_ITEMS.has(item.name)
-            || Object.prototype.hasOwnProperty.call(COOKABLE_FOOD, item.name)
+            || isCookableFood(bot.registry, item.name)
         ) return total;
         return total + (Math.max(0, Number(item.count) || 0) * Math.max(0, Number(food.foodPoints) || 0));
     }, 0);
@@ -2977,8 +2971,15 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
         return Boolean(world.getNearestBlock(bot, 'furnace', 16) || inventoryCount(bot, 'furnace') > 0)
             && Boolean(mc.getSmeltingFuel(bot));
     };
-    const carriedCookableCount = () => Object.keys(COOKABLE_FOOD).reduce(
-        (total, name) => total + inventoryCount(bot, name),
+    const carriedCookableFood = () => bot.inventory.items()
+        .map(item => ({
+            count: Math.max(0, Number(item.count) || 0),
+            input: item.name,
+            output: cookingOutputForFood(bot.registry, item.name),
+        }))
+        .filter(entry => entry.output && entry.count > 0);
+    const carriedCookableCount = () => carriedCookableFood().reduce(
+        (total, entry) => total + entry.count,
         0,
     );
     const cookCarriedFood = async (bootstrap) => {
@@ -2988,7 +2989,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
         } else if (!world.getNearestBlock(bot, 'furnace', 16) || !mc.getSmeltingFuel(bot)) {
             return false;
         }
-        for (const [input, output] of Object.entries(COOKABLE_FOOD)) {
+        for (const { input, output } of carriedCookableFood()) {
             if (interrupted() || safeFoodPoints(bot) >= targetPoints) break;
             const available = inventoryCount(bot, input);
             if (available < 1) continue;
@@ -3051,8 +3052,8 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
             }
         }
     };
-    const potentialCookedFoodPoints = () => Object.entries(COOKABLE_FOOD).reduce(
-        (total, [input, output]) => {
+    const potentialCookedFoodPoints = () => carriedCookableFood().reduce(
+        (total, { input, output }) => {
             const points = Number(bot.registry?.foodsByName?.[output]?.foodPoints) || 0;
             return total + (inventoryCount(bot, input) * points);
         },
@@ -3076,7 +3077,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
             const candidates = world.getNearbyEntities(bot, searchRange)
                 .filter(entity => (
                     mc.isHuntable(entity)
-                    && Object.prototype.hasOwnProperty.call(HUNT_FOOD_SPECS, entity.name)
+                    && HUNTABLE_FOOD_ANIMALS.has(entity.name)
                 ));
             if (candidates.length === 0) break;
             const populations = candidates.reduce((counts, entity) => {

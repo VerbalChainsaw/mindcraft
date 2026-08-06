@@ -1,3 +1,5 @@
+import { isCookableFood } from '../../utils/food-semantics.js';
+
 export const SUPPORTED_ITEM_FAMILIES = Object.freeze([
   'logs',
   'planks',
@@ -15,17 +17,6 @@ export const UNSAFE_FOOD_ITEMS = new Set([
   'suspicious_stew',
 ]);
 
-export const COOKABLE_FOOD = Object.freeze({
-  raw_beef: 'steak',
-  raw_chicken: 'cooked_chicken',
-  raw_cod: 'cooked_cod',
-  raw_mutton: 'cooked_mutton',
-  raw_porkchop: 'cooked_porkchop',
-  raw_rabbit: 'cooked_rabbit',
-  raw_salmon: 'cooked_salmon',
-  potato: 'baked_potato',
-});
-
 export function itemMatchesFamily(bot, item, family) {
   const name = String(item?.name || '');
   if (family === 'logs') return /_(?:log|stem)$/.test(name);
@@ -34,7 +25,7 @@ export function itemMatchesFamily(bot, item, family) {
     return Boolean(
       bot?.registry?.foodsByName?.[name]
       && !UNSAFE_FOOD_ITEMS.has(name)
-      && !Object.prototype.hasOwnProperty.call(COOKABLE_FOOD, name)
+      && !isCookableFood(bot?.registry, name)
     );
   }
   if (family === 'ores') {

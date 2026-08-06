@@ -1,5 +1,6 @@
 import Vec3 from 'vec3';
 
+import { isCookableFood } from '../../utils/food-semantics.js';
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
 import { isPreemption } from './action-result.js';
@@ -70,17 +71,6 @@ const UNSAFE_FOOD_ITEMS = new Set([
   'spider_eye',
   'suspicious_stew',
 ]);
-const COOKABLE_RAW_FOOD = new Set([
-  'raw_beef',
-  'raw_chicken',
-  'raw_cod',
-  'raw_mutton',
-  'raw_porkchop',
-  'raw_rabbit',
-  'raw_salmon',
-  'potato',
-]);
-
 function dimensionName(value) {
   const name = String(value || '').toLowerCase();
   if (name.endsWith('overworld')) return 'overworld';
@@ -158,7 +148,7 @@ function totalFoodPoints(bot, inventory) {
   const foods = bot.registry?.foodsByName || {};
   return Object.entries(inventory).reduce(
     (total, [name, count]) => (
-      UNSAFE_FOOD_ITEMS.has(name) || COOKABLE_RAW_FOOD.has(name)
+      UNSAFE_FOOD_ITEMS.has(name) || isCookableFood(bot.registry, name)
         ? total
         : total + ((foods[name]?.foodPoints || 0) * count)
     ),

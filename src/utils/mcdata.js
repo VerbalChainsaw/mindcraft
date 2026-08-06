@@ -13,6 +13,7 @@ import {
     smeltingInputsForOutput,
     smeltingOutputForInput,
 } from './smelting-catalogue.js';
+import { foodAnimalSource } from './food-semantics.js';
 const armorManager = plugin;
 const { pathfinder } = pf;
 const { plugin: collectblock } = collectBlockRuntime;
@@ -355,14 +356,7 @@ export function getItemBlockSources(itemName) {
 }
 
 export function getItemAnimalSource(itemName) {
-    return {    
-        raw_beef: 'cow',
-        raw_chicken: 'chicken',
-        raw_cod: 'cod',
-        raw_mutton: 'sheep',
-        raw_porkchop: 'pig',
-        raw_rabbit: 'rabbit',
-        raw_salmon: 'salmon',
+    return foodAnimalSource(mcdata, itemName) || {
         leather: 'cow',
         wool: 'sheep'
     }[itemName];
