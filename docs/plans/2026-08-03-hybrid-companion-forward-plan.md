@@ -26,6 +26,20 @@ Continuous geometry is not promoted into symbolic planning. A safe mining stance
 
 Local mechanical recovery stays inside the bounded adapter when it is part of executing the same binding, such as opening a door, leaving shallow water, collecting a nearby drop, or settling a plugin operation. Strategic recovery belongs to `GoalDirector` and must not be hidden inside long physical loops.
 
+## Default companion idle contract
+
+The primary bot is companion-directed by default. Completing or lacking player-authorized work does not authorize free progression, hunting, excavation, construction, or resource collection.
+
+- Stay available near the tracked player. Use a distance deadband and native Pathfinder so ordinary player movement does not cause constant footstep jitter or a custom follow engine.
+- Attend visually to the nearby tracked player through the existing bounded look mechanic only when combat, interaction, navigation safety, or active work does not require another gaze.
+- Continue ordinary non-destructive survival upkeep while idle.
+- Defend itself and the tracked player from verified hostile threats. Combat must remain attributed, bounded, non-suicidal, and willing to disengage; it may not reinterpret passive mobs or players as defensive targets.
+- Emergency self-preservation may escape drowning, fire, falling, entrapment, severe damage, or critical hunger. Obedience is not permission to die.
+- Operator Stop remains stricter than ordinary idle: it suppresses companion movement, autonomous work, and ordinary combat. Only the existing bounded emergency self-preservation exception may act until explicit player authority releases the hold.
+- Free autonomous progression and hunting require an explicit runtime mode or player standing order. A later bounded-helper mode may perform only pre-authorized low-impact chores inside an authorized shared work area.
+
+This is an ownership policy in `BehaviorArbiter` and runtime configuration, not a list of coal-, pig-, shelter-, or movement-specific exceptions.
+
 ## Declarative capability catalogue contract
 
 Every operation available to the prerequisite planner must be registered through one typed contract with these responsibilities:
