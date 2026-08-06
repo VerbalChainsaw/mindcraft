@@ -54,6 +54,7 @@ const CONNECTIVE_PATTERNS = [
   /\balso\b/gi,
   /\s*;\s*/g,
   /,\s+and\b/gi,
+  /,\s+(?=(?:go|walk|head|travel|run|harvest|replant|put|store|stash|deposit|come|return)\b)/gi,
 ];
 
 const SEGMENT_DELIMITER = '\u0000';
@@ -190,6 +191,12 @@ export function directiveToAgendaEntry(command, { requester = '' } = {}) {
   switch (name) {
     case 'goToPlayer':
       return unquote(args[0]) ? entry('goto', { recipient: unquote(args[0]) }) : null;
+    case 'goToFarm':
+      return entry('farm_visit', {});
+    case 'maintainFarm':
+      return entry('maintain_farm', {});
+    case 'putInChest':
+      return entry('deposit', { target: unquote(args[0]), quantity: asQuantity(args[1]) ?? 64 });
     case 'assignMiningJob':
       return entry('mine', { target: unquote(args[0]), quantity: asQuantity(args[1]) ?? 1 });
     case 'assignHarvestJob':
@@ -270,7 +277,14 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
     const directive = resolveDirective(playerName, segment, context);
     const agendaEntry = directive ? directiveToAgendaEntry(directive.command, { requester: playerName }) : null;
     if (agendaEntry) {
-      steps.push({ segment, command: directive.command, response: directive.response, entry: agendaEntry });
+      const previous = steps.at(-1)?.entry;
+      const duplicate = previous
+        && previous.kind === agendaEntry.kind
+        && previous.target === agendaEntry.target
+        && previous.recipient === agendaEntry.recipient;
+      if (!duplicate) {
+        steps.push({ segment, command: directive.command, response: directive.response, entry: agendaEntry });
+      }
     } else {
       unresolved.push({ segment, directive: directive || null });
     }

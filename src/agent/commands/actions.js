@@ -385,7 +385,9 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, player_name, closeness) => {
             setCompanionDirective(agent, null, player_name);
-            return await skills.goToPlayer(agent.bot, player_name, closeness);
+            return await skills.goToPlayer(agent.bot, player_name, closeness, {
+                locatePlayerPosition: name => agent.locatePlayerPosition(name),
+            });
         })
     },
     {
@@ -1240,6 +1242,19 @@ export const actionsList = [
         }),
     },
     {
+        name: '!goToFarm',
+        description: 'Use native Pathfinder to reach a verified service stance beside the remembered farm.',
+        params: {},
+        perform: runAsAction(async function (agent) {
+            const farm = agent.home_state?.snapshot?.().farm;
+            if (!farm) {
+                skills.log(agent.bot, 'No durable farm is remembered. Establish one first.');
+                return false;
+            }
+            return await skills.approachRememberedFarm(agent.bot, farm);
+        }),
+    },
+    {
         name: '!maintainFarm',
         description: 'Harvest mature crops, collect drops, replant missing plots, and verify the remembered farm.',
         params: {},
@@ -1853,7 +1868,9 @@ export const actionsList = [
         params: {'player_name': { type: 'string', description: 'Name of the player to approach.' }},
         perform: runAsAction(async (agent, player_name) => {
             setCompanionDirective(agent, null, player_name);
-            return await skills.goToPlayer(agent.bot, player_name, 2);
+            return await skills.goToPlayer(agent.bot, player_name, 2, {
+                locatePlayerPosition: name => agent.locatePlayerPosition(name),
+            });
         })
     },
     {

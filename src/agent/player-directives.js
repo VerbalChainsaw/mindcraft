@@ -162,7 +162,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/^(?:please\s+)?(?:come|walk|move|get)\s+(?:here|to me|over here)\b/.test(text)) {
+    if (/^(?:please\s+)?(?:come|walk|move|get)(?:\s+back)?\s+(?:here|to me|over here)\b/.test(text)) {
         return {
             command: `!goToPlayer(${commandString(playerName)}, 2)`,
             response: 'I will come to you now.',
@@ -465,6 +465,14 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
 
     // --- Base, farm, and livestock ------------------------------------------
 
+    if (/^(?:please\s+)?(?:go|walk|head|travel|run)\s+to\s+(?:the\s+)?(?:remembered\s+)?farm\b/.test(text)) {
+        return {
+            command: '!goToFarm',
+            response: 'Heading to the remembered farm.',
+            releasesHold: true,
+        };
+    }
+
     if (/\b(?:remember|save|mark|set)\b.{0,20}\b(?:this (?:spot|place|position|location) as )?(?:your |our |the )?home\b/.test(text)
         || /\bthis is (?:your|our) home\b/.test(text)) {
         return {
@@ -493,7 +501,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/\b(?:harvest|tend|maintain|work|check on|look after|replant)\b.{0,20}\b(?:the |your |our )?(?:farm|crops?|field)\b/.test(text)) {
+    if (/\b(?:harvest|tend|maintain|work|check on|look after|replant)\b.{0,28}\b(?:the |your |our )?(?:farm|crops?|field|wheat|carrots?|potatoes|beetroots?)\b/.test(text)) {
         return {
             command: '!maintainFarm',
             response: 'Harvesting what is ready, replanting, and verifying the farm.',

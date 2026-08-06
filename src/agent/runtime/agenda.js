@@ -39,6 +39,9 @@ export const AGENDA_KINDS = Object.freeze({
   // way in, so the dispatcher builds the command from a known-safe token.
   craft: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
   smelt: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  farm_visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
+  maintain_farm: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
+  deposit: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
   // Coordinates are validated numbers, never text, so a patrol step cannot
   // smuggle anything executable through the store.
   visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsPoint: true }),
@@ -192,6 +195,9 @@ export function describeAgendaEntry(entry) {
     case 'stockpile': return `stockpile ${entry.quantity} ${readable}`;
     case 'craft': return `craft ${entry.quantity} ${readable}`;
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
+    case 'farm_visit': return 'go to the remembered farm';
+    case 'maintain_farm': return 'harvest and replant the remembered farm';
+    case 'deposit': return `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
     case 'shelter': return 'build a shelter';
     case 'goto': return `go to ${entry.recipient}`;
     case 'visit': return `patrol to ${entry.x}, ${entry.y}, ${entry.z}`;

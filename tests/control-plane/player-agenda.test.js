@@ -130,6 +130,22 @@ test('parsePlayerAgenda preserves every registry-backed output in one collective
   assert.deepEqual(plan.unresolved, []);
 });
 
+test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed steps', () => {
+  const message = 'Go to the farm, harvest only the mature wheat, replant every crop you harvest, put the wheat in the existing chest at the farm, then come back to me.';
+  const bot = { registry: { itemsByName: { wheat: { name: 'wheat' } } } };
+  const plan = parsePlayerAgenda('WorksitePlayer', message, { bot });
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => step.entry), [
+    { kind: 'farm_visit', requester: 'WorksitePlayer' },
+    { kind: 'maintain_farm', requester: 'WorksitePlayer' },
+    { kind: 'deposit', requester: 'WorksitePlayer', target: 'wheat', quantity: 64 },
+    { kind: 'goto', requester: 'WorksitePlayer', recipient: 'WorksitePlayer' },
+  ]);
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda carries interrupt disposition and drops non-agenda segments', () => {
   const plan = parsePlayerAgenda('Gabriel', 'stop, follow me then come here', {}, { resolveDirective: stubResolver });
   assert.ok(plan);

@@ -23,7 +23,7 @@ import {
 import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
 import { observeCombatDamage } from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
-import { selectFarmSites } from '../runtime/farm-site-selector.js';
+import { selectFarmSites, selectRememberedFarmStances } from '../runtime/farm-site-selector.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
 import {
     COOKABLE_FOOD,
@@ -12137,7 +12137,7 @@ export async function rideToPosition(bot, x, y, z, minDistance=2) {
     return arrived;
 }
 
-export async function goToPlayer(bot, username, distance=3) {
+export async function goToPlayer(bot, username, distance=3, { locatePlayerPosition = null } = {}) {
     /**
      * Navigate to the given player.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -12161,6 +12161,51 @@ export async function goToPlayer(bot, username, distance=3) {
     let resolution = resolvePhysicalPlayer(bot, username);
     let target = playerTargetEvidence(resolution);
     let player = resolution.entity;
+    if (!player && typeof locatePlayerPosition === 'function') {
+        const observation = await locatePlayerPosition(username);
+        const position = observation?.position;
+        const observedDimension = String(observation?.dimension || '').replace(/^minecraft:/, '');
+        if (
+            observation?.success === true
+            && observation?.found === true
+            && [position?.x, position?.y, position?.z].every(Number.isFinite)
+            && observedDimension === dimensionName(bot)
+        ) {
+            const reacquireDistance = Math.max(6, normalizePlayerDistance(distance, 3) + 2);
+            const regionGoal = new pf.goals.GoalNear(
+                Math.floor(position.x),
+                Math.floor(position.y),
+                Math.floor(position.z),
+                reacquireDistance,
+            );
+            const reachedRegion = regionGoal.isEnd(bot.entity.position.floored()) || await goToGoal(bot, regionGoal, {
+                movements: () => safeMovements(bot),
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            });
+            if (!reachedRegion) return false;
+            resolution = resolvePhysicalPlayer(bot, username);
+            target = playerTargetEvidence(resolution);
+            player = resolution.entity;
+        } else {
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: observation?.success === true && observation?.found === false
+                    ? 'target_offline'
+                    : observedDimension && observedDimension !== dimensionName(bot)
+                        ? 'target_other_dimension'
+                        : 'target_location_unavailable',
+                target: { ...target, source: observation?.source || 'managed_paper' },
+                expected: dimensionName(bot),
+                observed: observedDimension || null,
+                retryable: observation?.found !== false,
+            });
+            log(bot, observation?.found === false
+                ? `${username} is not online.`
+                : `${username}'s current position is not reachable in ${dimensionName(bot)}.`);
+            return false;
+        }
+    }
     if (!player) {
         setActionEvidence(bot, {
             kind: 'movement',
@@ -13339,6 +13384,92 @@ function farmCellStatus(bot, farm, cell) {
     };
 }
 
+export async function approachRememberedFarm(bot, rawFarm) {
+    const farm = normalizeFarmState(rawFarm);
+    if (!farm) {
+        setActionEvidence(bot, { kind: 'farm_approach', outcome: 'invalid_farm_state', retryable: false });
+        return false;
+    }
+    if (farm.dimension !== dimensionName(bot)) {
+        setActionEvidence(bot, {
+            kind: 'farm_approach',
+            outcome: 'wrong_dimension',
+            target: { name: farm.crop },
+            expected: farm.dimension,
+            observed: dimensionName(bot),
+            retryable: true,
+        });
+        return false;
+    }
+
+    // A remembered farm may be outside loaded chunks. Native Pathfinder can
+    // route to its durable coordinates without inspecting the crops, then the
+    // loaded-world stance binder selects only verified perimeter footing.
+    const xs = farm.cells.map(cell => cell.x);
+    const zs = farm.cells.map(cell => cell.z);
+    const center = {
+        x: Math.floor((Math.min(...xs) + Math.max(...xs)) / 2),
+        y: farm.cells[0].y + 1,
+        z: Math.floor((Math.min(...zs) + Math.max(...zs)) / 2),
+    };
+    const coarseGoal = new pf.goals.GoalNear(center.x, center.y, center.z, 8);
+    if (!coarseGoal.isEnd(bot.entity.position.floored())) {
+        const reached = await goToGoal(bot, coarseGoal, {
+            movements: () => safeMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        if (!reached || !coarseGoal.isEnd(bot.entity.position.floored())) {
+            setActionEvidence(bot, {
+                kind: 'farm_approach',
+                outcome: 'farm_region_unreachable',
+                target: { name: farm.crop, ...center },
+                retryable: true,
+            });
+            return false;
+        }
+    }
+
+    const stances = selectRememberedFarmStances(bot, farm.cells);
+    if (stances.length === 0) {
+        setActionEvidence(bot, {
+            kind: 'farm_approach',
+            outcome: 'farm_service_stance_unavailable',
+            target: { name: farm.crop, ...center },
+            retryable: true,
+        });
+        return false;
+    }
+    const serviceGoal = new pf.goals.GoalCompositeAny(
+        stances.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+    );
+    if (!serviceGoal.isEnd(bot.entity.position.floored())) {
+        const reached = await goToGoal(bot, serviceGoal, {
+            movements: () => safeMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        if (!reached || !serviceGoal.isEnd(bot.entity.position.floored())) {
+            setActionEvidence(bot, {
+                kind: 'farm_approach',
+                outcome: 'farm_service_stance_unreachable',
+                target: { name: farm.crop, ...center },
+                candidates: stances.length,
+                retryable: true,
+            });
+            return false;
+        }
+    }
+    setActionEvidence(bot, {
+        kind: 'farm_approach',
+        outcome: 'arrived',
+        target: { name: farm.crop, ...center },
+        farm,
+        retryable: false,
+    });
+    return true;
+}
+
 export async function establishFarm(bot, cropName='wheat', width=3, depth=3, range=32) {
     const spec = FARM_CROP_INPUTS[String(cropName || '').trim().toLowerCase()];
     const farmWidth = Math.max(1, Math.min(4, Math.floor(Number(width) || 3)));
@@ -13510,6 +13641,7 @@ export async function maintainFarm(bot, rawFarm) {
         log(bot, `The remembered farm is in ${farm.dimension}; return there before maintaining it.`);
         return false;
     }
+    if (!await approachRememberedFarm(bot, farm)) return false;
     const statuses = farm.cells.map(cell => ({ cell, ...farmCellStatus(bot, farm, cell) }));
     const actionable = statuses.filter(status => (
         !status.planted || status.mature

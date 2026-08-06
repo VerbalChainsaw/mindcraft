@@ -92,6 +92,29 @@ function serviceStances(bot, origin, width, depth) {
   return positions;
 }
 
+/**
+ * Bind safe perimeter stances for an already remembered farm footprint.
+ * Unlike site selection, this never proposes new soil or construction; it only
+ * answers where native Pathfinder may stand to service the existing cells.
+ */
+export function selectRememberedFarmStances(bot, cells) {
+  const normalized = (Array.isArray(cells) ? cells : [])
+    .filter(cell => [cell?.x, cell?.y, cell?.z].every(Number.isFinite))
+    .map(cell => ({ x: Math.floor(cell.x), y: Math.floor(cell.y), z: Math.floor(cell.z) }));
+  if (normalized.length === 0 || normalized.length !== cells.length) return [];
+  const y = normalized[0].y;
+  if (normalized.some(cell => cell.y !== y)) return [];
+  const xs = normalized.map(cell => cell.x);
+  const zs = normalized.map(cell => cell.z);
+  const origin = { x: Math.min(...xs), y, z: Math.min(...zs) };
+  return serviceStances(
+    bot,
+    origin,
+    Math.max(...xs) - origin.x + 1,
+    Math.max(...zs) - origin.z + 1,
+  );
+}
+
 function waterPosition(block) {
   const position = block?.position;
   if (!position || block?.name !== 'water') return null;

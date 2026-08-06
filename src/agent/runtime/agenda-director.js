@@ -410,6 +410,9 @@ export class AgendaDirector {
       craft: () => `!craftRecipe("${entry.target}", ${entry.quantity})`,
       smelt: () => `!smeltItem("${entry.target}", ${entry.quantity})`,
       goto: () => `!goToPlayer("${entry.recipient}", 3)`,
+      farm_visit: () => '!goToFarm',
+      maintain_farm: () => '!maintainFarm',
+      deposit: () => `!putInChest("${entry.target}", ${entry.quantity})`,
     };
     const command = (DIRECT_COMMANDS[entry.kind] || DIRECT_COMMANDS.goto)();
     this.dispatching = true;
