@@ -94,6 +94,37 @@ function nearbyRecipeBot() {
   };
 }
 
+function carriedStoneBrickBot() {
+  const items = {
+    1: { id: 1, name: 'stone' },
+    2: { id: 2, name: 'cobblestone' },
+    3: { id: 3, name: 'stone_bricks' },
+    4: { id: 4, name: 'furnace' },
+  };
+  const carried = [
+    { name: 'cobblestone', type: 2, count: 429 },
+    { name: 'furnace', type: 4, count: 1 },
+  ];
+  return {
+    inventory: {
+      slots: carried,
+      items: () => carried,
+    },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks: {},
+      blocksByName: {},
+      recipes: {
+        3: [{
+          inShape: [[1, 1], [1, 1]],
+          result: { id: 3, count: 4 },
+        }],
+      },
+    },
+  };
+}
+
 function remoteTableRecipeBot() {
   const items = {
     1: { id: 1, name: 'test_machine' },
@@ -266,6 +297,26 @@ test('The causal planner prefers a carried transform source over a dead partial 
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.binding.command, '!craftRecipe("oak_planks", 1)');
+});
+
+test('The causal planner uses carried smelting inputs before scavenging a placed output block', () => {
+  const plan = buildPrerequisitePlan(carriedStoneBrickBot(), {
+    target: 'stone_bricks',
+    quantity: 16,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.deepEqual(
+    plan.actions.map(action => action.capability.id),
+    ['collect_wood', 'smelt', 'craft'],
+  );
+  assert.equal(plan.actions[1].capability.binding.command, '!smeltItem("cobblestone", 16)');
+  assert.equal(plan.actions[2].capability.binding.command, '!craftRecipe("stone_bricks", 4)');
+  assert.equal(
+    plan.actions.some(action => action.capability.binding.command.includes('collectBlocksInRange("stone_bricks"')),
+    false,
+  );
 });
 
 test('The causal planner acquires remote recipe ingredients before provisioning the final workstation', () => {

@@ -594,7 +594,12 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/\b(?:show inventory|your inventory|what do you have|what are you carrying|show tools)\b/.test(text)) {
+    // Inventory observation owns an utterance only when the player actually
+    // asks for an inventory report. The former unanchored `your inventory`
+    // alternative swallowed acquisition orders such as “make 16 stone bricks
+    // and keep them in your inventory”, leaving a held bot to print its items
+    // instead of accepting the durable goal.
+    if (/^(?:please\s+)?(?:show(?: me)?\s+(?:(?:your|the)\s+)?inventory|(?:check|list)\s+(?:your\s+)?inventory|your inventory(?:\s+please)?|what do you have|what are you carrying|show(?: me)?\s+(?:your\s+)?tools)\b/.test(text)) {
         return {
             command: '!inventory',
             response: 'Checking what I am carrying.',

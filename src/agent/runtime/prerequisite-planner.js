@@ -285,8 +285,7 @@ function acquisitionSourceDistance(bot, target, range, depth = 0, trail = []) {
     if (!Number.isFinite(distance)) return;
     nearest = nearest === null ? distance : Math.min(nearest, distance);
   };
-  const smeltingInput = mc.getItemSmeltingIngredient(target);
-  if (smeltingInput) {
+  for (const smeltingInput of smeltingInputCandidates(bot, { ledger: new Map(), range }, target)) {
     consider(acquisitionSourceDistance(bot, smeltingInput, range, depth + 1, nextTrail));
   }
   const itemId = bot.registry?.itemsByName?.[target]?.id;
@@ -338,6 +337,43 @@ function acquisitionCost(name) {
     if (entry.pattern.test(name)) return entry.cost;
   }
   return DEFAULT_ACQUISITION_COST;
+}
+
+function smeltingInputCandidates(bot, context, target) {
+  return mc.getItemSmeltingIngredients(target)
+    .filter(input => Boolean(bot.registry?.itemsByName?.[input]))
+    .filter(input => {
+      if (ledgerCount(context, input) > 0) return true;
+      // Equipment-to-nugget recipes are salvage operations. They are useful
+      // only for equipment already carried; planning and crafting fresh gear
+      // merely to melt it is a causal loop disguised as a valid recipe.
+      if (target.endsWith('_nugget')) return false;
+      const block = bot.registry?.blocksByName?.[input];
+      const item = bot.registry?.itemsByName?.[input];
+      // Ore smelting recipes require the ore item itself (normally Silk Touch).
+      // If ordinary mining cannot produce that item, it is not an acquisition
+      // candidate unless the item is already in inventory.
+      if (block && item && !block.drops?.includes(item.id)) return false;
+      return true;
+    })
+    .sort((left, right) => {
+      const carriedDifference = ledgerCount(context, right) - ledgerCount(context, left);
+      if (carriedDifference !== 0) return carriedDifference;
+      const leftDistance = nearestBlockDistance(bot, [
+        left,
+        ...sourceBlocks(bot, left).map(block => block.name),
+      ], context.range);
+      const rightDistance = nearestBlockDistance(bot, [
+        right,
+        ...sourceBlocks(bot, right).map(block => block.name),
+      ], context.range);
+      if (Number.isFinite(leftDistance) || Number.isFinite(rightDistance)) {
+        if (!Number.isFinite(leftDistance)) return 1;
+        if (!Number.isFinite(rightDistance)) return -1;
+        if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+      }
+      return acquisitionCost(left) - acquisitionCost(right) || left.localeCompare(right);
+    });
 }
 
 // Recipe ranking is only a hint, but it must value material already carried
@@ -595,14 +631,15 @@ function produceItem(bot, context, target, amount, trail) {
   if (nodeFailure) return nodeFailure;
   const nextTrail = [...trail, target];
 
-  const smeltingInput = mc.getItemSmeltingIngredient(target);
-  if (smeltingInput) {
+  const smeltingFailures = [];
+  for (const smeltingInput of smeltingInputCandidates(bot, context, target)) {
     const candidate = cloneContext(context);
     const failure = planFromSmelting(bot, candidate, target, amount, smeltingInput, nextTrail);
     if (!failure) {
       acceptContext(context, candidate);
       return null;
     }
+    smeltingFailures.push(failure);
   }
 
   const directSources = sourceBlocks(bot, target);
@@ -647,7 +684,7 @@ function produceItem(bot, context, target, amount, trail) {
     return null;
   }
 
-  return recipeFailures[0] || sourceFailure;
+  return recipeFailures[0] || smeltingFailures[0] || sourceFailure;
 }
 
 function ensureItem(bot, context, targetName, requiredCount, trail = []) {

@@ -66,6 +66,10 @@ test('compound pickaxe upgrade requests route through the resumable typed goal',
     commandFor('Please upgrade to a diamond axe.'),
     '!requestItemGoal("acquire", "diamond_axe", 1, "Gabriel", "main_hand")',
   );
+  assert.equal(
+    commandFor('Please gather 16 logs and keep them in your inventory.'),
+    '!requestItemGoal("acquire", "logs", 16, "Gabriel", "inventory")',
+  );
 });
 
 test('non-directive chatter still returns null (falls through to the model)', () => {

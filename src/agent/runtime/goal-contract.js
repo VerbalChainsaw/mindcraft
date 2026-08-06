@@ -278,7 +278,7 @@ export function resolveItemGoalTarget(bot, requestedName) {
     acquisitionKind = 'prepare_material';
   } else if (isCollectibleBlock) acquisitionKind = 'collect_block';
   else if (knowledge.recipes?.length > 0) acquisitionKind = 'craft';
-  else if (mc.getItemSmeltingIngredient(canonical) || hasBlockDropSource(bot, canonical)) {
+  else if (mc.getItemSmeltingIngredients(canonical).length > 0 || hasBlockDropSource(bot, canonical)) {
     acquisitionKind = 'planned';
   }
 

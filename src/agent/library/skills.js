@@ -292,16 +292,6 @@ const TOOL_TIER = Object.freeze({
     diamond: 5,
     netherite: 6,
 });
-const SMELTING_OUTPUT = Object.freeze({
-    ...COOKABLE_FOOD,
-    raw_iron: 'iron_ingot',
-    raw_gold: 'gold_ingot',
-    raw_copper: 'copper_ingot',
-    kelp: 'dried_kelp',
-    sand: 'glass',
-    cobblestone: 'stone',
-    clay_ball: 'brick',
-});
 const CROP_FOOD_SPECS = Object.freeze({
     carrots: Object.freeze({ harvest: 'carrot', seed: 'carrot', maxAge: 7 }),
     potatoes: Object.freeze({ harvest: 'potato', seed: 'potato', maxAge: 7 }),
@@ -2945,8 +2935,7 @@ export async function smeltItem(bot, itemName, num=1) {
 
     itemName = String(itemName || '').trim();
     const amount = Math.max(1, Math.min(64, Math.floor(Number(num) || 1)));
-    const outputName = SMELTING_OUTPUT[itemName]
-        || (itemName.endsWith('_log') || itemName.endsWith('_wood') ? 'charcoal' : null);
+    const outputName = mc.getItemSmeltingOutput(itemName);
     const target = { name: itemName || 'smeltable' };
     let finalEvidence = null;
     let furnace = null;

@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { selectSmeltingFuelPlan } from '../src/agent/library/skills.js';
+import {
+  smeltingInputsForOutput,
+  smeltingOutputForInput,
+} from '../src/utils/smelting-catalogue.js';
 
 test('smelting fuel planning combines individually insufficient compatible stacks', () => {
   const plan = selectSmeltingFuelPlan([
@@ -15,4 +19,10 @@ test('smelting fuel planning combines individually insufficient compatible stack
     { name: 'acacia_planks', count: 1 },
     { name: 'oak_log', count: 1 },
   ]);
+});
+
+test('the repository smelting catalogue gives planning and execution the same transform', () => {
+  assert.deepEqual(smeltingInputsForOutput('stone'), ['cobblestone']);
+  assert.equal(smeltingOutputForInput('cobblestone'), 'stone');
+  assert.equal(smeltingOutputForInput('black_terracotta'), 'black_glazed_terracotta');
 });

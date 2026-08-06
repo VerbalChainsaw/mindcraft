@@ -8,6 +8,11 @@ import collectBlockRuntime from '../../packages/minecraft-runtime/mineflayer-col
 import { plugin as autoEat } from 'mineflayer-auto-eat';
 import plugin from 'mineflayer-armor-manager';
 import { plugin as toolPlugin } from 'mineflayer-tool';
+import {
+    isSmeltingInput,
+    smeltingInputsForOutput,
+    smeltingOutputForInput,
+} from './smelting-catalogue.js';
 const armorManager = plugin;
 const { pathfinder } = pf;
 const { plugin: collectblock } = collectBlockRuntime;
@@ -290,8 +295,7 @@ export function getItemCraftingRecipes(itemName) {
 }
 
 export function isSmeltable(itemName) {
-    const misc_smeltables = ['beef', 'chicken', 'cod', 'mutton', 'porkchop', 'rabbit', 'salmon', 'tropical_fish', 'potato', 'kelp', 'sand', 'cobblestone', 'clay_ball'];
-    return itemName.includes('raw') || itemName.includes('log') || misc_smeltables.includes(itemName);
+    return isSmeltingInput(itemName, mcdata);
 }
 
 export function getSmeltingFuel(bot) {
@@ -319,21 +323,15 @@ export function getFuelSmeltOutput(fuelName) {
 }
 
 export function getItemSmeltingIngredient(itemName) {
-    return {    
-        baked_potato: 'potato',
-        steak: 'raw_beef',
-        cooked_chicken: 'raw_chicken',
-        cooked_cod: 'raw_cod',
-        cooked_mutton: 'raw_mutton',
-        cooked_porkchop: 'raw_porkchop',
-        cooked_rabbit: 'raw_rabbit',
-        cooked_salmon: 'raw_salmon',
-        dried_kelp: 'kelp',
-        iron_ingot: 'raw_iron',
-        gold_ingot: 'raw_gold',
-        copper_ingot: 'raw_copper',
-        glass: 'sand'
-    }[itemName];
+    return getItemSmeltingIngredients(itemName)[0];
+}
+
+export function getItemSmeltingIngredients(itemName) {
+    return smeltingInputsForOutput(itemName, mcdata);
+}
+
+export function getItemSmeltingOutput(itemName) {
+    return smeltingOutputForInput(itemName, mcdata);
 }
 
 export function getItemBlockSources(itemName) {
