@@ -276,8 +276,12 @@ export function resolveItemGoalTarget(bot, requestedName) {
   if (isTool) acquisitionKind = 'prepare_tool';
   else if (['cobblestone', 'dirt', 'torch'].includes(canonical) || canonical.endsWith('_planks')) {
     acquisitionKind = 'prepare_material';
-  } else if (isCollectibleBlock) acquisitionKind = 'collect_block';
-  else if (knowledge.recipes?.length > 0) acquisitionKind = 'craft';
+  // A placed crafted block is a world artifact, not a free resource source.
+  // Prefer its connected-registry recipe before the self-drop path so generic
+  // acquisition goals make rails, chests, and similar outputs instead of
+  // dismantling an existing player structure to obtain them.
+  } else if (knowledge.recipes?.length > 0) acquisitionKind = 'craft';
+  else if (isCollectibleBlock) acquisitionKind = 'collect_block';
   else if (mc.getItemSmeltingIngredients(canonical).length > 0 || hasBlockDropSource(bot, canonical)) {
     acquisitionKind = 'planned';
   }
@@ -649,8 +653,7 @@ export function createItemGoalContract({
 export function parseItemGoalRequest(requester, message, bot) {
   const normalized = normalizeMessage(message);
   if (!requester || !normalized || normalized.includes('!')) return null;
-  const quantity = requestedQuantity(normalized);
-  if (!quantity) return null;
+  const explicitQuantity = requestedQuantity(normalized);
 
   const delivery = /\b(?:bring|deliver|fetch)\b/.test(normalized)
     || /\bgive\s+(?:me|us)\b/.test(normalized)
@@ -666,6 +669,15 @@ export function parseItemGoalRequest(requester, message, bot) {
   if (!selected) return null;
   const target = resolveItemGoalTarget(bot, selected);
   if (!target || target.acquisitionKind === 'unsupported') return null;
+  // An indefinite manufactured-item request still has a deterministic unit:
+  // one recipe batch. Keep raw collection/stockpile requests on their existing
+  // quota-aware routes, but do not force "make some rails" through the model
+  // merely because the player did not name the recipe's output count.
+  const indefiniteBatch = !explicitQuantity
+    && /(?:^|\s)some(?=\s)/.test(normalized)
+    && ['craft', 'planned'].includes(target.acquisitionKind);
+  if (!explicitQuantity && !indefiniteBatch) return null;
+  const quantity = explicitQuantity || 1;
   const explicitWorkstation = /\buse\s+(?:(?:the|my)\s+)?furnace\s+here\b|\buse\s+this\s+furnace\b/.test(normalized)
     ? 'furnace'
     : /\buse\s+(?:(?:the|my)\s+)?(?:crafting\s+table|workbench)\s+here\b|\buse\s+this\s+(?:crafting\s+table|workbench)\b/.test(normalized)
@@ -687,6 +699,7 @@ export function parseItemGoalRequest(requester, message, bot) {
     }),
     request: boundedText(message, 500),
     workstationName: explicitWorkstation,
+    indefiniteBatch,
   });
 }
 

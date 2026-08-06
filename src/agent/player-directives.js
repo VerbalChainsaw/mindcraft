@@ -669,9 +669,11 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
             command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)}, ${commandString(typedGoal.completion.kind)}${workstationArguments})`,
             response: typedGoal.kind === 'deliver'
                 ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
-                : typedGoal.completion.kind === 'inventory'
-                    ? `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`
-                    : `I will acquire ${target.replaceAll('_', ' ')} and verify it in my ${typedGoal.completion.kind.replace('_', ' ')}.`,
+                : typedGoal.indefiniteBatch
+                    ? `I will make a recipe batch of ${target.replaceAll('_', ' ')} and keep working through its prerequisites until Minecraft verifies the output.`
+                    : typedGoal.completion.kind === 'inventory'
+                        ? `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`
+                        : `I will acquire ${target.replaceAll('_', ' ')} and verify it in my ${typedGoal.completion.kind.replace('_', ' ')}.`,
             releasesHold: true,
         };
     }

@@ -146,6 +146,7 @@ const MAX_COLLECTION_ACCESS_RECOVERIES = 2;
 const COLLECTION_ACCESS_PROGRESS_DISTANCE = 1;
 const MINING_COLLECTION_SLOT_RESERVE = 3;
 const MAX_COLLECTION_SLOT_RELEASE_ACTIONS = 4;
+const MIN_COLLECTION_NATURAL_FILL_RESERVE = 16;
 const MINING_TUNNEL_LENGTH = 12;
 const MAX_MINING_ROUTE_HEADINGS = 3;
 const MINING_ROUTE_STALL_TIMEOUT_MS = 5_000;
@@ -4522,10 +4523,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         const bulkDebris = inventoryItems
             .filter(item => (
                 Number.isInteger(item.slot)
-                && item.count >= 32
+                && item.count >= MIN_COLLECTION_NATURAL_FILL_RESERVE
                 && NATURAL_FILL_BLOCKS.has(item.name)
                 && !protectedNames.has(item.name)
-                && (totals.get(item.name) - item.count) >= Math.min(64, item.stackSize || 64)
+                && (totals.get(item.name) - item.count) >= MIN_COLLECTION_NATURAL_FILL_RESERVE
             ))
             .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))[0];
         if (bulkDebris) {
@@ -4533,7 +4534,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             // opens a slot instead of draining equivalent blocks elsewhere.
             await bot.tossStack(bulkDebris);
             releaseActions += 1;
-            log(bot, `Released one redundant ${bulkDebris.count}-block ${bulkDebris.name} excavation stack while preserving another full stack.`);
+            log(
+                bot,
+                `Released one redundant ${bulkDebris.count}-block ${bulkDebris.name} excavation stack while preserving at least ${MIN_COLLECTION_NATURAL_FILL_RESERVE} carried blocks.`,
+            );
             await interruptibleDelay(bot, 100);
             continue;
         }

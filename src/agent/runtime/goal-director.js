@@ -1208,6 +1208,8 @@ export class GoalDirector {
     const goal = this.activeGoal;
     const skill = actionResultEvidence(effectiveResult);
     const surfaceRecoveryProgress = verifiedSurfaceRecoveryProgress(kind, skill);
+    const capacityBlocked = skill?.outcome === 'inventory_full'
+      || effectiveResult.code === 'skill_inventory_full';
     const prerequisiteBlocked = Boolean(
       skill?.toolRequirement || skill?.workstationRequirement,
     );
@@ -1275,9 +1277,27 @@ export class GoalDirector {
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
     // unreachable target does, and the goal gave up on work that was fine.
-    const attempts = (preemptionRecovery || relocationFailure || prerequisiteBlocked)
+    const attempts = (preemptionRecovery || relocationFailure || prerequisiteBlocked || capacityBlocked)
       ? goal.attempts
       : goal.attempts + 1;
+    if (capacityBlocked) {
+      // The collection primitive has already exhausted its bounded safe release
+      // policy. Inventory capacity is a physical precondition, not a failed ore
+      // target and not a reason to relocate four times. Fail truthfully without
+      // charging productive attempts; a later request can resume after storage
+      // or inventory policy creates room.
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        updatedAt: this.now(),
+      });
+      this.fail(
+        'inventory_capacity_blocked',
+        effectiveResult.detail || 'The goal cannot reserve safe working inventory slots.',
+      );
+      return;
+    }
     if (
       prerequisiteBlocked
       && budgetedSubgoalCount(goal) < goal.maxSubgoals

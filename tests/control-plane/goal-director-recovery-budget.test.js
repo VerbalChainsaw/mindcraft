@@ -157,6 +157,31 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.equal(director.lastGoal.evidence.code, 'goal_attempts_exhausted');
 
   director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([subgoal('plan', 1, 'acting')]),
+    attempts: 2,
+  });
+  director.handleResult('plan', {
+    actionId: 'capacity-precondition',
+    phase: 'failed',
+    code: 'skill_inventory_full',
+    detail: 'Inventory cannot reserve three working slots safely.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'collect',
+        outcome: 'inventory_full',
+        requiredFreeSlots: 3,
+        observedFreeSlots: 1,
+        retryable: true,
+      },
+    },
+  });
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.phase, 'failed');
+  assert.equal(director.lastGoal.attempts, 2);
+  assert.equal(director.lastGoal.evidence.code, 'inventory_capacity_blocked');
+
+  director.activeGoal = normalizeGoalContract({
     ...boundaryGoal([{
       ...subgoal('plan', 1, 'acting'),
       targetName: 'raw_iron',
