@@ -1,11 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Active checkpoint: 5406794 (pushed); functional source: 2bca9c6
-Milestone: explicit player-worksite identity now survives the durable goal and binds the matching craft/smelt capability without substitution
+Active checkpoint: functional source 5db533b (pushed)
+Milestone: broad remembered-farm plans execute as durable visit, mature-harvest/replant, existing-storage deposit, and remote-return capabilities
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: product-scale capability engine, companion behavior, and world stewardship
-Live blocker: none in the exact-workstation slice; next broad product-scale campaign awaits checkpoint review
-Last physical result: from zero raw/ingots, bot mined, resurfaced, gathered fuel, smelted 8 in the exact furnace at (-659,71,-459), and raised WorksitePlayer 16->24
+Live blocker: the remembered farm has no existing chest; nearest loaded containers are 89+ blocks away and underground, so deposit fails truthfully without placement
+Last physical result: bot reused the 180-block remote farm, harvested only mature wheat, restored all 9 plots, returned via authoritative Paper player location, and stopped exactly 3 blocks from WorksitePlayer at health 20
 Repository: frozen control remains 4a94cdc; protected untracked files untouched; accidental nested C: path absent
-Next campaign: after review, return to broad unfamiliar companion outcomes; narrow only at the first live shared blocker
-Jordan review: request the completed exact-workstation checkpoint; runtime Stop-held at the preserved worksite
+Next campaign: complete the unchanged farm/storage request only when a real existing farm chest is available; do not synthesize one or add storage architecture
+Jordan review: request checkpoint review of 5db533b and the missing-world-fixture boundary; runtime Stop-held beside WorksitePlayer
