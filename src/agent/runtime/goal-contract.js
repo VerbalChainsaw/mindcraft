@@ -403,7 +403,7 @@ function normalizeWorkstationRequirement(raw) {
   });
 }
 
-function normalizeWorkstationConstraint(raw) {
+export function normalizeWorkstationConstraint(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const name = canonicalName(raw.name);
   const position = raw.position && typeof raw.position === 'object' && !Array.isArray(raw.position)

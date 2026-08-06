@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
+import { normalizeWorkstationConstraint } from './goal-contract.js';
 
 // An agenda is an ordered plan the player states once and the bot works through
 // on its own. Both executors are single-slot — goal_director holds one goal and
@@ -22,6 +23,7 @@ const MAX_ENTRIES = 24;
 const MAX_QUANTITY = 2304;
 const MAX_NOTE = 160;
 const ACQUIRE_COMPLETIONS = new Set(['inventory', 'main_hand', 'off_hand']);
+const SAFE_ENTRY_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
@@ -147,6 +149,15 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (kind === 'acquire' && completion !== 'inventory' && finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) !== 1) {
     throw new TypeError('An agenda hand-equipment step must request exactly one item.');
   }
+  const rawWorkstation = kind === 'smelt' ? raw.workstationConstraint : null;
+  const normalizedWorkstation = normalizeWorkstationConstraint(rawWorkstation);
+  if (rawWorkstation != null && !normalizedWorkstation) {
+    throw new TypeError('An agenda smelt workstation constraint is invalid.');
+  }
+  const sourceEntryId = boundedText(rawWorkstation?.sourceEntryId, 96);
+  if (sourceEntryId && !SAFE_ENTRY_ID.test(sourceEntryId)) {
+    throw new TypeError('An agenda workstation source entry id is invalid.');
+  }
 
   // Ids must never collide. A timestamp alone is not enough: the model emits
   // several !addToAgenda calls in one reply, those land inside the same
@@ -168,6 +179,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     x: point ? point.x : 0,
     y: point ? point.y : 0,
     z: point ? point.z : 0,
+    workstationConstraint: normalizedWorkstation
+      ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
+      : null,
     note: boundedText(raw.note),
     state,
     // Correlates a durable agenda entry with the exact GoalDirector or

@@ -268,3 +268,104 @@ test('a direct Agenda result persists while Stop is held and is not repeated aft
   assert.equal(director.entries[0].state, 'complete');
   assert.equal(director.entries[0].attempts, 1);
 });
+
+test('follow-until durably binds the designated furnace before a dependent smelt dispatch', async () => {
+  let persisted = [];
+  let director = null;
+  let now = 50_000;
+  let bindingSavedWhileDispatching = false;
+  const commands = [];
+  const designated = { x: -659, y: 71, z: -459 };
+  const closerDecoy = { x: -658, y: 71, z: -459 };
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      if (persisted[1]?.workstationConstraint) {
+        bindingSavedWhileDispatching = director?.dispatching === true;
+      }
+      return true;
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    last_action_result: { actionId: 'before', phase: 'succeeded', code: 'old_result' },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+  };
+  const executeCommand = (_agent, command) => {
+    commands.push(command);
+    if (command.startsWith('!followPlayerUntilNearBlock')) {
+      agent.last_action_result = {
+        actionId: 'follow-arrived-at-designated-furnace',
+        phase: 'succeeded',
+        code: 'skill_condition_reached',
+        detail: 'Reached the player-designated furnace.',
+        retryable: false,
+        evidence: {
+          request: { routeOrigin: 'agenda-director' },
+          skill: {
+            kind: 'follow',
+            outcome: 'condition_reached',
+            completion: {
+              kind: 'shared_world_block',
+              name: 'furnace',
+              position: designated,
+              dimension: 'minecraft:overworld',
+            },
+          },
+        },
+      };
+    } else {
+      assert.equal(
+        command,
+        `!smeltItem("raw_iron", 1, ${designated.x}, ${designated.y}, ${designated.z}, "minecraft:overworld")`,
+        `the closer decoy at ${closerDecoy.x}, ${closerDecoy.y}, ${closerDecoy.z} must not replace the designated furnace`,
+      );
+      agent.last_action_result = {
+        actionId: 'designated-furnace-changed',
+        phase: 'failed',
+        code: 'skill_exact_furnace_changed',
+        detail: 'The designated furnace changed; no substitute was used.',
+        retryable: false,
+        evidence: { request: { routeOrigin: 'agenda-director' } },
+      };
+    }
+    return Promise.resolve();
+  };
+
+  director = new AgendaDirector(agent, { store, executeCommand, now: () => now });
+  const follow = director.add({
+    kind: 'follow_until',
+    requester: 'Gabriel',
+    recipient: 'Gabriel',
+    target: 'furnace',
+    radius: 8,
+  });
+  director.add({ kind: 'smelt', requester: 'Gabriel', target: 'raw_iron', quantity: 1 });
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(persisted[0].id, follow.id);
+  assert.equal(persisted[0].state, 'complete');
+  assert.deepEqual(persisted[1].workstationConstraint, {
+    name: 'furnace',
+    position: designated,
+    dimension: 'minecraft:overworld',
+    source: 'agenda_follow_until',
+    observedAt: now,
+    sourceEntryId: follow.id,
+  });
+  assert.equal(bindingSavedWhileDispatching, true, 'binding must be durable before direct ownership releases');
+
+  now += 1_000;
+  director = new AgendaDirector(agent, { store, executeCommand, now: () => now });
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(commands.length, 2, 'a failed exact furnace must not trigger a nearest-furnace fallback');
+  assert.equal(persisted[1].state, 'failed');
+  assert.equal(persisted[1].evidence.code, 'skill_exact_furnace_changed');
+});

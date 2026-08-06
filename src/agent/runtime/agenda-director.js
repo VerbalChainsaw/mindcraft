@@ -296,6 +296,45 @@ export class AgendaDirector {
     };
   }
 
+  nextPendingAfter(entry) {
+    const activeIndex = this.entries.findIndex(candidate => candidate.id === entry?.id);
+    if (activeIndex < 0) return null;
+    return this.entries.slice(activeIndex + 1).find(candidate => candidate.state === 'pending') || null;
+  }
+
+  dependentWorkstationBinding(entry, next, result) {
+    if (
+      result?.phase !== 'succeeded'
+      || entry?.kind !== 'follow_until'
+      || entry.target !== 'furnace'
+      || next?.kind !== 'smelt'
+    ) return null;
+    const skill = result.evidence?.skill;
+    const completion = skill?.completion;
+    const position = completion?.position;
+    const dimension = boundedText(completion?.dimension, 64).toLowerCase();
+    if (
+      skill?.kind !== 'follow'
+      || completion?.kind !== 'shared_world_block'
+      || completion?.name !== entry.target
+      || !position
+      || ![position.x, position.y, position.z].every(Number.isFinite)
+      || !dimension
+    ) return null;
+    return {
+      name: entry.target,
+      position: {
+        x: Math.floor(position.x),
+        y: Math.floor(position.y),
+        z: Math.floor(position.z),
+      },
+      dimension,
+      source: 'agenda_follow_until',
+      observedAt: Number.isFinite(skill.recordedAt) ? skill.recordedAt : this.now(),
+      sourceEntryId: entry.id,
+    };
+  }
+
   commitDirectResult(entry, dispatchGeneration, result) {
     if (this.directDispatchGeneration !== dispatchGeneration) return false;
     const active = this.activeEntry();
@@ -304,18 +343,46 @@ export class AgendaDirector {
     // inside the terminal callback, before `dispatching` is released, and is
     // allowed while Operator Stop is held because it records an effect already
     // produced; it never starts another action.
-    this.commitSettlement(active, this.directSettlement(result));
+    const dependent = this.nextPendingAfter(active);
+    const needsWorkstationBinding = result?.phase === 'succeeded'
+      && active.kind === 'follow_until'
+      && active.target === 'furnace'
+      && dependent?.kind === 'smelt';
+    const workstationConstraint = this.dependentWorkstationBinding(active, dependent, result);
+    const settlement = needsWorkstationBinding && !workstationConstraint
+      ? {
+          state: 'failed',
+          code: 'agenda_workstation_binding_missing',
+          detail: 'The designated furnace identity was not available at the Agenda handoff, so smelting was not started.',
+          retryable: false,
+        }
+      : this.directSettlement(result);
+    this.commitSettlement(active, settlement, {
+      dependentEntryId: workstationConstraint ? dependent.id : '',
+      workstationConstraint,
+    });
     return true;
   }
 
-  commitSettlement(active, settled) {
+  commitSettlement(active, settled, { dependentEntryId = '', workstationConstraint = null } = {}) {
     const attempts = active.attempts + 1;
     const retryable = settled.state === 'failed'
       && settled.retryable !== false
       && attempts < MAX_ENTRY_ATTEMPTS;
-    this.replace(active.id, retryable
+    const activePatch = retryable
       ? { state: 'pending', startedAt: null, executorId: '', attempts, evidence: settled }
-      : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled });
+      : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled };
+    // Persist the terminal step and its dependent exact-workstation handoff in
+    // one store write. A restart can therefore never observe arrival complete
+    // while the following smelt remains free to select a different furnace.
+    this.entries = this.entries.map(entry => {
+      if (entry.id === active.id) return normalizeAgendaEntry({ ...entry, ...activePatch });
+      if (workstationConstraint && entry.id === dependentEntryId) {
+        return normalizeAgendaEntry({ ...entry, workstationConstraint });
+      }
+      return entry;
+    });
+    this.persist();
     this.setStatus(
       settled.state === 'complete' ? 'succeeded' : retryable ? 'recovering' : 'failed',
       settled.code,
@@ -434,7 +501,9 @@ export class AgendaDirector {
     const DIRECT_COMMANDS = {
       visit: () => `!goToCoordinates(${entry.x}, ${entry.y}, ${entry.z}, 2)`,
       craft: () => `!craftRecipe("${entry.target}", ${entry.quantity})`,
-      smelt: () => `!smeltItem("${entry.target}", ${entry.quantity})`,
+      smelt: () => entry.workstationConstraint
+        ? `!smeltItem("${entry.target}", ${entry.quantity}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
+        : `!smeltItem("${entry.target}", ${entry.quantity})`,
       goto: () => `!goToPlayer("${entry.recipient}", 3)`,
       follow_until: () => `!followPlayerUntilNearBlock("${entry.recipient}", "${entry.target}", ${entry.radius})`,
       farm_visit: () => '!goToFarm',

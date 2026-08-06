@@ -12412,6 +12412,7 @@ export async function followPlayerUntilNearBlock(bot, username, blockName, radiu
     let candidateKey = null;
     let candidateSince = 0;
     let playerAnchor = null;
+    let botAnchor = null;
     return await followPlayer(bot, username, distance, {
         completionDescription: `Reached ${canonicalBlock.replaceAll('_', ' ')} with ${username}.`,
         until: ({ player }) => {
@@ -12442,6 +12443,7 @@ export async function followPlayerUntilNearBlock(bot, username, blockName, radiu
                 candidateKey = null;
                 candidateSince = 0;
                 playerAnchor = null;
+                botAnchor = null;
                 return null;
             }
 
@@ -12449,11 +12451,14 @@ export async function followPlayerUntilNearBlock(bot, username, blockName, radiu
             if (
                 key !== candidateKey
                 || !playerAnchor
+                || !botAnchor
                 || player.position.distanceTo(playerAnchor) > FOLLOW_DESTINATION_POSITION_EPSILON
+                || bot.entity.position.distanceTo(botAnchor) > FOLLOW_DESTINATION_POSITION_EPSILON
             ) {
                 candidateKey = key;
                 candidateSince = Date.now();
                 playerAnchor = player.position.clone();
+                botAnchor = bot.entity.position.clone();
                 return null;
             }
             const settledMs = Date.now() - candidateSince;
@@ -12466,6 +12471,15 @@ export async function followPlayerUntilNearBlock(bot, username, blockName, radiu
                     y: candidate.position.y,
                     z: candidate.position.z,
                 },
+                dimension: (() => {
+                    const current = String(bot.game?.dimension || '')
+                        .trim()
+                        .toLowerCase()
+                        .replace(/^minecraft:/, '')
+                        .replace(/^the_nether$/, 'nether')
+                        .replace(/^the_end$/, 'end');
+                    return current ? `minecraft:${current}` : '';
+                })(),
                 radius: sharedRadius,
                 settledMs,
             };
