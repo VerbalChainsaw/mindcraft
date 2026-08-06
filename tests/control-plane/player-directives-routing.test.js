@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { resolvePlayerDirective } from '../../src/agent/player-directives.js';
+import { classifyPlayerSpeechAuthority } from '../../src/agent/player-speech-authority.js';
 
 function commandFor(message) {
   const directive = resolvePlayerDirective('Gabriel', message, {});
@@ -9,10 +10,30 @@ function commandFor(message) {
 }
 
 test('player self-assignment stays conversation instead of authorizing bot work', () => {
-  assert.equal(commandFor('I will build us some shelter for now'), null);
-  assert.equal(commandFor("I'll gather wood while you wait"), null);
-  assert.equal(commandFor('we are going to build a house'), null);
-  assert.equal(commandFor('build us a shelter'), '!assignFunctionalShelterJob("cobblestone")');
+  const selfAssignments = [
+    'I will build us some shelter for now',
+    "I'll gather wood while you wait",
+    'we are going to build a house',
+    'Let me build us a shelter',
+    'I am about to build us a shelter',
+    'I am trying to gather wood',
+    'I am building us a shelter',
+    "I'm gathering wood",
+  ];
+  for (const message of selfAssignments) {
+    assert.equal(classifyPlayerSpeechAuthority(message), 'conversation_only', message);
+    assert.equal(commandFor(message), null, message);
+  }
+
+  for (const message of [
+    'build us a shelter',
+    'please build us a shelter',
+    'I want you to build us a shelter',
+    'I need you to build us a shelter',
+  ]) {
+    assert.equal(classifyPlayerSpeechAuthority(message), 'action_eligible', message);
+    assert.equal(commandFor(message), '!assignFunctionalShelterJob("cobblestone")', message);
+  }
 });
 
 test('digTunnel is reachable deterministically (the reported gap)', () => {

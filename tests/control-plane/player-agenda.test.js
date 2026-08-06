@@ -151,6 +151,8 @@ test('parsePlayerAgenda returns null when nothing is agenda-worthy', () => {
   assert.equal(parsePlayerAgenda('Gabriel', 'follow me', {}, { resolveDirective: stubResolver }), null);
   assert.equal(parsePlayerAgenda('Gabriel', 'how are you today', {}, { resolveDirective: stubResolver }), null);
   assert.equal(parsePlayerAgenda('Gabriel', 'I will get 5 logs then build a shelter', {}, { resolveDirective: stubResolver }), null);
+  assert.equal(parsePlayerAgenda('Gabriel', 'Let me get 5 logs then build a shelter', {}, { resolveDirective: stubResolver }), null);
+  assert.equal(parsePlayerAgenda('Gabriel', 'I am building a shelter then gathering wood', {}, { resolveDirective: stubResolver }), null);
 });
 
 test('parsePlayerAgenda ignores explicit !command lines and empty input', () => {
