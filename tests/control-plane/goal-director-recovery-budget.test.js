@@ -607,6 +607,93 @@ test('dimensionless player observations are never movement authority', () => {
   assert.equal(director.activeGoal.evidence.code, 'delivery_player_absent');
 });
 
+test('a local drop-stance failure rebinds the recipient without acquisition relocation', () => {
+  const director = createDirector();
+  let now = 100_000;
+  director.now = () => now;
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'phixxation',
+    destinationPlayer: 'phixxation',
+    target: {
+      requestedName: 'clock',
+      canonicalName: 'clock',
+      inventoryName: 'clock',
+      acquisitionName: 'clock',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+    completion: 'delivery',
+  });
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'deliver',
+    memory: {
+      deliveryTarget: {
+        player: 'phixxation',
+        position: { x: 10, y: 64, z: 10 },
+        dimension: 'minecraft:overworld',
+        source: 'mineflayer_entity',
+        observedAt: now,
+      },
+    },
+  });
+  director.appendActingSubgoal('deliver', '!givePlayer("phixxation", "clock", 1)');
+  director.handleResult('deliver', {
+    actionId: 'failed-local-delivery',
+    phase: 'failed',
+    code: 'skill_drop_stance_unreachable',
+    detail: 'The moving recipient invalidated the selected drop stance.',
+    retryable: true,
+  });
+  const memoryAfterFailure = structuredClone(director.activeGoal.memory);
+  const commands = [];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 1);
+  now = director.nextAttemptAt;
+  director.update();
+
+  assert.deepEqual(commands, []);
+  assert.equal(director.activeGoal.phase, 'deliver');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.subgoals.at(-1).kind, 'deliver');
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_drop_stance_unreachable');
+  assert.deepEqual(director.activeGoal.memory, memoryAfterFailure);
+  assert.ok(director.nextAttemptAt > now);
+
+  for (let attempt = 2; attempt <= goal.maxAttempts; attempt += 1) {
+    director.appendActingSubgoal('deliver', '!givePlayer("phixxation", "clock", 1)');
+    director.handleResult('deliver', {
+      actionId: `failed-local-delivery-${attempt}`,
+      phase: 'failed',
+      code: 'skill_drop_stance_unreachable',
+      detail: 'The moving recipient invalidated the selected drop stance.',
+      retryable: true,
+    });
+    if (attempt < goal.maxAttempts) {
+      assert.equal(director.activeGoal.phase, 'recover');
+      assert.equal(director.activeGoal.attempts, attempt);
+      now = director.nextAttemptAt;
+      director.update();
+      assert.equal(director.activeGoal.phase, 'deliver');
+      assert.deepEqual(commands, []);
+    }
+  }
+
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.phase, 'failed');
+  assert.equal(director.lastGoal.attempts, goal.maxAttempts);
+  assert.equal(director.lastGoal.subgoals.length, goal.maxAttempts);
+  assert.deepEqual(director.lastGoal.memory, memoryAfterFailure);
+  assert.deepEqual(commands, []);
+});
+
 test('one no-progress concrete failure relocates before the same regional signature can spend another attempt', async () => {
   const director = createDirector();
   const now = Date.now();

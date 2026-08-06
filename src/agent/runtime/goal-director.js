@@ -1360,6 +1360,15 @@ export class GoalDirector {
       this.setStatus('recover', effectiveResult.code || 'subgoal_failed', effectiveResult.detail || 'Subgoal failed and may be retried.', true);
       return;
     }
+    // The terminal failure is still a completed physical attempt. Persist its
+    // charge and any checkpoint change before fail() snapshots the durable
+    // goal; otherwise the final action exists in subgoals but not in attempts.
+    this.persist({
+      ...goal,
+      checkpoint,
+      attempts,
+      updatedAt: this.now(),
+    });
     this.fail(
       effectiveResult.code || 'goal_attempts_exhausted',
       effectiveResult.detail || `Goal exhausted its bounded recovery budget after ${attempts} failed attempts.`,
@@ -1766,6 +1775,28 @@ export class GoalDirector {
             'waiting',
             'causal_replan',
             `The last prerequisite changed or failed (${goal.evidence?.code || 'unknown'}); live inventory, world state, and failed-target memory will be planned again.`,
+            true,
+          );
+          return;
+        }
+        const latestSubgoal = goal.subgoals.at(-1);
+        if (
+          latestSubgoal?.kind === 'deliver'
+          && latestSubgoal.state === 'failed'
+          && latestSubgoal.code === 'skill_drop_stance_unreachable'
+          && goal.evidence?.code === 'skill_drop_stance_unreachable'
+        ) {
+          // The delivery skill already reached the recipient and owns local
+          // stance selection. A moving recipient can invalidate that stance,
+          // but acquisition-region relocation would abandon the handoff area.
+          // Preserve the charged delivery attempt and let the next bounded
+          // action rebind the recipient from current Minecraft state.
+          this.persist({ ...goal, phase: 'deliver', updatedAt: this.now() });
+          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+          this.setStatus(
+            'waiting',
+            'delivery_stance_rebind',
+            'The local drop stance changed; rebinding the current recipient before the next bounded delivery attempt.',
             true,
           );
           return;
