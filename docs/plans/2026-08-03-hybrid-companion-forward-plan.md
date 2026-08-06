@@ -391,6 +391,18 @@ The final unchanged Paper campaign crossed roughly 180 blocks, harvested only a 
 
 One adjacent responsiveness risk remains open rather than hidden: a Stop issued while Mineflayer is waiting for `windowOpen` retained ActionManager ownership and prevented overlap, but the plugin promise did not settle until its 20-second window-open timeout. This did not occur in the accepted campaign and does not reopen farm/storage behavior. Treat it as a shared package-adapter cancellation candidate when selected by review or a later broad interruption scenario.
 
+### Container and Agenda interruption closeout
+
+Commit `4fa25d5` closes the two cross-cutting races selected after the farm campaign without reopening farm or storage design. The Center Audit rejected a temporary project adapter that replaced `bot.openBlock` and `bot.openEntity`: it mutated shared methods and stopped listening two seconds after cancellation even though Mineflayer's server-response horizon is twenty seconds.
+
+The repair lives at the owned Mineflayer boundary. One container activation generation owns activation, `windowOpen`, abort, timeout, and late-window disposal. Stop rejects the action promptly but leaves the UI channel quarantined until that generation's window is closed or the original response horizon expires. A new container open fails cheaply while quarantined; it is never queued, never consumes a stale window, and never creates a second executor. V2 now passes only the current `ActionManager` signal and remaining deadline before using Mineflayer's existing container and transfer mechanics.
+
+The same checkpoint makes direct Agenda completion durable inside its terminal callback before dispatch ownership is released. A completed deposit, movement, farm, craft, or smelt step therefore cannot be replayed if Stop and process restart occur before the next behavior tick.
+
+Paper acceptance blocked the farm chest with a temporary full block so activation produced no window. Stop settled immediately; an open issued inside the old horizon failed in about ten milliseconds with `CONTAINER_OPEN_QUARANTINED`; after the horizon a fresh withdrawal and deposit both succeeded. Paper verified the chest returned to one amethyst sentinel plus 12 wheat and the bot retained no wheat. A separate real Agenda run persisted `go to farm` as `complete`, `attempts: 1`; Stop plus agent restart left its ID, attempt count, terminal timestamp, and evidence unchanged. The pending test continuation was cancelled and the bot returned to hold.
+
+Farm/storage is now frozen. The next broad outcome is: `Come with me while I check the farm. Stay close, protect me if anything hostile attacks, and keep following me afterward.` This is one integrated companion session, not another delivery or quantity campaign.
+
 ### Post-Phase 3 survival and restart ownership correction
 
 The first unattended observation after Phase 3 exposed a shared survival defect, not random building intelligence. At clear night the runtime authorized an emergency shelter beside the player, and the builder repeatedly replaced dirt with cobblestone and back again. The exact causes were three ownership violations:
@@ -546,4 +558,4 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Preserve `88e47a2` and obtain checkpoint review. The broad remembered-farm request is complete end to end, so freeze farm/storage and do not spend another campaign varying crop counts, chest contents, or return distance. After review, select the next broad useful lived-in-world companion outcome that pressures existing capability contracts and world stewardship; descend into a narrow repair only when that scenario exposes its first shared blocker. Keep the declarative catalogue, GoalDirector, ActionManager, native package mechanics, Stop authority, and no-parallel-engine rules fixed. The observed `openContainer` cancellation latency is explicit risk, not permission to begin a storage architecture project.
+Preserve `4fa25d5` and request closeout review. Farm/storage and the two selected interruption defects are complete; do not vary crop counts, chest contents, return distance, or UI timing. Then run the approved broad companion request: `Come with me while I check the farm. Stay close, protect me if anything hostile attacks, and keep following me afterward.` Require native Follow, attributed hostile preemption, player defense, deterministic Follow resumption without model restoration, and settled nearby gaze in one lived-in-world session. Descend narrowly only if that scenario exposes a shared blocker. Keep the declarative catalogue, GoalDirector, ActionManager, owned package mechanics, Stop authority, and no-parallel-engine rules fixed.

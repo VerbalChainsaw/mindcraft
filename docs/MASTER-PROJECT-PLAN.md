@@ -34,6 +34,8 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] Checkpoint `7b05d24` physically established and planted a coherent 3x3 wheat farm after binding an exact hydrated site and native no-dig route; Paper verified all nine plots, and an unchanged repeat request reused the existing farm without expanding it.
 - [~] Checkpoint `fd1d9c4` preserved exact failed-resource coordinates and accepted native workstation interaction stances. One broad eight-iron request completed delivery; a controlled follow-up used the existing workshop furnace with no fallback placement, while the unchanged repeat still failed upstream after four expensive ore-route rejections.
 - [x] Owned Pathfinder now handles ordinary locomotion through policy, including the corrected one-block descent contract. Custom controls remain only for mechanics Pathfinder cannot express safely.
+- [x] Checkpoint `4fa25d5` gives V2 an independent exact dependency tree and lock, and moves canceled chest-window ownership into a single-generation Mineflayer gate. Paper proved prompt Stop, full response-horizon quarantine, later fresh transfer, and exact chest/inventory restoration.
+- [x] Direct Agenda terminal results are persisted before dispatch ownership is released; a Paper Stop-plus-restart proof retained the completed step exactly once and did not replay it.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
 
@@ -50,6 +52,7 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 
 ### 1. Companion presence and player authority
 
+- Run the approved broad farm companion session: Follow, attributed hostile preemption, defend the player, resume Follow without model restoration, and settle nearby gaze.
 - Finish reliable swimming/follow settlement without oscillating through the player.
 - Distinguish orders addressed to the bot from nearby player conversation.
 - Keep nearby gaze on the player without stealing active-action control.

@@ -10,6 +10,8 @@
 
 **Second implementation checkpoint (2026-08-05):** `096b5c6` repaired an observed collection-mechanics defect in the already imported V2-owned `mineflayer-collectblock` package. Hand-harvestable targets now use an empty hand or a non-wearing item when no carried tool is materially faster; faster real tools still delegate to `mineflayer-tool`. The ineffective project-side selector was removed. In Paper, the persisted broad glass goal resumed without model restoration, collected sand with no selected tool, gathered fuel, smelted 16 glass, and delivered all 16 to the moving underground player. This is one bounded mechanic correction, not authorization to switch the remaining shared dependency tree or start a broad package migration.
 
+**Third implementation checkpoint (2026-08-06):** `4fa25d5` activates an independent V2 dependency tree with a committed 547-package lock while preserving the former frozen-control symlink outside the checkout. The resolved physical-runtime versions are unchanged. The existing Mineflayer patch now owns an abort-aware single-generation container-open gate; no project method replacement remains. A clean published `mineflayer@4.37.1` artifact accepted the complete patch, startup/login/inventory/Stop passed on Paper 1.21.11, and a blocked chest activation proved prompt Stop, full-horizon quarantine, fresh-open recovery, and exact inventory restoration. This completes the active Mineflayer cancellation defect and most of Tranche 1; it does not claim camera parity, removal of the known nested legacy Mineflayer under `mineflayer-utils`, or full owned-package parity.
+
 This plan replaces the generic “patch, contribute, or fork” choice in the forward plan. External projects remain useful read-only sources and compatibility references. They are not the destination for our changes.
 
 ## Outcome
@@ -61,6 +63,8 @@ The runtime baseline is not reproducible enough to modify safely yet:
 - the published `mineflayer-collectblock@1.6.0` commit exists, but its repository default branch still presents `1.3.4`; blindly forking the default branch would regress the installed code.
 - `mineflayer-pvp@1.3.2` pulls `mineflayer-utils@0.1.4`, which installs an obsolete second copy of `mineflayer@2.41.0` beside V2's `4.37.1`.
 - the 265-line Pathfinder patch combines several independent mechanics and policies, making one change difficult to test or roll back in isolation.
+
+Those bullets describe the audit snapshot. Checkpoint `4fa25d5` has since corrected the missing-lock, shared-`node_modules`, and shared-patch-application defects for the active V2 runtime. The semver, nested legacy Mineflayer, patch decomposition, and full private-source migration work remains governed by the tranches below and is pulled only by broad gameplay failures.
 
 Audit toolchain and physical compatibility target:
 
@@ -250,6 +254,8 @@ The active additional-bucket request remains an integration acceptance scenario,
 
 ### Tranche 1: independent reproducible V2 installation
 
+**Status: substantially complete at `4fa25d5`; camera parity and duplicate-package cleanup remain.**
+
 1. Stage a clean V2 install in a separate temporary directory while the current symlink remains untouched.
 2. Pin every physical-runtime dependency and commit a lockfile.
 3. Verify the staged tree contains one Mineflayer and one Pathfinder.
@@ -342,4 +348,4 @@ The dependency migration is complete when:
 
 ## Immediate next move
 
-Do not start by rewriting Pathfinder or deleting patches. Preserve the current gameplay WIP, stage an independent exact-parity V2 install, and create the owned package sources from the exact published snapshots. Once parity is proven, use the additional-bucket blocker to select the first real package correction—most likely Pathfinder task/locomotion settlement or the atomic collector—then rerun the same physical request through completion.
+Do not continue dependency migration as a detached architecture project. Preserve the independent locked V2 runtime and the accepted container gate, then return to the approved broad Follow/defense/resumption/gaze companion campaign. If that physical session exposes a package-level locomotion, combat, UI, or cancellation defect, repair the smallest coherent owned-package seam and rerun the same session. Camera parity and the known nested legacy Mineflayer remain bounded Tranche 1 debt; neither blocks the next companion campaign unless runtime evidence makes it material.
