@@ -30,6 +30,8 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] The planner consumes a typed capability catalogue for collect, craft, smelt, fuel, equip, and delivery operations; it is not an item-specific route table.
 - [x] Broad physical campaigns have crossed stone, iron, bucket, shield, clock, interruption/resumption, exact/family delivery, glass, escort, and companion-control boundaries.
 - [x] Checkpoint `bd2bd12` physically completed the natural request `Please make and equip an iron sword.` from a deep mine: surfaced, collected fuel, reused an existing furnace, smelted, crafted, reclaimed a temporary table, equipped, and passed Paper verification.
+- [x] Checkpoint `3db8228` physically completed the natural request `Please make 16 stone bricks and keep them in your inventory.` twice through the generic fuel, smelting, crafting, and inventory contracts; Paper verified 32 total bricks and furnace reclamation.
+- [x] Checkpoint `7b05d24` physically established and planted a coherent 3x3 wheat farm after binding an exact hydrated site and native no-dig route; Paper verified all nine plots, and an unchanged repeat request reused the existing farm without expanding it.
 - [x] Owned Pathfinder now handles ordinary locomotion through policy, including the corrected one-block descent contract. Custom controls remain only for mechanics Pathfinder cannot express safely.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
@@ -58,6 +60,7 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - Prefer non-destructive native routes; do not tear up terrain, paths, or buildings for convenience.
 - Discover and reuse reachable furnaces, crafting tables, storage, farms, shelters, and player-designated shared structures.
 - Bind building work to an explicit player-owned site and cleanup contract instead of ad-hoc block placement.
+- [x] Farm establishment binds a complete rectangular hydrated site, safe service stances, and a non-destructive native route before changing soil; this proves farm-site stewardship only, not general structure ownership.
 
 ### 3. Repeatable capability engine
 
