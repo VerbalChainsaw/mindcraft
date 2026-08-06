@@ -1,11 +1,11 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Active checkpoint: functional source 5db533b (pushed)
-Milestone: broad remembered-farm plans execute as durable visit, mature-harvest/replant, existing-storage deposit, and remote-return capabilities
+Active checkpoint: functional source 88e47a2 (pushed)
+Milestone: broad remembered-farm visit, mature-harvest/replant, verified existing-storage deposit, and remote return completed end to end
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: product-scale capability engine, companion behavior, and world stewardship
-Live blocker: the remembered farm has no existing chest; nearest loaded containers are 89+ blocks away and underground, so deposit fails truthfully without placement
-Last physical result: bot reused the 180-block remote farm, harvested only mature wheat, restored all 9 plots, returned via authoritative Paper player location, and stopped exactly 3 blocks from WorksitePlayer at health 20
+Live risk: Mineflayer openContainer cancellation can remain unsettled until its 20-second window-open timeout; no overlap occurred, but responsiveness is unaccepted
+Last physical result: bot crossed 180 blocks, harvested/replanted mature wheat, verified 12 wheat in chest (-835,63,-518) with sentinel preserved, and returned 2.1 blocks from WorksitePlayer
 Repository: frozen control remains 4a94cdc; protected untracked files untouched; accidental nested C: path absent
-Next campaign: complete the unchanged farm/storage request only when a real existing farm chest is available; do not synthesize one or add storage architecture
-Jordan review: request checkpoint review of 5db533b and the missing-world-fixture boundary; runtime Stop-held beside WorksitePlayer
+Next campaign: after review, choose the next broad lived-in-world companion outcome; storage is frozen unless a later campaign exposes a regression
+Jordan review: requested C2J-20260806-0900-farm-storage-complete; runtime Stop-held beside WorksitePlayer
