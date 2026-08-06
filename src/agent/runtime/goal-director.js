@@ -897,7 +897,7 @@ export class GoalDirector {
     // A worn tool is a capability prerequisite, not evidence that the selected
     // world target is bad. Preserve the target and let the causal planner
     // replace the tool before retrying the same physical source.
-    if (skill?.toolRequirement || skill?.workstationRequirement) return this.activeGoal;
+    if (skill?.toolRequirement || skill?.workstationRequirement || skill?.accessRequirement) return this.activeGoal;
     const resultTarget = result?.target;
     const skillTarget = skill?.target;
     // Capability results often carry only the requested inventory identity at
@@ -1022,6 +1022,24 @@ export class GoalDirector {
           carried: true,
           observedAt: this.now(),
         },
+      },
+      updatedAt: this.now(),
+    });
+  }
+
+  rememberAccessRequirement(result) {
+    if (!this.activeGoal) return this.activeGoal;
+    const skill = actionResultEvidence(result);
+    const reachedSurface = skill?.kind === 'surface_navigation'
+      && skill?.outcome === 'surface_reached';
+    const requestedSurface = result?.phase !== 'succeeded'
+      && skill?.accessRequirement?.kind === 'surface';
+    if (!reachedSurface && !requestedSurface) return this.activeGoal;
+    return this.persist({
+      ...this.activeGoal,
+      memory: {
+        ...this.activeGoal.memory,
+        accessRequirement: requestedSurface ? { kind: 'surface' } : null,
       },
       updatedAt: this.now(),
     });
@@ -1201,6 +1219,7 @@ export class GoalDirector {
     this.rememberOperationalProgress(effectiveResult, miningRouteProgress);
     this.rememberToolRequirement(effectiveResult);
     this.rememberWorkstationRequirement(effectiveResult);
+    this.rememberAccessRequirement(effectiveResult);
     // A bounded multi-item action may make verified material progress before
     // its remaining work times out. Replan from that real inventory delta
     // instead of blacklisting the productive target and walking away from it.
@@ -1211,7 +1230,7 @@ export class GoalDirector {
     const capacityBlocked = skill?.outcome === 'inventory_full'
       || effectiveResult.code === 'skill_inventory_full';
     const prerequisiteBlocked = Boolean(
-      skill?.toolRequirement || skill?.workstationRequirement,
+      skill?.toolRequirement || skill?.workstationRequirement || skill?.accessRequirement,
     );
     let checkpoint = goal.checkpoint;
 
@@ -1314,10 +1333,14 @@ export class GoalDirector {
         'planning',
         skill.workstationRequirement
           ? 'carried_workstation_required'
-          : 'tool_replacement_required',
+          : skill.accessRequirement
+            ? 'source_access_required'
+            : 'tool_replacement_required',
         skill.workstationRequirement
           ? `The unreachable ${skill.workstationRequirement.name} must be replaced by a carried local workstation.`
-          : `Mining requires a replacement ${skill.toolRequirement.name} with at least ${skill.toolRequirement.minimumUsableDurability} usable durability.`,
+          : skill.accessRequirement
+            ? 'The selected physical source requires a verified supported surface stance before acquisition can continue.'
+            : `Mining requires a replacement ${skill.toolRequirement.name} with at least ${skill.toolRequirement.minimumUsableDurability} usable durability.`,
         true,
       );
       return;
@@ -1864,6 +1887,7 @@ export class GoalDirector {
             experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
             toolRequirement: goal.memory?.toolRequirement,
             workstationRequirement: goal.memory?.workstationRequirement,
+            accessRequirement: goal.memory?.accessRequirement,
             workstationConstraint: goal.workstationConstraint,
           });
           const planSignature = JSON.stringify(

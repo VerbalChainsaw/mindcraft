@@ -24,6 +24,10 @@ test('Given a valid construction request, work-order normalization preserves bou
       height: 3,
       cells: [{ x: 0, y: 0, z: 0, material: 'oak_planks' }],
     },
+    checkpoint: {
+      toolRequirement: { name: 'stone_pickaxe', minimumUsableDurability: 24 },
+      workstationRequirement: { name: 'crafting_table', carried: true },
+    },
   });
 
   assert.equal(order.id, 'builder-order-1');
@@ -92,6 +96,24 @@ test('Given action results, a phase advances only on a new verified success and 
     code: 'skill_checked',
   }, { previousActionId: 'old', nextPhase: 'prepare' });
   assert.equal(advanced.phase, 'prepare');
+
+  const recoveredProgress = advanceWorkOrder(recovery, {
+    actionId: 'progress',
+    phase: 'succeeded',
+    code: 'skill_crafted',
+  }, { previousActionId: 'new', nextPhase: 'assess' });
+  assert.equal(recoveredProgress.attempts, 0);
+
+  const capacityBlocked = advanceWorkOrder(order, {
+    actionId: 'capacity',
+    phase: 'failed',
+    code: 'skill_no_safe_release',
+    detail: 'No protected inventory slot can be released.',
+    retryable: true,
+  }, { previousActionId: 'old' });
+  assert.equal(capacityBlocked.phase, 'failed');
+  assert.equal(capacityBlocked.attempts, 0);
+  assert.equal(capacityBlocked.evidence.code, 'inventory_capacity_blocked');
 });
 
 test('Given a persisted in-flight order after restart, reconciliation forces world revalidation before resuming', () => {

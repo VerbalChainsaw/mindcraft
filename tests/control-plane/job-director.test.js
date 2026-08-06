@@ -848,3 +848,45 @@ test('Given a fight that dragged the bot off its worksite, the job walks back be
   // The return step must not reanchor the order to where the fight ended.
   assert.deepEqual(director.activeOrder.anchor, { x: 0, y: 12, z: 0 });
 });
+
+test('Given a satisfied state-only prerequisite, JobDirector persists it before selecting the next physical step', () => {
+  const agent = createAgent('builder');
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({
+      x: 10,
+      y: 70,
+      z: -20,
+      inventory: {},
+      foodPoints: 20,
+      hunger: 20,
+      freeSlots: 20,
+      blueprintAudit: { valid: true, correct: 1, missing: [], incorrect: [] },
+    }),
+    now: () => 10_000,
+  });
+  director.submit(createWorkOrder({
+    id: 'state-only-transition',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester: 'Director',
+    phase: 'execute',
+    target: { name: 'construction_site', x: 10, y: 70, z: -20 },
+    blueprint: {
+      id: 'single_block',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{ x: 0, y: 0, z: 0, material: 'stone' }],
+    },
+    checkpoint: { accessRequirement: { kind: 'surface' } },
+    evidence: { code: 'skill_surface_reached', detail: '', actionId: 'surface-1' },
+  }));
+
+  director.update();
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.lastOrder.phase, 'complete');
+  assert.equal(director.lastOrder.checkpoint.accessRequirement, undefined);
+});

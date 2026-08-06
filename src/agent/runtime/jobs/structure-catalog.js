@@ -61,7 +61,7 @@ function plan() {
  * to place them. Exported so a new structure is proven before it reaches a
  * world, not after a bot has half-built it.
  */
-export function validateStructureBlueprint(blueprint) {
+export function validateStructureBlueprint(blueprint, { canSupportMaterial = () => true } = {}) {
   const problems = [];
   const cells = blueprint?.cells || [];
   if (!cells.length) problems.push('blueprint has no cells');
@@ -70,10 +70,12 @@ export function validateStructureBlueprint(blueprint) {
   }
   // Earliest stage at which each position becomes solid ground for a neighbour.
   const placedAt = new Map();
+  const cellAt = new Map();
   for (const cell of cells) {
     const key = `${cell.x}:${cell.y}:${cell.z}`;
     if (placedAt.has(key)) problems.push(`duplicate cell at ${key}`);
     placedAt.set(key, cell.stage);
+    cellAt.set(key, cell);
   }
   for (const cell of cells) {
     if (cell.y === 0) continue;
@@ -85,8 +87,10 @@ export function validateStructureBlueprint(blueprint) {
       [0, 0, -1],
     ];
     const held = neighbours.some(([dx, dy, dz]) => {
-      const stage = placedAt.get(`${cell.x + dx}:${cell.y + dy}:${cell.z + dz}`);
-      return stage !== undefined && stage <= cell.stage;
+      const support = cellAt.get(`${cell.x + dx}:${cell.y + dy}:${cell.z + dz}`);
+      return support
+        && canSupportMaterial(support.material)
+        && support.stage <= cell.stage;
     });
     if (!held) {
       problems.push(

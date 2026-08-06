@@ -719,6 +719,7 @@ export function buildPrerequisitePlan(bot, {
   experience = null,
   toolRequirement = null,
   workstationRequirement = null,
+  accessRequirement = null,
   workstationConstraint = null,
 } = {}) {
   const canonicalTarget = canonicalName(target);
@@ -823,6 +824,17 @@ export function buildPrerequisitePlan(bot, {
     10_000,
   );
   let failure = null;
+  if (accessRequirement?.kind === 'surface') {
+    failure = addCapabilityAction(bot, context, 'reach_surface', {}, {
+      kind: 'access',
+      target: 'surface',
+      expectedName: null,
+      expectedIncrease: 1,
+      reason: 'The selected physical source requires a verified supported surface stance before acquisition can continue.',
+      trail: [canonicalTarget, 'surface_access'],
+      learningKey: null,
+    });
+  }
   if (requiredTool) {
     if (!bot.registry?.itemsByName?.[requiredTool]) {
       failure = blocked(

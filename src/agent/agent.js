@@ -979,7 +979,20 @@ export class Agent {
                 role: this.runtime?.role,
                 bot: this.bot,
             });
-            if (directive) {
+            if (directive?.deferToModel === true) {
+                // Stop is durable until a new assignment arrives. A familiar
+                // directive releases it through its command metadata; an
+                // unfamiliar construction assignment still needs the model to
+                // compile a bounded blueprint, so release only for this
+                // resolver-certified action path before prompt interruption is
+                // checked below. Ordinary conversation never gets this marker.
+                if (directive.releasesHold) this.releaseOperatorHold('player design request');
+                this.self_prompter.interruptForManualCommand();
+                this.role_director.deferForManualCommand('Player design request is being interpreted.');
+                if (directive.modelInstruction) {
+                    await this.history.add('system', directive.modelInstruction);
+                }
+            } else if (directive) {
                 await this.history.add(source, message);
                 await this.history.add(this.name, `${directive.response} ${directive.command}`);
                 this.history.save();

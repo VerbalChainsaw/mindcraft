@@ -16,6 +16,7 @@ import { PersonalMemory } from '../src/agent/runtime/personal-memory.js';
 import { classifyMethodOutcome } from '../src/agent/runtime/action-result.js';
 import {
   capabilityCommand,
+  createCapabilityPlanAction,
   createCapabilityRequest,
   executeCapabilityAction,
   getCapabilityDefinition,
@@ -481,6 +482,90 @@ test('Verified capability effects supersede a stale executor failure', async () 
   assert.equal(outcome.result.code, 'capability_effects_verified');
   assert.equal(outcome.result.retryable, false);
   assert.equal(outcome.result.evidence.capability.executorResult.code, 'skill_unreachable');
+});
+
+test('Verified returnable mining progress advances a capability before its inventory effect', async () => {
+  const bot = plannerBot();
+  const plan = buildPrerequisitePlan(bot, { target: 'test_gem', quantity: 1 });
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(plan.nextStep.capability, {
+    agent,
+    executeCommand: () => {
+      agent.last_action_result = {
+        actionId: 'mining-route-progress',
+        phase: 'failed',
+        code: 'skill_search_advanced',
+        detail: 'Advanced a bounded mining route.',
+        retryable: false,
+        evidence: {
+          skill: {
+            kind: 'mining_search',
+            outcome: 'search_advanced',
+            routeDigging: true,
+            returnable: true,
+            routeSteps: 4,
+            target: { name: 'alpha_ore', x: 4, y: 20, z: 8 },
+            observedPosition: { x: 1, y: 22, z: 4 },
+          },
+        },
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, false);
+  assert.equal(outcome.result.phase, 'succeeded');
+  assert.equal(outcome.result.code, 'capability_verified_partial_progress');
+  assert.equal(outcome.result.retryable, false);
+});
+
+test('Verified supported surface progress advances without spending a productive attempt', async () => {
+  const bot = plannerBot();
+  const capability = createCapabilityPlanAction('reach_surface', {}, {}, { bot }).capability;
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(capability, {
+    agent,
+    executeCommand: () => {
+      agent.last_action_result = {
+        actionId: 'surface-progress',
+        phase: 'failed',
+        code: 'skill_surface_progress_incomplete',
+        detail: 'Advanced upward through a bounded surface corridor.',
+        retryable: true,
+        evidence: {
+          skill: {
+            kind: 'surface_navigation',
+            outcome: 'surface_progress_incomplete',
+            target: { x: 8, y: 70, z: 4 },
+            observed: { x: 3, y: 42, z: 1 },
+            supported: true,
+            verticalProgress: 24,
+          },
+        },
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, false);
+  assert.equal(outcome.result.phase, 'succeeded');
+  assert.equal(outcome.result.code, 'capability_verified_partial_progress');
+  assert.equal(outcome.result.retryable, false);
+});
+
+test('The causal planner schedules a verified source-access capability before nested acquisition', () => {
+  const bot = plannerBot();
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'test_gem',
+    quantity: 1,
+    accessRequirement: { kind: 'surface' },
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'reach_surface');
+  assert.equal(plan.nextStep.capability.binding.command, '!goToSurface');
 });
 
 test('Exact-item delivery binds one recipient and trusts only authoritative pickup evidence', async () => {

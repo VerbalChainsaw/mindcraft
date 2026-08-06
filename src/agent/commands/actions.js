@@ -19,8 +19,10 @@ import {
     createDesignedStructureOrder,
     designLanguageHelp,
 } from '../runtime/jobs/structure-design.js';
+import { selectConstructionSites } from '../runtime/jobs/structure-site-selector.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
+import { blockCanSupportPlacement } from '../runtime/block-placement-contract.js';
 import {
     createItemGoalContract,
     inventoryCountForGoalTarget,
@@ -123,6 +125,39 @@ function submitRememberedStructure(agent, order) {
         }
     }
     return response;
+}
+
+function bindSafeConstructionOrder(agent, order, origin) {
+    const selection = selectConstructionSites(agent.bot, order.blueprint, {
+        origin,
+        isNaturalTerrain: block => skills.isClearableWorksiteBlock(agent.bot, block),
+    });
+    const probed = selection.sites.map(site => ({
+        site,
+        route: skills.probeSafeNavigationStances(agent.bot, site.stances),
+    }));
+    const selected = probed.find(candidate => candidate.route.reachable);
+    const site = selected?.site;
+    if (!site) {
+        const routeSummary = probed.length > 0
+            ? ` Native Pathfinder rejected ${probed.length} geometrically safe candidate(s): ${probed
+                .map(candidate => candidate.route.status)
+                .slice(0, 4)
+                .join(', ')}.`
+            : '';
+        throw new TypeError(
+            `No clear, naturally supported, non-destructively reachable construction footprint is loaded near the bot after checking ${selection.inspected} bounded candidates.${routeSummary}`,
+        );
+    }
+    return createWorkOrder({
+        ...order,
+        target: {
+            ...order.target,
+            x: site.origin.x,
+            y: site.origin.y,
+            z: site.origin.z,
+        },
+    });
 }
 
 function persistFarmState(agent, farm, physicalOutcome) {
@@ -744,6 +779,17 @@ export const actionsList = [
         })
     },
     {
+        name: '!releaseInventoryWorkingSlots',
+        description: 'Free bounded working inventory slots while preserving every named job material, essential gear, food, and useful reserves. Does not place temporary debris.',
+        params: {
+            'protected_items': { type: 'string', description: 'Comma-separated canonical item names that the current durable job still needs.' },
+            'reserve_slots': { type: 'int', description: 'Free working slots required before the job resumes.', domain: [1, 12] },
+        },
+        perform: runAsAction(async (agent, protected_items, reserve_slots) => {
+            return await skills.releaseInventoryWorkingSlots(agent.bot, protected_items, reserve_slots);
+        }),
+    },
+    {
         name: '!collectBlocks',
         description: 'Collect blocks of a given type, safely relocating and rescanning when the current area has no reachable source.',
         params: {
@@ -1082,13 +1128,14 @@ export const actionsList = [
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Functional shelter work order was not accepted: Minecraft spawn state is unavailable.';
-                const order = createBuilderFunctionalShelterOrder({
-                    x: Math.floor(position.x) + 2,
-                    y: Math.floor(position.y),
-                    z: Math.floor(position.z) - 2,
+                const provisional = createBuilderFunctionalShelterOrder({
+                    x: 0,
+                    y: 0,
+                    z: 0,
                     material,
                     requester: 'player',
                 });
+                const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
                 return `Functional shelter work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
@@ -1115,10 +1162,10 @@ export const actionsList = [
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Construction work order was not accepted: Minecraft spawn state is unavailable.';
-                const order = createBuilderConstructionOrder({
-                    x: Math.floor(position.x) + 2,
-                    y: Math.floor(position.y),
-                    z: Math.floor(position.z) + 2,
+                const provisional = createBuilderConstructionOrder({
+                    x: 0,
+                    y: 0,
+                    z: 0,
                     shape,
                     width,
                     depth,
@@ -1126,6 +1173,7 @@ export const actionsList = [
                     material: canonicalMaterial,
                     requester: 'player',
                 });
+                const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
                 return `Construction work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
@@ -1149,16 +1197,15 @@ export const actionsList = [
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Structure work order was not accepted: Minecraft spawn state is unavailable.';
-                const order = createStructureOrder({
+                const provisional = createStructureOrder({
                     name: structure,
-                    // Offset so the bot is never standing inside its own worksite,
-                    // which the blueprint audit reports as an occupied cell.
-                    x: Math.floor(position.x) + 2,
-                    y: Math.floor(position.y),
-                    z: Math.floor(position.z) + 2,
+                    x: 0,
+                    y: 0,
+                    z: 0,
                     material: canonicalMaterial,
                     requester: 'player',
                 });
+                const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
                 return `Structure work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
@@ -1167,7 +1214,8 @@ export const actionsList = [
     },
     {
         name: '!designStructure',
-        description: `Design and build a structure that is NOT in the known list - a spiral tower, a bridge with railings, a walled compound, anything a player describes. Write the shape yourself as a design, and the bot proves it can stand before placing a block. ${designLanguageHelp()}`,
+        description: `Compile and persist one complete bounded multi-block arrangement that is NOT in the known list - a spiral tower, a bridge with railings, a machine layout, a track, or anything else a player describes. Call this BEFORE gathering or placing anything: the Builder derives and acquires every blueprint material through the shared prerequisite planner, then places and verifies the supported cells. Write the shape yourself as design data; never micromanage its materials or individual placements. ${designLanguageHelp()}`,
+        compactDescription: 'Persist one complete validated blueprint before gathering. DESIGN MUST BE THIS DSL, NEVER PROSE. Separate operations with ;. Operations: box X Y Z W H D [MATERIAL]; shell X Y Z W H D [MATERIAL]; room X Y Z W H D [MATERIAL]; slab X Y Z W D [MATERIAL]; ring X Y Z W D [MATERIAL]; line X1 Y1 Z1 X2 Y2 Z2 [MATERIAL]; block X Y Z MATERIAL; roof X Y Z W D flat|gable|pyramid [MATERIAL]; carve X Y Z W H D; put X Y Z door|glass|torch|chest|ladder|fence|gate|crafting|furnace|bed. Coordinates are relative, x east/y up/z south, EACH 0..31 ONLY: start every axis at 0 and never use negatives. SUPPORT RULE: put the full support layer at y=0 and non-solid functional cells at y=1; never overwrite their support cells. Exact mixed example: !designStructure("mixed_platform", "cobblestone", "slab 0 0 0 5 5 cobblestone; ring 0 1 0 5 5 rail; block 2 1 0 powered_rail; block 2 1 1 redstone_torch")',
         params: {
             'name': { type: 'string', description: 'Short name for the building, such as watchtower or barn.' },
             'material': { type: 'BlockName', description: 'Canonical full support block for the structure. Fixtures like doors, glass, and chests are chosen automatically.' },
@@ -1183,23 +1231,34 @@ export const actionsList = [
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Design was not accepted: Minecraft spawn state is unavailable.';
-                const order = createDesignedStructureOrder({
+                const provisional = createDesignedStructureOrder({
                     design,
                     name,
-                    // Offset so the bot is never standing inside its own worksite.
-                    x: Math.floor(position.x) + 2,
-                    y: Math.floor(position.y),
-                    z: Math.floor(position.z) + 2,
+                    x: 0,
+                    y: 0,
+                    z: 0,
                     material: canonicalMaterial,
                     requester: 'player',
+                    canSupportMaterial: name => blockCanSupportPlacement(agent.bot?.registry, name),
                 });
+                const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
                 // The design language reports the exact step or the exact block
                 // that cannot stand, which is what lets a rejected design be
                 // corrected instead of guessed at again.
-                return `Design was not accepted: ${String(error?.message || error).slice(0, 220)}`;
+                return `Design was not accepted: ${String(error?.message || error).slice(0, 220)} Use the exact !designStructure DSL shown in the command contract; descriptive prose is not design data.`;
             }
+        }),
+    },
+    {
+        name: '!resumeStructureJob',
+        description: 'Resume the last explicitly authorized construction blueprint at its original bound site. The Builder re-audits Minecraft and continues only the cells that are still missing.',
+        params: {},
+        perform: persistentJobCommand(function (agent) {
+            const order = agent.home_state?.snapshot?.().structureOrder;
+            if (!order) return 'Construction was not resumed: there is no remembered structure blueprint.';
+            return submitRoleOrder(agent, 'builder', order);
         }),
     },
     {

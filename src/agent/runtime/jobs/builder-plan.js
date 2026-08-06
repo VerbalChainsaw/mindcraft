@@ -226,6 +226,27 @@ function resolvedMaterial(cell, snapshot) {
   return snapshot.selectedMaterial || 'cobblestone';
 }
 
+function orderedSupportedMissing(missing = []) {
+  return missing
+    .filter(candidate => candidate.supported !== false)
+    .slice()
+    .sort((left, right) => (
+      (left.stage ?? 0) - (right.stage ?? 0)
+      || left.y - right.y
+      || (left.index ?? 0) - (right.index ?? 0)
+    ));
+}
+
+function carriedCellInCurrentStage(missing, snapshot) {
+  const ordered = orderedSupportedMissing(missing);
+  if (ordered.length === 0) return null;
+  const stage = ordered[0].stage ?? 0;
+  return ordered.find(cell => (
+    (cell.stage ?? 0) === stage
+    && count(snapshot, resolvedMaterial(cell, snapshot)) > 0
+  )) || null;
+}
+
 function collectCommand(material, amount, range=64) {
   const bounded = Math.max(1, Math.min(64, Math.floor(amount)));
   const boundedRange = Math.max(16, Math.min(512, Math.floor(Number(range) || 64)));
@@ -336,7 +357,7 @@ export function createBuilderConstructionOrder({
   });
 }
 
-export function nextBuilderStep(order, snapshot = {}) {
+export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planItem = null } = {}) {
   if (order.kind === 'build' && order.source !== 'player') {
     return { terminal: true, code: 'construction_not_authorized', retryable: false };
   }
@@ -344,20 +365,43 @@ export function nextBuilderStep(order, snapshot = {}) {
     return { terminal: true, code: 'emergency_construction_not_authorized', retryable: false };
   }
   const reserveSlots = Number(order.constraints?.reserveSlots ?? 1);
+  const priorSkill = lastResult?.evidence?.skill || null;
+  const verifiedAcquisitionProgress = Boolean(
+    order.phase === 'acquire'
+    && priorSkill?.progress?.verified === true
+    && typeof priorSkill.progress.kind === 'string'
+    && [
+      priorSkill.progress.position?.x,
+      priorSkill.progress.position?.y,
+      priorSkill.progress.position?.z,
+    ].every(Number.isFinite),
+  );
+  const carriedBuildCell = order.kind === 'build'
+    ? carriedCellInCurrentStage(snapshot.blueprintAudit?.missing, snapshot)
+    : null;
   if (
     Number(snapshot.freeSlots) <= reserveSlots
-    && (order.kind === 'stockpile' || order.phase === 'acquire')
+    && order.kind === 'stockpile'
+    && !carriedBuildCell
+    && !verifiedAcquisitionProgress
   ) {
+    const protectedMaterial = order.kind === 'stockpile'
+      ? order.target?.name || 'planks'
+      : [...new Set((order.blueprint?.cells || [])
+        .map(cell => resolvedMaterial(cell, snapshot))
+        .filter(Boolean))].join(',');
     if (snapshot.deposit?.mode !== 'assigned') {
-      return { blocked: true, code: 'inventory_full_no_deposit', retryable: true };
+      return {
+        command: `!releaseInventoryWorkingSlots(${JSON.stringify(protectedMaterial)}, ${Math.max(2, reserveSlots)})`,
+        nextPhase: order.phase,
+        code: 'inventory_capacity_release_required',
+        target: { name: 'working_inventory' },
+      };
     }
     const deposit = snapshot.deposit?.target;
     if (![deposit?.x, deposit?.y, deposit?.z].every(Number.isFinite)) {
       return { blocked: true, code: 'assigned_deposit_missing', retryable: true };
     }
-    const protectedMaterial = order.kind === 'stockpile'
-      ? order.target?.name || 'planks'
-      : snapshot.selectedMaterial || 'building_blocks';
     return {
       command: `!depositInventoryOverflowAt("builder", ${JSON.stringify(protectedMaterial)}, ${Math.max(2, reserveSlots)}, ${deposit.x}, ${deposit.y}, ${deposit.z})`,
       nextPhase: order.phase,
@@ -472,13 +516,12 @@ export function nextBuilderStep(order, snapshot = {}) {
   }
 
   if (order.phase === 'assess' || order.phase === 'recover') {
-    const next = missing[0];
-    const material = resolvedMaterial(next, snapshot);
-    return count(snapshot, material) > 0
+    return carriedCellInCurrentStage(missing, snapshot)
       ? { phase: 'execute', code: 'worksite_verified' }
       : { phase: 'acquire', code: 'materials_required' };
   }
   if (order.phase === 'acquire') {
+    if (carriedBuildCell) return { phase: 'execute', code: 'carried_material_ready' };
     const requirements = new Map();
     for (const cell of missing) {
       const material = resolvedMaterial(cell, snapshot);
@@ -488,21 +531,61 @@ export function nextBuilderStep(order, snapshot = {}) {
       .map(([material, required]) => ({ material, missing: Math.max(0, required - count(snapshot, material)) }))
       .find(entry => entry.missing > 0);
     if (!needed) return { phase: 'execute', code: 'materials_ready' };
+    if (typeof planItem !== 'function') {
+      return {
+        terminal: true,
+        code: 'material_planner_unavailable',
+        detail: `No prerequisite planner is available for ${needed.material}.`,
+        retryable: false,
+      };
+    }
+    const desired = count(snapshot, needed.material) + needed.missing;
+    const toolRequirement = priorSkill?.toolRequirement
+      || order.checkpoint?.toolRequirement
+      || null;
+    const workstationRequirement = priorSkill?.workstationRequirement
+      || order.checkpoint?.workstationRequirement
+      || null;
+    const surfaceReached = priorSkill?.kind === 'surface_navigation'
+      && priorSkill?.outcome === 'surface_reached';
+    const accessRequirement = surfaceReached
+      ? null
+      : priorSkill?.accessRequirement || order.checkpoint?.accessRequirement || null;
+    const plan = planItem({
+      target: needed.material,
+      quantity: desired,
+      completion: 'inventory',
+      range: order.constraints?.maxDistance,
+      toolRequirement,
+      workstationRequirement,
+      accessRequirement,
+    });
+    if (plan?.status === 'complete') return { phase: 'execute', code: 'materials_ready' };
+    if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
+      return {
+        terminal: true,
+        code: plan?.code || 'material_plan_blocked',
+        detail: plan?.detail || `No deterministic prerequisite plan exists for ${needed.material}.`,
+        retryable: false,
+      };
+    }
     return {
-      command: collectCommand(needed.material, needed.missing, order.constraints?.maxDistance),
+      capability: plan.nextStep.capability,
       nextPhase: 'assess',
+      code: 'material_prerequisite_planned',
       target: { name: needed.material },
+      reason: plan.nextStep.reason,
+      checkpoint: {
+        ...order.checkpoint,
+        ...(toolRequirement ? { toolRequirement } : {}),
+        ...(workstationRequirement ? { workstationRequirement } : {}),
+        accessRequirement,
+      },
     };
   }
   if (order.phase === 'execute') {
-    const cell = missing
-      .filter(candidate => candidate.supported !== false)
-      .slice()
-      .sort((left, right) => (
-        (left.stage ?? 0) - (right.stage ?? 0)
-        || left.y - right.y
-        || (left.index ?? 0) - (right.index ?? 0)
-      ))[0];
+    const ordered = orderedSupportedMissing(missing);
+    const cell = carriedCellInCurrentStage(missing, snapshot) || ordered[0];
     if (!cell) {
       return {
         terminal: true,

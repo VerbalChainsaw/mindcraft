@@ -198,6 +198,14 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
+    if (/^(?:please\s+)?(?:resume|continue)(?:\s+(?:the\s+)?(?:last\s+)?(?:build|construction|structure|job|work order))?$/.test(text)) {
+        return {
+            command: '!resumeStructureJob',
+            response: 'Re-auditing the remembered construction and continuing from its verified physical state.',
+            releasesHold: true,
+        };
+    }
+
     // --- Navigation, mining, and self-maintenance ----------------------------
     // Common phrasings mapped straight onto existing skills so they never need a
     // model round trip. These are discrete one-shot actions (not agenda kinds),
@@ -578,6 +586,25 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
             const w = clampInt(wide ?? 7, 3, 16, 7);
             return design('room', `@room ${w} ${clampInt(long ?? w, 3, 16, w)} ${clampInt(tall ?? 4, 3, 8, 4)}`, 'a room with a door and a light');
         }
+    }
+
+    // A compound construction outcome owns its material clauses. Without this
+    // boundary, "build it ... gather redstone" is reduced below to a redstone
+    // mining quota and the durable blueprint is lost. Known deterministic
+    // shapes above still route directly; unfamiliar designs fall through to
+    // the model, whose !designStructure command persists one bounded blueprint.
+    // Shelter remains on its dedicated survival-building route below.
+    if (
+        /\b(?:build|construct|erect|raise|put up|lay out|assemble)\b/.test(text)
+        && !/\b(?:shelter|hut|small house|safe house)\b/.test(text)
+    ) {
+        return {
+            command: null,
+            response: '',
+            releasesHold: true,
+            deferToModel: true,
+            modelInstruction: 'This is one player-authorized multi-block construction outcome. Compile the complete bounded blueprint before acquiring materials. Use !buildStructure for a known named building or !designStructure for a custom arrangement. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.',
+        };
     }
 
     // --- Search --------------------------------------------------------------

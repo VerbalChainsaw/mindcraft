@@ -97,3 +97,18 @@ test('non-directive chatter still returns null (falls through to the model)', ()
   assert.equal(commandFor('what a lovely day it is'), null);
   assert.equal(commandFor('go to the store and buy milk'), null);
 });
+
+test('an explicit continuation resumes remembered construction without model redesign', () => {
+  const directive = resolvePlayerDirective('Gabriel', 'Resume the last construction');
+  assert.equal(directive.command, '!resumeStructureJob');
+  assert.equal(directive.releasesHold, true);
+});
+
+test('compound construction keeps ownership instead of becoming a material quota', () => {
+  const request = 'Build a powered loop, gather the redstone yourself, and keep working until it is complete.';
+  const directive = resolvePlayerDirective('Gabriel', request, {});
+  assert.equal(commandFor(request), null);
+  assert.equal(directive?.deferToModel, true);
+  assert.equal(directive?.releasesHold, true);
+  assert.match(directive?.modelInstruction || '', /complete bounded blueprint/i);
+});

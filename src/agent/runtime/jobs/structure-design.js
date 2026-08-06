@@ -59,12 +59,15 @@ export function designLanguageHelp() {
   '@tower 5 12 gives a finished tower, and @tower 5 12; ring 0 12 0 7 7 adds a balcony to it.',
   `Templates, with optional arguments that have sensible defaults: ${describeTemplates()}.`,
   'Coordinates are relative to the build site: x east, y up, z south, all starting at 0.',
+  'Support rule: put full support cells in an earlier layer and non-solid functional cells one layer above; never overwrite their supports.',
   'box X Y Z W H D - solid block of material.',
   'shell X Y Z W H D - four walls only, open top and bottom.',
   'room X Y Z W H D - floor, four walls, and a roof.',
   'slab X Y Z W D - one-block-thick floor or platform.',
   'ring X Y Z W D - one-block-tall rectangular outline.',
   'line X1 Y1 Z1 X2 Y2 Z2 - straight run between two points on one axis.',
+  'block X Y Z MATERIAL - one exact block or fixture material.',
+  'box, shell, room, slab, ring, line, and roof accept an optional MATERIAL as their last value.',
   'roof X Y Z W D STYLE - flat, gable, or pyramid; stepped and solid so it supports itself.',
   'carve X Y Z W H D - remove already-planned blocks to cut a doorway, window, or interior.',
   `put X Y Z THING - place one fixture: ${ACCESSORY_NAMES.join(' ')}.`,
@@ -315,6 +318,16 @@ export function parseStructureDesign(text) {
           material: tokens[7] ? canonicalMaterial(tokens[7], `${step} material`) : null,
         };
       }
+      case 'block': {
+        need(4);
+        return {
+          op,
+          x: coordinate(tokens[1], `${step} x`),
+          y: coordinate(tokens[2], `${step} y`),
+          z: coordinate(tokens[3], `${step} z`),
+          material: canonicalMaterial(tokens[4], `${step} material`),
+        };
+      }
       case 'roof': {
         need(5);
         const style = String(tokens[6] || 'flat').toLowerCase();
@@ -358,7 +371,7 @@ export function parseStructureDesign(text) {
  * its own stage, which a floating ring satisfies by leaning on itself; this
  * proves the whole design actually reaches the ground it is built from.
  */
-function floatingCells(placed) {
+function floatingCells(placed, canSupportMaterial) {
   const keys = [...placed.keys()];
   if (!keys.length) return [];
   const parsed = new Map(keys.map(key => [key, key.split(':').map(Number)]));
@@ -373,7 +386,9 @@ function floatingCells(placed) {
   }
   const steps = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   while (queue.length) {
-    const [x, y, z] = parsed.get(queue.pop());
+    const sourceKey = queue.pop();
+    const [x, y, z] = parsed.get(sourceKey);
+    if (!canSupportMaterial(placed.get(sourceKey)?.material)) continue;
     for (const [dx, dy, dz] of steps) {
       const key = `${x + dx}:${y + dy}:${z + dz}`;
       if (placed.has(key) && !reached.has(key)) {
@@ -462,6 +477,10 @@ function applyOperation(placed, operation, block) {
       }
       return;
     }
+    case 'block': {
+      set(operation.x, operation.y, operation.z, operation.material, 'structure');
+      return;
+    }
     case 'roof': {
       // Each course is nested inside the one below it, so a roof always rests on
       // its own previous layer. A stepped solid roof is blunt, but it is a roof
@@ -516,7 +535,10 @@ function applyOperation(placed, operation, block) {
  * Turn a design into a proven blueprint, or throw with the exact reason it
  * cannot be built.
  */
-export function expandStructureDesign(design, material, { id = 'designed_structure' } = {}) {
+export function expandStructureDesign(design, material, {
+  id = 'designed_structure',
+  canSupportMaterial = () => true,
+} = {}) {
   const block = canonicalMaterial(material);
   const operations = Array.isArray(design) ? design : parseStructureDesign(design);
   const placed = new Map();
@@ -527,7 +549,7 @@ export function expandStructureDesign(design, material, { id = 'designed_structu
     throw new TypeError(`The design needs ${placed.size} blocks, above the ${MAX_CELLS} limit.`);
   }
 
-  const floating = floatingCells(placed);
+  const floating = floatingCells(placed, canSupportMaterial);
   if (floating.length) {
     const [first] = floating;
     throw new TypeError(
@@ -568,7 +590,7 @@ export function expandStructureDesign(design, material, { id = 'designed_structu
     cells,
   };
 
-  const problems = validateStructureBlueprint(blueprint);
+  const problems = validateStructureBlueprint(blueprint, { canSupportMaterial });
   if (problems.length) throw new TypeError(`The design is not buildable: ${problems[0]}.`);
   return blueprint;
 }
@@ -582,6 +604,7 @@ export function createDesignedStructureOrder({
   material = 'cobblestone',
   requester = 'player',
   constraints,
+  canSupportMaterial,
 } = {}) {
   const id = String(name || 'designed_structure')
     .trim()
@@ -589,7 +612,10 @@ export function createDesignedStructureOrder({
     .replace(/[\s-]+/g, '_')
     .replace(/[^a-z0-9_]/g, '')
     .slice(0, 48) || 'designed_structure';
-  const blueprint = expandStructureDesign(design, material, { id: `${id}_${canonicalMaterial(material)}` });
+  const blueprint = expandStructureDesign(design, material, {
+    id: `${id}_${canonicalMaterial(material)}`,
+    canSupportMaterial,
+  });
   return createWorkOrder({
     role: 'builder',
     kind: 'build',

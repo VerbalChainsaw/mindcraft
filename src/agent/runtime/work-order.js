@@ -145,6 +145,24 @@ function normalizeCheckpoint(checkpoint) {
       .slice(0, MAX_BLUEPRINT_CELLS)
       .filter(value => typeof value === 'string' && value.length <= 32));
   }
+  const toolName = boundedText(checkpoint.toolRequirement?.name, 80);
+  const minimumUsableDurability = Number(checkpoint.toolRequirement?.minimumUsableDurability);
+  if (/^[a-z0-9_]+$/.test(toolName) && Number.isFinite(minimumUsableDurability)) {
+    normalized.toolRequirement = Object.freeze({
+      name: toolName,
+      minimumUsableDurability: finiteInteger(minimumUsableDurability, 1, 1, 10_000),
+    });
+  }
+  const workstationName = boundedText(checkpoint.workstationRequirement?.name, 80);
+  if (/^[a-z0-9_]+$/.test(workstationName) && checkpoint.workstationRequirement?.carried === true) {
+    normalized.workstationRequirement = Object.freeze({
+      name: workstationName,
+      carried: true,
+    });
+  }
+  if (checkpoint.accessRequirement?.kind === 'surface') {
+    normalized.accessRequirement = Object.freeze({ kind: 'surface' });
+  }
   return Object.freeze(normalized);
 }
 
@@ -249,8 +267,10 @@ export function advanceWorkOrder(order, result, {
       phase: nextPhase,
       resumePhase: null,
       // Verified progress clears the preemption budget. A long job should not
-      // be killed by interruptions accumulated across work it already finished.
+      // be killed by interruptions or failures accumulated across work it
+      // already finished.
       preemptions: 0,
+      attempts: 0,
       evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
       updatedAt: now,
     });
@@ -265,6 +285,29 @@ export function advanceWorkOrder(order, result, {
       evidence: {
         code: 'preempted',
         detail: result.detail || 'A higher-priority lane took ownership; the work order is unchanged.',
+        actionId: result.actionId,
+      },
+      updatedAt: now,
+    });
+  }
+  const capacityBlocked = result.code === 'inventory_capacity_blocked'
+    || result.code === 'skill_no_safe_release'
+    || (
+      result.evidence?.skill?.kind === 'inventory_capacity'
+      && result.evidence.skill.outcome === 'no_safe_release'
+    );
+  if (capacityBlocked) {
+    // Working capacity is a physical precondition, not a failed attempt at
+    // the requested build/mine/craft operation. Repeating the same release
+    // policy cannot improve the inventory and must not spend the productive
+    // work-order budget or trigger relocation.
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'failed',
+      resumePhase: null,
+      evidence: {
+        code: 'inventory_capacity_blocked',
+        detail: result.detail || 'No safe working inventory slot can be released.',
         actionId: result.actionId,
       },
       updatedAt: now,

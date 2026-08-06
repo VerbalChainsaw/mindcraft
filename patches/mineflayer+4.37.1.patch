@@ -354,3 +354,19 @@ index fdaec6b..08983b6 100644
          // Condition to wait to receive block update actually changing the block type, in case the bot receives block updates with no changes
          // oldBlock and newBlock will both be null when the world unloads
          checkCondition: (oldBlock, newBlock) => !oldBlock || !newBlock || oldBlock.type !== newBlock.type
+diff --git a/node_modules/mineflayer/lib/plugins/simple_inventory.js b/node_modules/mineflayer/lib/plugins/simple_inventory.js
+index 8c68644..bcc982a 100644
+--- a/node_modules/mineflayer/lib/plugins/simple_inventory.js
++++ b/node_modules/mineflayer/lib/plugins/simple_inventory.js
+@@ -121,6 +121,10 @@ function inject (bot) {
+       destSlot = QUICK_BAR_START + nextQuickBarSlot
+       nextQuickBarSlot = (nextQuickBarSlot + 1) % QUICK_BAR_COUNT
+     }
+-    setQuickBarSlot(destSlot - QUICK_BAR_START)
+     await bot.moveSlotItem(sourceSlot, destSlot)
++    // Bind the requested stack into the destination before selecting it. If
++    // the hotbar is full, selecting the LRU slot first briefly exposes its old
++    // item to the server; an immediate use/place packet can then act with that
++    // stale stack even though the local inventory swap subsequently succeeds.
++    setQuickBarSlot(destSlot - QUICK_BAR_START)
+   }

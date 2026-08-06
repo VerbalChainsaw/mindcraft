@@ -7,6 +7,7 @@ import {
   capabilityCommand,
   executeCapabilityAction,
 } from './capability-catalogue.js';
+import { buildPrerequisitePlan } from './prerequisite-planner.js';
 import { RoleDirector } from './role-director.js';
 import { JobStateStore } from './job-state-store.js';
 import {
@@ -24,8 +25,16 @@ import { canonicalLogFamily, nextLumberjackStep } from './jobs/lumberjack-plan.j
 import {
   isProtectedGameplayBlock,
   isReplaceableGameplayBlock,
+  isSafeGameplaySupport,
 } from './gameplay-safety.js';
-import { isClearableWorksiteBlock } from '../library/skills.js';
+import {
+  isClearableWorksiteBlock,
+  probeSafeNavigationStances,
+} from '../library/skills.js';
+import {
+  blockCanSupportPlacement,
+  blockMatchesPlacement,
+} from './block-placement-contract.js';
 
 const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
@@ -177,15 +186,43 @@ function nextJobUpkeepStep(order, snapshot) {
 }
 
 /**
- * Walk back to where the work is before continuing it. Only runs after a
- * preemption, so ordinary job movement -- following a seam, ranging for
- * materials -- never trips it. `keepAnchor` stops the return step from
- * overwriting the very position it is walking to.
+ * Walk back to where physical work is authorized before continuing it.
+ * Preempted jobs return to their explicit anchor; Builder also returns after
+ * remote prerequisite acquisition before it may execute blueprint cells.
+ * `keepAnchor` stops the return step from overwriting the destination.
  */
-function nextWorksiteReturnStep(order, snapshot) {
-  const anchor = order.anchor;
-  if (!anchor || order.evidence?.code !== 'preempted') return null;
+export function nextWorksiteReturnStep(order, snapshot) {
+  const builderExecution = order.role === 'builder'
+    && order.kind !== 'stockpile'
+    && ['execute', 'deliver', 'verify'].includes(order.phase);
+  const preempted = order.evidence?.code === 'preempted';
+  if (!builderExecution && !preempted) return null;
+  const anchor = order.anchor || (builderExecution ? order.target : null);
+  if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isFinite)) return null;
   if (![snapshot.x, snapshot.y, snapshot.z].every(Number.isFinite)) return null;
+  const surfaceAccessRequired = order.checkpoint?.accessRequirement?.kind === 'surface';
+  const surfaceAccessSatisfied = order.evidence?.code === 'skill_surface_reached';
+  if (builderExecution && surfaceAccessSatisfied && surfaceAccessRequired) {
+    return {
+      phase: order.phase,
+      checkpoint: { ...order.checkpoint, accessRequirement: null },
+      code: 'worksite_surface_access_satisfied',
+      keepAnchor: true,
+    };
+  }
+  if (builderExecution && (surfaceAccessRequired || anchor.y - snapshot.y > 8)) {
+    return {
+      capability: { id: 'reach_surface', arguments: {} },
+      nextPhase: order.phase,
+      code: 'worksite_surface_access_required',
+      keepAnchor: true,
+      target: { name: 'surface_access' },
+      checkpoint: {
+        ...order.checkpoint,
+        accessRequirement: { kind: 'surface' },
+      },
+    };
+  }
   const distance = Math.hypot(
     snapshot.x - anchor.x,
     snapshot.y - anchor.y,
@@ -319,27 +356,75 @@ function entityOccupies(bot, x, y, z) {
   });
 }
 
+/**
+ * Candidate standing cells immediately outside a construction footprint.
+ * Policy owns which cells are safe; native Pathfinder owns whether ordinary
+ * locomotion can reach any of them. Including one-block descents and ascents
+ * avoids treating a platform edge as a prison merely because its surrounding
+ * terrain is not at the exact same elevation.
+ */
+export function blueprintEscapeStances(bot, order) {
+  const anchor = order?.target;
+  const blueprint = order?.blueprint;
+  const originY = Math.floor(bot?.entity?.position?.y ?? Infinity);
+  if (
+    ![anchor?.x, anchor?.y, anchor?.z, originY].every(Number.isFinite)
+    || !Number.isInteger(blueprint?.width)
+    || !Number.isInteger(blueprint?.depth)
+  ) return [];
+
+  const minX = Math.floor(anchor.x);
+  const maxX = minX + blueprint.width - 1;
+  const minZ = Math.floor(anchor.z);
+  const maxZ = minZ + blueprint.depth - 1;
+  const perimeter = [];
+  for (let x = minX; x <= maxX; x += 1) {
+    perimeter.push([x, minZ - 1], [x, maxZ + 1]);
+  }
+  for (let z = minZ; z <= maxZ; z += 1) {
+    perimeter.push([minX - 1, z], [maxX + 1, z]);
+  }
+
+  const stances = [];
+  const seen = new Set();
+  for (const [x, z] of perimeter) {
+    for (const y of [originY, originY - 1, originY + 1]) {
+      const key = `${x}:${y}:${z}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const feet = blockAt(bot, x, y, z);
+      const head = blockAt(bot, x, y + 1, z);
+      const support = blockAt(bot, x, y - 1, z);
+      if (!isReplaceableGameplayBlock(feet) || !isReplaceableGameplayBlock(head)) continue;
+      if (!isSafeGameplaySupport(support)) continue;
+      stances.push(new Vec3(x, y, z));
+    }
+  }
+  return stances;
+}
+
 function auditBlueprint(bot, order, inventory) {
   if (!order.blueprint || !order.target) return { valid: false, code: 'not_audited', missing: [], incorrect: [] };
   const anchor = order.target;
-  const blueprintPositions = new Set(order.blueprint.cells.map(cell => `${cell.x}:${cell.y}:${cell.z}`));
+  const blueprintPositions = new Map(order.blueprint.cells.map(cell => [`${cell.x}:${cell.y}:${cell.z}`, cell]));
   const missing = [];
   const incorrect = [];
   let correct = 0;
+  const materialFor = cell => cell.material === 'survival_building_block'
+    ? Object.keys(inventory).find(name => (
+      (name.endsWith('_planks') || ['cobblestone', 'stone', 'dirt'].includes(name))
+      && inventory[name] > 0
+    )) || 'cobblestone'
+    : cell.material;
   for (let index = 0; index < order.blueprint.cells.length; index += 1) {
     const cell = order.blueprint.cells[index];
     const x = anchor.x + cell.x;
     const y = anchor.y + cell.y;
     const z = anchor.z + cell.z;
-    const expected = cell.material === 'survival_building_block'
-      ? Object.keys(inventory).find(name => (
-        (name.endsWith('_planks') || ['cobblestone', 'stone', 'dirt'].includes(name))
-        && inventory[name] > 0
-      )) || 'cobblestone'
-      : cell.material;
+    const expected = materialFor(cell);
     const current = blockAt(bot, x, y, z);
     if (!current) return { valid: false, code: 'unloaded', missing: [], incorrect: [] };
-    if (current.name === expected || (expected === 'dirt' && current.name === 'grass_block')) {
+    if (blockMatchesPlacement(bot.registry, expected, current)) {
       correct += 1;
       continue;
     }
@@ -371,6 +456,11 @@ function auditBlueprint(bot, order, inventory) {
       continue;
     }
     const relativeBelow = `${cell.x}:${cell.y - 1}:${cell.z}`;
+    const plannedCellCanSupport = key => {
+      const support = blueprintPositions.get(key);
+      if (!support) return false;
+      return blockCanSupportPlacement(bot.registry, materialFor(support));
+    };
     const supported = blockIsSolid(blockAt(bot, x, y - 1, z))
       || [
         [1, 0, 0],
@@ -379,13 +469,13 @@ function auditBlueprint(bot, order, inventory) {
         [0, 0, -1],
       ].some(([dx, dy, dz]) => blockIsSolid(blockAt(bot, x + dx, y + dy, z + dz)));
     const plannedSupport = (
-      (cell.y > 0 && blueprintPositions.has(relativeBelow))
+      (cell.y > 0 && plannedCellCanSupport(relativeBelow))
       || [
         [1, 0, 0],
         [-1, 0, 0],
         [0, 0, 1],
         [0, 0, -1],
-      ].some(([dx, dy, dz]) => blueprintPositions.has(`${cell.x + dx}:${cell.y + dy}:${cell.z + dz}`))
+      ].some(([dx, dy, dz]) => plannedCellCanSupport(`${cell.x + dx}:${cell.y + dy}:${cell.z + dz}`))
     );
     if (!supported && !plannedSupport) {
       return { valid: false, code: 'unsupported', missing: [], incorrect: [] };
@@ -420,20 +510,16 @@ function auditBlueprint(bot, order, inventory) {
       }
     }
   } else if (insideFootprint) {
-    const escape = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-    ].some(([dx, dz]) => {
-      const feet = blockAt(bot, botX + dx, botY, botZ + dz);
-      const head = blockAt(bot, botX + dx, botY + 1, botZ + dz);
-      const floor = blockAt(bot, botX + dx, botY - 1, botZ + dz);
-      return isReplaceableGameplayBlock(feet)
-        && isReplaceableGameplayBlock(head)
-        && blockIsSolid(floor);
-    });
-    if (!escape) return { valid: false, code: 'trapped_exit', missing: [], incorrect: [] };
+    const escape = probeSafeNavigationStances(bot, blueprintEscapeStances(bot, order), 500);
+    if (!escape.reachable) {
+      return {
+        valid: false,
+        code: 'trapped_exit',
+        missing: [],
+        incorrect: [],
+        routeStatus: escape.status,
+      };
+    }
   }
   if (missing.length > 0 && correct === 0 && !missing.some(cell => cell.supported === true)) {
     return { valid: false, code: 'no_support_anchor', missing: [], incorrect: [] };
@@ -955,7 +1041,29 @@ export class JobDirector extends RoleDirector {
         snapshot = this.getJobSnapshot(this.agent, this.activeOrder);
         step = nextJobUpkeepStep(this.activeOrder, snapshot)
           || nextWorksiteReturnStep(this.activeOrder, snapshot)
-          || reducer(this.activeOrder, snapshot, this.agent.last_action_result);
+          || reducer(this.activeOrder, snapshot, this.agent.last_action_result, {
+            planItem: ({
+              target,
+              quantity,
+              completion,
+              range,
+              toolRequirement,
+              workstationRequirement,
+              accessRequirement,
+            }) => buildPrerequisitePlan(
+              this.agent.bot,
+              {
+                target,
+                quantity,
+                completion,
+                range: Number(range) || 64,
+                experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
+                toolRequirement,
+                workstationRequirement,
+                accessRequirement,
+              },
+            ),
+          });
       } catch (error) {
         this.setStatus('failed', 'job_snapshot_failed', this.activeOrder.target?.name, error?.message || error, true);
         this.nextAttemptAt = this.now() + JOB_RETRY_MS;
@@ -993,11 +1101,16 @@ export class JobDirector extends RoleDirector {
           updatedAt: this.now(),
         });
       }
-      if (!step.command && !step.capability) continue;
-
       if (step.checkpoint) {
         this.persist({ ...this.activeOrder, checkpoint: step.checkpoint, updatedAt: this.now() });
       }
+      // Some planning edges change only durable job state. Commit those
+      // declarative transitions before deciding whether the executor has any
+      // physical work to own; otherwise the same satisfied precondition is
+      // selected forever (for example, surface access after returning from a
+      // mine).
+      if (!step.command && !step.capability) continue;
+
       // Remember where this step is being worked from, so a preemption that
       // drags the bot away has somewhere to come back to.
       if (!step.keepAnchor && Number.isFinite(snapshot.x) && Number.isFinite(snapshot.z)) {

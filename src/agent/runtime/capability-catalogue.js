@@ -245,6 +245,40 @@ defineCapability({
   cost: (_snapshot, args) => args.count * Math.max(1, Math.ceil(args.range / 16)),
 });
 
+function verifySurfaceAccess(_before, _after, _binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const verified = Boolean(
+    skill?.kind === 'surface_navigation'
+    && skill?.outcome === 'surface_reached'
+    && [skill?.target?.x, skill?.target?.y, skill?.target?.z].every(Number.isFinite)
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'surface_access_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed a supported surface stance at ${skill.target.x}, ${skill.target.y}, ${skill.target.z}.`
+      : 'Minecraft did not confirm a supported surface stance.',
+  });
+}
+
+defineCapability({
+  id: 'reach_surface',
+  parameters: {},
+  normalizeArguments: () => immutable({}),
+  preconditions: () => preconditionReport([
+    { requirement: 'connected surface navigation primitive', satisfied: true },
+  ]),
+  expectedEffects: () => [immutable({ kind: 'surface_access' })],
+  bind: () => immutable({
+    ok: true,
+    commandName: '!goToSurface',
+    command: '!goToSurface',
+  }),
+  execute: executeBoundCommand,
+  verify: verifySurfaceAccess,
+  cost: () => 4,
+});
+
 defineCapability({
   id: 'collect_block',
   parameters: {
@@ -702,6 +736,52 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
       },
     },
   };
+
+  const skill = result.evidence?.skill;
+  const verifiedMiningProgress = Boolean(
+    skill?.kind === 'mining_search'
+    && skill?.outcome === 'search_advanced'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.routeSteps) > 0
+    && [
+      skill?.target?.x,
+      skill?.target?.y,
+      skill?.target?.z,
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
+  const verifiedSurfaceProgress = Boolean(
+    skill?.kind === 'surface_navigation'
+    && skill?.outcome === 'surface_progress_incomplete'
+    && skill?.supported === true
+    && Number(skill?.verticalProgress) > 0
+    && [
+      skill?.target?.x,
+      skill?.target?.y,
+      skill?.target?.z,
+      skill?.observed?.x,
+      skill?.observed?.y,
+      skill?.observed?.z,
+    ].every(Number.isFinite)
+  );
+  const verifiedPartialProgress = verifiedMiningProgress || verifiedSurfaceProgress;
+
+  if (!verification.ok && verifiedPartialProgress && result.phase === 'failed') {
+    const progressDetail = verifiedSurfaceProgress
+      ? 'Minecraft verified a supported upward surface advance'
+      : 'Minecraft verified a returnable mining-route advance';
+    return createActionResult({
+      ...result,
+      phase: 'succeeded',
+      code: 'capability_verified_partial_progress',
+      detail: `${result.detail || 'The bounded action ended before its final effect.'} ${progressDetail}; replanning may continue from that physical progress.`,
+      evidence,
+      retryable: false,
+    });
+  }
 
   // A bounded adapter may finish its requested effect and then report a stale
   // route or cleanup failure. Minecraft state is authoritative for the

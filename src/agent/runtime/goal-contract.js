@@ -496,6 +496,9 @@ function normalizeOperationalMemory(raw) {
     failedTargets: Object.freeze(failedTargets),
     toolRequirement: normalizeToolRequirement(source.toolRequirement),
     workstationRequirement: normalizeWorkstationRequirement(source.workstationRequirement),
+    accessRequirement: source.accessRequirement?.kind === 'surface'
+      ? Object.freeze({ kind: 'surface' })
+      : null,
     activeCollectionTarget: normalizeActiveCollectionTarget(source.activeCollectionTarget),
     deliveryTarget: normalizeDeliveryTarget(source.deliveryTarget),
   });

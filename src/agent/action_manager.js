@@ -115,6 +115,21 @@ function isSameActionArea(first, second) {
 }
 
 function actionProgressTarget(result) {
+    const progress = result?.evidence?.skill?.progress;
+    if (
+        progress?.verified === true
+        && typeof progress.kind === 'string'
+        && progress.kind.trim()
+        && [progress?.position?.x, progress?.position?.y, progress?.position?.z].every(Number.isFinite)
+    ) {
+        return JSON.stringify([
+            'verified_progress',
+            progress.kind.trim().slice(0, 80),
+            Math.floor(progress.position.x),
+            Math.floor(progress.position.y),
+            Math.floor(progress.position.z),
+        ]);
+    }
     const target = result?.target;
     if (
         result?.phase !== 'succeeded'
@@ -231,9 +246,10 @@ export class ActionManager {
         this.lastProgressTargetByAction.set(key, target);
         if (previousTarget === target) return false;
 
-        // A deterministic skill just changed a different world coordinate.
-        // That is productive batch work (placing a blueprint, mining a seam),
-        // not the same no-progress action reclaiming one patch of ground.
+        // A deterministic skill just changed a different verified progress
+        // marker. That is productive batch work (placing a blueprint, opening
+        // a mining corridor), not the same no-progress action reclaiming one
+        // patch of ground.
         this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
             attempt.owner !== actionOwner || attempt.label !== actionLabel
         ));

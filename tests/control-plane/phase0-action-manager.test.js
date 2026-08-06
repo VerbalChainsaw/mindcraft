@@ -131,6 +131,30 @@ test('Verified batch placements at different coordinates do not trip the no-prog
   assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
 });
 
+test('Verified primitive progress markers prevent false loop detection across bounded actions', async () => {
+  const agent = createHarness();
+  const outcomes = [];
+
+  for (let y = 63; y > 57; y -= 1) {
+    outcomes.push(await agent.actions.runAction('action:collectBlocksInRange', () => {
+      agent.bot.entity.position = { x: 10, y, z: 10 };
+      agent.bot.lastActionEvidence = {
+        kind: 'mining_search',
+        outcome: 'search_advanced',
+        progress: {
+          verified: true,
+          kind: 'mining_route_cell',
+          position: { x: 10, y, z: 10 },
+        },
+      };
+      return false;
+    }, { owner: 'job' }));
+  }
+
+  assert.equal(outcomes.every(outcome => outcome.result.code === 'skill_search_advanced'), true);
+  assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
+});
+
 test('Repeated success at one unchanged coordinate still trips the no-progress guard', async () => {
   const agent = createHarness();
   let outcome;

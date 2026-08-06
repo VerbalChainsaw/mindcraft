@@ -77,7 +77,7 @@ const COMMAND_CATEGORIES = Object.freeze([
     Object.freeze({ category: 'Combat', pattern: /^!(attack\w*|resolveTacticalCombat|guardPlayer|defend)$/ }),
     Object.freeze({ category: 'Gathering', pattern: /^!(collect\w*|pickup\w*|fish|prepare\w*|breakBlock|digDown)$/ }),
     Object.freeze({ category: 'Crafting', pattern: /^!(craftRecipe|smeltItem|brewPotion|clearFurnace|enchantItem|repairItem)$/ }),
-    Object.freeze({ category: 'Building', pattern: /^!(place\w*|build\w*|repairHome|establishFarm|goToFarm|maintainFarm|rememberHome)$/ }),
+    Object.freeze({ category: 'Building', pattern: /^!(place\w*|build\w*|resumeStructureJob|repairHome|establishFarm|goToFarm|maintainFarm|rememberHome)$/ }),
     Object.freeze({ category: 'Inventory', pattern: /^!(equip|consume|discard|give\w*|putIn\w*|putFamily\w*|takeFrom\w*|viewChest|deposit\w*|useItem|useOn)$/ }),
     Object.freeze({ category: 'Memory', pattern: /^!(rememberHere|goToRememberedPlace|savedPlaces|recoverDeathItems)$/ }),
     Object.freeze({ category: 'Social', pattern: /^!(startConversation|endConversation|squadRadio|lookAt\w*|showVillagerTrades|tradeWithVillager)$/ }),
@@ -448,10 +448,13 @@ export function getCommandDocs(agent, { compact = false, purpose = 'all' } = {})
                     .map(([name, param]) => `${name}:${typeTranslations[param.type] ?? param.type}`)
                     .join(', ')
                 : '';
-            const description = String(command.description || '')
+            // Most commands need only a short reminder. Data-compiling
+            // commands may declare a bounded compact contract so their grammar
+            // is not silently amputated by the ordinary 140-character summary.
+            const description = String(command.compactDescription || command.description || '')
                 .replace(/\s+/g, ' ')
                 .trim()
-                .slice(0, 140);
+                .slice(0, command.compactDescription ? 1_100 : 140);
             docs += `${command.name}${params ? `(${params})` : ''} - ${description}\n`;
         }
         return docs + '*\n';

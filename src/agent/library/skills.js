@@ -4,6 +4,7 @@ import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
 import { currentActionExecutionContext } from '../action_manager.js';
+import { blockMatchesPlacement } from '../runtime/block-placement-contract.js';
 import {
     assessAnchoredGameplaySupport,
     isAnchoredGameplaySupport,
@@ -1144,6 +1145,49 @@ export function guardExecutableDiagonalCorners(movements) {
         return getMoveDiagonal(node, direction, neighbours);
     };
     return movements;
+}
+
+/**
+ * Read-only native Pathfinder proof for a set of ordinary standing cells.
+ * Site selectors use this before persisting a target; actual locomotion uses
+ * goToGoal with the same safeMovements policy.
+ */
+export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
+    const positions = (Array.isArray(stances) ? stances : [])
+        .filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
+        .map(position => new Vec3(
+            Math.floor(position.x),
+            Math.floor(position.y),
+            Math.floor(position.z),
+        ));
+    if (positions.length === 0 || !bot?.pathfinder?.getPathTo || !bot?.entity?.position) {
+        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+    }
+    const goal = new pf.goals.GoalCompositeAny(
+        positions.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+    );
+    if (goal.isEnd(bot.entity.position.floored())) {
+        return { reachable: true, status: 'already_at_stance', pathLength: 0 };
+    }
+    try {
+        const result = bot.pathfinder.getPathTo(
+            safeMovements(bot),
+            goal,
+            Math.max(100, Math.min(5_000, Math.floor(Number(timeoutMs) || 2_000))),
+        );
+        return {
+            reachable: result?.status === 'success',
+            status: result?.status || 'unknown',
+            pathLength: Array.isArray(result?.path) ? result.path.length : 0,
+        };
+    } catch (error) {
+        return {
+            reachable: false,
+            status: 'route_probe_error',
+            pathLength: 0,
+            error: String(error?.message || error).slice(0, 160),
+        };
+    }
 }
 
 function miningMovements(bot) {
@@ -4423,7 +4467,9 @@ export async function defendPlayer(bot, username, range=10) {
     return await followPlayer(bot, username, normalizePlayerDistance(Math.min(3, Number(range) || 3), 3));
 }
 
-async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1) {
+async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1, {
+    allowLocalCache = true,
+} = {}) {
     const inventoryStart = Number(bot.inventory?.inventoryStart);
     const inventoryEnd = Number(bot.inventory?.inventoryEnd);
     const carriedSlotCount = Number.isInteger(inventoryStart)
@@ -4435,6 +4481,20 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         carriedSlotCount,
         Math.floor(Number(requestedSlots) || 1),
     ));
+    if (!allowLocalCache) {
+        const staleDrop = bot.nearestEntity?.(entity => (
+            entity?.name === 'item'
+            && entity?.position
+            && bot.entity?.position?.distanceTo(entity.position) <= 2.5
+        ));
+        if (staleDrop) {
+            const cleanStanceReached = await moveAway(bot, 4, { allowLocalRecovery: false });
+            if (!cleanStanceReached) {
+                log(bot, 'Could not reach a clean disposal stance away from old dropped items.');
+                return false;
+            }
+        }
+    }
     let releaseActions = 0;
     while (
         !bot.interrupt_code
@@ -4453,7 +4513,7 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             .map(item => ({ ...item, kind: 'natural_fill' }))
             .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))[0];
 
-        if (candidate) {
+        if (candidate && allowLocalCache) {
             let placed = 0;
             while (
                 !bot.interrupt_code
@@ -4486,6 +4546,29 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
                 continue;
             }
         }
+        if (candidate && !allowLocalCache) {
+            // Construction near a player-owned site must not create an
+            // untracked cache pile. The same bounded classification is still
+            // safe to retire directly: this is a tiny natural-fill stack, not
+            // a protected job material or essential item.
+            await bot.tossStack(candidate);
+            releaseActions += 1;
+            log(bot, `Released one expendable ${candidate.count}-block ${candidate.name} stack without modifying the worksite.`);
+            await interruptibleDelay(bot, 100);
+            continue;
+        }
+
+        const disposableClutter = selectDisposableWorkingSlotStack(bot, protectedNames);
+        if (disposableClutter) {
+            // Only the shared overflow policy's lowest-value, zero-reserve
+            // class is eligible here. Unknown items, useful reserves, gear,
+            // food, and every current job material remain fail-closed.
+            await bot.tossStack(disposableClutter);
+            releaseActions += 1;
+            log(bot, `Released one expendable ${disposableClutter.count}-item ${disposableClutter.name} stack.`);
+            await interruptibleDelay(bot, 100);
+            continue;
+        }
 
         const toolGroups = new Map();
         for (const item of inventoryItems) {
@@ -4500,7 +4583,7 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
                     toolDurability(bot, right).usable - toolDurability(bot, left).usable
                     || left.slot - right.slot
                 ))
-                .slice(2))
+                .slice(1))
             .sort((left, right) => (
                 toolDurability(bot, left).usable - toolDurability(bot, right).usable
                 || left.name.localeCompare(right.name)
@@ -4511,7 +4594,7 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             // may transfer a healthier same-type tool from an earlier slot.
             await bot.tossStack(duplicateTool);
             releaseActions += 1;
-            log(bot, `Retired one superseded ${duplicateTool.name} while preserving the two healthiest carried copies.`);
+            log(bot, `Retired one superseded ${duplicateTool.name} while preserving the healthiest carried copy.`);
             await interruptibleDelay(bot, 100);
             continue;
         }
@@ -4543,7 +4626,52 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         }
         break;
     }
-    return bot.inventory.emptySlotCount() >= desiredSlots;
+    let released = bot.inventory.emptySlotCount() >= desiredSlots;
+    if (released && releaseActions > 0 && !allowLocalCache) {
+        const leftDisposalStance = await moveAway(bot, 3, { allowLocalRecovery: false });
+        if (!leftDisposalStance) {
+            log(bot, 'Working slots opened, but the bot could not leave the disposal pickup radius safely.');
+            return false;
+        }
+        await interruptibleDelay(bot, 150);
+        released = bot.inventory.emptySlotCount() >= desiredSlots;
+    }
+    return released;
+}
+
+export async function releaseInventoryWorkingSlots(bot, protectedItems='', requestedSlots=2) {
+    const protectedNames = new Set(
+        (protectedItems instanceof Set
+            ? [...protectedItems]
+            : Array.isArray(protectedItems)
+                ? protectedItems
+                : String(protectedItems || '').split(','))
+            .map(name => String(name || '').trim())
+            .filter(Boolean),
+    );
+    const desiredSlots = Math.max(1, Math.min(12, Math.floor(Number(requestedSlots) || 2)));
+    const beforeSlots = bot.inventory.emptySlotCount();
+    const released = await freeCollectionWorkingSlots(bot, protectedNames, desiredSlots, {
+        // A construction capacity repair must not scatter temporary blocks
+        // around a player's base. Collection may still cache tiny natural-fill
+        // stacks in verified cells while tunnelling.
+        allowLocalCache: false,
+    });
+    const afterSlots = bot.inventory.emptySlotCount();
+    setActionEvidence(bot, {
+        kind: 'inventory_capacity',
+        outcome: released ? 'working_slots_released' : bot.interrupt_code ? 'interrupted' : 'no_safe_release',
+        target: { name: 'working_inventory' },
+        protectedItems: [...protectedNames],
+        requestedSlots: desiredSlots,
+        beforeSlots,
+        afterSlots,
+        retryable: !released && !bot.interrupt_code,
+    });
+    log(bot, released
+        ? `Released ${afterSlots - beforeSlots} safe working inventory slot${afterSlots - beforeSlots === 1 ? '' : 's'} while preserving job materials.`
+        : `Could not release ${desiredSlots} working inventory slots without sacrificing protected or essential items.`);
+    return released;
 }
 
 
@@ -5580,12 +5708,21 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             ) continue;
             if ((candidates?.blocks.length || 0) === 0 && await relocateCollectionSearch(bot, 'trees', search)) continue;
             if (collected === 0) {
+                const surfaceAccessRequired = Boolean(
+                    candidates?.blocks?.some(block => (
+                        String(block?.name || '').endsWith('_log')
+                        && Number(block?.position?.y) >= Number(bot.entity?.position?.y) + 4
+                    )),
+                );
                 setActionEvidence(bot, {
                     kind: 'collect',
                     outcome: candidates?.blocks.length > 0 ? 'unreachable' : 'resource_not_found',
                     target: search.lastAccessRecoveryTarget || { name: 'wood' },
                     count: 0,
                     search: collectionSearchEvidence(bot, search),
+                    ...(surfaceAccessRequired ? {
+                        accessRequirement: { kind: 'surface' },
+                    } : {}),
                     retryable: true,
                 });
             }
@@ -6751,13 +6888,12 @@ export async function placeBlock(
         log(bot, `Cannot place ${blockType}: destination chunk is not loaded.`);
         return false;
     }
-    if (targetBlock.name === blockType || (targetBlock.name === 'grass_block' && blockType === 'dirt')) {
+    if (blockMatchesPlacement(bot.registry, blockType, targetBlock)) {
         setActionEvidence(bot, { kind: 'place', outcome: 'already_present', target, retryable: false });
         log(bot, `${blockType} already at ${targetBlock.position}.`);
         return false;
     }
-    const empty_blocks = ['air', 'water', 'lava', 'grass', 'short_grass', 'tall_grass', 'snow', 'dead_bush', 'fern'];
-    if (!empty_blocks.includes(targetBlock.name)) {
+    if (!isReplaceableGameplayBlock(targetBlock)) {
         if (!replaceObstruction) {
             setActionEvidence(bot, {
                 kind: 'place',
@@ -6806,7 +6942,7 @@ export async function placeBlock(
         const block = bot.blockAt(target_dest.plus(d));
         if (
             block
-            && !empty_blocks.includes(block.name)
+            && !isReplaceableGameplayBlock(block)
             && !block.name.endsWith('_door')
         ) {
             buildOffBlock = block;
@@ -6858,6 +6994,18 @@ export async function placeBlock(
         }
         else {
             await bot.equip(block_item, 'hand');
+            if (bot.heldItem?.name !== item_name) {
+                setActionEvidence(bot, {
+                    kind: 'place',
+                    outcome: 'material_binding_failed',
+                    target,
+                    expectedItem: item_name,
+                    observedItem: bot.heldItem?.name || null,
+                    retryable: true,
+                });
+                log(bot, `Cannot place ${blockType}: the hand contains ${bot.heldItem?.name || 'nothing'} after binding ${item_name}.`);
+                return false;
+            }
             await bot.lookAt(buildOffBlock.position.offset(0.5, 0.5, 0.5));
             // Mineflayer's generic placement packet still leaves server-side
             // sneak state as a TODO. Without it, clicking a crafting table,
@@ -6886,7 +7034,7 @@ export async function placeBlock(
             : item_name === 'lava_bucket'
                 ? 'lava'
                 : blockType;
-        if (placedBlock?.name !== expectedName) {
+        if (!blockMatchesPlacement(bot.registry, expectedName, placedBlock)) {
             setActionEvidence(bot, { kind: 'place', outcome: 'not_placed', target, observed: placedBlock?.name || 'unloaded', retryable: true });
             log(bot, `Could not verify ${blockType} at ${target_dest}.`);
             return false;
@@ -8238,11 +8386,30 @@ function overflowKeepCount(bot, role, name, protectedName) {
 function overflowPriority(name) {
     if (
         /(?:flower|tulip|dandelion|poppy|grass|fern|bush)$/.test(name)
-        || ['rotten_flesh', 'spider_eye', 'poisonous_potato'].includes(name)
+        || ['leaf_litter', 'rotten_flesh', 'spider_eye', 'poisonous_potato'].includes(name)
     ) return 0;
     if (['dirt', 'gravel', 'sand', 'cobblestone', 'cobbled_deepslate', 'stone'].includes(name)) return 1;
     if (name.startsWith('raw_') || /_(?:ore|ingot|nugget)$/.test(name)) return 3;
     return 2;
+}
+
+export function selectDisposableWorkingSlotStack(bot, protectedNames = new Set()) {
+    const protectedSet = protectedNames instanceof Set
+        ? protectedNames
+        : new Set(Array.isArray(protectedNames) ? protectedNames : [protectedNames]);
+    return bot.inventory.items()
+        .filter(item => (
+            item.count > 0
+            && Number.isInteger(item.slot)
+            && ![...protectedSet].some(name => protectedInventoryItem(item.name, String(name || '').trim()))
+            && overflowKeepCount(bot, 'builder', item.name, '') === 0
+            && overflowPriority(item.name) === 0
+        ))
+        .sort((left, right) => (
+            left.count - right.count
+            || left.name.localeCompare(right.name)
+            || left.slot - right.slot
+        ))[0] || null;
 }
 
 export async function depositInventoryOverflowAt(bot, role, protectedName, reserveSlots, x, y, z) {
@@ -11403,6 +11570,17 @@ export async function mineSearchTunnel(
                 excavated: access.excavated,
                 distance: observed ? observed.distanceTo(routeStart) : 0,
                 observedPosition: observed,
+                ...(observed ? {
+                    progress: {
+                        verified: true,
+                        kind: 'mining_route_cell',
+                        position: {
+                            x: observed.x,
+                            y: observed.y,
+                            z: observed.z,
+                        },
+                    },
+                } : {}),
                 returnable,
                 ...(plan.boundary ? {
                     boundary: {

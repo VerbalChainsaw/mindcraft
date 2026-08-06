@@ -1,12 +1,12 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Active checkpoint: 2d8483c generic rail-batch and capacity recovery
-Milestone: natural `go make some rails` completed as a durable generic 16-rail recipe batch
+Active checkpoint: UNCOMMITTED-PRESERVED generic mixed-material construction engine
+Milestone: one persisted blueprint planned, supplied, resumed, returned to, placed, and exactly verified end to end
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: manufactured-item goal routing, prerequisite execution, and bounded collection capacity
-Live blocker: none for regular rails; broader small redstone loop still needs powered materials and bounded placement
-Last physical result: collected/smelted iron, released only redundant natural fill, crafted 16 rails, attempts 0, Paper health 20
-Runtime: Paper 1.21.11 healthy; bot held by Operator Stop at (-597.7, 69.94, -299.5)
-Repository: functional checkpoint 2d8483c verified; protected audit files untouched
-Next campaign: continue the same small redstone-loop outcome until powered materials and a safe loop are physically complete
-Jordan review: requested C2J-20260806-1445-rail-capacity
+Owned subsystem: blueprint effects, dependency planning, safe placement, durable worksite return, and exact verification
+Live blocker: none for this campaign; stateful/oriented functional components remain unproven
+Last physical result: 44/44 cells and four powered rails Paper-verified; attempts 0; health 20
+Runtime: Paper 1.21.11 healthy; bot Operator Stop-held at (-644.5, 66, -308.46)
+Repository: functional tranche preserved; protected audit files untouched; accidental nested `C:` path absent
+Next campaign: one materially different custom functional workshop on unchanged generic construction code
+Jordan review: pending functional commit

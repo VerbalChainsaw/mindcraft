@@ -7,9 +7,30 @@ import {
   createConstructionBlueprint,
   nextBuilderStep,
 } from '../../src/agent/runtime/jobs/builder-plan.js';
+import { expandStructureDesign } from '../../src/agent/runtime/jobs/structure-design.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
+import { getCommandDocs } from '../../src/agent/commands/index.js';
 
 test('general construction compiler creates bounded supported shapes with a safe room doorway', () => {
+  const compactDocs = getCommandDocs({ blocked_actions: [] }, { compact: true });
+  assert.match(compactDocs, /DESIGN MUST BE THIS DSL, NEVER PROSE/);
+  assert.match(compactDocs, /block X Y Z MATERIAL/);
+
+  const mixed = expandStructureDesign(
+    'slab 0 0 0 5 5 cobblestone; ring 0 1 0 5 5 rail; block 2 1 0 powered_rail; block 2 1 1 redstone_torch',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  );
+  assert.deepEqual(
+    new Set(mixed.cells.map(cell => cell.material)),
+    new Set(['cobblestone', 'rail', 'powered_rail', 'redstone_torch']),
+  );
+  assert.throws(() => expandStructureDesign(
+    'slab 0 0 0 3 3 cobblestone; block 0 0 0 redstone_torch; block 0 1 0 powered_rail',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), /no path down to the ground/i);
+
   const platform = createConstructionBlueprint({
     shape: 'platform',
     width: 4,
@@ -46,6 +67,120 @@ test('general construction compiler creates bounded supported shapes with a safe
   assert.equal(order.kind, 'build');
   assert.equal(order.blueprint.cells.length, 18);
   assert.deepEqual(order.target, { name: 'construction_site', x: 10, y: 64, z: -4 });
+
+  let plannerRequest = null;
+  const acquire = nextBuilderStep(
+    { ...order, phase: 'acquire' },
+    {
+      inventory: {},
+      freeSlots: 12,
+      blueprintAudit: {
+        valid: true,
+        incorrect: [],
+        missing: [{ x: 10, y: 64, z: -4, material: 'stone_bricks', supported: true }],
+      },
+    },
+    {
+      phase: 'failed',
+      evidence: {
+        skill: {
+          toolRequirement: { name: 'stone_pickaxe', minimumUsableDurability: 24 },
+        },
+      },
+    },
+    {
+      planItem: request => {
+        plannerRequest = request;
+        return {
+          status: 'ready',
+          nextStep: {
+            capability: { id: 'craft', arguments: { item: request.target, batches: 1, expectedIncrease: 4 } },
+            reason: 'Use the shared prerequisite catalogue.',
+          },
+        };
+      },
+    },
+  );
+  assert.equal(acquire.command, undefined);
+  assert.equal(acquire.capability.id, 'craft');
+  assert.equal(acquire.code, 'material_prerequisite_planned');
+  assert.deepEqual(plannerRequest.toolRequirement, {
+    name: 'stone_pickaxe',
+    minimumUsableDurability: 24,
+  });
+  assert.deepEqual(acquire.checkpoint.toolRequirement, plannerRequest.toolRequirement);
+
+  const capacity = nextBuilderStep(
+    { ...createBuilderStockpileOrder({ material: 'stone_bricks', quota: 16 }), phase: 'acquire' },
+    {
+      inventory: {},
+      freeSlots: 0,
+      deposit: { mode: 'inventory' },
+      blueprintAudit: { valid: true, incorrect: [], missing: [] },
+    },
+  );
+  assert.equal(
+    capacity.command,
+    '!releaseInventoryWorkingSlots("stone_bricks", 2)',
+  );
+  assert.equal(capacity.nextPhase, 'acquire');
+  assert.equal(capacity.code, 'inventory_capacity_release_required');
+
+  const continueMining = nextBuilderStep(
+    { ...order, phase: 'acquire' },
+    {
+      inventory: {},
+      freeSlots: 0,
+      deposit: { mode: 'inventory' },
+      blueprintAudit: {
+        valid: true,
+        incorrect: [],
+        missing: [{ x: 10, y: 64, z: -4, material: 'stone_bricks', supported: true }],
+      },
+    },
+    {
+      phase: 'failed',
+      evidence: {
+        skill: {
+          progress: {
+            verified: true,
+            kind: 'mining_route_cell',
+            position: { x: 4, y: 42, z: -8 },
+          },
+        },
+      },
+    },
+    {
+      planItem: () => ({
+        status: 'ready',
+        nextStep: {
+          capability: { id: 'collect', arguments: { item: 'stone_bricks', quantity: 1 } },
+          reason: 'Continue the verified acquisition route.',
+        },
+      }),
+    },
+  );
+  assert.equal(continueMining.command, undefined);
+  assert.equal(continueMining.capability.id, 'collect');
+  assert.equal(continueMining.code, 'material_prerequisite_planned');
+
+  const carriedOutOfSequence = nextBuilderStep(
+    { ...order, phase: 'acquire' },
+    {
+      inventory: { oak_planks: 1 },
+      freeSlots: 0,
+      blueprintAudit: {
+        valid: true,
+        incorrect: [],
+        missing: [
+          { x: 10, y: 64, z: -4, material: 'stone_bricks', stage: 1, supported: true, index: 0 },
+          { x: 11, y: 64, z: -4, material: 'oak_planks', stage: 1, supported: true, index: 1 },
+        ],
+      },
+    },
+  );
+  assert.equal(carriedOutOfSequence.phase, 'execute');
+  assert.equal(carriedOutOfSequence.code, 'carried_material_ready');
 });
 
 test('general construction compiler rejects unknown, excessive, and unsafe room geometry', () => {
