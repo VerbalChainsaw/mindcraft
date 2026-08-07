@@ -3,7 +3,11 @@ import settings from '../settings.js';
 import convoManager from '../conversation.js';
 import { requestBotSpawn, sendSquadRadio, serverProxy } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
-import { createWorkOrder, workOrderCollectionExclusions } from '../runtime/work-order.js';
+import {
+    createWorkOrder,
+    resumeFailedWorkOrder,
+    workOrderCollectionExclusions,
+} from '../runtime/work-order.js';
 import {
     builderWorksiteCollectionExclusion,
     createBuilderConstructionOrder,
@@ -1332,7 +1336,7 @@ export const actionsList = [
         perform: persistentJobCommand(function (agent) {
             const order = agent.home_state?.snapshot?.().structureOrder;
             if (!order) return 'Construction was not resumed: there is no remembered structure blueprint.';
-            return submitRememberedStructure(agent, order);
+            return submitRememberedStructure(agent, resumeFailedWorkOrder(order));
         }),
     },
     {

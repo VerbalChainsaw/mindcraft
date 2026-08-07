@@ -622,3 +622,22 @@ export function reconcileWorkOrder(order, currentSnapshot = {}, now = Date.now()
     updatedAt: now,
   });
 }
+
+export function resumeFailedWorkOrder(order, now = Date.now()) {
+  const current = normalizeWorkOrder(order);
+  if (current.phase !== 'failed' || current.source !== 'player') return current;
+  return normalizeWorkOrder({
+    ...current,
+    phase: 'assess',
+    resumePhase: null,
+    attempts: 0,
+    recoveries: 0,
+    preemptions: 0,
+    evidence: {
+      code: 'player_resume_requested',
+      detail: 'The player explicitly resumed this exact failed work order; Minecraft state must be reassessed before execution.',
+      actionId: '',
+    },
+    updatedAt: now,
+  });
+}

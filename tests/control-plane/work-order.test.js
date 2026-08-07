@@ -6,6 +6,7 @@ import {
   createWorkOrder,
   normalizeWorkOrder,
   reconcileWorkOrder,
+  resumeFailedWorkOrder,
 } from '../../src/agent/runtime/work-order.js';
 
 test('Given a valid construction request, work-order normalization preserves bounded authoritative fields', () => {
@@ -377,6 +378,36 @@ test('Given endless preemption, the work order still fails instead of retrying f
   }
   assert.notEqual(order.phase, 'execute');
   assert.ok(order.preemptions <= 24);
+});
+
+test('an explicit player resume re-arms the same failed order and preserves its verified checkpoint', () => {
+  const failed = createWorkOrder({
+    id: 'builder-resume-1',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    target: { name: 'worksite', x: 4, y: 64, z: 8 },
+    quota: 12,
+    phase: 'failed',
+    attempts: 3,
+    recoveries: 4,
+    preemptions: 7,
+    checkpoint: { verifiedCount: 5, nextCell: 5 },
+    evidence: { code: 'action_pattern_detected', detail: 'old failure', actionId: 'old-action' },
+  });
+
+  const resumed = resumeFailedWorkOrder(failed, 12_345);
+
+  assert.equal(resumed.id, failed.id);
+  assert.equal(resumed.phase, 'assess');
+  assert.equal(resumed.attempts, 0);
+  assert.equal(resumed.recoveries, 0);
+  assert.equal(resumed.preemptions, 0);
+  assert.deepEqual(resumed.checkpoint, failed.checkpoint);
+  assert.equal(resumed.evidence.code, 'player_resume_requested');
+
+  const completed = normalizeWorkOrder({ ...failed, phase: 'complete' });
+  assert.equal(resumeFailedWorkOrder(completed).phase, 'complete');
 });
 
 test('Given a work order anchor, only finite coordinates are kept', () => {
