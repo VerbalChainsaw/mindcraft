@@ -85,12 +85,16 @@ test('ordinary hand-harvestable collection does not consume a tied durable tool'
     assert.deepEqual(selectCollectionTool(bot, sand), { kind: 'item', item: dirt, digTime: 10 });
 });
 
-test('dropped-item pursuit accepts a native adjacent pickup stance', () => {
-    const entity = { position: new Vec3(4.5, 8.2, 12.5) };
+test('dropped-item pursuit preserves a native adjacent approach for the exact cavity geometry', () => {
+    const entity = { position: new Vec3(-379.0625, 66, -39.875), isValid: true };
     const goal = createDroppedItemPickupGoal(entity);
 
-    assert.equal(goal.isEnd(new Vec3(3, 8, 12)), true);
-    assert.equal(goal.isEnd(new Vec3(2, 8, 12)), false);
+    // The adjacent node is the only reachable block stance in this cavity.
+    // CollectBlock must retain it for native routing, then settle the remaining
+    // sub-block distance before it may report the item picked up.
+    assert.equal(goal.isEnd(new Vec3(-381, 66, -40)), true);
+    assert.equal(goal.isEnd(new Vec3(-380, 66, -40)), true);
+    assert.equal(goal.isEnd(new Vec3(-378, 66, -40)), false);
 });
 
 test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {

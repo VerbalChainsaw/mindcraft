@@ -20,7 +20,10 @@ const events_1 = require("events");
 const util_1 = require("util");
 const DEFAULT_TARGET_TIMEOUT_MS = 12000;
 const DEFAULT_TARGET_STALL_TIMEOUT_MS = 3000;
-const DROPPED_ITEM_PICKUP_RANGE = 1;
+const DROPPED_ITEM_APPROACH_RANGE = 1;
+const DROPPED_ITEM_NUDGE_TIMEOUT_MS = 1000;
+const DROPPED_ITEM_NUDGE_STALL_MS = 250;
+const DROPPED_ITEM_NUDGE_MAX_DISTANCE = 2.25;
 const SKIPPABLE_TARGET_ERRORS = new Set(['NoPath', 'Timeout', 'TargetStalled', 'TargetTimeout']);
 function createDroppedItemPickupGoal(entity) {
     // Item voxels are often not standable: drops can rest beneath a low
@@ -29,9 +32,56 @@ function createDroppedItemPickupGoal(entity) {
     // occupy the entity's exact voxel creates a false no-path result after a
     // successful break. Native Pathfinder still owns the approach; entity
     // disappearance and the caller's inventory delta remain authoritative.
-    return new mineflayer_pathfinder_1.goals.GoalFollow(entity, DROPPED_ITEM_PICKUP_RANGE);
+    return new mineflayer_pathfinder_1.goals.GoalFollow(entity, DROPPED_ITEM_APPROACH_RANGE);
 }
 exports.createDroppedItemPickupGoal = createDroppedItemPickupGoal;
+function nextPhysicsTick(bot) {
+    return new Promise(resolve => {
+        let timeout;
+        const finish = () => {
+            clearTimeout(timeout);
+            bot.removeListener('physicsTick', finish);
+            resolve();
+        };
+        bot.once('physicsTick', finish);
+        timeout = setTimeout(finish, 50);
+    });
+}
+async function settleDroppedItemPickup(bot, entity, isPickedUp) {
+    if (!entity?.position || !bot.entity?.position || isPickedUp())
+        return isPickedUp();
+    const initialDistance = bot.entity.position.distanceTo(entity.position);
+    if (!Number.isFinite(initialDistance) || initialDistance > DROPPED_ITEM_NUDGE_MAX_DISTANCE)
+        return false;
+    let cancelled = false;
+    const onCancelled = () => { cancelled = true; };
+    bot.once('collectBlock_cancelled', onCancelled);
+    const startedAt = Date.now();
+    let bestDistance = initialDistance;
+    let lastProgressAt = startedAt;
+    try {
+        await bot.lookAt(entity.position, true);
+        bot.setControlState('forward', true);
+        while (!cancelled && !isPickedUp() && Date.now() - startedAt < DROPPED_ITEM_NUDGE_TIMEOUT_MS) {
+            await nextPhysicsTick(bot);
+            if (!entity.position || !bot.entity?.position)
+                break;
+            const distance = bot.entity.position.distanceTo(entity.position);
+            if (distance + 0.01 < bestDistance) {
+                bestDistance = distance;
+                lastProgressAt = Date.now();
+            }
+            else if (Date.now() - lastProgressAt >= DROPPED_ITEM_NUDGE_STALL_MS) {
+                break;
+            }
+        }
+    }
+    finally {
+        bot.setControlState('forward', false);
+        bot.removeListener('collectBlock_cancelled', onCancelled);
+    }
+    return isPickedUp();
+}
 function boundedTargetTimeout(value) {
     const timeout = Number(value);
     if (!Number.isFinite(timeout) || timeout <= 0)
@@ -158,8 +208,11 @@ function collectAll(bot, options) {
                                 }
                             }
                             else {
-                                pickupTimeout = setTimeout(finishPickupWait, 3000);
-                                yield waitForPickup;
+                                yield settleDroppedItemPickup(bot, closest, () => pickupObserved || !closest.isValid);
+                                if (!pickupObserved && closest.isValid) {
+                                    pickupTimeout = setTimeout(finishPickupWait, 3000);
+                                    yield waitForPickup;
+                                }
                             }
                         }
                         catch (err) {
