@@ -1,12 +1,12 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional commit: current HEAD — Builder, sleep, and Operator Stop persistence repairs
-Milestone: final natural build-then-sleep campaign
+Functional commits: 35aeff0, 697cdae, 9cae237
+Milestone: final natural overnight outpost plus ordered sleep accepted locally
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: shared acquisition proof, Builder completion, and dependent sleep
-Live blocker: fresh run exposed night-survival failure; exact operator-stopped order must re-arm on restart
-Last physical result: 1/112 cells verified; skeleton death, then spider death; Stop held but legacy code cancelled Job
-Runtime: Paper 1.21.11 healthy; world outpost-final-20260807-1220; OutpostFinal Stop-held
-Repository: protected audit/debt artifacts remain untracked and untouched
-Next campaign: restart/re-arm the same order, repair shared survival seam, then finish construction and sleep
-Jordan review: J2C-20260807-0451 accepted Builder and authorized final campaign; none pending
+Owned subsystem: generic capability planning, Builder, Agenda continuation, and owned package mechanics
+Live blocker: none; the complete broad request passed
+Last physical result: 111/111 outpost complete; exact bound bed slept in; dawn verified; bot Stop-held inside
+Runtime: Paper 1.21.11 healthy; world outpost-final-20260807-1220; OutpostProof held
+Repository: tracked tree clean before this marker; protected untracked audit/debt artifacts untouched
+Next campaign: Jordan review, then select the next broad cross-domain capability outcome; no shelter permutations
+Jordan review: requested C2J-20260807-1544-final-overnight-outpost
