@@ -261,12 +261,13 @@ export class ActionManager {
         this.lastProgressTargetByAction.set(key, target);
         if (previousTarget === target) return false;
 
-        // A deterministic skill just changed a different verified progress
-        // marker. That is productive batch work (placing a blueprint, opening
-        // a mining corridor), not the same no-progress action reclaiming one
-        // patch of ground.
+        // A deterministic skill just changed a verified progress marker. That
+        // ends the owner's whole no-progress streak, even when the next step
+        // uses another primitive (for example, surface return between two
+        // different blueprint placements). Unchanged targets do not clear the
+        // streak, so alternating no-op actions still reach the safety ceiling.
         this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
-            attempt.owner !== actionOwner || attempt.signature !== signature
+            attempt.owner !== actionOwner
         ));
         return true;
     }

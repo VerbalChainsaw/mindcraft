@@ -155,6 +155,33 @@ test('Verified primitive progress markers prevent false loop detection across bo
   assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
 });
 
+test('Verified progress in one job action resets no-progress history for another job action', async () => {
+  const agent = createHarness();
+  const surfaceOutcomes = [];
+
+  for (let x = 20; x < 26; x += 1) {
+    surfaceOutcomes.push(await agent.actions.runAction('action:goToSurface', () => {
+      agent.bot.lastActionEvidence = {
+        kind: 'surface_navigation',
+        outcome: 'surface_reached',
+        target: { name: 'surface_access', x: 10, y: 64, z: 10 },
+      };
+      return true;
+    }, { owner: 'job' }));
+
+    await agent.actions.runAction('action:placeBlockAt', () => {
+      agent.bot.lastActionEvidence = {
+        outcome: 'placed',
+        target: { name: 'cobblestone', x, y: 64, z: 20 },
+      };
+      return true;
+    }, { owner: 'job' });
+  }
+
+  assert.equal(surfaceOutcomes.every(outcome => outcome.result.phase === 'succeeded'), true);
+  assert.equal(surfaceOutcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
+});
+
 test('Repeated success at one unchanged coordinate still trips the no-progress guard', async () => {
   const agent = createHarness();
   let outcome;
