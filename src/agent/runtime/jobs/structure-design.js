@@ -63,6 +63,7 @@ export function designLanguageHelp() {
   `Templates, with optional arguments that have sensible defaults: ${describeTemplates()}.`,
   'Coordinates are relative to the build site: x east, y up, z south, all starting at 0.',
   'Support rule: ground fixtures go above a solid floor; wall fixtures such as torches go in interior air face-adjacent to a same-height solid wall. Never replace a roof or required support with a fixture.',
+  'A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture.',
   'A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor.',
   'box X Y Z W H D - solid block of material.',
   'shell X Y Z W H D - four walls only, open top and bottom.',
