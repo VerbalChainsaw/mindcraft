@@ -5424,10 +5424,6 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         let beforeTargetDropCount = null;
         let priorDropEntityIds = null;
         try {
-            if (!isLiquid) {
-                beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
-                priorDropEntityIds = droppedItemEntityIds(bot);
-            }
             let success = false;
             if (isLiquid) {
                 success = await useToolOnBlock(bot, 'bucket', block);
@@ -5448,6 +5444,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     log(bot, `Cannot reach ${block.name} to collect it.`);
                     return false;
                 }
+                // Navigation may legitimately cross an older drop of the same
+                // item. Start proof only after arrival so that incidental
+                // pickup cannot be mistaken for the target block's drop.
+                beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                priorDropEntityIds = droppedItemEntityIds(bot);
                 await runBoundedCollectionOperation(
                     bot,
                     () => bot.dig(block),
@@ -5582,6 +5583,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             && bot.entity.position.distanceTo(block.position) <= 4.5
                             && bot.canSeeBlock?.(liveTarget);
                     }
+                    // The approach can pick up existing matching items. The
+                    // collection result must be measured from the settled
+                    // pre-dig state, not from the start of navigation.
+                    beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+                    priorDropEntityIds = droppedItemEntityIds(bot);
                     // Target selection and safe-stance proof are ours; moving,
                     // digging, and collecting the explicit target belong to
                     // Collect Block. Its movement object is target-scoped

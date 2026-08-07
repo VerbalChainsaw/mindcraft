@@ -1,12 +1,12 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Functional commit: 27fcf1e
-Milestone: generic Builder supplied and completed a usable 98-cell overnight outpost
+Functional commit: current HEAD — pre-dig pickup attribution repair
+Milestone: final natural build-then-sleep campaign
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: safe site binding, shared acquisition, fixture placement, and Builder verification
-Live blocker: unchanged natural build-then-sleep request and controlled Stop/restart proof remain
-Last physical result: 98/98 exact Paper cells, attempts 0, health 20; door, bed, glass, lighting, workstations, walls, and roof complete
-Runtime: Paper 1.21.11 healthy; OutpostBot2 Operator Stop-held at the finished outpost
-Repository: 27fcf1e pushed; protected audit/debt artifacts remain untracked and untouched
-Next campaign: unchanged natural overnight-outpost request through verified sleep
-Jordan review: requested C2J-20260807-0436-overnight-outpost-builder
+Owned subsystem: shared acquisition proof, Builder completion, and dependent sleep
+Live blocker: unchanged natural outpost request must complete construction and actual sleep
+Last physical result: manual flower collection gained exactly one item and left no stale drop; health 20
+Runtime: Paper 1.21.11 healthy; OutpostBot2 Operator Stop-held in the acceptance world
+Repository: protected audit/debt artifacts remain untracked and untouched
+Next campaign: unchanged overnight-outpost request with one controlled Stop/restart
+Jordan review: J2C-20260807-0451 accepted the Builder rung and authorized this campaign
