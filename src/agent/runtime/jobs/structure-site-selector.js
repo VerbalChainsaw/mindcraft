@@ -11,6 +11,9 @@ import {
 const DEFAULT_SEARCH_RADIUS = 12;
 const DEFAULT_VERTICAL_RADIUS = 12;
 const DEFAULT_SITE_LIMIT = 16;
+const MIN_CLEARANCE_LIMIT = 4;
+const MAX_CLEARANCE_LIMIT = 32;
+const CLEARANCE_FRACTION = 0.1;
 
 function blockAt(bot, x, y, z) {
   try {
@@ -38,6 +41,12 @@ function clearConstructionCell(block) {
     && !isHazardousGameplayBlock(block)
     && !isProtectedGameplayBlock(block)
   );
+}
+
+function constructionCellDisposition(block, isNaturalTerrain) {
+  if (clearConstructionCell(block)) return 'clear';
+  if (block && isNaturalTerrain(block)) return 'clearable_natural';
+  return null;
 }
 
 function naturalSupport(block, isNaturalTerrain) {
@@ -72,15 +81,28 @@ function serviceStances(bot, anchor, blueprint, isNaturalTerrain) {
   return stances;
 }
 
-function inspectSite(bot, blueprint, anchor, isNaturalTerrain) {
+function inspectSite(bot, blueprint, anchor, isNaturalTerrain, clearanceLimit) {
   const minY = Math.min(...blueprint.cells.map(cell => cell.y));
   const baseCells = blueprint.cells.filter(cell => cell.y === minY);
   let supportedBaseCells = 0;
+  let clearanceCount = 0;
   for (const cell of blueprint.cells) {
     const x = anchor.x + cell.x;
     const y = anchor.y + cell.y;
     const z = anchor.z + cell.z;
-    if (!clearConstructionCell(blockAt(bot, x, y, z))) return null;
+    const disposition = constructionCellDisposition(
+      blockAt(bot, x, y, z),
+      isNaturalTerrain,
+    );
+    if (!disposition) return null;
+    if (disposition === 'clearable_natural') {
+      clearanceCount += 1;
+      // Natural terrain is admissible only as bounded site preparation. A
+      // completely buried volume is technically clearable, but it is not a
+      // sensible construction site and must never win merely because every
+      // floor cell has support.
+      if (clearanceCount > clearanceLimit) return null;
+    }
     if (entityOccupies(bot, x, y, z)) return null;
     if (cell.y === minY && naturalSupport(blockAt(bot, x, y - 1, z), isNaturalTerrain)) {
       supportedBaseCells += 1;
@@ -104,12 +126,15 @@ function inspectSite(bot, blueprint, anchor, isNaturalTerrain) {
   const distance = botPosition
     ? Math.min(...stances.map(stance => botPosition.distanceTo(new Vec3(stance.x, stance.y, stance.z))))
     : Number.POSITIVE_INFINITY;
+  const unsupportedBaseCells = baseCells.length - supportedBaseCells;
   return {
     origin: anchor,
     stances,
     supportedBaseCells,
     baseCellCount: baseCells.length,
     supportRatio: supportedBaseCells / baseCells.length,
+    clearanceCount,
+    terrainFitCost: clearanceCount + unsupportedBaseCells,
     verticalDelta: botPosition ? Math.abs(botPosition.y - anchor.y) : 0,
     distance,
   };
@@ -168,6 +193,10 @@ export function selectConstructionSites(bot, blueprint, {
   const boundedRadius = Math.max(4, Math.min(24, Math.floor(Number(radius) || DEFAULT_SEARCH_RADIUS)));
   const boundedVertical = Math.max(2, Math.min(16, Math.floor(Number(verticalRadius) || DEFAULT_VERTICAL_RADIUS)));
   const boundedLimit = Math.max(1, Math.min(32, Math.floor(Number(limit) || DEFAULT_SITE_LIMIT)));
+  const clearanceLimit = Math.max(
+    MIN_CLEARANCE_LIMIT,
+    Math.min(MAX_CLEARANCE_LIMIT, Math.ceil(blueprint.cells.length * CLEARANCE_FRACTION)),
+  );
 
   for (const horizontal of horizontalOffsets(boundedRadius)) {
     for (const yOffset of verticalOffsets(boundedVertical)) {
@@ -176,14 +205,16 @@ export function selectConstructionSites(bot, blueprint, {
         x: base.x + horizontal.x,
         y: base.y + yOffset,
         z: base.z + horizontal.z,
-      }, isNaturalTerrain);
+      }, isNaturalTerrain, clearanceLimit);
       if (site) sites.push(site);
     }
     if (sites.length >= boundedLimit) break;
   }
 
   sites.sort((left, right) => (
-    right.supportRatio - left.supportRatio
+    left.terrainFitCost - right.terrainFitCost
+    || left.clearanceCount - right.clearanceCount
+    || right.supportRatio - left.supportRatio
     || left.verticalDelta - right.verticalDelta
     || left.distance - right.distance
     || left.origin.y - right.origin.y

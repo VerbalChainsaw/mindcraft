@@ -267,7 +267,14 @@ test('The causal planner uses learned outcomes only to rank otherwise viable met
 });
 
 test('The causal planner prefers the nearest physical source behind equivalent recipe ingredients', () => {
-  const plan = buildPrerequisitePlan(nearbyRecipeBot(), {
+  const bot = nearbyRecipeBot();
+  const probes = [];
+  const findBlock = bot.findBlock.bind(bot);
+  bot.findBlock = options => {
+    probes.push(options);
+    return findBlock(options);
+  };
+  const plan = buildPrerequisitePlan(bot, {
     target: 'test_tool',
     quantity: 1,
     range: 64,
@@ -275,6 +282,11 @@ test('The causal planner prefers the nearest physical source behind equivalent r
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64)');
+  assert.equal(probes.every(probe => probe.maxDistance <= 16), true);
+  assert.equal(
+    new Set(probes.map(probe => `${probe.matching}:${probe.maxDistance}`)).size,
+    probes.length,
+  );
 });
 
 test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {

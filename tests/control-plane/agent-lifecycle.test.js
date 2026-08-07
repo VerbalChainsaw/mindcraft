@@ -1009,3 +1009,70 @@ test('dashboard commands cannot replace the tracked Minecraft companion', async 
 
   assert.deepEqual(observed, ['phixxation']);
 });
+
+test('a held construction request keeps physical Stop until a valid work order exists', async () => {
+  const history = [];
+  const responses = [];
+  const holds = [];
+  let released = 0;
+  let promptCalls = 0;
+  const harness = {
+    name: 'MindcraftBot',
+    runtime: { role: 'companion' },
+    bot: { modes: { flushBehaviorLog: () => '' } },
+    shut_up: false,
+    operator_hold: true,
+    operator_hold_generation: 7,
+    checkTaskDone: () => Promise.resolve(),
+    dispatchPlayerAgenda: () => Promise.resolve(false),
+    isOperatorHeld() { return this.operator_hold; },
+    isCurrentOperatorHold(generation) {
+      return this.operator_hold && this.operator_hold_generation === generation;
+    },
+    releaseOperatorHold() {
+      released += 1;
+      this.operator_hold = false;
+    },
+    holdPosition(reason) {
+      holds.push(reason);
+      this.operator_hold = true;
+      this.operator_hold_generation += 1;
+    },
+    routeResponse(_source, message) { responses.push(message); },
+    companion_context: { observeChat: () => null },
+    self_prompter: {
+      interruptForManualCommand: () => {},
+      shouldInterrupt: () => false,
+      isActive: () => false,
+    },
+    role_director: { deferForManualCommand: () => {} },
+    history: {
+      add(name, content) {
+        history.push({ name, content });
+        return Promise.resolve();
+      },
+      save: () => {},
+      getHistory: () => [],
+    },
+    prompter: {
+      promptConvo() {
+        promptCalls += 1;
+        return Promise.resolve('The workshop is already registered and underway.');
+      },
+    },
+  };
+
+  const usedCommand = await Agent.prototype.handleMessage.call(
+    harness,
+    'ADMIN',
+    'Build a small functional workshop with a clear entrance, lighting, a crafting table, a furnace, and a chest.',
+    1,
+  );
+
+  assert.equal(usedCommand, false);
+  assert.equal(promptCalls, 1);
+  assert.equal(released, 0);
+  assert.deepEqual(holds, ['player design request was not compiled']);
+  assert.equal(responses.at(-1), 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.');
+  assert.equal(history.some(entry => entry.content.includes('already registered and underway')), false);
+});

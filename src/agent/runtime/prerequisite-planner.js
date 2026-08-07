@@ -6,6 +6,7 @@ const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
 const DEFAULT_MAX_NODES = 384;
 const DEFAULT_MAX_ACTIONS = 64;
+const PLANNER_PROXIMITY_RANGE = 16;
 const TOOL_TIER = Object.freeze({
   wooden: 1,
   golden: 2,
@@ -207,12 +208,28 @@ function recipeNeedsTable(recipe) {
   return Array.isArray(recipe?.ingredients) && recipe.ingredients.filter(value => value != null).length > 4;
 }
 
-function nearbyBlock(bot, name, range = 16) {
+function plannerProximityRange(range) {
+  return Math.max(4, Math.min(
+    PLANNER_PROXIMITY_RANGE,
+    Math.floor(Number(range) || PLANNER_PROXIMITY_RANGE),
+  ));
+}
+
+function nearbyBlock(bot, name, range = PLANNER_PROXIMITY_RANGE, cache = null) {
+  const boundedRange = plannerProximityRange(range);
+  const cacheKey = `${name}:${boundedRange}`;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
   const block = bot.registry?.blocksByName?.[name];
-  if (!block || typeof bot.findBlock !== 'function') return null;
+  if (!block || typeof bot.findBlock !== 'function') {
+    cache?.set(cacheKey, null);
+    return null;
+  }
   try {
-    return bot.findBlock({ matching: block.id, maxDistance: range }) || null;
+    const found = bot.findBlock({ matching: block.id, maxDistance: boundedRange }) || null;
+    cache?.set(cacheKey, found);
+    return found;
   } catch {
+    cache?.set(cacheKey, null);
     return null;
   }
 }
@@ -247,10 +264,10 @@ function blockDistance(bot, block) {
   return Math.hypot(targetX - originX, targetY - originY, targetZ - originZ);
 }
 
-function nearestBlockDistance(bot, names, range) {
+function nearestBlockDistance(bot, names, range, cache = null) {
   let nearest = null;
   for (const name of new Set(names)) {
-    const distance = blockDistance(bot, nearbyBlock(bot, name, range));
+    const distance = blockDistance(bot, nearbyBlock(bot, name, range, cache));
     if (!Number.isFinite(distance)) continue;
     nearest = nearest === null ? distance : Math.min(nearest, distance);
   }
@@ -262,26 +279,30 @@ function nearestBlockDistance(bot, names, range) {
 // those planks. Rank that connected-registry source instead of hardcoding one
 // wood species. The shallow bound keeps this a cheap hint; the real recursive
 // planner still proves every prerequisite before accepting a candidate.
-function acquisitionSourceDistance(bot, target, range, depth = 0, trail = []) {
+function acquisitionSourceDistance(bot, target, range, depth = 0, trail = [], blockCache = null) {
   if (depth > 2 || trail.includes(target)) return null;
   const nextTrail = [...trail, target];
   let nearest = nearestBlockDistance(bot, [
     target,
     ...sourceBlocks(bot, target).map(block => block.name),
-  ], range);
+  ], range, blockCache);
   if (depth === 2) return nearest;
 
   const consider = distance => {
     if (!Number.isFinite(distance)) return;
     nearest = nearest === null ? distance : Math.min(nearest, distance);
   };
-  for (const smeltingInput of smeltingInputCandidates(bot, { ledger: new Map(), range }, target)) {
-    consider(acquisitionSourceDistance(bot, smeltingInput, range, depth + 1, nextTrail));
+  for (const smeltingInput of smeltingInputCandidates(bot, {
+    ledger: new Map(),
+    range,
+    blockProximityCache: blockCache,
+  }, target)) {
+    consider(acquisitionSourceDistance(bot, smeltingInput, range, depth + 1, nextTrail, blockCache));
   }
   const itemId = bot.registry?.itemsByName?.[target]?.id;
   for (const recipe of (bot.registry?.recipes?.[itemId] || []).slice(0, 32)) {
     for (const ingredient of recipeIngredientEntries(bot, recipe)) {
-      consider(acquisitionSourceDistance(bot, ingredient.name, range, depth + 1, nextTrail));
+      consider(acquisitionSourceDistance(bot, ingredient.name, range, depth + 1, nextTrail, blockCache));
     }
   }
   return nearest;
@@ -352,11 +373,11 @@ function smeltingInputCandidates(bot, context, target) {
       const leftDistance = nearestBlockDistance(bot, [
         left,
         ...sourceBlocks(bot, left).map(block => block.name),
-      ], context.range);
+      ], context.range, context.blockProximityCache);
       const rightDistance = nearestBlockDistance(bot, [
         right,
         ...sourceBlocks(bot, right).map(block => block.name),
-      ], context.range);
+      ], context.range, context.blockProximityCache);
       if (Number.isFinite(leftDistance) || Number.isFinite(rightDistance)) {
         if (!Number.isFinite(leftDistance)) return 1;
         if (!Number.isFinite(rightDistance)) return -1;
@@ -404,7 +425,14 @@ function recipeScore(bot, context, target, recipe) {
       if (!context.proximityCache.has(cacheKey)) {
         context.proximityCache.set(
           cacheKey,
-          acquisitionSourceDistance(bot, ingredient.name, context.range),
+          acquisitionSourceDistance(
+            bot,
+            ingredient.name,
+            context.range,
+            0,
+            [],
+            context.blockProximityCache,
+          ),
         );
       }
       const distance = context.proximityCache.get(cacheKey);
@@ -477,7 +505,7 @@ function ensurePersistentItem(bot, context, name, trail) {
     // workstation requirement if this loaded candidate is not actually
     // reachable. Requiring interaction reach here duplicated that query and
     // rebuilt tables/furnaces that native Pathfinder could reach in seconds.
-    || (!carriedRequired && nearbyBlock(bot, name, Math.min(64, context.range)))
+    || (!carriedRequired && nearbyBlock(bot, name, context.range, context.blockProximityCache))
   ) return null;
   return ensureItem(bot, context, name, 1, trail);
 }
@@ -796,6 +824,7 @@ export function buildPrerequisitePlan(bot, {
     maxActions: boundedInteger(maxActions, DEFAULT_MAX_ACTIONS, 4, 128),
     experience: typeof experience === 'function' ? experience : null,
     proximityCache: new Map(),
+    blockProximityCache: new Map(),
     workstationRequirement: {
       name: canonicalName(workstationRequirement?.name),
       carried: workstationRequirement?.carried === true,

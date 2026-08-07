@@ -61,6 +61,7 @@ const HOLD_SAFE_COMMANDS = new Set([
     '!cancelGoal',
 ]);
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
+const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
 const MAX_INGAME_CHAT_CHARS = 240;
 const MIN_INGAME_CHAT_INTERVAL_MS = 450;
 // One bounded entity read at roughly 7Hz. Cheap enough to run continuously and
@@ -882,6 +883,7 @@ export class Agent {
         }
 
         let used_command = false;
+        let deferredModelAssignment = null;
         if (max_responses === null) {
             max_responses = settings.max_commands === -1 ? Infinity : settings.max_commands;
         }
@@ -980,13 +982,16 @@ export class Agent {
                 bot: this.bot,
             });
             if (directive?.deferToModel === true) {
-                // Stop is durable until a new assignment arrives. A familiar
-                // directive releases it through its command metadata; an
-                // unfamiliar construction assignment still needs the model to
-                // compile a bounded blueprint, so release only for this
-                // resolver-certified action path before prompt interruption is
-                // checked below. Ordinary conversation never gets this marker.
-                if (directive.releasesHold) this.releaseOperatorHold('player design request');
+                // Blueprint compilation is cognition, not physical ownership.
+                // Retain an existing Stop while the model works; the eventual
+                // validated construction command releases it at the same
+                // ownership boundary as every other player action. Capturing
+                // the generation lets a NEW Stop still cancel this prompt.
+                deferredModelAssignment = {
+                    holdGeneration: this.isOperatorHeld()
+                        ? this.operator_hold_generation
+                        : null,
+                };
                 this.self_prompter.interruptForManualCommand();
                 this.role_director.deferForManualCommand('Player design request is being interpreted.');
                 if (directive.modelInstruction) {
@@ -1046,7 +1051,14 @@ export class Agent {
         message = await handleEnglishTranslation(message);
         console.log('received message from', source, ':', message);
 
-        const checkInterrupt = () => this.isOperatorHeld() || this.self_prompter.shouldInterrupt(self_prompt) || this.shut_up || convoManager.responseScheduledFor(source);
+        const checkInterrupt = () => {
+            const retainedCompilationHold = Number.isInteger(deferredModelAssignment?.holdGeneration)
+                && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
+            return (this.isOperatorHeld() && !retainedCompilationHold)
+                || this.self_prompter.shouldInterrupt(self_prompt)
+                || this.shut_up
+                || convoManager.responseScheduledFor(source);
+        };
         
         let behavior_log = this.bot.modes.flushBehaviorLog().trim();
         if (behavior_log.length > 0) {
@@ -1082,6 +1094,14 @@ export class Agent {
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
 
+                if (deferredModelAssignment && !PLAYER_DESIGN_COMMANDS.has(command_name)) {
+                    await this.history.add(
+                        'system',
+                        `No command was executed: this construction assignment requires !buildStructure or !designStructure, not ${command_name}.`,
+                    );
+                    continue;
+                }
+
                 if (playerSpeechAuthority === 'conversation_only') {
                     const conversationalPrefix = res.substring(0, res.indexOf(command_name)).trim();
                     await this.history.add(
@@ -1101,7 +1121,9 @@ export class Agent {
                 if (checkInterrupt()) break;
                 if (!self_prompt && !from_other_bot) {
                     const assignsTypedGoal = commandAssignsPersistentGoal(command_name);
-                    this.releaseOperatorHold('player command');
+                    if (!deferredModelAssignment) {
+                        this.releaseOperatorHold('player command');
+                    }
                     if (commandTakesManualAutonomy(command_name)) {
                         this.actions.cancelResume();
                         this.goal_director?.releaseProtectedCompletion?.('Released by later player-authorized model work.');
@@ -1159,6 +1181,17 @@ export class Agent {
 
                 if (execute_res)
                     this.history.add('system', execute_res);
+                const deferredAssignmentAccepted = Boolean(
+                    deferredModelAssignment
+                    && commandAssignsPersistentJob(command_name)
+                    && this.job_director?.activeOrder,
+                );
+                if (deferredAssignmentAccepted) {
+                    deferredModelAssignment = null;
+                    this.releaseOperatorHold('player design work order accepted');
+                    this.history.save();
+                    break;
+                }
                 const terminalActionFailure = self_prompt
                     && isAction(command_name)
                     && this.last_action_result?.actionId
@@ -1169,8 +1202,24 @@ export class Agent {
                     break;
             }
             else { // conversation response
-                this.history.add(this.name, res);
-                this.routeResponse(source, res);
+                if (deferredModelAssignment) {
+                    const detail = 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.';
+                    await this.history.add(this.name, detail);
+                    await this.history.add(
+                        'system',
+                        'The construction request remains unassigned. Transcript claims are not durable work; only an active JobDirector order may claim construction is registered or underway.',
+                    );
+                    const sameRetainedHold = deferredModelAssignment.holdGeneration !== null
+                        && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
+                    if (!this.isOperatorHeld() || sameRetainedHold) {
+                        this.holdPosition('player design request was not compiled');
+                    }
+                    this.history.save();
+                    this.routeResponse(source, detail);
+                } else {
+                    this.history.add(this.name, res);
+                    this.routeResponse(source, res);
+                }
                 break;
             }
             
