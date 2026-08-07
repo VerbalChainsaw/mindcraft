@@ -85,6 +85,18 @@ test('general construction compiler creates bounded supported shapes with a safe
     { canSupportMaterial: name => name === 'cobblestone' },
   ), /occupied head cell.*move it or face it into clear interior space/i,
   'an explicit facing must not silently rotate, and its correction must describe the occupancy defect');
+  assert.throws(() => expandStructureDesign(
+    'room 0 0 0 5 4 5 cobblestone; put 2 0 2 bed south; put 1 0 1 crafting; put 3 0 1 furnace north; put 1 0 3 chest north',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), error => (
+    /floor-standing fixture\(s\) replace planned floor cells/i.test(error.message)
+    && /bed at 2,0,2/.test(error.message)
+    && /crafting at 1,0,1/.test(error.message)
+    && /furnace at 3,0,1/.test(error.message)
+    && /chest at 1,0,3/.test(error.message)
+    && /move each fixture one block up/i.test(error.message)
+  ), 'one causal correction must name every floor-standing fixture that displaced the foundation');
 
   const platform = createConstructionBlueprint({
     shape: 'platform',

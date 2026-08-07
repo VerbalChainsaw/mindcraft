@@ -45,6 +45,21 @@ const ACCESSORIES = Object.freeze({
   bed: { material: 'red_bed', function: 'rest' },
 });
 
+// These fixtures occupy the air immediately above a supporting floor. If a
+// design writes one directly onto a planned foundation cell, the ordered DSL
+// would otherwise replace the floor and report a later, misleading support or
+// multiblock collision. Keep that semantic mistake visible to the compiler so
+// one correction can move every affected fixture up together.
+const FLOOR_STANDING_ACCESSORIES = new Set([
+  'door',
+  'chest',
+  'fence',
+  'gate',
+  'crafting',
+  'furnace',
+  'bed',
+]);
+
 export const ACCESSORY_NAMES = Object.freeze(Object.keys(ACCESSORIES));
 const ACCESSORY_ALIASES = Object.freeze(Object.fromEntries(
   Object.entries(ACCESSORIES).map(([name, accessory]) => [accessory.material, name]),
@@ -429,10 +444,12 @@ function floatingCells(placed, canSupportMaterial) {
   return keys.filter(key => !reached.has(key));
 }
 
-function applyOperation(placed, operation, block) {
+function applyOperation(placed, operation, block, displacedFoundations) {
   const material = operation.material || block;
   const set = (x, y, z, cellMaterial, cellFunction, extra = {}) => {
-    placed.set(`${x}:${y}:${z}`, { material: cellMaterial, function: cellFunction, ...extra });
+    const key = `${x}:${y}:${z}`;
+    displacedFoundations.delete(key);
+    placed.set(key, { material: cellMaterial, function: cellFunction, ...extra });
   };
 
   switch (operation.op) {
@@ -550,7 +567,9 @@ function applyOperation(placed, operation, block) {
       for (let x = 0; x < operation.w; x += 1) {
         for (let y = 0; y < operation.h; y += 1) {
           for (let z = 0; z < operation.d; z += 1) {
-            placed.delete(`${operation.x + x}:${operation.y + y}:${operation.z + z}`);
+            const key = `${operation.x + x}:${operation.y + y}:${operation.z + z}`;
+            placed.delete(key);
+            displacedFoundations.delete(key);
           }
         }
       }
@@ -558,6 +577,11 @@ function applyOperation(placed, operation, block) {
     }
     case 'put': {
       const accessory = ACCESSORIES[operation.thing];
+      const anchorKey = `${operation.x}:${operation.y}:${operation.z}`;
+      const displacesFoundation = (
+        FLOOR_STANDING_ACCESSORIES.has(operation.thing)
+        && placed.get(anchorKey)?.function === 'foundation'
+      );
       if (operation.thing === 'door') {
         // `put door` describes the complete two-block fixture. Requiring a
         // separate carve for its upper half made the primitive contradict its
@@ -569,6 +593,14 @@ function applyOperation(placed, operation, block) {
         fixtureKind: ['door', 'bed'].includes(operation.thing) ? operation.thing : null,
         requestedFacing: operation.facing,
       });
+      if (displacesFoundation) {
+        displacedFoundations.set(anchorKey, {
+          thing: operation.thing,
+          x: operation.x,
+          y: operation.y,
+          z: operation.z,
+        });
+      }
       return;
     }
     default:
@@ -699,7 +731,19 @@ export function expandStructureDesign(design, material, {
   const block = canonicalMaterial(material);
   const operations = Array.isArray(design) ? design : parseStructureDesign(design);
   const placed = new Map();
-  for (const operation of operations) applyOperation(placed, operation, block);
+  const displacedFoundations = new Map();
+  for (const operation of operations) {
+    applyOperation(placed, operation, block, displacedFoundations);
+  }
+
+  if (displacedFoundations.size > 0) {
+    const placements = [...displacedFoundations.values()]
+      .map(({ thing, x, y, z }) => `${thing} at ${x},${y},${z}`)
+      .join('; ');
+    throw new TypeError(
+      `Floor-standing fixture(s) replace planned floor cells: ${placements}. Move each fixture one block up so it stands above the floor.`,
+    );
+  }
 
   if (!placed.size) throw new TypeError('The design places no blocks.');
   if (placed.size > MAX_CELLS) {
