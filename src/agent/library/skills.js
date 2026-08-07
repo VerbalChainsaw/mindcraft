@@ -1371,6 +1371,13 @@ export function observedSupportedStandingCell(bot) {
         .find(candidate => physicallyOccupiesStandingCell(bot, candidate)) || null;
 }
 
+function occupiedOpenSurfaceStandingCell(bot) {
+    const supported = observedSupportedStandingCell(bot);
+    return supported && world.getFirstBlockAboveHead(bot, null, 32) === 'none'
+        ? supported
+        : null;
+}
+
 function navigationGoalSatisfied(bot, goal) {
     if (typeof goal?.isEnd !== 'function') return false;
     const floored = bot.entity?.position?.floored?.();
@@ -1919,8 +1926,9 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
 
         const origin = start.floored();
         const local = localNavigationRecoveryMovements(bot, origin);
-        const requiresMonotonicAscent = (
-            candidate.position.y - Math.floor(start.y) >= MIN_SURFACE_ROUTE_PROGRESS
+        const requiresMonotonicAscent = Boolean(
+            !occupiedOpenSurfaceStandingCell(bot)
+            && candidate.position.y - Math.floor(start.y) >= MIN_SURFACE_ROUTE_PROGRESS
         );
         // Access recovery may clear nearby leaves, but it must not turn a
         // harvest request into a damaging plunge toward an unreachable block.
@@ -6263,7 +6271,8 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             if ((candidates?.blocks.length || 0) === 0 && await relocateCollectionSearch(bot, 'trees', search)) continue;
             if (collected === 0) {
                 const surfaceAccessRequired = Boolean(
-                    candidates?.blocks?.some(block => (
+                    !occupiedOpenSurfaceStandingCell(bot)
+                    && candidates?.blocks?.some(block => (
                         String(block?.name || '').endsWith('_log')
                         && Number(block?.position?.y) >= Number(bot.entity?.position?.y) + 4
                     )),
@@ -15886,10 +15895,7 @@ function surfaceArrivalObservation(bot, minY, maxY) {
     // with an open column overhead, however, that stance is usable surface
     // access regardless of whether its support is terrain, leaves, a path, or
     // a player-placed block.
-    const occupiedOpenSurface = Boolean(
-        supported
-        && world.getFirstBlockAboveHead(bot, null, 32) === 'none'
-    );
+    const occupiedOpenSurface = occupiedOpenSurfaceStandingCell(bot);
     const scan = occupiedOpenSurface
         ? { target: supported, diagnostics: null }
         : observed
