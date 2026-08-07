@@ -607,41 +607,51 @@ export class BehaviorArbiter {
     if (this.stopped) return this.snapshot();
     if (this.updating) return this.snapshot();
     this.updating = true;
-    this.lastTickStartedAt = this.now();
-    this.tick += 1;
+    // Everything below runs inside the try so the finally's `this.updating =
+    // false` covers the whole body. A throw in this preamble used to leave the
+    // flag set for the lifetime of the agent, and because a wedged arbiter then
+    // returns a snapshot instead of throwing, the agent update loop's
+    // consecutive-failure watchdog reset to zero every tick and never restarted
+    // it. `modes` and `modeCycleStarted` stay outside because the finally reads
+    // them; both are non-throwing declarations.
     const modes = this.agent.bot?.modes;
-    this.urgency = this.urgencyOf();
-    // A tick that a world edge asked for is recorded as that edge. Without this
-    // every evaluation looked scheduled, and the one thing worth measuring --
-    // whether a threat actually shortened the wait -- left no evidence behind.
-    const wakeReason = this.lastWakeReason;
-    this.lastWakeReason = null;
-    const scheduledWake = !wakeReason || wakeReason === 'scheduled' || wakeReason === 'immediate';
-    // `delta` spans behavior-loop starts and `nextTickDelayMs` is the period
-    // requested by the prior decision. Their positive difference is scheduled
-    // loop delay/overrun, not a general measurement of Node event-loop lag.
-    this.traceRecorder.recordScheduledLoopDelay(delta, this.nextTickDelayMs, scheduledWake);
-    this.traceRecorder.begin({
-      tick: this.tick,
-      trigger: {
-        code: this.directiveResumeRequested
-          ? 'directive_resume'
-          : scheduledWake ? 'scheduled_tick' : wakeReason,
-        deltaMs: Number.isFinite(Number(delta)) ? Number(delta) : null,
-      },
-      activeAction: this.actionState(),
-    });
-    this.traceRecorder.startStage('perception_refresh');
-    const perception = await this.refreshPerception();
-    this.traceRecorder.finishStage('perception_refresh');
-    this.traceRecorder.addEvidence({
-      id: `perception-${this.tick}`,
-      source: 'environment_observer',
-      observedAt: perception.observedAt,
-      summary: perception.error || perception.freshness,
-    });
     let modeCycleStarted = false;
+    // `perception` is read by the outer catch, which is a sibling scope to the
+    // try, so it must be declared out here rather than inside it.
+    let perception = null;
     try {
+      this.lastTickStartedAt = this.now();
+      this.tick += 1;
+      this.urgency = this.urgencyOf();
+      // A tick that a world edge asked for is recorded as that edge. Without this
+      // every evaluation looked scheduled, and the one thing worth measuring --
+      // whether a threat actually shortened the wait -- left no evidence behind.
+      const wakeReason = this.lastWakeReason;
+      this.lastWakeReason = null;
+      const scheduledWake = !wakeReason || wakeReason === 'scheduled' || wakeReason === 'immediate';
+      // `delta` spans behavior-loop starts and `nextTickDelayMs` is the period
+      // requested by the prior decision. Their positive difference is scheduled
+      // loop delay/overrun, not a general measurement of Node event-loop lag.
+      this.traceRecorder.recordScheduledLoopDelay(delta, this.nextTickDelayMs, scheduledWake);
+      this.traceRecorder.begin({
+        tick: this.tick,
+        trigger: {
+          code: this.directiveResumeRequested
+            ? 'directive_resume'
+            : scheduledWake ? 'scheduled_tick' : wakeReason,
+          deltaMs: Number.isFinite(Number(delta)) ? Number(delta) : null,
+        },
+        activeAction: this.actionState(),
+      });
+      this.traceRecorder.startStage('perception_refresh');
+      perception = await this.refreshPerception();
+      this.traceRecorder.finishStage('perception_refresh');
+      this.traceRecorder.addEvidence({
+        id: `perception-${this.tick}`,
+        source: 'environment_observer',
+        observedAt: perception.observedAt,
+        summary: perception.error || perception.freshness,
+      });
       try {
         modes?.beginUpdateCycle?.();
         modeCycleStarted = true;
