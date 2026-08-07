@@ -42,6 +42,13 @@ const HAZARDOUS_GAMEPLAY_BLOCKS = new Set([
     'campfire',
     'soul_campfire',
     'powder_snow',
+    // Contact-damage blocks that otherwise pass the standing checks: the first
+    // two have an empty bounding box, so a position whose feet block is one of
+    // them satisfies "the bot can occupy this space"; pointed dripstone is a
+    // full block and so was accepted as a surface to stand on.
+    'sweet_berry_bush',
+    'wither_rose',
+    'pointed_dripstone',
 ]);
 
 function blockName(blockOrName) {
