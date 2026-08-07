@@ -45,6 +45,7 @@ const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
 const SURVIVAL_BUILDING_MATERIALS = new Set(['cobblestone', 'stone', 'dirt']);
+const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|not_collected|unreachable|target_unloaded|path_(?:stalled|timeout)|no_path)/;
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
@@ -78,6 +79,13 @@ function dimensionName(value) {
   if (name.endsWith('the_nether') || name.endsWith('nether')) return 'nether';
   if (name.endsWith('the_end') || name.endsWith('end')) return 'end';
   return name;
+}
+
+function failedAcquisitionMethod(step, result) {
+  const method = String(step?.methodKey || '');
+  if (!/^(?:collect|harvest):/.test(method)) return null;
+  if (result?.retryable !== true || !ACQUISITION_METHOD_FAILURE.test(String(result?.code || ''))) return null;
+  return method;
 }
 
 function inventoryCounts(bot) {
@@ -1194,21 +1202,23 @@ export class JobDirector extends RoleDirector {
               range,
               toolRequirement,
               workstationRequirement,
-                accessRequirement,
-              }) => buildPrerequisitePlan(
-                this.agent.bot,
-                {
+              accessRequirement,
+              excludedMethods,
+            }) => buildPrerequisitePlan(
+              this.agent.bot,
+              {
                 target,
                 quantity,
                 completion,
                 range: Number(range) || 64,
                 experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
                 toolRequirement,
-                  workstationRequirement,
-                  accessRequirement,
-                  allowEntityAlternatives: this.activeOrder?.role === 'builder'
-                    && this.activeOrder?.kind !== 'stockpile',
-                },
+                workstationRequirement,
+                accessRequirement,
+                excludedMethods,
+                allowEntityAlternatives: this.activeOrder?.role === 'builder'
+                  && this.activeOrder?.kind !== 'stockpile',
+              },
             ),
           });
       } catch (error) {
@@ -1335,6 +1345,7 @@ export class JobDirector extends RoleDirector {
           const advanced = advanceWorkOrder(verifiedOrder, result, {
             previousActionId,
             nextPhase: step.nextPhase,
+            failedMethod: failedAcquisitionMethod(step, result),
             now: this.now(),
           });
           this.persist(advanced);

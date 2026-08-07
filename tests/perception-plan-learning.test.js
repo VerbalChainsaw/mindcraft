@@ -456,6 +456,17 @@ test('Recursive recipes require evidence before treating a crafted self-drop blo
     observed.nextStep.capability.binding.command,
     '!collectBlocksInRange("bone_block", 1, 64)',
   );
+  const excludedObserved = buildPrerequisitePlan(recursivePlacedBlockBot({ observed: true }), {
+    target: 'white_dye',
+    quantity: 1,
+    range: 64,
+    excludedMethods: ['collect:bone_block->bone_block'],
+  });
+  assert.equal(excludedObserved.status, 'blocked');
+  assert.equal(
+    excludedObserved.actions.some(action => action.learningKey === 'collect:bone_block->bone_block'),
+    false,
+  );
 
   const explicitWorldSearch = buildPrerequisitePlan(recursivePlacedBlockBot(), {
     target: 'bone_block',

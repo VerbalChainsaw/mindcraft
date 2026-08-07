@@ -113,7 +113,11 @@ test('general construction compiler creates bounded supported shapes with a safe
 
   let plannerRequest = null;
   const acquire = nextBuilderStep(
-    { ...order, phase: 'acquire' },
+    {
+      ...order,
+      phase: 'acquire',
+      checkpoint: { failedMethods: ['collect:stone->stone_bricks'] },
+    },
     {
       inventory: {},
       freeSlots: 12,
@@ -139,6 +143,7 @@ test('general construction compiler creates bounded supported shapes with a safe
           nextStep: {
             capability: { id: 'craft', arguments: { item: request.target, batches: 1, expectedIncrease: 4 } },
             reason: 'Use the shared prerequisite catalogue.',
+            learningKey: 'craft:stone_bricks<-4xstone',
           },
         };
       },
@@ -151,6 +156,8 @@ test('general construction compiler creates bounded supported shapes with a safe
     name: 'stone_pickaxe',
     minimumUsableDurability: 24,
   });
+  assert.deepEqual(plannerRequest.excludedMethods, ['collect:stone->stone_bricks']);
+  assert.equal(acquire.methodKey, 'craft:stone_bricks<-4xstone');
   assert.deepEqual(acquire.checkpoint.toolRequirement, plannerRequest.toolRequirement);
 
   const capacity = nextBuilderStep(

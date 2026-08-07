@@ -610,6 +610,7 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
       toolRequirement,
       workstationRequirement,
       accessRequirement,
+      excludedMethods: order.checkpoint?.failedMethods || [],
     });
     if (plan?.status === 'complete') return { phase: 'execute', code: 'materials_ready' };
     if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
@@ -622,6 +623,7 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
     }
     return {
       capability: plan.nextStep.capability,
+      methodKey: plan.nextStep.learningKey || null,
       nextPhase: 'assess',
       code: 'material_prerequisite_planned',
       target: { name: needed.material },

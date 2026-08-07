@@ -22,6 +22,7 @@ const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_REQUESTER = /^[A-Za-z0-9_ -]{0,32}$/;
 const MAX_BLUEPRINT_CELLS = 4096;
 const MAX_BLUEPRINT_FIXTURES = 64;
+const MAX_FAILED_METHODS = 24;
 const FIXTURE_KINDS = new Set(['bed', 'door']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 // A preemption is not the work order failing. The bot was mid-swing when a
@@ -248,6 +249,12 @@ function normalizeCheckpoint(checkpoint) {
   if (checkpoint.accessRequirement?.kind === 'surface') {
     normalized.accessRequirement = Object.freeze({ kind: 'surface' });
   }
+  if (Array.isArray(checkpoint.failedMethods)) {
+    normalized.failedMethods = Object.freeze([...new Set(checkpoint.failedMethods
+      .slice(0, MAX_FAILED_METHODS)
+      .map(value => boundedText(value, 160))
+      .filter(Boolean))]);
+  }
   return Object.freeze(normalized);
 }
 
@@ -342,6 +349,7 @@ export function createWorkOrder(input = {}) {
 export function advanceWorkOrder(order, result, {
   previousActionId = null,
   nextPhase = null,
+  failedMethod = null,
   now = Date.now(),
 } = {}) {
   const current = normalizeWorkOrder(order);
@@ -399,11 +407,19 @@ export function advanceWorkOrder(order, result, {
     });
   }
   if (result.retryable === true && current.attempts < current.maxAttempts) {
+    const method = boundedText(failedMethod, 160);
+    const failedMethods = method
+      ? [...new Set([...(current.checkpoint.failedMethods || []), method])].slice(-MAX_FAILED_METHODS)
+      : current.checkpoint.failedMethods;
     return normalizeWorkOrder({
       ...current,
       phase: 'recover',
       resumePhase: current.phase,
       attempts: current.attempts + 1,
+      checkpoint: {
+        ...current.checkpoint,
+        ...(failedMethods ? { failedMethods } : {}),
+      },
       evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
       updatedAt: now,
     });

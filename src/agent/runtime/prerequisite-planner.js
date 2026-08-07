@@ -100,6 +100,10 @@ function learnedPreference(context, learningKey) {
   }
 }
 
+function methodExcluded(context, learningKey) {
+  return Boolean(learningKey && context.excludedMethods.has(learningKey));
+}
+
 function isLog(name) {
   return /_(?:log|stem)$/.test(name);
 }
@@ -687,6 +691,7 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
 function planFromWorldSource(bot, context, target, amount, trail) {
   const sources = sourceBlocks(bot, target)
     .filter(source => selfDroppingSourceIsGrounded(bot, context, source, target, trail))
+    .filter(source => !methodExcluded(context, sourceLearningKey(source.name, target)))
     .sort((left, right) => (
       sourceScore(context, right, target) - sourceScore(context, left, target)
       || left.name.localeCompare(right.name)
@@ -751,7 +756,11 @@ function planFromWorldSource(bot, context, target, amount, trail) {
 }
 
 function planFromEntityHarvestSource(bot, context, target, amount, trail) {
-  const sources = entityHarvestSources(bot.registry, target);
+  const sources = entityHarvestSources(bot.registry, target)
+    .filter(source => !methodExcluded(
+      context,
+      `harvest:${source.method}:${source.entity}->${target}`,
+    ));
   if (sources.length === 0) {
     return blocked(
       'unsupported_entity_harvest_leaf',
@@ -818,7 +827,8 @@ function produceItem(bot, context, target, amount, trail) {
   const nextTrail = [...trail, target];
 
   const smeltingFailures = [];
-  for (const smeltingInput of smeltingInputCandidates(bot, context, target)) {
+  for (const smeltingInput of smeltingInputCandidates(bot, context, target)
+    .filter(input => !methodExcluded(context, `smelt:${canonicalName(input)}->${canonicalName(target)}`))) {
     const candidate = cloneContext(context);
     const failure = planFromSmelting(bot, candidate, target, amount, smeltingInput, nextTrail);
     if (!failure) {
@@ -845,6 +855,7 @@ function produceItem(bot, context, target, amount, trail) {
   }
 
   const recipes = connectedRecipes(bot, target)
+    .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe)))
     .sort((left, right) => (
       recipeScore(bot, context, target, right) - recipeScore(bot, context, target, left)
     ));
@@ -929,6 +940,7 @@ export function buildPrerequisitePlan(bot, {
   workstationConstraint = null,
   blockProximityCache = null,
   allowEntityAlternatives = false,
+  excludedMethods = [],
 } = {}) {
   const canonicalTarget = canonicalName(target);
   const desired = boundedInteger(quantity, 1, 1, 100_000);
@@ -1003,6 +1015,9 @@ export function buildPrerequisitePlan(bot, {
     maxNodes: boundedInteger(maxNodes, DEFAULT_MAX_NODES, 32, 2_048),
     maxActions: boundedInteger(maxActions, DEFAULT_MAX_ACTIONS, 4, 128),
     experience: typeof experience === 'function' ? experience : null,
+    excludedMethods: new Set((Array.isArray(excludedMethods) ? excludedMethods : [])
+      .map(value => String(value || '').slice(0, 160))
+      .filter(Boolean)),
     allowEntityAlternatives: allowEntityAlternatives === true,
     proximityCache: new Map(),
     blockProximityCache: blockProximityCache instanceof Map ? blockProximityCache : new Map(),

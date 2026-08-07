@@ -112,9 +112,17 @@ test('Given action results, a phase advances only on a new verified success and 
     phase: 'failed',
     code: 'skill_unreachable',
     retryable: true,
-  }, { previousActionId: 'old' });
+  }, {
+    previousActionId: 'old',
+    failedMethod: 'collect:stone->cobblestone',
+  });
   assert.equal(recovery.phase, 'recover');
   assert.equal(recovery.attempts, 1);
+  assert.deepEqual(recovery.checkpoint.failedMethods, ['collect:stone->cobblestone']);
+  assert.deepEqual(
+    normalizeWorkOrder(JSON.parse(JSON.stringify(recovery))).checkpoint.failedMethods,
+    ['collect:stone->cobblestone'],
+  );
 
   const advanced = advanceWorkOrder(order, {
     actionId: 'new',
