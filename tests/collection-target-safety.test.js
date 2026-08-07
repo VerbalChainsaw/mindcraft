@@ -5,6 +5,7 @@ import Vec3 from 'vec3';
 import {
     assessStableMiningCollectionTarget,
     findStableMiningCollectionCandidates,
+    isLocalNavigationFoliage,
 } from '../src/agent/library/skills.js';
 import { assessAnchoredGameplaySupport } from '../src/agent/runtime/gameplay-safety.js';
 
@@ -117,4 +118,28 @@ test('settled falling material is support only while its bounded column remains 
     const unanchored = assessAnchoredGameplaySupport(bot, sand);
     assert.equal(unanchored.ok, false);
     assert.equal(unanchored.outcome, 'falling_support_unanchored');
+});
+
+test('canopy recovery authorizes one supported downward foliage step but no unsupported plunge', () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const descendingLeaf = block('acacia_leaves', 1, 71, 0);
+    put(descendingLeaf);
+    put(block('acacia_log', 1, 70, 0));
+    const bot = {
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+    const origin = new Vec3(0, 72, 0);
+
+    assert.equal(isLocalNavigationFoliage(bot, descendingLeaf, origin), true);
+
+    blocks.delete('1:70:0');
+    assert.equal(isLocalNavigationFoliage(bot, descendingLeaf, origin), false);
+    assert.equal(
+        isLocalNavigationFoliage(bot, block('acacia_leaves', 1, 70, 0), origin),
+        false,
+    );
 });

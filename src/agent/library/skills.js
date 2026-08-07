@@ -1214,17 +1214,29 @@ function miningMovements(bot) {
     return movements;
 }
 
-function isLocalNavigationFoliage(bot, block, origin) {
+export function isLocalNavigationFoliage(bot, block, origin) {
     const position = block?.position;
     if (!position || !String(block.name || '').endsWith('_leaves')) return false;
     const dx = Math.abs(position.x - origin.x);
     const dy = position.y - origin.y;
     const dz = Math.abs(position.z - origin.z);
-    return dx <= NAVIGATION_RECOVERY_RADIUS
+    const locallyBounded = dx <= NAVIGATION_RECOVERY_RADIUS
         && dz <= NAVIGATION_RECOVERY_RADIUS
-        && dy >= 0
-        && dy <= NAVIGATION_RECOVERY_RADIUS
-        && isEnvironmentallySafeToClear(bot, block);
+        && dy >= -1
+        && dy <= NAVIGATION_RECOVERY_RADIUS;
+    if (!locallyBounded || !isEnvironmentallySafeToClear(bot, block)) return false;
+    if (dy >= 0) return true;
+
+    // A canopy can otherwise become a false "surface": ordinary Pathfinder
+    // sees safe support but no route down, while recovery refuses to clear any
+    // foliage below its starting Y. Authorize exactly one descending leaf cell
+    // only when the resulting stance has verified support immediately below
+    // and clear body space above. Pathfinder still owns the step and repeats
+    // the proof from a new origin before any further descent.
+    const support = bot.blockAt(position.offset(0, -1, 0));
+    const bodySpace = bot.blockAt(position.offset(0, 1, 0));
+    return isSafeGameplaySupport(support)
+        && isCollectionStandingCellClear(bodySpace);
 }
 
 function localNavigationRecoveryMovements(bot, origin) {
