@@ -14273,11 +14273,31 @@ export async function useDoor(bot, door_pos=null) {
     return true;
 }
 
+function classifySleepRejection(error) {
+    const message = String(error?.message || error || '').trim();
+    const known = {
+        'there are monsters nearby': { outcome: 'hostiles_near_bed', retryable: true },
+        'the bed is occupied': { outcome: 'bed_occupied', retryable: true },
+        "it's not night and it's not a thunderstorm": { outcome: 'not_sleep_time', retryable: true },
+        'the bed is too far': { outcome: 'bed_too_far', retryable: true },
+        'cant click the bed': { outcome: 'bed_interaction_failed', retryable: true },
+        "there's only half bed": { outcome: 'bed_incomplete', retryable: false },
+        'wrong block : not a bed block': { outcome: 'bed_changed', retryable: false },
+        'already sleeping': { outcome: 'sleep_state_conflict', retryable: false },
+        'already awake': { outcome: 'sleep_state_conflict', retryable: false },
+        'bot is not sleeping': { outcome: 'sleep_not_confirmed', retryable: false },
+    };
+    return {
+        message,
+        ...(known[message] || { outcome: 'sleep_rejected', retryable: true }),
+    };
+}
+
 export async function goToBed(bot, {
     navigate = goToPosition,
     now = Date.now,
     delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
-    sleepTimeoutMs = 20_000,
+    standaloneSleepTimeoutMs = 600_000,
     exactPosition = null,
     expectedDimension = null,
 } = {}) {
@@ -14338,16 +14358,8 @@ export async function goToBed(bot, {
         log(bot, 'The selected bed is no longer loaded.');
         return false;
     }
-    const hostile = bot.nearestEntity?.(entity => mc.isHostile(entity));
-    if (
-        hostile?.position
-        && hostile.position.distanceTo(bot.entity.position) <= 12
-    ) {
-        setActionEvidence(bot, { kind: 'sleep', outcome: 'unsafe_bed', target, retryable: true });
-        log(bot, 'It is not safe to sleep while a hostile is nearby.');
-        return false;
-    }
-    if (bot.interrupt_code) {
+    const signal = actionCancellationSignal();
+    if (bot.interrupt_code || signal?.aborted) {
         setActionEvidence(bot, { kind: 'sleep', outcome: 'interrupted', target, retryable: true });
         return false;
     }
@@ -14365,12 +14377,13 @@ export async function goToBed(bot, {
     try {
         await bot.sleep(bed);
     } catch (error) {
+        const rejection = classifySleepRejection(error);
         setActionEvidence(bot, {
             kind: 'sleep',
-            outcome: 'sleep_rejected',
+            outcome: rejection.outcome,
             target,
-            error: String(error?.message || error).slice(0, 180),
-            retryable: true,
+            error: rejection.message.slice(0, 180),
+            retryable: rejection.retryable,
         });
         log(bot, `Could not sleep: ${error?.message || error}.`);
         return false;
@@ -14388,26 +14401,42 @@ export async function goToBed(bot, {
     }
     log(bot, `You are in bed.`);
     bot.modes.pause('unstuck');
-    const deadline = now() + Math.max(1_000, sleepTimeoutMs);
+    // ActionManager's AbortSignal is the authoritative deadline and Stop
+    // boundary. Direct callers that do not own an ActionManager context retain
+    // one full-night backstop, but nested timers never shorten an owned action.
+    const boundedStandaloneTimeoutMs = Number.isFinite(standaloneSleepTimeoutMs)
+        ? Math.max(600_000, standaloneSleepTimeoutMs)
+        : 600_000;
+    const standaloneDeadline = signal
+        ? Number.POSITIVE_INFINITY
+        : now() + boundedStandaloneTimeoutMs;
+    let cancellationRequested = false;
+    let wakeRequested = false;
     while (bot.isSleeping) {
-        if (bot.interrupt_code || now() >= deadline) {
-            try {
-                await bot.wake?.();
-            } catch {
-                // The postcondition below remains authoritative.
+        if (bot.interrupt_code || signal?.aborted || now() >= standaloneDeadline) {
+            cancellationRequested = true;
+            if (!wakeRequested) {
+                wakeRequested = true;
+                try {
+                    await bot.wake?.();
+                } catch {
+                    // Do not release physical ownership until entityWake makes
+                    // the postcondition true, even if Mineflayer rejects wake.
+                }
             }
-            const outcome = bot.interrupt_code ? 'interrupted' : 'sleep_timeout';
-            setActionEvidence(bot, {
-                kind: 'sleep',
-                outcome,
-                target,
-                enteredSleep: true,
-                woke: !bot.isSleeping,
-                retryable: true,
-            });
-            return false;
         }
         await delay(250);
+    }
+    if (cancellationRequested) {
+        setActionEvidence(bot, {
+            kind: 'sleep',
+            outcome: 'interrupted',
+            target,
+            enteredSleep: true,
+            woke: true,
+            retryable: true,
+        });
+        return false;
     }
     setActionEvidence(bot, {
         kind: 'sleep',
