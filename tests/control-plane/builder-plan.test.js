@@ -32,6 +32,15 @@ test('general construction compiler creates bounded supported shapes with a safe
     new Set(mixed.cells.map(cell => cell.material)),
     new Set(['cobblestone', 'rail', 'powered_rail', 'redstone_torch']),
   );
+  const unlocked = expandStructureDesign(
+    'slab 0 0 0 5 5 auto; shell 0 1 0 5 3 5 auto; roof 0 4 0 5 5 flat auto; block 2 1 2 auto',
+    'oak_planks',
+    { canSupportMaterial: name => name === 'oak_planks' },
+  );
+  assert.ok(
+    unlocked.cells.every(cell => cell.material === 'oak_planks'),
+    'operation-level auto placeholders must resolve to the validated outer structural material',
+  );
   assert.throws(() => expandStructureDesign(
     'slab 0 0 0 3 3 cobblestone; block 0 0 0 redstone_torch; block 0 1 0 powered_rail',
     'cobblestone',
@@ -97,6 +106,15 @@ test('general construction compiler creates bounded supported shapes with a safe
     && /chest at 1,0,3/.test(error.message)
     && /move each fixture one block up/i.test(error.message)
   ), 'one causal correction must name every floor-standing fixture that displaced the foundation');
+  assert.throws(() => expandStructureDesign(
+    'room 0 0 0 5 4 5 cobblestone; put 2 1 0 door north; put 2 1 1 torch north; put 2 1 2 bed south; put 2 1 3 torch south',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), error => (
+    /torch at 2,1,1: no adjacent solid wall/i.test(error.message)
+    && /bed_1 has an occupied head cell at 2,1,3/i.test(error.message)
+    && error.message.length <= 220
+  ), 'one correction must expose independent wall-support and multiblock fixture defects together');
 
   const platform = createConstructionBlueprint({
     shape: 'platform',

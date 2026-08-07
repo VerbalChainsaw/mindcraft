@@ -445,7 +445,13 @@ function floatingCells(placed, canSupportMaterial) {
 }
 
 function applyOperation(placed, operation, block, displacedFoundations) {
-  const material = operation.material || block;
+  // The command's outer material owns structural binding. Models sometimes
+  // repeat that unlocked choice as `auto` on individual DSL operations; keep
+  // it a placeholder instead of turning it into a fictitious block that fails
+  // support analysis and later acquisition.
+  const material = !operation.material || operation.material === 'auto'
+    ? block
+    : operation.material;
   const set = (x, y, z, cellMaterial, cellFunction, extra = {}) => {
     const key = `${x}:${y}:${z}`;
     displacedFoundations.delete(key);
@@ -530,7 +536,7 @@ function applyOperation(placed, operation, block, displacedFoundations) {
       return;
     }
     case 'block': {
-      set(operation.x, operation.y, operation.z, operation.material, 'structure');
+      set(operation.x, operation.y, operation.z, material, 'structure');
       return;
     }
     case 'roof': {
@@ -615,7 +621,34 @@ const FACING_OFFSETS = Object.freeze({
   west: Object.freeze({ x: -1, y: 0, z: 0 }),
 });
 
-function logicalFixtures(placed, canSupportMaterial) {
+function wallFixtureProblems(placed, canSupportMaterial) {
+  const unsupportedByKind = new Map();
+  const wallFixtures = Object.entries(ACCESSORIES)
+    .filter(([name]) => ['torch', 'ladder'].includes(name));
+  for (const [key, value] of placed) {
+    const fixture = wallFixtures.find(([, accessory]) => (
+      accessory.material === value.material
+      && accessory.function === value.function
+    ));
+    if (!fixture) continue;
+    const [thing] = fixture;
+    const [x, y, z] = key.split(':').map(Number);
+    const supported = Object.values(FACING_OFFSETS).some(offset => {
+      const support = placed.get(`${x + offset.x}:${y}:${z + offset.z}`);
+      return support && canSupportMaterial(support.material);
+    });
+    if (!supported) {
+      const positions = unsupportedByKind.get(thing) || [];
+      positions.push(`${x},${y},${z}`);
+      unsupportedByKind.set(thing, positions);
+    }
+  }
+  return [...unsupportedByKind].map(([thing, positions]) => (
+    `${thing} at ${positions.join(' and ')}: no adjacent solid wall; move beside a solid wall`
+  ));
+}
+
+function logicalFixtures(placed, canSupportMaterial, problems = []) {
   const fixtureEntries = [...placed.entries()].filter(([, value]) => value.fixtureKind);
   if (fixtureEntries.length === 0) return [];
   const parsedPositions = [...placed.keys()].map(key => key.split(':').map(Number));
@@ -686,16 +719,13 @@ function logicalFixtures(placed, canSupportMaterial) {
         const correction = value.fixtureKind === 'bed'
           ? 'a bed occupies its anchor plus one block in its facing direction, so move it inward, face it toward supported interior floor, or extend the floor'
           : 'add a solid floor with room or slab before placing the fixture';
-        throw new TypeError(
-          `Fixture ${id} ${detail}; ${correction}.`,
-        );
+        problems.push(`Fixture ${id} ${detail}; ${correction}`);
+      } else if (detail) {
+        problems.push(`Fixture ${id} ${detail}; move it or face it into clear interior space`);
+      } else {
+        problems.push(`Fixture ${id} has no clear supported ${value.fixtureKind} orientation`);
       }
-      if (detail) {
-        throw new TypeError(
-          `Fixture ${id} ${detail}; move it or face it into clear interior space.`,
-        );
-      }
-      throw new TypeError(`Fixture ${id} has no clear supported ${value.fixtureKind} orientation.`);
+      continue;
     }
     const direction = FACING_OFFSETS[facing];
     const occupiedOffsets = value.fixtureKind === 'door'
@@ -750,6 +780,12 @@ export function expandStructureDesign(design, material, {
     throw new TypeError(`The design needs ${placed.size} blocks, above the ${MAX_CELLS} limit.`);
   }
 
+  const fixtureProblems = wallFixtureProblems(placed, canSupportMaterial);
+  const fixtures = logicalFixtures(placed, canSupportMaterial, fixtureProblems);
+  if (fixtureProblems.length > 0) {
+    throw new TypeError(`Fixture layout errors: ${fixtureProblems.join('; ')}.`);
+  }
+
   const floating = floatingCells(placed, canSupportMaterial);
   if (floating.length) {
     const [first] = floating;
@@ -757,8 +793,6 @@ export function expandStructureDesign(design, material, {
       `The design has ${floating.length} block(s) with no path down to the ground, starting at ${first.replaceAll(':', ', ')}.`,
     );
   }
-
-  const fixtures = logicalFixtures(placed, canSupportMaterial);
 
   const entries = [...placed.entries()].map(([key, value]) => {
     const [x, y, z] = key.split(':').map(Number);
