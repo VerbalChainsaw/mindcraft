@@ -499,6 +499,22 @@ The goal system already records proven procedures. Once several live capabilitie
 - measure completion time only to find obvious gameplay waste;
 - never trade correctness or stop authority for speed.
 
+### Learning-statistics applicability checkpoint (2026-08-07)
+
+The persisted outcome table is a useful prioritization signal, but its raw lifetime percentages are not yet a safe strategy-switching contract. One `attempt` is one settled GoalDirector prerequisite action, not one candidate block or one complete acquire goal. Current GoalDirector settlement credits verified partial inventory or corridor progress and censors Stop/preemption, but each method row retains only lifetime totals plus the latest code and timestamp. It cannot separate recent code from old behavior, reconstruct no-progress streaks, or attribute yield to a particular physical strategy. Collection keys such as `collect:iron_ore->raw_iron` identify a source/output pair, not surface search, cave following, corridor mining, or another independently selectable method.
+
+The completed OutpostBot2 Builder campaign recorded no global outcome rows because JobDirector currently consumes learned preferences but keeps its own failed-method exclusions inside the active work order rather than writing those settlements to PersonalMemory. Therefore the older MindcraftBot dataset is valid evidence that collection has historically dominated wall time, but it is not evidence that the current collection implementation still has the same success rate.
+
+Do not add a raw success-rate threshold or another learning subsystem. After the fresh overnight-outpost build-and-sleep acceptance remains complete, use a broad collection-heavy outcome to activate the next repair. If that campaign demonstrates a need for cross-session strategy selection, extend the existing planner/memory seam only enough to provide:
+
+- stable identities for physical strategies that actually exist as distinct capability bindings;
+- a recent comparable window or code epoch rather than lifetime-only totals;
+- verified requested yield per minute, no-progress duration, and repeated failure signatures;
+- an explicit decision about whether JobDirector capability settlements contribute to shared learning;
+- goal/region-local temporary exclusion of a failing strategy before any global preference change.
+
+If only one physical strategy exists, report that capability gap truthfully. A threshold cannot invent a method the catalogue cannot execute and verify.
+
 ## Prioritized backlog
 
 ### P0
