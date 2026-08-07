@@ -128,6 +128,23 @@ class Movements {
     })
   }
 
+  openableAction (node, block) {
+    if (!this.canOpenDoors || !block.openable || block._properties?.open === true) return null
+    return {
+      x: block.position.x,
+      y: block.position.y,
+      z: block.position.z,
+      dx: 0,
+      dy: 0,
+      dz: 0,
+      useOne: true,
+      closeAfterCrossing: {
+        source: { x: node.x, y: node.y, z: node.z },
+        destination: { x: block.position.x, y: block.position.y, z: block.position.z }
+      }
+    }
+  }
+
   exclusionPlace (block) {
     if (this.exclusionAreasPlace.length === 0) return 0
     let weight = 0
@@ -387,8 +404,13 @@ class Movements {
     if (cost > 100) return
     cost += this.safeOrBreak(blockH, toBreak)
     if (cost > 100) return
-    cost += this.safeOrBreak(blockB, toBreak)
-    if (cost > 100) return
+    const openableAction = this.openableAction(node, blockB)
+    if (openableAction) {
+      toPlace.push(openableAction)
+    } else {
+      cost += this.safeOrBreak(blockB, toBreak)
+      if (cost > 100) return
+    }
 
     neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'step_up'))
   }
@@ -423,8 +445,9 @@ class Movements {
     if (cost > 100) return
 
     // Open fence gates and doors
-    if (this.canOpenDoors && blockC.openable && !blockC._properties.open) {
-      toPlace.push({ x: node.x + dir.x, y: node.y, z: node.z + dir.z, dx: 0, dy: 0, dz: 0, useOne: true }) // Indicate that a block should be used on this block not placed
+    const openableAction = this.openableAction(node, blockC)
+    if (openableAction) {
+      toPlace.push(openableAction)
     } else {
       cost += this.safeOrBreak(blockC, toBreak)
       if (cost > 100) return

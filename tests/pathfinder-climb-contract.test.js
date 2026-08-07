@@ -115,3 +115,122 @@ test('Pathfinder counts drop depth between standing cells rather than destinatio
     { x: 1, z: 0 },
   ), null);
 });
+
+test('Pathfinder owns closing an openable that it opened for a forward move', () => {
+  const node = { x: 4, y: 64, z: 7, remainingBlocks: 0 };
+  const movement = Object.create(Movements.prototype);
+  movement.canOpenDoors = true;
+  movement.liquidCost = 1;
+  movement.exclusionStep = () => 0;
+  movement.getNumEntitiesAt = () => 0;
+  movement.safeOrBreak = () => 0;
+  movement.makeMove = (_node, x, y, z, remainingBlocks, cost, toBreak, toPlace, type) => ({
+    x,
+    y,
+    z,
+    remainingBlocks,
+    cost,
+    toBreak,
+    toPlace,
+    locomotion: { type },
+  });
+  movement.getBlock = (_node, x, y, z) => {
+    if (x === 1 && y === 0 && z === 0) {
+      return {
+        position: new Vec3(5, 64, 7),
+        openable: true,
+        _properties: { open: false },
+        liquid: false,
+      };
+    }
+    return {
+      position: new Vec3(node.x + x, node.y + y, node.z + z),
+      physical: y === -1,
+      liquid: false,
+    };
+  };
+
+  const neighbors = [];
+  movement.getMoveForward(node, { x: 1, z: 0 }, neighbors);
+
+  assert.equal(neighbors.length, 1);
+  assert.deepEqual(neighbors[0].toPlace, [{
+    x: 5,
+    y: 64,
+    z: 7,
+    dx: 0,
+    dy: 0,
+    dz: 0,
+    useOne: true,
+    closeAfterCrossing: {
+      source: { x: 4, y: 64, z: 7 },
+      destination: { x: 5, y: 64, z: 7 },
+    },
+  }]);
+});
+
+test('Pathfinder uses the same owned openable lifecycle for a raised doorway', () => {
+  const node = { x: 4, y: 64, z: 7, remainingBlocks: 0 };
+  const movement = Object.create(Movements.prototype);
+  movement.canOpenDoors = true;
+  movement.getNumEntitiesAt = () => 0;
+  movement.safeOrBreak = () => 0;
+  movement.makeMove = (_node, x, y, z, remainingBlocks, cost, toBreak, toPlace, type) => ({
+    x,
+    y,
+    z,
+    remainingBlocks,
+    cost,
+    toBreak,
+    toPlace,
+    locomotion: { type },
+  });
+  movement.getBlock = (_node, x, y, z) => {
+    if (x === 1 && y === 1 && z === 0) {
+      return {
+        position: new Vec3(5, 65, 7),
+        openable: true,
+        _properties: { open: false },
+        physical: false,
+      };
+    }
+    if (x === 1 && y === 0 && z === 0) {
+      return {
+        position: new Vec3(5, 64, 7),
+        physical: true,
+        height: 65,
+      };
+    }
+    if (x === 0 && y === -1 && z === 0) {
+      return {
+        position: new Vec3(4, 63, 7),
+        physical: true,
+        height: 64,
+      };
+    }
+    return {
+      position: new Vec3(node.x + x, node.y + y, node.z + z),
+      physical: false,
+      height: node.y + y,
+    };
+  };
+
+  const neighbors = [];
+  movement.getMoveJumpUp(node, { x: 1, z: 0 }, neighbors);
+
+  assert.equal(neighbors.length, 1);
+  assert.equal(neighbors[0].locomotion.type, 'step_up');
+  assert.deepEqual(neighbors[0].toPlace, [{
+    x: 5,
+    y: 65,
+    z: 7,
+    dx: 0,
+    dy: 0,
+    dz: 0,
+    useOne: true,
+    closeAfterCrossing: {
+      source: { x: 4, y: 64, z: 7 },
+      destination: { x: 5, y: 65, z: 7 },
+    },
+  }]);
+});

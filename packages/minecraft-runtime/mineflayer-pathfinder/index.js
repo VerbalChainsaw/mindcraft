@@ -14,6 +14,9 @@ const Physics = require('./lib/physics')
 const nbt = require('prismarine-nbt')
 const interactableBlocks = require('./lib/interactable.json')
 const NODE_EXECUTION_STALL_MS = 2500
+const OPENABLE_STATE_TIMEOUT_MS = 1200
+const OPENABLE_CLEAR_TIMEOUT_MS = 3000
+const OPENABLE_SAFE_CLEARANCE = 0.7
 
 function inject (bot) {
   const waterType = bot.registry.blocksByName.water.id
@@ -35,6 +38,9 @@ function inject (bot) {
   let stopPathing = false
   let lastStuckState = null
   let verticalTransition = null
+  let pendingOpenable = null
+  let activatingUseBlock = false
+  let openableGeneration = 0
   const physics = new Physics(bot)
   const lockPlaceBlock = new Lock()
   const lockEquipItem = new Lock()
@@ -157,12 +163,13 @@ function inject (bot) {
       bot.stopDigging()
     }
     placing = false
+    placingBlock = null
     verticalTransition = null
     pathUpdated = false
     astarContext = null
     lockEquipItem.release()
     lockPlaceBlock.release()
-    lockUseBlock.release()
+    if (!activatingUseBlock) lockUseBlock.release()
     stateMovements.clearCollisionIndex()
     if (clearStates) bot.clearControlStates()
     if (stopPathing) return stop()
@@ -183,7 +190,7 @@ function inject (bot) {
     resetPath('movements_updated')
   }
 
-  bot.pathfinder.isMoving = () => path.length > 0
+  bot.pathfinder.isMoving = () => path.length > 0 || activatingUseBlock || pendingOpenable !== null
   bot.pathfinder.isMining = () => digging
   bot.pathfinder.isBuilding = () => placing
 
@@ -386,6 +393,134 @@ function inject (bot) {
     if (Math.abs(bot.entity.position.z - blockZ) > 0.2) { bot.entity.position.z = blockZ }
   }
 
+  function openableProgress (pending, position) {
+    const dx = pending.destination.x - pending.source.x
+    const dz = pending.destination.z - pending.source.z
+    return ((position.x - (pending.destination.x + 0.5)) * dx) +
+      ((position.z - (pending.destination.z + 0.5)) * dz)
+  }
+
+  function failOpenablePath (reason, error) {
+    if (error) console.error(error)
+    pendingOpenable = null
+    placing = false
+    placingBlock = null
+    path = []
+    stateGoal = null
+    stopPathing = false
+    fullStop()
+    bot.emit('path_stop', reason)
+  }
+
+  function servicePendingOpenable () {
+    const pending = pendingOpenable
+    if (!pending) return false
+
+    if (pending.phase === 'failed') {
+      const { error } = pending
+      pendingOpenable = null
+      if (stopPathing) return false
+      failOpenablePath('openable_interaction_failed', error)
+      return true
+    }
+
+    const block = bot.blockAt(pending.position, false)
+    if (!block || block.type !== pending.type || block.name !== pending.name) {
+      pendingOpenable = null
+      return false
+    }
+
+    const now = performance.now()
+    const isOpen = block._properties?.open === true
+    if (pending.phase === 'opening') {
+      if (!isOpen) {
+        if (now >= pending.stateDeadlineAt) {
+          pending.phase = 'failed'
+          pending.error = new Error(`Openable ${pending.name} did not report open after activation`)
+        }
+        fullStop()
+        return true
+      }
+      pending.phase = 'open'
+    }
+
+    if (pending.phase === 'closing' || pending.phase === 'confirming') {
+      if (!isOpen) {
+        const failure = pending.failAfterClose || null
+        pendingOpenable = null
+        lastNodeTime = now
+        if (failure) {
+          failOpenablePath('openable_clearance_failed', failure)
+          return true
+        }
+        return false
+      }
+      if (pending.phase === 'confirming' && now >= pending.stateDeadlineAt) {
+        pending.phase = 'failed'
+        pending.error = new Error(`Openable ${pending.name} did not report closed after activation`)
+      }
+      fullStop()
+      return true
+    }
+
+    if (!isOpen) {
+      pendingOpenable = null
+      return false
+    }
+
+    const progress = openableProgress(pending, bot.entity.position)
+    const crossedSafely = progress >= OPENABLE_SAFE_CLEARANCE
+    const cancelledSafely = stopPathing && Math.abs(progress) >= OPENABLE_SAFE_CLEARANCE
+    let shouldClose = crossedSafely || cancelledSafely
+    if (!shouldClose) {
+      if (stopPathing) {
+        // Stop has priority over leaving the doorway. If the body is still in
+        // the collision plane, abandoning this cleanup is safer than moving it
+        // after ownership was cancelled or closing the block around it.
+        pendingOpenable = null
+        return false
+      }
+      if (now >= pending.clearDeadlineAt) {
+        const error = new Error(`Could not clear ${pending.name} far enough to close it safely`)
+        if (Math.abs(progress) >= OPENABLE_SAFE_CLEARANCE) {
+          pending.failAfterClose = error
+          shouldClose = true
+        } else {
+          pending.phase = 'failed'
+          pending.error = error
+          fullStop()
+          return true
+        }
+      }
+      if (!shouldClose) return false
+    }
+
+    if (!lockUseBlock.tryAcquire()) {
+      fullStop()
+      return true
+    }
+
+    pending.phase = 'closing'
+    activatingUseBlock = true
+    fullStop()
+    const generation = pending.generation
+    bot.activateBlock(block).then(() => {
+      if (pendingOpenable?.generation === generation) {
+        pendingOpenable.phase = 'confirming'
+        pendingOpenable.stateDeadlineAt = performance.now() + OPENABLE_STATE_TIMEOUT_MS
+      }
+    }, error => {
+      if (pendingOpenable?.generation === generation) {
+        pendingOpenable.phase = 'failed'
+        pendingOpenable.error = error
+      }
+    }).then(() => {
+      activatingUseBlock = false
+      lockUseBlock.release()
+    })
+    return true
+  }
+
   function moveToEdge (refBlock, edge) {
     // If allowed turn instantly should maybe be a bot option
     const allowInstantTurn = false
@@ -562,6 +697,11 @@ function inject (bot) {
   }
 
   function stop () {
+    if (activatingUseBlock || pendingOpenable) {
+      stopPathing = true
+      fullStop()
+      return
+    }
     stopPathing = false
     stateGoal = null
     path = []
@@ -591,6 +731,16 @@ function inject (bot) {
   })
 
   function monitorMovement () {
+    if (activatingUseBlock) {
+      fullStop()
+      return
+    }
+    if (servicePendingOpenable()) return
+    if (stopPathing) {
+      stop()
+      return
+    }
+
     // Test freemotion
     if (stateMovements && stateMovements.allowFreeMotion && stateGoal && stateGoal.entity) {
       const target = stateGoal.entity
@@ -618,7 +768,7 @@ function inject (bot) {
       // still queued. Continuing that stale path makes followers cross their
       // target, replan behind themselves, and oscillate. Settle immediately but
       // retain the dynamic goal so movement resumes when the target leaves.
-      if (stateGoal && dynamicGoal && stateGoal.isEnd(bot.entity.position.floored())) {
+      if (stateGoal && dynamicGoal && !pendingOpenable && stateGoal.isEnd(bot.entity.position.floored())) {
         const controlsActive = Object.values(bot.controlState || {}).some(Boolean)
         if (!pathResetForChangedGoal && (path.length > 0 || digging || placing || verticalTransition || controlsActive)) {
           resetPath('dynamic_goal_reached')
@@ -651,6 +801,7 @@ function inject (bot) {
       lastNodeTime = performance.now()
       if (stateGoal && stateMovements) {
         if (stateGoal.isEnd(bot.entity.position.floored())) {
+          if (pendingOpenable) return
           if (!dynamicGoal) {
             bot.emit('goal_reached', stateGoal)
             stateGoal = null
@@ -715,15 +866,55 @@ function inject (bot) {
       // Open gates or doors
       if (placingBlock?.useOne) {
         if (!lockUseBlock.tryAcquire()) return
-        bot.activateBlock(bot.blockAt(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z))).then(() => {
+        const action = placingBlock
+        const activeNode = nextPoint
+        const usedBlock = bot.blockAt(new Vec3(action.x, action.y, action.z))
+        let trackedGeneration = null
+        if (action.closeAfterCrossing && usedBlock && usedBlock._properties?.open !== true) {
+          trackedGeneration = ++openableGeneration
+          const now = performance.now()
+          pendingOpenable = {
+            generation: trackedGeneration,
+            phase: 'opening',
+            position: usedBlock.position.clone(),
+            type: usedBlock.type,
+            name: usedBlock.name,
+            source: action.closeAfterCrossing.source,
+            destination: action.closeAfterCrossing.destination,
+            stateDeadlineAt: now + OPENABLE_STATE_TIMEOUT_MS,
+            clearDeadlineAt: now + OPENABLE_CLEAR_TIMEOUT_MS,
+            error: null
+          }
+        }
+        activatingUseBlock = true
+        bot.activateBlock(usedBlock).then(() => {
           lockUseBlock.release()
-          placingBlock = nextPoint.toPlace.shift()
+          activatingUseBlock = false
+          lastNodeTime = performance.now()
+          if (stopPathing || path[0] !== activeNode || placingBlock !== action) {
+            placingBlock = null
+            placing = false
+            return
+          }
+          placingBlock = activeNode.toPlace.shift()
           if (!placingBlock) {
             placing = false
+            if (trackedGeneration && path[0] === activeNode) {
+              path = postProcessPath(path)
+            }
           }
         }, err => {
-          console.error(err)
           lockUseBlock.release()
+          activatingUseBlock = false
+          placingBlock = null
+          placing = false
+          if (trackedGeneration && pendingOpenable?.generation === trackedGeneration) {
+            pendingOpenable.phase = 'failed'
+            pendingOpenable.error = err
+          } else {
+            console.error(err)
+            resetPath('use_block_error')
+          }
         })
         return
       }
@@ -789,6 +980,10 @@ function inject (bot) {
       }
       path.shift()
       if (path.length === 0) { // done
+        if (pendingOpenable) {
+          fullStop()
+          return
+        }
         // If the block the bot is standing on is not a full block only checking for the floored position can fail as
         // the distance to the goal can get greater then 0 when the vector is floored.
         if (!dynamicGoal && stateGoal && (stateGoal.isEnd(p.floored()) || stateGoal.isEnd(p.floored().offset(0, 1, 0)))) {
