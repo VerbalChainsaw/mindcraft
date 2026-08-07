@@ -1,8 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { placeBlock } from '../../src/agent/library/skills.js';
+import {
+  fixtureOrientationStances,
+  placeBlock,
+} from '../../src/agent/library/skills.js';
 import Vec3 from 'vec3';
+
+test('oriented fixtures use a safe lower stance outside a raised foundation', () => {
+  const anchor = new Vec3(10, 65, 10);
+  const lowerStance = new Vec3(10, 64, 8);
+  const bot = {
+    entity: { position: new Vec3(10.5, 64, 7.5) },
+    blockAt(position) {
+      if (position.equals(lowerStance.offset(0, -1, 0))) {
+        return { name: 'stone', boundingBox: 'block', position };
+      }
+      return { name: 'air', boundingBox: 'empty', position };
+    },
+  };
+
+  assert.deepEqual(
+    fixtureOrientationStances(bot, anchor, { x: 0, y: 0, z: 1 }),
+    [lowerStance],
+  );
+});
 
 test('Given a blueprint cell occupied by an unrelated block, strict placement refuses to break it', async () => {
   const material = { name: 'stone', count: 1 };

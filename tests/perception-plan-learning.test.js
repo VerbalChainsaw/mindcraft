@@ -364,6 +364,21 @@ test('The causal planner prefers the nearest physical source behind equivalent r
   );
 });
 
+test('Equivalent plank recipes collect generic wood before binding an unobserved species', () => {
+  const bot = nearbyRecipeBot();
+  bot.findBlock = () => null;
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'test_tool',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'collect_wood');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64)');
+});
+
 test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {
   const bot = nearbyRecipeBot();
   bot.inventory.items = () => [

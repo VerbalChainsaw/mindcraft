@@ -6981,6 +6981,23 @@ const FIXTURE_FACING_OFFSETS = Object.freeze({
     west: Object.freeze({ x: -1, y: 0, z: 0 }),
 });
 
+export function fixtureOrientationStances(bot, anchor, direction) {
+    if (!anchor?.offset || !direction || !bot?.blockAt) return [];
+    const orientationLine = anchor.offset(-direction.x * 2, 0, -direction.z * 2);
+    return [0, -1, 1]
+        .map(yOffset => orientationLine.offset(0, yOffset, 0))
+        .filter(stance => (
+            isReplaceableGameplayBlock(bot.blockAt(stance))
+            && isReplaceableGameplayBlock(bot.blockAt(stance.offset(0, 1, 0)))
+            && isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)))
+        ))
+        .sort((left, right) => (
+            (bot.entity?.position?.distanceTo?.(left) ?? 0)
+            - (bot.entity?.position?.distanceTo?.(right) ?? 0)
+            || left.y - right.y
+        ));
+}
+
 export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
     const fixtureKind = String(kind || '').trim().toLowerCase();
     const fixtureFacing = String(facing || '').trim().toLowerCase();
@@ -7025,12 +7042,23 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
             return false;
         }
     }
-    const stance = anchor.offset(-direction.x * 2, 0, -direction.z * 2);
-    const stanceSafe = isReplaceableGameplayBlock(bot.blockAt(stance))
-        && isReplaceableGameplayBlock(bot.blockAt(stance.offset(0, 1, 0)))
-        && isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)));
-    if (!stanceSafe || !await goToPosition(bot, stance.x, stance.y, stance.z, 0.75)) {
-        setActionEvidence(bot, { kind: 'fixture_place', outcome: 'orientation_stance_unreachable', target, retryable: true });
+    const stances = fixtureOrientationStances(bot, anchor, direction);
+    let reachedStance = null;
+    for (const stance of stances) {
+        if (await goToPosition(bot, stance.x, stance.y, stance.z, 0.75)) {
+            reachedStance = stance;
+            break;
+        }
+    }
+    if (!reachedStance) {
+        setActionEvidence(bot, {
+            kind: 'fixture_place',
+            outcome: 'orientation_stance_unreachable',
+            target,
+            candidateCount: stances.length,
+            candidates: stances.map(stance => ({ x: stance.x, y: stance.y, z: stance.z })),
+            retryable: true,
+        });
         return false;
     }
     await bot.lookAt(anchor.offset(0.5, 0.5, 0.5), true);

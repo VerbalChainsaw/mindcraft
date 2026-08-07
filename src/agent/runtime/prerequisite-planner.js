@@ -476,6 +476,116 @@ function immediateCarriedProduction(bot, context, target) {
   return best;
 }
 
+function logTransformForPlanks(bot, plankName) {
+  return connectedRecipes(bot, plankName)
+    .map(recipe => {
+      const ingredients = recipeIngredientEntries(bot, recipe);
+      if (ingredients.length !== 1 || !isLog(ingredients[0].name)) return null;
+      return {
+        logName: ingredients[0].name,
+        logCount: ingredients[0].count,
+        plankCount: recipeOutputCount(recipe),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => (
+      (right.plankCount / right.logCount) - (left.plankCount / left.logCount)
+      || left.logName.localeCompare(right.logName)
+    ))[0] || null;
+}
+
+function plankVariantDescriptor(bot, recipe) {
+  const ingredients = recipeIngredientEntries(bot, recipe);
+  const plankIngredients = ingredients.filter(ingredient => ingredient.name.endsWith('_planks'));
+  if (plankIngredients.length !== 1) return null;
+  const transform = logTransformForPlanks(bot, plankIngredients[0].name);
+  if (!transform) return null;
+  const signature = ingredients
+    .map(ingredient => `${ingredient.count}x${ingredient.name.endsWith('_planks') ? '#planks' : ingredient.name}`)
+    .sort()
+    .join('+');
+  return {
+    recipe,
+    signature: `${recipeOutputCount(recipe)}<-${signature}`,
+    plank: plankIngredients[0],
+    transform,
+  };
+}
+
+// Registry recipe alternatives often encode a tag as many concrete recipes.
+// If none of those species is carried or physically observed, choosing the
+// registry's first species turns planning into a blind search. Collect one
+// bounded batch through the existing wood-family capability, then let the
+// mandatory post-action replan bind the actual log and plank species found.
+function planUnboundPlankFamily(bot, context, target, amount, recipes, trail) {
+  const learningKey = 'collect:logs->logs';
+  if (methodExcluded(context, learningKey)) return null;
+
+  const groups = new Map();
+  for (const recipe of recipes) {
+    const descriptor = plankVariantDescriptor(bot, recipe);
+    if (!descriptor) continue;
+    const group = groups.get(descriptor.signature) || [];
+    group.push(descriptor);
+    groups.set(descriptor.signature, group);
+  }
+  const family = [...groups.values()]
+    .filter(group => new Set(group.map(entry => entry.plank.name)).size >= 2)
+    .sort((left, right) => (
+      right.length - left.length
+      || left[0].signature.localeCompare(right[0].signature)
+    ))[0];
+  if (!family) return null;
+
+  const hasConcreteBinding = family.some(entry => {
+    if (ledgerCount(context, entry.plank.name) > 0) return true;
+    if (immediateCarriedProduction(bot, context, entry.plank.name) > 0) return true;
+    return Number.isFinite(acquisitionSourceDistance(
+      bot,
+      entry.plank.name,
+      context.range,
+      0,
+      [],
+      context.blockProximityCache,
+    ));
+  });
+  if (hasConcreteBinding) return null;
+
+  const representative = family
+    .slice()
+    .sort((left, right) => left.plank.name.localeCompare(right.plank.name))[0];
+  const batches = Math.max(1, Math.ceil(amount / recipeOutputCount(representative.recipe)));
+  const planksNeeded = representative.plank.count * batches;
+  const logsNeeded = Math.max(1, Math.ceil(
+    (planksNeeded * representative.transform.logCount) / representative.transform.plankCount,
+  ));
+  const actionFailure = addCapabilityAction(bot, context, 'collect_wood', {
+    count: logsNeeded,
+    range: context.range,
+    expectedIncrease: logsNeeded,
+  }, {
+    kind: 'collect',
+    target: 'logs',
+    expectedName: 'logs',
+    expectedFamily: 'logs',
+    expectedIncrease: logsNeeded,
+    reason: `${target} accepts interchangeable plank recipes, but no concrete wood species is currently bound.`,
+    trail: [...trail, target, 'plank_family'],
+    learningKey,
+  });
+  if (actionFailure) return actionFailure;
+
+  // This representative log exists only inside the speculative remainder of
+  // this plan. The family collection is always the next physical action, and
+  // GoalDirector replans from the actual collected log before any craft runs.
+  setLedgerCount(
+    context,
+    representative.transform.logName,
+    ledgerCount(context, representative.transform.logName) + logsNeeded,
+  );
+  return null;
+}
+
 function recipeScore(bot, context, target, recipe) {
   const ingredients = recipeIngredientEntries(bot, recipe);
   let score = 0;
@@ -855,8 +965,17 @@ function produceItem(bot, context, target, amount, trail) {
   }
 
   const recipes = connectedRecipes(bot, target)
-    .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe)))
-    .sort((left, right) => (
+    .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe)));
+  const plankFamilyFailure = planUnboundPlankFamily(
+    bot,
+    context,
+    target,
+    amount,
+    recipes,
+    nextTrail,
+  );
+  if (plankFamilyFailure) return plankFamilyFailure;
+  recipes.sort((left, right) => (
       recipeScore(bot, context, target, right) - recipeScore(bot, context, target, left)
     ));
   const recipeFailures = [];
