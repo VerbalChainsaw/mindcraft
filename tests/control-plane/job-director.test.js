@@ -435,6 +435,40 @@ test('Given a resumable mining order, JobDirector dispatches one phase action an
   assert.equal(director.snapshot().phase, 'succeeded');
 });
 
+test('Given low food during durable work, JobDirector waits for SurvivalDirector without spending productive attempts', () => {
+  const agent = createAgent();
+  const commands = [];
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({
+      ...safeMiningSnapshot({ cobblestone: 0, cooked_beef: 1 }),
+      hunger: 12,
+      foodPoints: 8,
+    }),
+    now: () => 10_000,
+    executeCommand: (_agent, command) => commands.push(command),
+  });
+  director.submit(createWorkOrder({
+    id: 'hungry-mine',
+    role: 'miner',
+    kind: 'mine',
+    source: 'player',
+    requester: 'Gabriel',
+    target: { name: 'cobblestone' },
+    quota: 6,
+    phase: 'acquire',
+    attempts: 2,
+  }));
+
+  director.update();
+
+  assert.deepEqual(commands, [], 'the job lane must not become a second food executor');
+  assert.equal(director.activeOrder.phase, 'acquire');
+  assert.equal(director.activeOrder.attempts, 2);
+  assert.equal(director.snapshot().phase, 'waiting');
+  assert.equal(director.snapshot().code, 'food_resupply_required');
+});
+
 test('Given a partial mixed-family handoff, JobDirector checkpoints only verified transfers', async () => {
   const agent = createAgent('lumberjack');
   const recipient = {

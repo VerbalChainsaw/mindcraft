@@ -193,12 +193,12 @@ function nextJobUpkeepStep(order, snapshot) {
     && Number(snapshot.hunger) < minimumHunger
   ) {
     const target = Math.max(24, minimumFood);
-    const range = Math.max(16, Math.min(128, Number(order.constraints?.maxDistance) || 64));
     return {
-      command: `!prepareFood(${target}, ${range})`,
-      nextPhase: order.phase,
+      blocked: true,
       code: 'food_resupply_required',
       target: { name: 'safe_food' },
+      detail: `Work is waiting for the survival lane to restore ${target} safe food points.`,
+      retryable: true,
     };
   }
   return null;
