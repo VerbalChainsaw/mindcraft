@@ -351,6 +351,64 @@ export class AgendaDirector {
     return { accepted: true, id: entry.id, executorId: orderId };
   }
 
+  resumeConstructionContinuation(orderId) {
+    const order = this.agent.job_director?.activeOrder;
+    if (!orderId || order?.id !== orderId) {
+      return { resumed: false, code: 'construction_order_mismatch' };
+    }
+    const construction = this.entries.find(entry => (
+      entry.kind === 'construction'
+      && entry.executorId === orderId
+    ));
+    if (!construction) return { resumed: false, code: 'construction_barrier_missing' };
+    if (construction.state === 'active') {
+      return { resumed: false, code: 'construction_already_active', id: construction.id };
+    }
+    if (construction.state !== 'failed') {
+      return { resumed: false, code: 'construction_not_resumable', id: construction.id };
+    }
+
+    this.entries = this.entries.map(entry => {
+      if (entry.id === construction.id) {
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'active',
+          finishedAt: null,
+          assignmentState: 'accepted_and_bound',
+          evidence: {
+            code: 'construction_resumed',
+            detail: `Resumed exact Builder work order ${orderId}.`,
+          },
+        });
+      }
+      if (
+        entry.dependsOnEntryId === construction.id
+        && entry.state === 'failed'
+        && entry.evidence?.code === 'agenda_dependency_failed'
+      ) {
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'pending',
+          finishedAt: null,
+          evidence: {
+            code: 'agenda_dependency_resumed',
+            detail: 'Waiting for the resumed construction to complete.',
+          },
+        });
+      }
+      return entry;
+    });
+    this.persist();
+    this.nextEligibleAt = 0;
+    this.setStatus(
+      'acting',
+      'construction_resumed',
+      `Continuing through work order ${orderId}.`,
+      construction.id,
+    );
+    return { resumed: true, code: 'construction_resumed', id: construction.id, executorId: orderId };
+  }
+
   snapshot() {
     const active = this.activeEntry();
     return {

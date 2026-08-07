@@ -256,6 +256,24 @@ test('a failed construction barrier blocks its dependent sleep step', () => {
     director.entries.find(entry => entry.id === sleep.id).evidence.code,
     'agenda_dependency_failed',
   );
+
+  agent.job_director.activeOrder = { ...order, phase: 'assess' };
+  agent.job_director.lastOrder = null;
+  const resumed = director.resumeConstructionContinuation(order.id);
+
+  assert.deepEqual(resumed, {
+    resumed: true,
+    code: 'construction_resumed',
+    id: construction.id,
+    executorId: order.id,
+  });
+  assert.equal(director.entries.find(entry => entry.id === construction.id).state, 'active');
+  assert.equal(director.entries.find(entry => entry.id === construction.id).executorId, order.id);
+  assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'pending');
+  assert.equal(
+    director.entries.find(entry => entry.id === sleep.id).evidence.code,
+    'agenda_dependency_resumed',
+  );
 });
 
 test('a restart fails closed when construction compilation never bound a durable Builder order', () => {

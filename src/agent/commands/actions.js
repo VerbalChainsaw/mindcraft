@@ -173,12 +173,16 @@ function submitRoleOrder(agent, expectedRole, order) {
 
 function submitRememberedStructure(agent, order, {
     structuralMaterialAlternatives = false,
+    resumeAgenda = false,
 } = {}) {
     const boundOrder = bindStructureAccessoryMaterials(order, agent.bot, {
         structuralMaterialAlternatives,
     });
     const submission = submitRoleOrderResult(agent, 'builder', boundOrder);
     if (submission.result?.accepted === true) {
+        if (resumeAgenda) {
+            agent.agenda_director?.resumeConstructionContinuation?.(boundOrder.id);
+        }
         try {
             agent.home_state?.rememberStructure?.(boundOrder);
         } catch (error) {
@@ -1336,7 +1340,9 @@ export const actionsList = [
         perform: persistentJobCommand(function (agent) {
             const order = agent.home_state?.snapshot?.().structureOrder;
             if (!order) return 'Construction was not resumed: there is no remembered structure blueprint.';
-            return submitRememberedStructure(agent, resumeFailedWorkOrder(order));
+            return submitRememberedStructure(agent, resumeFailedWorkOrder(order), {
+                resumeAgenda: true,
+            });
         }),
     },
     {

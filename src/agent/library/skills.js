@@ -1934,9 +1934,9 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
         // harvest request into a damaging plunge toward an unreachable block.
         local.movements.maxDropDown = requiresMonotonicAscent
             ? 0
-            : Math.min(
+            : Math.max(
                 Number(local.movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
-                DEFAULT_MAX_DROP_DOWN,
+                Number(selection?.descentFallback?.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
             );
         local.movements.infiniteLiquidDropdownDistance = false;
         const goal = collectionApproachGoal(candidateEntry.safeStances)
@@ -6114,7 +6114,10 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
                 targetTimeoutMs: 8_000,
                 targetStallTimeoutMs: 3_000,
                 isSatisfied: () => carriedLogCount(bot, woodTypes) - before >= limit,
-                maxTargetFailures: 1,
+                // A single high or occluded log must not discard the rest of
+                // a physically discovered tree. Let CollectBlock try exactly
+                // one different native target before returning control.
+                maxTargetFailures: Math.min(2, targets.length),
             }),
             () => bot.collectBlock.cancelTask(),
         );
