@@ -1,8 +1,24 @@
 import { Vec3 } from 'vec3';
-import { Camera } from "./camera.js";
 import fs from 'node:fs/promises';
 import { resolvePlayerTarget } from '../player-target.js';
 import { getFullState } from '../library/full_state.js';
+
+// Camera reaches prismarine-viewer and node-canvas-webgl, which load the
+// `canvas` native binary. A missing or mismatched build of that binary threw
+// at module load and took the whole agent down with it -- including bots with
+// vision switched off, and every test that transitively imports the agent.
+//
+// Vision is already optional at runtime: the camera is only constructed when
+// the profile enables it, and every request path already answers
+// 'camera_unavailable' when it is absent. Loading the module is made optional
+// to match, so an unusable native dependency degrades exactly like a disabled
+// camera instead of being fatal. Kicked off during construction, so warm-up
+// still starts as early as it did before.
+let cameraModulePromise = null;
+function loadCameraModule() {
+    if (!cameraModulePromise) cameraModulePromise = import('./camera.js');
+    return cameraModulePromise;
+}
 
 const CAMERA_READY_TIMEOUT_MS = 8_000;
 const MINUTE_MS = 60_000;
@@ -58,10 +74,21 @@ export class VisionInterpreter {
         this.retainScreenshots = Number.isInteger(vision.retainScreenshots)
             ? Math.max(0, vision.retainScreenshots)
             : 12;
+        this.cameraReady = null;
+        this.cameraLoadError = null;
         if (this.allow_vision && this.visionMode !== 'off') {
-            this.camera = new Camera(agent.bot, this.fp, {
-                retainScreenshots: this.retainScreenshots,
-            });
+            this.cameraReady = loadCameraModule()
+                .then(({ Camera }) => {
+                    this.camera = new Camera(agent.bot, this.fp, {
+                        retainScreenshots: this.retainScreenshots,
+                    });
+                })
+                .catch((error) => {
+                    // Leaving this.camera unset routes every request through the
+                    // existing 'camera_unavailable' answer.
+                    this.cameraLoadError = String(error?.message || error).slice(0, 512);
+                    console.warn(`[vision] camera_unavailable: ${this.cameraLoadError}`);
+                });
         }
     }
 
@@ -125,6 +152,10 @@ export class VisionInterpreter {
     }
 
     async _runVision({ target, lookingMessage, aim }) {
+        // Settle the camera module before validating, so the synchronous
+        // `!this.camera` check sees a final answer rather than a load in
+        // flight. Never rejects: the loader records its own failure.
+        if (this.cameraReady) await this.cameraReady;
         const unavailable = this._validateRequest(target);
         if (unavailable) return unavailable;
 
