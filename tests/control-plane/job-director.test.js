@@ -159,6 +159,25 @@ test('Given work-order submissions, JobDirector owns exactly one active order', 
     target: { name: 'oak_log' },
     quota: 16,
   }));
+  director.persist({
+    ...director.activeOrder,
+    phase: 'acquire',
+    checkpoint: { collected: 5 },
+  });
+  const same = director.submit(createWorkOrder({
+    id: 'one',
+    role: 'builder',
+    kind: 'stockpile',
+    target: { name: 'oak_log' },
+    quota: 16,
+  }));
+  const conflict = director.submit(createWorkOrder({
+    id: 'one',
+    role: 'builder',
+    kind: 'stockpile',
+    target: { name: 'stone' },
+    quota: 16,
+  }));
   const second = director.submit(createWorkOrder({
     id: 'two',
     role: 'builder',
@@ -168,8 +187,44 @@ test('Given work-order submissions, JobDirector owns exactly one active order', 
   }));
 
   assert.deepEqual(first, { accepted: true, id: 'one' });
+  assert.deepEqual(same, { accepted: true, code: 'already_active', id: 'one' });
+  assert.deepEqual(conflict, { accepted: false, code: 'order_id_conflict', id: 'one' });
   assert.deepEqual(second, { accepted: false, code: 'job_busy', id: 'one' });
   assert.equal(director.snapshot().workOrder.id, 'one');
+  assert.equal(director.activeOrder.phase, 'acquire');
+  assert.equal(director.activeOrder.checkpoint.collected, 5);
+});
+
+test('A failed player job blocks autonomous shelter substitution until new direction arrives', () => {
+  const agent = createAgent('builder');
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({ inventory: {} }),
+    now: () => 10_000,
+  });
+  director.submit(createWorkOrder({
+    id: 'player-build',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'construction_site', x: 4, y: 64, z: 4 },
+    quota: 1,
+    blueprint: {
+      id: 'small_build',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{ x: 0, y: 0, z: 0, material: 'cobblestone' }],
+    },
+  }));
+  director.finishOrder('failed', 'material_unavailable', 'Waiting for player direction.', false);
+
+  assert.deepEqual(director.requestWorkOrder({ kind: 'emergency_shelter' }), {
+    accepted: false,
+    code: 'player_job_failed_awaiting_direction',
+    id: 'player-build',
+  });
 });
 
 test('Given an active typed player goal, survival shelter cannot seize persistent job ownership', () => {

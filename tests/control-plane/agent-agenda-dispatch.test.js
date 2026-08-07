@@ -27,7 +27,14 @@ function makeFakeAgent({ remaining = 0 } = {}) {
     runtime: { role: 'companion' },
     bot: {},
     agenda_director: {
-      add(entry) { calls.added.push(entry); return { accepted: true, description: `${entry.kind} ${entry.target || entry.recipient || ''}`.trim() }; },
+      add(entry) {
+        calls.added.push(entry);
+        return {
+          accepted: true,
+          id: `agenda-test-${calls.added.length}`,
+          description: `${entry.kind} ${entry.target || entry.recipient || ''}`.trim(),
+        };
+      },
       clear() { calls.cleared += 1; return { cleared: remaining }; },
       snapshot() { return { remaining }; },
     },
@@ -84,6 +91,117 @@ test('dispatchPlayerAgenda ignores a lone task so the fast path handles it', asy
   assert.equal(handled, false, 'a single task with no chain stays on the single-directive path');
   assert.equal(calls.added.length, 0);
   assert.equal(calls.stop, 0);
+});
+
+test('dispatchPlayerAgenda queues a construction barrier and returns it for model binding', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 0 });
+  const outcome = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'Gabriel',
+    'Gabriel',
+    'Build a small safe overnight outpost with windows and a bed, then go inside and sleep.',
+  );
+
+  assert.deepEqual(calls.added.map(entry => entry.kind), ['construction', 'sleep']);
+  assert.equal(outcome.deferredConstruction.entryId, 'agenda-test-1');
+  assert.match(outcome.deferredConstruction.modelInstruction, /bounded blueprint/i);
+  assert.equal(calls.operatorHoldReleased, 0, 'Stop remains held until the exact Builder order is bound');
+});
+
+test('a bound construction barrier releases sleep only after the exact Builder completion', async () => {
+  let now = 60_000;
+  let persisted = [];
+  const commands = [];
+  const order = {
+    id: 'builder-outpost-1',
+    phase: 'acquire',
+    evidence: { code: 'materials_required', detail: '' },
+  };
+  const agent = {
+    name: 'TestBot',
+    last_action_result: null,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: order, lastOrder: null },
+  };
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) { persisted = JSON.parse(JSON.stringify(entries)); },
+  };
+  const executeCommand = (_agent, command, options) => {
+    commands.push(command);
+    agent.last_action_result = {
+      actionId: 'sleep-complete',
+      phase: 'succeeded',
+      code: 'skill_slept',
+      detail: 'Slept in the verified bed.',
+      retryable: false,
+      evidence: { request: { routeOrigin: options.routeOrigin } },
+    };
+    return Promise.resolve();
+  };
+  let director = new AgendaDirector(agent, { store, executeCommand, now: () => now });
+  const construction = director.add({ kind: 'construction', requester: 'Gabriel' });
+  const sleep = director.add({ kind: 'sleep', requester: 'Gabriel' });
+
+  assert.equal(director.bindConstruction(construction.id, order.id).accepted, true);
+  assert.equal(director.entries.find(entry => entry.id === construction.id).executorId, order.id);
+  assert.equal(commands.length, 0);
+
+  director = new AgendaDirector(agent, { store, executeCommand, now: () => now });
+  assert.equal(director.entries.find(entry => entry.id === construction.id).state, 'active');
+  assert.equal(director.entries.find(entry => entry.id === construction.id).executorId, order.id);
+  assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'pending');
+
+  agent.job_director.activeOrder = null;
+  agent.job_director.lastOrder = {
+    ...order,
+    phase: 'complete',
+    evidence: { code: 'blueprint_complete', detail: 'Outpost verified.' },
+  };
+  director.update();
+  assert.equal(director.entries.find(entry => entry.id === construction.id).state, 'complete');
+  assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'pending');
+
+  now += 1_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(commands, ['!goToBed']);
+  assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'complete');
+});
+
+test('a failed construction barrier blocks its dependent sleep step', () => {
+  const order = { id: 'builder-outpost-failed', phase: 'acquire', evidence: {} };
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: order, lastOrder: null },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => 70_000,
+  });
+  const construction = director.add({ kind: 'construction', requester: 'Gabriel' });
+  const sleep = director.add({ kind: 'sleep', requester: 'Gabriel' });
+  director.bindConstruction(construction.id, order.id);
+  agent.job_director.activeOrder = null;
+  agent.job_director.lastOrder = {
+    ...order,
+    phase: 'failed',
+    evidence: { code: 'material_unavailable', detail: 'Could not finish.' },
+  };
+
+  director.update();
+
+  assert.equal(director.entries.find(entry => entry.id === construction.id).state, 'failed');
+  assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'failed');
+  assert.equal(
+    director.entries.find(entry => entry.id === sleep.id).evidence.code,
+    'construction_prerequisite_failed',
+  );
 });
 
 test('agenda acquire snapshots current family inventory for each dispatched step', () => {

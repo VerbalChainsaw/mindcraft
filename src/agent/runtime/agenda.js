@@ -32,6 +32,10 @@ export const AGENDA_KINDS = Object.freeze({
   harvest: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   stockpile: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   shelter: Object.freeze({ executor: 'job', needsTarget: false, needsQuantity: false }),
+  // The model compiles custom geometry, but the persisted entry stores only a
+  // typed barrier. AgendaDirector binds it to the exact accepted Builder order
+  // id before any dependent step may run.
+  construction: Object.freeze({ executor: 'job', needsTarget: false, needsQuantity: false }),
   // 'direct' runs a single bounded command the dispatcher builds in code from a
   // validated player name. The command text is never stored or replayed.
   goto: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsRecipient: true }),
@@ -48,6 +52,7 @@ export const AGENDA_KINDS = Object.freeze({
   farm_visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   maintain_farm: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   deposit: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  sleep: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   // Coordinates are validated numbers, never text, so a patrol step cannot
   // smuggle anything executable through the store.
   visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsPoint: true }),
@@ -218,6 +223,8 @@ export function describeAgendaEntry(entry) {
     case 'maintain_farm': return 'harvest and replant the remembered farm';
     case 'deposit': return `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
     case 'shelter': return 'build a shelter';
+    case 'construction': return 'build the requested structure';
+    case 'sleep': return 'go inside and sleep';
     case 'goto': return `go to ${entry.recipient}`;
     case 'follow_until': return `follow ${entry.recipient} until both are near ${readable}`;
     case 'visit': return `patrol to ${entry.x}, ${entry.y}, ${entry.z}`;

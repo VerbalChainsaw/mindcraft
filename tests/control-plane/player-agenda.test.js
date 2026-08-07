@@ -67,6 +67,10 @@ test('directiveToAgendaEntry maps agenda-worthy commands to typed entries', () =
     { kind: 'goto', requester: 'Gabriel', recipient: 'Gabriel' },
   );
   assert.deepEqual(
+    directiveToAgendaEntry('!goToBed', { requester: 'Gabriel' }),
+    { kind: 'sleep', requester: 'Gabriel' },
+  );
+  assert.deepEqual(
     directiveToAgendaEntry('!requestItemGoal("deliver", "oak_log", 5, "Gabriel")', { requester: 'Gabriel' }),
     { kind: 'deliver', requester: 'Gabriel', target: 'oak_log', quantity: 5, recipient: 'Gabriel' },
   );
@@ -143,6 +147,23 @@ test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed st
     { kind: 'deposit', requester: 'WorksitePlayer', target: 'wheat', quantity: 64 },
     { kind: 'goto', requester: 'WorksitePlayer', recipient: 'WorksitePlayer' },
   ]);
+  assert.deepEqual(plan.unresolved, []);
+});
+
+test('parsePlayerAgenda preserves custom construction as a barrier before sleep', () => {
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    'Build a small safe overnight outpost with windows and a bed, then go inside and sleep.',
+    {},
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => step.entry), [
+    { kind: 'construction', requester: 'Gabriel' },
+    { kind: 'sleep', requester: 'Gabriel' },
+  ]);
+  assert.equal(plan.steps[0].requiresModelAssignment, true);
   assert.deepEqual(plan.unresolved, []);
 });
 

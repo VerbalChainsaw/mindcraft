@@ -10,6 +10,7 @@ import {
 import {
   Agent,
   configureSurvivalOwnership,
+  correlatedPersistentJobSubmissionAccepted,
   emitStartupMilestone,
   shouldSeedLegacyDefaultGoal,
 } from '../../src/agent/agent.js';
@@ -1075,4 +1076,49 @@ test('a held construction request keeps physical Stop until a valid work order e
   assert.deepEqual(holds, ['player design request was not compiled']);
   assert.equal(responses.at(-1), 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.');
   assert.equal(history.some(entry => entry.content.includes('already registered and underway')), false);
+});
+
+test('deferred construction accepts only a new exact correlated job submission', () => {
+  const deferredAssignment = { holdGeneration: 7 };
+  const activeOrder = { id: 'builder-new-outpost' };
+  const base = {
+    deferredAssignment,
+    commandName: '!designStructure',
+    previousGeneration: 4,
+    activeOrder,
+  };
+
+  assert.equal(correlatedPersistentJobSubmissionAccepted({
+    ...base,
+    submission: {
+      generation: 4,
+      selectedSkill: '!designStructure',
+      submittedOrderId: 'builder-old-job',
+      activeOrderId: 'builder-old-job',
+      accepted: true,
+    },
+  }), false, 'an older successful receipt cannot accept the new request');
+
+  assert.equal(correlatedPersistentJobSubmissionAccepted({
+    ...base,
+    submission: {
+      generation: 5,
+      selectedSkill: '!designStructure',
+      submittedOrderId: 'builder-new-outpost',
+      activeOrderId: 'builder-old-job',
+      accepted: false,
+      code: 'job_busy',
+    },
+  }), false, 'job_busy cannot be mistaken for acceptance because some job is active');
+
+  assert.equal(correlatedPersistentJobSubmissionAccepted({
+    ...base,
+    submission: {
+      generation: 5,
+      selectedSkill: '!designStructure',
+      submittedOrderId: 'builder-new-outpost',
+      activeOrderId: 'builder-new-outpost',
+      accepted: true,
+    },
+  }), true);
 });

@@ -701,6 +701,21 @@ function reducerFor(order) {
   return null;
 }
 
+function immutableOrderPayload(order) {
+  return JSON.stringify({
+    id: order.id,
+    role: order.role,
+    kind: order.kind,
+    source: order.source,
+    requester: order.requester,
+    target: order.target,
+    constraints: order.constraints,
+    quota: order.quota,
+    blueprint: order.blueprint,
+    maxAttempts: order.maxAttempts,
+  });
+}
+
 export class JobDirector extends RoleDirector {
   constructor(agent, {
     executeCommand = executeAgentCommand,
@@ -766,12 +781,27 @@ export class JobDirector extends RoleDirector {
   }
 
   submit(raw) {
-    if (this.activeOrder && !TERMINAL_PHASES.has(this.activeOrder.phase)) {
-      return { accepted: false, code: 'job_busy', id: this.activeOrder.id };
-    }
     try {
       const order = normalizeWorkOrder(bindEmergencyShelterMaterial(raw, this.agent.bot));
       if (TERMINAL_PHASES.has(order.phase)) return { accepted: false, code: 'job_already_terminal' };
+      if (this.activeOrder && !TERMINAL_PHASES.has(this.activeOrder.phase)) {
+        if (this.activeOrder.id !== order.id) {
+          return { accepted: false, code: 'job_busy', id: this.activeOrder.id };
+        }
+        if (immutableOrderPayload(this.activeOrder) !== immutableOrderPayload(order)) {
+          return { accepted: false, code: 'order_id_conflict', id: order.id };
+        }
+        this.nextAttemptAt = 0;
+        this.setStatus(
+          'waiting',
+          'already_active',
+          this.activeOrder.target?.name || null,
+          `Work order ${order.id} is already active; continuing from verified Minecraft state.`,
+          true,
+        );
+        this.agent.behavior_arbiter?.wake?.('job_resubmitted');
+        return { accepted: true, code: 'already_active', id: order.id };
+      }
       this.activeOrder = order;
       this.lastOrder = null;
       this.store.save(order);
@@ -798,6 +828,16 @@ export class JobDirector extends RoleDirector {
       return {
         accepted: false,
         code: 'player_agenda_active',
+      };
+    }
+    if (
+      this.lastOrder?.phase === 'failed'
+      && PLAYER_JOB_SOURCES.has(this.lastOrder.source)
+    ) {
+      return {
+        accepted: false,
+        code: 'player_job_failed_awaiting_direction',
+        id: this.lastOrder.id,
       };
     }
     if (this.activeOrder && !TERMINAL_PHASES.has(this.activeOrder.phase)) {

@@ -100,33 +100,59 @@ function applyRuntimeChange(agent, patch) {
     }
 }
 
-function submitRoleOrder(agent, expectedRole, order) {
+function submitRoleOrderResult(agent, expectedRole, order) {
     const director = agent.job_director;
     if (!director || typeof director.submit !== 'function') {
-        return `Work order was not accepted: ${expectedRole} job director unavailable.`;
+        return {
+            result: { accepted: false, code: 'job_director_unavailable' },
+            message: `Work order was not accepted: ${expectedRole} job director unavailable.`,
+        };
     }
     const result = director.submit(order);
+    const request = agent.actions?.currentRequestContext?.() || null;
+    const previousGeneration = Number(agent.last_persistent_job_submission?.generation) || 0;
+    agent.last_persistent_job_submission = Object.freeze({
+        generation: previousGeneration + 1,
+        requestId: request?.requestId || null,
+        selectedSkill: request?.selectedSkill || null,
+        submittedOrderId: order?.id || null,
+        activeOrderId: director.activeOrder?.id || null,
+        accepted: result?.accepted === true,
+        code: result?.code || (result?.accepted === true ? 'job_accepted' : 'job_rejected'),
+    });
     if (result?.accepted !== true) {
-        return `Work order was not accepted: ${result?.code || 'job director unavailable'}.`;
+        return {
+            result,
+            message: `Work order was not accepted: ${result?.code || 'job director unavailable'}.`,
+        };
     }
     const defaultRole = agent.runtime?.role || 'companion';
     const roleContext = defaultRole === expectedRole
         ? ''
         : ` while keeping ${defaultRole} as the default role`;
-    return `Accepted resumable ${expectedRole} work order ${result.id}${roleContext}.`;
+    return {
+        result,
+        message: result.code === 'already_active'
+            ? `Resuming already-active ${expectedRole} work order ${result.id}${roleContext}.`
+            : `Accepted resumable ${expectedRole} work order ${result.id}${roleContext}.`,
+    };
+}
+
+function submitRoleOrder(agent, expectedRole, order) {
+    return submitRoleOrderResult(agent, expectedRole, order).message;
 }
 
 function submitRememberedStructure(agent, order) {
     const boundOrder = bindStructureAccessoryMaterials(order, agent.bot);
-    const response = submitRoleOrder(agent, 'builder', boundOrder);
-    if (response.startsWith('Accepted resumable')) {
+    const submission = submitRoleOrderResult(agent, 'builder', boundOrder);
+    if (submission.result?.accepted === true) {
         try {
             agent.home_state?.rememberStructure?.(boundOrder);
         } catch (error) {
-            return `${response} Warning: durable home tracking failed: ${String(error?.message || error).slice(0, 160)}.`;
+            return `${submission.message} Warning: durable home tracking failed: ${String(error?.message || error).slice(0, 160)}.`;
         }
     }
-    return response;
+    return submission.message;
 }
 
 function bindSafeConstructionOrder(agent, order, origin) {

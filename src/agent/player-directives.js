@@ -220,7 +220,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/\b(?:go to (?:bed|sleep)|get to bed|get some sleep|time for bed|lie down|sleep now)\b/.test(text)) {
+    if (/\b(?:go to (?:bed|sleep)|get to bed|get some sleep|time for bed|lie down|sleep now|go (?:in|inside) and sleep|sleep inside)\b/.test(text)) {
         return {
             command: '!goToBed',
             response: 'Finding the nearest bed to sleep.',

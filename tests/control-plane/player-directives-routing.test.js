@@ -58,6 +58,9 @@ test('surface, coordinates, move-away, bed, fish, and death recovery route direc
   assert.equal(commandFor('back off 3'), '!moveAway(3)');
   assert.equal(commandFor('give me some space'), '!moveAway(5)');
   assert.equal(commandFor('go to sleep'), '!goToBed');
+  assert.equal(commandFor('go inside and sleep'), '!goToBed');
+  assert.equal(commandFor('sleep inside'), '!goToBed');
+  assert.equal(commandFor('go in and get some sleep'), '!goToBed');
   assert.equal(commandFor('go catch some fish'), '!fish(8)');
   assert.equal(commandFor('go get your dropped items'), '!recoverDeathItems');
 });

@@ -180,6 +180,29 @@ export class AgendaDirector {
     this.persist();
   }
 
+  bindConstruction(entryId, orderId) {
+    const entry = this.entries.find(candidate => candidate.id === entryId);
+    const order = this.agent.job_director?.activeOrder;
+    if (!entry || entry.kind !== 'construction' || isTerminalAgendaState(entry.state)) {
+      return { accepted: false, code: 'construction_barrier_missing' };
+    }
+    if (!orderId || order?.id !== orderId) {
+      return { accepted: false, code: 'construction_order_mismatch' };
+    }
+    if (entry.executorId && entry.executorId !== orderId) {
+      return { accepted: false, code: 'construction_barrier_conflict' };
+    }
+    this.replace(entry.id, {
+      state: 'active',
+      startedAt: entry.startedAt || this.now(),
+      executorId: orderId,
+      evidence: { code: 'construction_bound', detail: `Bound to Builder work order ${orderId}.` },
+    });
+    this.nextEligibleAt = 0;
+    this.setStatus('acting', 'construction_bound', `Building through work order ${orderId}.`, entry.id);
+    return { accepted: true, id: entry.id, executorId: orderId };
+  }
+
   snapshot() {
     const active = this.activeEntry();
     return {
@@ -277,6 +300,7 @@ export class AgendaDirector {
         state: succeeded ? 'complete' : 'failed',
         code: last?.evidence?.code || 'job_ended',
         detail: last?.evidence?.detail || '',
+        ...(entry.kind === 'construction' && !succeeded ? { retryable: false } : {}),
       };
     }
     return {
@@ -375,8 +399,22 @@ export class AgendaDirector {
     // Persist the terminal step and its dependent exact-workstation handoff in
     // one store write. A restart can therefore never observe arrival complete
     // while the following smelt remains free to select a different furnace.
+    const blockedSleep = settled.state !== 'complete' && active.kind === 'construction'
+      ? this.nextPendingAfter(active)
+      : null;
     this.entries = this.entries.map(entry => {
       if (entry.id === active.id) return normalizeAgendaEntry({ ...entry, ...activePatch });
+      if (blockedSleep?.kind === 'sleep' && entry.id === blockedSleep.id) {
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: {
+            code: 'construction_prerequisite_failed',
+            detail: 'Sleep was not attempted because the requested structure did not complete.',
+          },
+        });
+      }
       if (workstationConstraint && entry.id === dependentEntryId) {
         return normalizeAgendaEntry({ ...entry, workstationConstraint });
       }
@@ -509,6 +547,7 @@ export class AgendaDirector {
       farm_visit: () => '!goToFarm',
       maintain_farm: () => '!maintainFarm',
       deposit: () => `!putInChest("${entry.target}", ${entry.quantity})`,
+      sleep: () => '!goToBed',
     };
     const command = (DIRECT_COMMANDS[entry.kind] || DIRECT_COMMANDS.goto)();
     const previousActionId = this.agent.last_action_result?.actionId || null;
@@ -584,6 +623,16 @@ export class AgendaDirector {
           this.agent.behavior_arbiter?.requestDirectiveResume?.();
         }
       }
+      return;
+    }
+
+    if (next.kind === 'construction' && !next.executorId) {
+      this.setStatus(
+        'waiting',
+        'construction_assignment_pending',
+        'Waiting for the bounded construction blueprint to be accepted.',
+        next.id,
+      );
       return;
     }
 

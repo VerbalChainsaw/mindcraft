@@ -246,6 +246,8 @@ export function directiveToAgendaEntry(command, { requester = '' } = {}) {
       return entry('stockpile', { target: unquote(args[0]), quantity: asQuantity(args[1]) ?? 1 });
     case 'assignFunctionalShelterJob':
       return entry('shelter', {});
+    case 'goToBed':
+      return entry('sleep', {});
     case 'craftRecipe':
       return entry('craft', { target: unquote(args[0]), quantity: asQuantity(args[1]) ?? 1 });
     case 'smeltItem':
@@ -317,6 +319,18 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const standing = [];
   for (const [segmentIndex, segment] of segments.entries()) {
     const directive = resolveDirective(playerName, segment, context);
+    if (directive?.deferToModel === true) {
+      steps.push({
+        segment,
+        command: null,
+        response: '',
+        entry: { kind: 'construction', requester: playerName },
+        segmentIndex,
+        requiresModelAssignment: true,
+        modelInstruction: directive.modelInstruction || '',
+      });
+      continue;
+    }
     const agendaEntry = directive ? directiveToAgendaEntry(directive.command, { requester: playerName }) : null;
     if (agendaEntry) {
       const previous = steps.at(-1)?.entry;

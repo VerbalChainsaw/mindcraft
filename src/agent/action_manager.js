@@ -192,6 +192,10 @@ export class ActionManager {
         return this.requestContext.run(normalizeRequestContext(context), operation);
     }
 
+    currentRequestContext() {
+        return this.requestContext.getStore() || null;
+    }
+
     ownerPriority(owner) {
         return ACTION_OWNER_PRIORITY[normalizeActionOwner(owner)];
     }

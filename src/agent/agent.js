@@ -86,6 +86,25 @@ export function emitStartupMilestone(milestone) {
     }
 }
 
+export function correlatedPersistentJobSubmissionAccepted({
+    deferredAssignment,
+    commandName,
+    previousGeneration,
+    submission,
+    activeOrder,
+} = {}) {
+    return Boolean(
+        deferredAssignment
+        && commandAssignsPersistentJob(commandName)
+        && Number(submission?.generation) > (Number(previousGeneration) || 0)
+        && submission?.selectedSkill === commandName
+        && submission?.accepted === true
+        && submission?.submittedOrderId
+        && submission.submittedOrderId === submission.activeOrderId
+        && submission.activeOrderId === activeOrder?.id
+    );
+}
+
 function boundedChatText(message) {
     const normalized = String(message || '')
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
@@ -818,6 +837,7 @@ export class Agent {
         });
         if (!plan) return false;
         const agendaBusy = (director.snapshot?.().remaining || 0) > 0;
+        const compilesConstruction = plan.steps.some(step => step.requiresModelAssignment === true);
         // Only intercept a real chain, an explicit interrupt, or an append onto
         // work already queued. Anything else stays on the single-command path.
         if (!plan.multiStep && plan.disposition !== 'interrupt' && !agendaBusy) return false;
@@ -830,7 +850,7 @@ export class Agent {
         // step alone and simply extends the queue.
         const takeover = plan.disposition === 'interrupt' || !agendaBusy;
         if (takeover) {
-            this.releaseOperatorHold('player agenda');
+            if (!compilesConstruction) this.releaseOperatorHold('player agenda');
             this.actions.cancelResume();
             this.goal_director?.releaseProtectedCompletion?.('Released by a later player agenda.');
             this.goal_director?.cancel?.('Superseded by a player plan.');
@@ -850,9 +870,19 @@ export class Agent {
 
         const queued = [];
         const rejected = [];
+        let deferredConstruction = null;
         for (const step of plan.steps) {
             const result = director.add(step.entry);
-            if (result?.accepted) queued.push(result.description || step.segment);
+            if (result?.accepted) {
+                queued.push(result.description || step.segment);
+                if (step.requiresModelAssignment === true) {
+                    deferredConstruction = {
+                        entryId: result.id,
+                        segment: step.segment,
+                        modelInstruction: step.modelInstruction || '',
+                    };
+                }
+            }
             else rejected.push(`${step.segment} (${result?.detail || result?.code || 'rejected'})`);
         }
 
@@ -872,7 +902,7 @@ export class Agent {
         await this.history.add(this.name, response);
         this.history.save();
         this.routeResponse(source, response);
-        return true;
+        return deferredConstruction ? { deferredConstruction } : true;
     }
 
     async handleMessage(source, message, max_responses=null) {
@@ -884,6 +914,7 @@ export class Agent {
 
         let used_command = false;
         let deferredModelAssignment = null;
+        let playerMessageAlreadyRecorded = false;
         if (max_responses === null) {
             max_responses = settings.max_commands === -1 ? Infinity : settings.max_commands;
         }
@@ -971,16 +1002,27 @@ export class Agent {
             // deterministically into the Agenda queue before the single-directive
             // path, so serial plans never need a model round trip. A lone task
             // returns false here and continues below unchanged.
-            if (await this.dispatchPlayerAgenda(source, canonicalPlayer, message)) {
+            const agendaDispatch = await this.dispatchPlayerAgenda(source, canonicalPlayer, message);
+            if (agendaDispatch === true) {
                 return true;
             }
+            playerMessageAlreadyRecorded = Boolean(agendaDispatch?.deferredConstruction);
 
             // Keep `source` for history, replies, and player-order audit; canonical
             // identity resolution is scoped to deterministic command generation.
-            const directive = resolvePlayerDirective(canonicalPlayer || source, message, {
-                role: this.runtime?.role,
-                bot: this.bot,
-            });
+            const queuedConstruction = agendaDispatch?.deferredConstruction || null;
+            const directive = queuedConstruction
+                ? {
+                    command: null,
+                    response: '',
+                    releasesHold: true,
+                    deferToModel: true,
+                    modelInstruction: queuedConstruction.modelInstruction,
+                }
+                : resolvePlayerDirective(canonicalPlayer || source, message, {
+                    role: this.runtime?.role,
+                    bot: this.bot,
+                });
             if (directive?.deferToModel === true) {
                 // Blueprint compilation is cognition, not physical ownership.
                 // Retain an existing Stop while the model works; the eventual
@@ -991,6 +1033,7 @@ export class Agent {
                     holdGeneration: this.isOperatorHeld()
                         ? this.operator_hold_generation
                         : null,
+                    agendaEntryId: queuedConstruction?.entryId || null,
                 };
                 this.self_prompter.interruptForManualCommand();
                 this.role_director.deferForManualCommand('Player design request is being interpreted.');
@@ -1071,7 +1114,7 @@ export class Agent {
         }
 
         // Handle other user messages
-        await this.history.add(source, message);
+        if (!playerMessageAlreadyRecorded) await this.history.add(source, message);
         this.history.save();
 
         if (!self_prompt && this.self_prompter.isActive()) // message is from user during self-prompting
@@ -1170,6 +1213,9 @@ export class Agent {
                 }
 
                 const previousActionId = this.last_action_result?.actionId || null;
+                const previousJobSubmissionGeneration = Number(
+                    this.last_persistent_job_submission?.generation,
+                ) || 0;
                 const commandOwner = self_prompt || source === 'system' ? 'autonomy' : 'player';
                 let execute_res = await executeCommand(this, res, {
                     owner: commandOwner,
@@ -1181,12 +1227,28 @@ export class Agent {
 
                 if (execute_res)
                     this.history.add('system', execute_res);
-                const deferredAssignmentAccepted = Boolean(
-                    deferredModelAssignment
-                    && commandAssignsPersistentJob(command_name)
-                    && this.job_director?.activeOrder,
-                );
+                const submittedJob = this.last_persistent_job_submission;
+                const deferredAssignmentAccepted = correlatedPersistentJobSubmissionAccepted({
+                    deferredAssignment: deferredModelAssignment,
+                    commandName: command_name,
+                    previousGeneration: previousJobSubmissionGeneration,
+                    submission: submittedJob,
+                    activeOrder: this.job_director?.activeOrder,
+                });
                 if (deferredAssignmentAccepted) {
+                    if (deferredModelAssignment.agendaEntryId) {
+                        const binding = this.agenda_director?.bindConstruction?.(
+                            deferredModelAssignment.agendaEntryId,
+                            submittedJob.activeOrderId,
+                        );
+                        if (binding?.accepted !== true) {
+                            const detail = `The structure job was accepted, but its durable agenda barrier could not be bound (${binding?.code || 'unknown error'}). I am holding position.`;
+                            await this.history.add('system', detail);
+                            this.holdPosition('construction agenda binding failed');
+                            this.routeResponse(source, detail);
+                            break;
+                        }
+                    }
                     deferredModelAssignment = null;
                     this.releaseOperatorHold('player design work order accepted');
                     this.history.save();
