@@ -110,6 +110,20 @@ test('a failed concrete acquisition target survives restart normalization and ex
   assert.equal(collectionPositionExcluded({ x: 27, y: 59, z: -7 }, expanded), true);
   assert.equal(collectionPositionExcluded({ x: 35, y: 59, z: -7 }, expanded), false);
 
+  const separated = createWorkOrder({
+    ...order,
+    id: 'builder-separated-target-recovery',
+    checkpoint: {
+      failedTargets: [
+        { name: 'stone', x: 0, y: 60, z: 0 },
+        { name: 'stone', x: 40, y: 60, z: 0 },
+      ],
+    },
+  });
+  const separatedExclusions = workOrderCollectionExclusions(separated, 'stone');
+  assert.equal(collectionPositionExcluded({ x: 12, y: 60, z: 0 }, separatedExclusions), false);
+  assert.equal(collectionPositionExcluded({ x: 28, y: 60, z: 0 }, separatedExclusions), false);
+
   let exhausted = second;
   for (let index = second.recoveries; index <= second.maxRecoveries; index += 1) {
     exhausted = advanceWorkOrder(exhausted, {

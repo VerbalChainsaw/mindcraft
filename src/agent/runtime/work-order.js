@@ -406,17 +406,26 @@ export function workOrderCollectionExclusions(order, requestedName = null) {
     .filter(target => [target?.x, target?.y, target?.z].every(Number.isFinite))
     .filter(target => !canonicalRequested || target.name === canonicalRequested);
   // One rejected block excludes its compact vein. Two repeat rejections are
-  // evidence that the local approach/region is unsuitable, so the next
-  // binding must move materially farther instead of draining the budget on
-  // adjacent coordinates.
-  const boundedRadius = targets.length >= 2 ? 16 : 4;
-  return targets
-    .map(target => ({
+  // evidence that the local approach/region is unsuitable only when their
+  // coordinates actually describe the same local region. A global count of
+  // unrelated failures must not inflate every old point until their zones
+  // erase an otherwise usable forest or ore field.
+  return targets.map((target, index) => {
+    const repeatedLocalFailure = targets.slice(0, index).some(previous => (
+      previous.name === target.name
+      && Math.max(
+        Math.abs(previous.x - target.x),
+        Math.abs(previous.y - target.y),
+        Math.abs(previous.z - target.z),
+      ) <= 8
+    ));
+    return {
       x: Math.floor(target.x),
       y: Math.floor(target.y),
       z: Math.floor(target.z),
-      radius: boundedRadius,
-    }));
+      radius: repeatedLocalFailure ? 16 : 4,
+    };
+  });
 }
 
 export function advanceWorkOrder(order, result, {
