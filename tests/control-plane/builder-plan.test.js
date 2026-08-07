@@ -63,6 +63,16 @@ test('general construction compiler creates bounded supported shapes with a safe
     'cobblestone',
     { canSupportMaterial: name => name === 'cobblestone' },
   ), /weather_cover|open to the sky/i);
+  assert.throws(() => expandStructureDesign(
+    'shell 0 0 0 5 4 5 cobblestone; carve 2 1 0 1 2 1; put 2 1 0 door north; put 1 1 1 bed east',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), /lacks planned solid support.*room or slab/i);
+  assert.throws(() => expandStructureDesign(
+    'room 0 0 0 5 4 5 cobblestone; put 1 1 1 bed north',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), /occupied head cell/i, 'an explicit facing must not silently rotate to another clear direction');
 
   const platform = createConstructionBlueprint({
     shape: 'platform',

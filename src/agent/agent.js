@@ -62,6 +62,7 @@ const HOLD_SAFE_COMMANDS = new Set([
 ]);
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
+const MAX_CONSTRUCTION_COMPILATION_TURNS = 6;
 const MAX_INGAME_CHAT_CHARS = 240;
 const MIN_INGAME_CHAT_INTERVAL_MS = 450;
 // One bounded entity read at roughly 7Hz. Cheap enough to run continuously and
@@ -1059,7 +1060,19 @@ export class Agent {
                 deferredModelAssignment = {
                     holdGeneration: this.operator_hold_generation,
                     agendaEntryId: queuedConstruction?.entryId || null,
+                    lastFailureSignature: '',
+                    repeatedFailures: 0,
                 };
+                max_responses = Math.min(
+                    max_responses,
+                    Math.max(
+                        1,
+                        Math.min(
+                            MAX_CONSTRUCTION_COMPILATION_TURNS,
+                            Number(this.runtime?.limits?.maxPromptTurns) || 3,
+                        ),
+                    ),
+                );
                 this.self_prompter.interruptForManualCommand();
                 this.role_director.deferForManualCommand('Player design request is being interpreted.');
                 if (directive.modelInstruction) {
@@ -1279,6 +1292,25 @@ export class Agent {
                     this.releaseOperatorHold('player design work order accepted');
                     this.history.save();
                     break;
+                }
+                if (deferredModelAssignment && PLAYER_DESIGN_COMMANDS.has(command_name)) {
+                    const failureSignature = String(execute_res || '')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .slice(0, 280);
+                    if (failureSignature) {
+                        deferredModelAssignment.repeatedFailures = failureSignature === deferredModelAssignment.lastFailureSignature
+                            ? deferredModelAssignment.repeatedFailures + 1
+                            : 1;
+                        deferredModelAssignment.lastFailureSignature = failureSignature;
+                        if (deferredModelAssignment.repeatedFailures >= 2) {
+                            await this.history.add(
+                                'system',
+                                'Construction compilation stopped because the same rejected design result repeated without progress.',
+                            );
+                            break;
+                        }
+                    }
                 }
                 const terminalActionFailure = self_prompt
                     && isAction(command_name)

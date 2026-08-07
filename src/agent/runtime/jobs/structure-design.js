@@ -68,6 +68,7 @@ export function designLanguageHelp() {
   'line X1 Y1 Z1 X2 Y2 Z2 - straight run between two points on one axis.',
   'block X Y Z MATERIAL - one exact block or fixture material.',
   'box, shell, room, slab, ring, line, and roof accept an optional MATERIAL as their last value.',
+  'For a habitable building use room, or combine slab + shell + roof. Shell has walls only: no floor and no roof.',
   'roof X Y Z W D STYLE - flat, gable, or pyramid; stepped and solid so it supports itself.',
   'carve X Y Z W H D - remove already-planned blocks to cut a doorway, window, or interior.',
   `put X Y Z THING [FACING] - place one fixture: ${ACCESSORY_NAMES.join(' ')}; door and bed optionally face north, south, east, or west.`,
@@ -577,30 +578,52 @@ function logicalFixtures(placed, canSupportMaterial) {
           : z === maxZ
             ? 'north'
             : null;
-    const candidates = [
-      value.requestedFacing,
-      value.fixtureKind === 'door' ? perimeterFacing : null,
-      'north',
-      'south',
-      'east',
-      'west',
-    ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
-    const facing = candidates.find(candidate => {
+    const orientationProblem = (candidate) => {
       if (value.fixtureKind === 'door') {
         const upperKey = `${x}:${y + 1}:${z}`;
         const support = placed.get(`${x}:${y - 1}:${z}`);
-        return !placed.has(upperKey)
-          && Boolean(support)
-          && canSupportMaterial(support.material);
+        if (placed.has(upperKey)) return `has an occupied upper cell at ${x},${y + 1},${z}`;
+        if (!support || !canSupportMaterial(support.material)) {
+          return `lacks planned solid support at ${x},${y - 1},${z}`;
+        }
+        return null;
       }
       const offset = FACING_OFFSETS[candidate];
       const headKey = `${x + offset.x}:${y}:${z + offset.z}`;
-      const headSupport = placed.get(`${x + offset.x}:${y - 1}:${z + offset.z}`);
-      return !placed.has(headKey)
-        && Boolean(headSupport)
-        && canSupportMaterial(headSupport.material);
-    });
-    if (!facing) throw new TypeError(`Fixture ${id} has no clear supported ${value.fixtureKind} orientation.`);
+      if (placed.has(headKey)) {
+        return `has an occupied head cell at ${x + offset.x},${y},${z + offset.z}`;
+      }
+      const missingSupports = [
+        { x, y: y - 1, z },
+        { x: x + offset.x, y: y - 1, z: z + offset.z },
+      ].filter(position => {
+        const support = placed.get(`${position.x}:${position.y}:${position.z}`);
+        return !support || !canSupportMaterial(support.material);
+      });
+      if (missingSupports.length > 0) {
+        return `lacks planned solid support at ${missingSupports.map(position => `${position.x},${position.y},${position.z}`).join(' and ')}`;
+      }
+      return null;
+    };
+    const candidates = (value.requestedFacing
+      ? [value.requestedFacing]
+      : [
+          value.fixtureKind === 'door' ? perimeterFacing : null,
+          'north',
+          'south',
+          'east',
+          'west',
+        ]).filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+    const facing = candidates.find(candidate => (
+      FACING_OFFSETS[candidate]
+      && orientationProblem(candidate) === null
+    ));
+    if (!facing) {
+      const detail = candidates.length === 1 ? orientationProblem(candidates[0]) : null;
+      throw new TypeError(detail
+        ? `Fixture ${id} ${detail}; add a solid floor with room or slab before placing the fixture.`
+        : `Fixture ${id} has no clear supported ${value.fixtureKind} orientation.`);
+    }
     const direction = FACING_OFFSETS[facing];
     const occupiedOffsets = value.fixtureKind === 'door'
       ? [{ x: 0, y: 0, z: 0, part: 'lower' }, { x: 0, y: 1, z: 0, part: 'upper' }]

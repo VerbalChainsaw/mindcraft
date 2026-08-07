@@ -603,7 +603,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
             response: '',
             releasesHold: true,
             deferToModel: true,
-            modelInstruction: 'This is one player-authorized multi-block construction outcome. Compile the complete bounded blueprint before acquiring materials. Use !buildStructure for a known named building or !designStructure for a custom arrangement. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.',
+            modelInstruction: 'This is one player-authorized multi-block construction outcome. Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.',
         };
     }
 
