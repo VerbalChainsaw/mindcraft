@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import minecraftData from 'minecraft-data';
 
 import {
   classifyEntityMotion,
@@ -356,7 +357,7 @@ test('The causal planner prefers the nearest physical source behind equivalent r
   });
 
   assert.equal(plan.status, 'ready');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64, true)');
   assert.equal(probes.every(probe => probe.maxDistance <= 16), true);
   assert.equal(
     new Set(probes.map(probe => `${probe.matching}:${probe.maxDistance}`)).size,
@@ -376,7 +377,7 @@ test('Equivalent plank recipes collect generic wood before binding an unobserved
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'collect_wood');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64, true)');
 });
 
 test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {
@@ -469,7 +470,7 @@ test('Recursive recipes require evidence before treating a crafted self-drop blo
   assert.equal(observed.status, 'ready');
   assert.equal(
     observed.nextStep.capability.binding.command,
-    '!collectBlocksInRange("bone_block", 1, 64)',
+    '!collectBlocksInRange("bone_block", 1, 64, true)',
   );
   const excludedObserved = buildPrerequisitePlan(recursivePlacedBlockBot({ observed: true }), {
     target: 'white_dye',
@@ -491,7 +492,7 @@ test('Recursive recipes require evidence before treating a crafted self-drop blo
   assert.equal(explicitWorldSearch.status, 'ready');
   assert.equal(
     explicitWorldSearch.nextStep.capability.binding.command,
-    '!collectBlocksInRange("bone_block", 1, 64)',
+    '!collectBlocksInRange("bone_block", 1, 64, true)',
   );
 });
 
@@ -625,7 +626,7 @@ test('The causal planner acquires remote recipe ingredients before provisioning 
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'collect_block');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("test_gem_ore", 5, 64)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("test_gem_ore", 5, 64, true)');
 
   const staged = remoteTableRecipeBot();
   staged.inventory.items = () => [{ name: 'test_gem', type: 2, count: 5 }];
@@ -640,6 +641,213 @@ test('The causal planner acquires remote recipe ingredients before provisioning 
   assert.equal(readyToCraft.status, 'ready');
   assert.equal(readyToCraft.nextStep.capability.id, 'craft');
   assert.equal(readyToCraft.nextStep.capability.binding.command, '!craftRecipe("test_machine", 1)');
+});
+
+test('The causal planner uses mixed carried planks before searching for another exact log species', () => {
+  const items = {
+    1: { id: 1, name: 'crafting_table' },
+    2: { id: 2, name: 'oak_planks' },
+    3: { id: 3, name: 'jungle_planks' },
+    4: { id: 4, name: 'oak_log' },
+    5: { id: 5, name: 'jungle_log' },
+  };
+  const carried = [
+    { name: 'oak_planks', type: 2, count: 3 },
+    { name: 'jungle_planks', type: 3, count: 1 },
+  ];
+  const bot = {
+    inventory: { slots: carried, items: () => carried },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks: {
+        10: { id: 10, name: 'oak_log', diggable: true, drops: [4], harvestTools: {} },
+        11: { id: 11, name: 'jungle_log', diggable: true, drops: [5], harvestTools: {} },
+      },
+      blocksByName: {},
+      recipes: {
+        1: [
+          { inShape: [[2, 2], [2, 2]], result: { id: 1, count: 1 } },
+          { inShape: [[3, 3], [3, 3]], result: { id: 1, count: 1 } },
+        ],
+        2: [{ ingredients: [4], result: { id: 2, count: 4 } }],
+        3: [{ ingredients: [5], result: { id: 3, count: 4 } }],
+      },
+    },
+    findBlock() { return null; },
+  };
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'crafting_table',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'craft');
+  assert.equal(plan.nextStep.capability.binding.command, '!craftRecipe("crafting_table", 1)');
+  assert.equal(plan.actions.some(action => action.capability.id === 'collect_block'), false);
+  assert.match(plan.nextStep.learningKey, /4xplanks/);
+});
+
+test('The causal planner compares carried bamboo transforms before generic wood search', () => {
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'bamboo', type: registry.itemsByName.bamboo.id, count: 83 },
+    { name: 'jungle_planks', type: registry.itemsByName.jungle_planks.id, count: 1 },
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+    { name: 'shears', type: registry.itemsByName.shears.id, count: 1 },
+    {
+      name: 'wooden_pickaxe',
+      type: registry.itemsByName.wooden_pickaxe.id,
+      count: 1,
+      durabilityUsed: 51,
+    },
+    {
+      name: 'wooden_pickaxe',
+      type: registry.itemsByName.wooden_pickaxe.id,
+      count: 1,
+      durabilityUsed: 58,
+    },
+  ];
+  const bot = {
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    entities: {},
+    inventory: { slots: carried, items: () => carried },
+    registry,
+    findBlock() { return null; },
+  };
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'cobblestone',
+    quantity: 8,
+    range: 64,
+    toolRequirement: {
+      name: 'wooden_pickaxe',
+      minimumUsableDurability: 1,
+    },
+    allowUnobservedSelfDropRoot: false,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'craft');
+  assert.match(plan.nextStep.capability.binding.command, /bamboo_block|bamboo_planks/);
+  assert.equal(plan.actions.some(action => action.capability.id === 'collect_wood'), false);
+
+  const wornToolReplacement = buildPrerequisitePlan(bot, {
+    target: 'wooden_pickaxe',
+    quantity: 1,
+    toolRequirement: {
+      name: 'wooden_pickaxe',
+      minimumUsableDurability: 1,
+    },
+    allowUnobservedSelfDropRoot: false,
+  });
+  assert.equal(wornToolReplacement.status, 'ready');
+  assert.equal(wornToolReplacement.nextStep.capability.id, 'craft');
+  assert.ok(wornToolReplacement.actions.some(action => (
+    action.capability.binding.command === '!craftRecipe("wooden_pickaxe", 1)'
+  )), 'the two worn carried pickaxes must not satisfy the usable-durability prerequisite');
+
+  const carriedBuilderMaterials = [
+    { name: 'oak_planks', type: registry.itemsByName.oak_planks.id, count: 2 },
+    { name: 'bamboo', type: registry.itemsByName.bamboo.id, count: 50 },
+    { name: 'bamboo_block', type: registry.itemsByName.bamboo_block.id, count: 1 },
+    { name: 'cobblestone', type: registry.itemsByName.cobblestone.id, count: 47 },
+  ];
+  const implicitMiningToolPlan = buildPrerequisitePlan({
+    entity: { position: { x: 0, y: 34, z: 0 } },
+    entities: {},
+    inventory: { slots: carriedBuilderMaterials, items: () => carriedBuilderMaterials },
+    registry,
+    findBlock({ matching }) {
+      return matching === registry.blocksByName.granite.id
+        ? { name: 'granite', position: { x: 1, y: 34, z: 0 } }
+        : null;
+    },
+  }, {
+    target: 'granite',
+    quantity: 8,
+    range: 64,
+    allowUnobservedSelfDropRoot: false,
+  });
+  assert.equal(implicitMiningToolPlan.status, 'ready');
+  assert.ok(implicitMiningToolPlan.exploredNodes < 384);
+  assert.ok(implicitMiningToolPlan.actions.some(action => (
+    action.capability.binding.command === '!craftRecipe("stone_pickaxe", 1)'
+  )));
+  assert.equal(implicitMiningToolPlan.actions.some(action => (
+    /_log/.test(action.capability.binding.command)
+    || action.capability.id === 'collect_wood'
+  )), false);
+
+  const bedPlan = buildPrerequisitePlan(bot, {
+    target: 'red_bed',
+    quantity: 1,
+    range: 64,
+    allowEntityAlternatives: true,
+    allowUnobservedSelfDropRoot: false,
+  });
+  assert.equal(bedPlan.status, 'ready');
+  assert.ok(bedPlan.exploredNodes < 384);
+  assert.equal(bedPlan.nextStep.capability.id, 'harvest_entity_drop');
+  assert.match(bedPlan.nextStep.capability.binding.command, /"sheep".*"red_wool".*true/);
+
+  carried.push(
+    { name: 'gray_wool', type: registry.itemsByName.gray_wool.id, count: 2 },
+    { name: 'black_wool', type: registry.itemsByName.black_wool.id, count: 2 },
+  );
+  const committedBedPlan = buildPrerequisitePlan(bot, {
+    target: 'gray_bed',
+    quantity: 1,
+    range: 64,
+    allowEntityAlternatives: false,
+    allowUnobservedSelfDropRoot: false,
+  });
+  assert.equal(committedBedPlan.status, 'ready');
+  assert.ok(committedBedPlan.exploredNodes < 384);
+  assert.equal(
+    committedBedPlan.actions.some(action => /!harvestEntityDrop\([^)]*true\)/.test(
+      action.capability.binding.command,
+    )),
+    false,
+  );
+
+  const planAfterMissingNaturalFlower = buildPrerequisitePlan(bot, {
+    target: 'gray_bed',
+    quantity: 1,
+    range: 64,
+    allowEntityAlternatives: false,
+    allowUnobservedSelfDropRoot: false,
+    excludedMethods: ['collect:closed_eyeblossom->closed_eyeblossom'],
+  });
+  assert.equal(planAfterMissingNaturalFlower.status, 'ready');
+  assert.equal(planAfterMissingNaturalFlower.nextStep.capability.id, 'harvest_entity_drop');
+  assert.doesNotMatch(
+    planAfterMissingNaturalFlower.nextStep.capability.binding.command,
+    /potted_/,
+  );
+});
+
+test('Job-planned materials manufacture craftable blocks instead of searching for unobserved placed copies', () => {
+  const bot = nearbyRecipeBot();
+  bot.findBlock = () => null;
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'oak_planks',
+    quantity: 4,
+    range: 64,
+    allowUnobservedSelfDropRoot: false,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'collect_block');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("oak_log", 1, 64, true)');
+  assert.equal(
+    plan.actions.some(action => action.learningKey === 'collect:oak_planks->oak_planks'),
+    false,
+  );
 });
 
 test('The causal planner keeps a hand-equipment completion open until Minecraft reports the item equipped', () => {
@@ -688,7 +896,7 @@ test('Planner capabilities expose and enforce the typed execution contract', asy
   const outcome = await executeCapabilityAction(capability, {
     agent,
     executeCommand: (_agent, command, options) => {
-      assert.equal(command, '!collectBlocksInRange("alpha_ore", 1, 64)');
+      assert.equal(command, '!collectBlocksInRange("alpha_ore", 1, 64, true)');
       assert.equal(options.owner, 'player');
       bot.inventory.slots = [{ name: 'test_gem', count: 1 }];
       return 'collected';

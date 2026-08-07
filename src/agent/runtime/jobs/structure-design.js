@@ -46,6 +46,9 @@ const ACCESSORIES = Object.freeze({
 });
 
 export const ACCESSORY_NAMES = Object.freeze(Object.keys(ACCESSORIES));
+const ACCESSORY_ALIASES = Object.freeze(Object.fromEntries(
+  Object.entries(ACCESSORIES).map(([name, accessory]) => [accessory.material, name]),
+));
 
 /**
  * The syntax summary the model reads in the command description. A function
@@ -59,7 +62,8 @@ export function designLanguageHelp() {
   '@tower 5 12 gives a finished tower, and @tower 5 12; ring 0 12 0 7 7 adds a balcony to it.',
   `Templates, with optional arguments that have sensible defaults: ${describeTemplates()}.`,
   'Coordinates are relative to the build site: x east, y up, z south, all starting at 0.',
-  'Support rule: put full support cells in an earlier layer and non-solid functional cells one layer above; never overwrite their supports.',
+  'Support rule: ground fixtures go above a solid floor; wall fixtures such as torches go in interior air face-adjacent to a same-height solid wall. Never replace a roof or required support with a fixture.',
+  'A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor.',
   'box X Y Z W H D - solid block of material.',
   'shell X Y Z W H D - four walls only, open top and bottom.',
   'room X Y Z W H D - floor, four walls, and a roof.',
@@ -71,7 +75,7 @@ export function designLanguageHelp() {
   'For a habitable building use room, or combine slab + shell + roof. Shell has walls only: no floor and no roof.',
   'roof X Y Z W D STYLE - flat, gable, or pyramid; stepped and solid so it supports itself.',
   'carve X Y Z W H D - remove already-planned blocks to cut a doorway, window, or interior.',
-  `put X Y Z THING [FACING] - place one fixture: ${ACCESSORY_NAMES.join(' ')}; door and bed optionally face north, south, east, or west.`,
+  `put X Y Z THING [FACING] - place one fixture: ${ACCESSORY_NAMES.join(' ')}; door and bed optionally face north, south, east, or west. Fixtures must use put, never block.`,
   ].join(' ');
 }
 
@@ -215,7 +219,11 @@ function expandTemplates(statements) {
 }
 
 function canonicalMaterial(value, label = 'material') {
-  const material = String(value || '')
+  const raw = String(value || '').trim();
+  const unwrapped = raw.startsWith('[') && raw.endsWith(']')
+    ? raw.slice(1, -1)
+    : raw;
+  const material = unwrapped
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
@@ -276,12 +284,18 @@ export function parseStructureDesign(text) {
         throw new TypeError(`Design ${step} needs ${count} values but got ${tokens.length - 1}.`);
       }
     };
+    const allow = (count) => {
+      if (tokens.length > count + 1) {
+        throw new TypeError(`Design ${step} accepts at most ${count} values but got ${tokens.length - 1}.`);
+      }
+    };
     switch (op) {
       case 'box':
       case 'shell':
       case 'room':
       case 'carve': {
         need(6);
+        allow(op === 'carve' ? 6 : 7);
         return {
           op,
           x: coordinate(tokens[1], `${step} x`),
@@ -296,6 +310,7 @@ export function parseStructureDesign(text) {
       case 'slab':
       case 'ring': {
         need(5);
+        allow(6);
         return {
           op,
           x: coordinate(tokens[1], `${step} x`),
@@ -308,6 +323,7 @@ export function parseStructureDesign(text) {
       }
       case 'line': {
         need(6);
+        allow(7);
         return {
           op,
           x1: coordinate(tokens[1], `${step} x1`),
@@ -321,6 +337,7 @@ export function parseStructureDesign(text) {
       }
       case 'block': {
         need(4);
+        allow(4);
         return {
           op,
           x: coordinate(tokens[1], `${step} x`),
@@ -331,6 +348,7 @@ export function parseStructureDesign(text) {
       }
       case 'roof': {
         need(5);
+        allow(7);
         const style = String(tokens[6] || 'flat').toLowerCase();
         if (!['flat', 'gable', 'pyramid'].includes(style)) {
           throw new TypeError(`Design ${step} style must be flat, gable, or pyramid.`);
@@ -348,7 +366,11 @@ export function parseStructureDesign(text) {
       }
       case 'put': {
         need(4);
-        const thing = String(tokens[4] || '').toLowerCase();
+        allow(5);
+        const requestedThing = canonicalMaterial(tokens[4], `${step} fixture`);
+        const thing = ACCESSORIES[requestedThing]
+          ? requestedThing
+          : ACCESSORY_ALIASES[requestedThing];
         if (!ACCESSORIES[thing]) {
           throw new TypeError(`Design ${step} fixture must be one of: ${ACCESSORY_NAMES.join(', ')}.`);
         }
@@ -535,6 +557,13 @@ function applyOperation(placed, operation, block) {
     }
     case 'put': {
       const accessory = ACCESSORIES[operation.thing];
+      if (operation.thing === 'door') {
+        // `put door` describes the complete two-block fixture. Requiring a
+        // separate carve for its upper half made the primitive contradict its
+        // own footprint and caused ordinary room-wall doors to be rejected.
+        // A door placed into the roof still fails the later weather-cover audit.
+        placed.delete(`${operation.x}:${operation.y + 1}:${operation.z}`);
+      }
       set(operation.x, operation.y, operation.z, accessory.material, accessory.function, {
         fixtureKind: ['door', 'bed'].includes(operation.thing) ? operation.thing : null,
         requestedFacing: operation.facing,
@@ -620,9 +649,20 @@ function logicalFixtures(placed, canSupportMaterial) {
     ));
     if (!facing) {
       const detail = candidates.length === 1 ? orientationProblem(candidates[0]) : null;
-      throw new TypeError(detail
-        ? `Fixture ${id} ${detail}; add a solid floor with room or slab before placing the fixture.`
-        : `Fixture ${id} has no clear supported ${value.fixtureKind} orientation.`);
+      if (detail?.startsWith('lacks planned solid support')) {
+        const correction = value.fixtureKind === 'bed'
+          ? 'a bed occupies its anchor plus one block in its facing direction, so move it inward, face it toward supported interior floor, or extend the floor'
+          : 'add a solid floor with room or slab before placing the fixture';
+        throw new TypeError(
+          `Fixture ${id} ${detail}; ${correction}.`,
+        );
+      }
+      if (detail) {
+        throw new TypeError(
+          `Fixture ${id} ${detail}; move it or face it into clear interior space.`,
+        );
+      }
+      throw new TypeError(`Fixture ${id} has no clear supported ${value.fixtureKind} orientation.`);
     }
     const direction = FACING_OFFSETS[facing];
     const occupiedOffsets = value.fixtureKind === 'door'

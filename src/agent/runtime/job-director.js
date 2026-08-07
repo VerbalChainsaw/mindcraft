@@ -21,7 +21,10 @@ import {
   createBuilderStockpileOrder,
   nextBuilderStep,
 } from './jobs/builder-plan.js';
-import { bindStructureAccessoryMaterials } from './jobs/structure-material-binder.js';
+import {
+  bindStructureAccessoryMaterials,
+  preservesStructureAccessoryProgress,
+} from './jobs/structure-material-binder.js';
 import { canonicalMiningTarget, miningKnowledge, nextMinerStep } from './jobs/miner-plan.js';
 import { canonicalLogFamily, nextLumberjackStep } from './jobs/lumberjack-plan.js';
 import {
@@ -45,7 +48,7 @@ const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
 const SURVIVAL_BUILDING_MATERIALS = new Set(['cobblestone', 'stone', 'dirt']);
-const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|not_collected|unreachable|target_unloaded|path_(?:stalled|timeout)|no_path)/;
+const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|source_not_found|not_collected|unreachable|target_unloaded|path_(?:stalled|timeout)|no_path)/;
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
@@ -83,11 +86,26 @@ function dimensionName(value) {
   return name;
 }
 
-function failedAcquisitionMethod(step, result) {
+function failedAcquisitionRecovery(step, result) {
   const method = String(step?.methodKey || '');
-  if (!/^(?:collect|harvest):/.test(method)) return null;
-  if (result?.retryable !== true || !ACQUISITION_METHOD_FAILURE.test(String(result?.code || ''))) return null;
-  return method;
+  if (!/^(?:collect|harvest):/.test(method)) return {};
+  if (result?.retryable !== true || !ACQUISITION_METHOD_FAILURE.test(String(result?.code || ''))) return {};
+  const skillTarget = result?.evidence?.skill?.target;
+  const target = [result?.target, skillTarget].find(candidate => (
+    candidate?.name
+    && [candidate.x, candidate.y, candidate.z].every(Number.isFinite)
+  ));
+  if (target) {
+    return {
+      failedTarget: {
+        name: target.name,
+        x: Math.floor(target.x),
+        y: Math.floor(target.y),
+        z: Math.floor(target.z),
+      },
+    };
+  }
+  return { failedMethod: method };
 }
 
 function inventoryCounts(bot) {
@@ -1067,6 +1085,17 @@ export class JobDirector extends RoleDirector {
     const previousPhase = this.activeOrder?.phase;
     this.activeOrder = normalizeWorkOrder(order);
     this.store.save(this.activeOrder);
+    if (
+      this.activeOrder.role === 'builder'
+      && this.activeOrder.kind === 'build'
+      && PLAYER_JOB_SOURCES.has(this.activeOrder.source)
+    ) {
+      try {
+        this.agent.home_state?.rememberStructure?.(this.activeOrder);
+      } catch (error) {
+        console.warn(`[builder-checkpoint] Could not persist ${this.activeOrder.id}: ${String(error?.message || error).slice(0, 180)}`);
+      }
+    }
     if (previousPhase && previousPhase !== this.activeOrder.phase) {
       this.agent.publishBehaviorEvent?.({
         type: 'job.changed',
@@ -1088,26 +1117,52 @@ export class JobDirector extends RoleDirector {
       ? harvestEvidence.alternativeOutput
       : null;
     if (!alternativeOutput) return false;
+    const preservedProgress = preservesStructureAccessoryProgress(
+      order,
+      this.agent.bot,
+      alternativeOutput,
+    );
     const rebound = bindStructureAccessoryMaterials(order, this.agent.bot, { alternativeOutput });
-    if (rebound === order) return false;
+    if (rebound === order && !preservedProgress) return false;
+    const acquisitionRequirement = order.checkpoint?.acquisitionRequirement;
+    const reboundTargets = new Set((order.blueprint?.cells || [])
+      .map((cell, index) => (
+        cell.material === acquisitionRequirement?.target
+          ? rebound.blueprint?.cells?.[index]?.material
+          : null
+      ))
+      .filter(Boolean));
+    const reboundRequirement = acquisitionRequirement && reboundTargets.size === 1
+      ? {
+        target: [...reboundTargets][0],
+        quantity: acquisitionRequirement.quantity,
+      }
+      : acquisitionRequirement || null;
     const persisted = {
       ...rebound,
-      ...(reassess ? { phase: 'assess', resumePhase: null } : {}),
+      ...(reassess ? {
+        phase: reboundRequirement ? 'acquire' : 'assess',
+        resumePhase: null,
+      } : {}),
+      ...(reboundRequirement ? {
+        checkpoint: {
+          ...rebound.checkpoint,
+          acquisitionRequirement: reboundRequirement,
+          ...(preservedProgress
+            ? { acquisitionVariantCommitted: true }
+            : { acquisitionVariantCommitted: null }),
+        },
+      } : {}),
       evidence: {
-        code: 'material_alternative_bound',
-        detail: `Bound the structure accessory to verified ${alternativeOutput}.`,
+        code: preservedProgress ? 'material_alternative_deferred' : 'material_alternative_bound',
+        detail: preservedProgress
+          ? `Kept the structure accessory already backed by more carried recipe progress than ${alternativeOutput}.`
+          : `Bound the structure accessory to verified ${alternativeOutput}.`,
         actionId: result?.actionId || '',
       },
       updatedAt: this.now(),
     };
     this.persist(persisted);
-    if (PLAYER_JOB_SOURCES.has(persisted.source)) {
-      try {
-        this.agent.home_state?.rememberStructure?.(this.activeOrder);
-      } catch (error) {
-        console.warn(`[builder-binding] Could not persist ${persisted.id}: ${String(error?.message || error).slice(0, 180)}`);
-      }
-    }
     return true;
   }
 
@@ -1243,6 +1298,7 @@ export class JobDirector extends RoleDirector {
               workstationRequirement,
               accessRequirement,
               excludedMethods,
+              allowEntityAlternatives,
             }) => buildPrerequisitePlan(
               this.agent.bot,
               {
@@ -1256,7 +1312,12 @@ export class JobDirector extends RoleDirector {
                 accessRequirement,
                 excludedMethods,
                 allowEntityAlternatives: this.activeOrder?.role === 'builder'
-                  && this.activeOrder?.kind !== 'stockpile',
+                  && this.activeOrder?.kind !== 'stockpile'
+                  && allowEntityAlternatives !== false,
+                // A job requesting materials wants those items manufactured
+                // from connected recipes. It must not interpret an unobserved
+                // self-dropping block as permission to scavenge a structure.
+                allowUnobservedSelfDropRoot: false,
               },
             ),
           });
@@ -1392,10 +1453,11 @@ export class JobDirector extends RoleDirector {
                 },
               }
               : orderAtDispatch;
+          const acquisitionRecovery = failedAcquisitionRecovery(step, result);
           const advanced = advanceWorkOrder(verifiedOrder, result, {
             previousActionId,
             nextPhase: step.nextPhase,
-            failedMethod: failedAcquisitionMethod(step, result),
+            ...acquisitionRecovery,
             now: this.now(),
           });
           this.persist(advanced);

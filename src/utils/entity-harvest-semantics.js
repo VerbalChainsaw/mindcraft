@@ -95,3 +95,18 @@ export function entityHarvestSearchCost(source) {
   const frequency = Math.max(0, Math.min(1, Number(source?.naturalFrequency) || 0));
   return frequency > 0 ? Math.max(1, Math.ceil(1 / frequency)) : 1_000;
 }
+
+export function entityHarvestAlternativeSearchCost(registry, source) {
+  if (!source?.entity || !source?.method) return entityHarvestSearchCost(source);
+  return Object.values(registry?.itemsByName || {})
+    .flatMap(item => entityHarvestSources(registry, item?.name))
+    .filter(candidate => (
+      candidate.entity === source.entity
+      && candidate.method === source.method
+      && candidate.requiredItem === source.requiredItem
+    ))
+    .reduce(
+      (best, candidate) => Math.min(best, entityHarvestSearchCost(candidate)),
+      entityHarvestSearchCost(source),
+    );
+}

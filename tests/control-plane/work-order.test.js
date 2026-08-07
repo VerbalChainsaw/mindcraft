@@ -51,6 +51,8 @@ test('Given a valid construction request, work-order normalization preserves bou
     checkpoint: {
       toolRequirement: { name: 'stone_pickaxe', minimumUsableDurability: 24 },
       workstationRequirement: { name: 'crafting_table', carried: true },
+      acquisitionRequirement: { target: 'oak_planks', quantity: 12 },
+      acquisitionVariantCommitted: true,
     },
   });
 
@@ -148,6 +150,139 @@ test('Given action results, a phase advances only on a new verified success and 
   assert.equal(capacityBlocked.phase, 'failed');
   assert.equal(capacityBlocked.attempts, 0);
   assert.equal(capacityBlocked.evidence.code, 'inventory_capacity_blocked');
+});
+
+test('A newly discovered acquisition prerequisite is persisted without spending or blacklisting a productive attempt', () => {
+  const order = createWorkOrder({
+    id: 'build-tool-recovery',
+    role: 'builder',
+    kind: 'build',
+    target: { name: 'worksite', x: 0, y: 64, z: 0 },
+    blueprint: {
+      id: 'tool_recovery',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{ x: 0, y: 0, z: 0, material: 'cobblestone' }],
+    },
+    phase: 'acquire',
+  });
+  const failure = {
+    actionId: 'worn-pickaxe',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    detail: 'The selected stone route requires a replacement tool.',
+    retryable: true,
+    evidence: {
+      skill: {
+        toolRequirement: {
+          name: 'wooden_pickaxe',
+          minimumUsableDurability: 12,
+        },
+      },
+    },
+  };
+
+  const recovery = advanceWorkOrder(order, failure, {
+    failedMethod: 'collect:stone->cobblestone',
+  });
+
+  assert.equal(recovery.phase, 'recover');
+  assert.equal(recovery.attempts, 0);
+  assert.equal(recovery.checkpoint.failedMethods, undefined);
+  assert.deepEqual(recovery.checkpoint.toolRequirement, {
+    name: 'wooden_pickaxe',
+    minimumUsableDurability: 12,
+  });
+  assert.deepEqual(
+    normalizeWorkOrder(JSON.parse(JSON.stringify(recovery))).checkpoint.toolRequirement,
+    recovery.checkpoint.toolRequirement,
+  );
+
+  const repeated = advanceWorkOrder(recovery, {
+    ...failure,
+    actionId: 'same-worn-pickaxe-again',
+  }, {
+    previousActionId: 'worn-pickaxe',
+    failedMethod: 'collect:stone->cobblestone',
+  });
+  assert.equal(repeated.attempts, 1);
+  assert.deepEqual(repeated.checkpoint.failedMethods, ['collect:stone->cobblestone']);
+});
+
+test('Surface access uses the bounded recovery budget without spending productive attempts', () => {
+  const order = createWorkOrder({
+    id: 'surface-budget',
+    role: 'builder',
+    kind: 'build',
+    target: { name: 'worksite', x: 0, y: 64, z: 0 },
+    blueprint: {
+      id: 'surface_budget',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{ x: 0, y: 0, z: 0, material: 'cobblestone' }],
+    },
+    phase: 'recover',
+    attempts: 2,
+    recoveries: 3,
+    checkpoint: { accessRequirement: { kind: 'surface' } },
+  });
+  const progressed = advanceWorkOrder(order, {
+    actionId: 'surface-progress',
+    phase: 'failed',
+    code: 'skill_route_step_not_reached',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'surface_navigation',
+        outcome: 'route_step_not_reached',
+        supported: true,
+        verticalProgress: 5,
+      },
+    },
+  });
+  assert.equal(progressed.phase, 'recover');
+  assert.equal(progressed.attempts, 2);
+  assert.equal(progressed.recoveries, 3);
+  assert.equal(progressed.evidence.code, 'capability_verified_partial_progress');
+
+  const stalled = advanceWorkOrder(progressed, {
+    actionId: 'surface-stalled',
+    phase: 'failed',
+    code: 'skill_return_route_failed',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'surface_navigation',
+        outcome: 'return_route_failed',
+        supported: true,
+        verticalProgress: 0,
+      },
+    },
+  });
+  assert.equal(stalled.phase, 'recover');
+  assert.equal(stalled.attempts, 2);
+  assert.equal(stalled.recoveries, 4);
+
+  const reached = advanceWorkOrder(stalled, {
+    actionId: 'surface-reached',
+    phase: 'succeeded',
+    code: 'skill_surface_reached',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'surface_navigation',
+        outcome: 'surface_reached',
+        supported: true,
+        verticalProgress: 9,
+      },
+    },
+  }, { nextPhase: 'recover' });
+  assert.equal(reached.phase, 'recover');
+  assert.equal(reached.attempts, 2);
+  assert.equal(reached.recoveries, 4);
+  assert.equal(reached.evidence.code, 'skill_surface_reached');
 });
 
 test('Given a persisted in-flight order after restart, reconciliation forces world revalidation before resuming', () => {

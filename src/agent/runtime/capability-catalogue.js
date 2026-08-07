@@ -239,7 +239,7 @@ defineCapability({
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!collectWoodInRange',
-    command: `!collectWoodInRange(${args.count}, ${args.range})`,
+    command: `!collectWoodInRange(${args.count}, ${args.range}, true)`,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,
@@ -305,7 +305,7 @@ defineCapability({
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!collectBlocksInRange',
-    command: `!collectBlocksInRange(${commandString(args.source)}, ${args.count}, ${args.range})`,
+    command: `!collectBlocksInRange(${commandString(args.source)}, ${args.count}, ${args.range}, true)`,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,

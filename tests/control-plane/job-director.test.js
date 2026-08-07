@@ -671,15 +671,23 @@ test('A verified accessory alternative rebinds the durable structure without spe
       brown_bed: { id: 1, name: 'brown_bed' },
       brown_wool: { id: 2, name: 'brown_wool' },
       oak_planks: { id: 3, name: 'oak_planks' },
+      white_bed: { id: 4, name: 'white_bed' },
+      white_wool: { id: 5, name: 'white_wool' },
     },
     items: {
       1: { id: 1, name: 'brown_bed' },
       2: { id: 2, name: 'brown_wool' },
       3: { id: 3, name: 'oak_planks' },
+      4: { id: 4, name: 'white_bed' },
+      5: { id: 5, name: 'white_wool' },
     },
-    blocksByName: { brown_bed: { id: 10, name: 'brown_bed' } },
+    blocksByName: {
+      brown_bed: { id: 10, name: 'brown_bed' },
+      white_bed: { id: 11, name: 'white_bed' },
+    },
     recipes: {
-      1: [{ ingredients: [{ id: 2 }, { id: 3 }] }],
+      1: [{ inShape: [[2, 2, 2], [3, 3, 3]], result: { id: 1, count: 1 } }],
+      4: [{ inShape: [[5, 5, 5], [3, 3, 3]], result: { id: 4, count: 1 } }],
     },
   };
   const remembered = [];
@@ -698,6 +706,7 @@ test('A verified accessory alternative rebinds the durable structure without spe
     phase: 'acquire',
     target: { name: 'construction_site', x: 0, y: 64, z: 0 },
     quota: 1,
+    checkpoint: { acquisitionRequirement: { target: 'white_bed', quantity: 1 } },
     blueprint: {
       id: 'alternative_bed',
       width: 1,
@@ -728,11 +737,53 @@ test('A verified accessory alternative rebinds the durable structure without spe
   }, { reassess: true });
 
   assert.equal(accepted, true);
-  assert.equal(director.activeOrder.phase, 'assess');
+  assert.equal(director.activeOrder.phase, 'acquire');
   assert.equal(director.activeOrder.attempts, 0);
   assert.equal(director.activeOrder.blueprint.cells[0].material, 'brown_bed');
+  assert.deepEqual(director.activeOrder.checkpoint.acquisitionRequirement, {
+    target: 'brown_bed',
+    quantity: 1,
+  });
   assert.equal(director.activeOrder.evidence.code, 'material_alternative_bound');
   assert.equal(remembered.at(-1).blueprint.cells[0].material, 'brown_bed');
+
+  agent.bot.inventory.items = () => [{ name: 'brown_wool', count: 2 }];
+  const deferred = director.acceptStructureMaterialAlternative(director.activeOrder, {
+    actionId: 'harvest-alternative-2',
+    phase: 'failed',
+    code: 'skill_alternative_source_observed',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'entity_harvest',
+        outcome: 'alternative_source_observed',
+        alternativeOutput: 'white_wool',
+      },
+    },
+  }, { reassess: true });
+  assert.equal(deferred, true);
+  assert.equal(director.activeOrder.phase, 'acquire');
+  assert.equal(director.activeOrder.blueprint.cells[0].material, 'brown_bed');
+  assert.deepEqual(director.activeOrder.checkpoint.acquisitionRequirement, {
+    target: 'brown_bed',
+    quantity: 1,
+  });
+  assert.equal(director.activeOrder.evidence.code, 'material_alternative_deferred');
+  assert.equal(director.activeOrder.checkpoint.acquisitionVariantCommitted, true);
+
+  director.persist({
+    ...director.activeOrder,
+    phase: 'recover',
+    checkpoint: {
+      ...director.activeOrder.checkpoint,
+      failedMethods: ['collect:closed_eyeblossom->closed_eyeblossom'],
+    },
+  });
+  assert.equal(remembered.at(-1).phase, 'recover');
+  assert.deepEqual(
+    remembered.at(-1).checkpoint.failedMethods,
+    ['collect:closed_eyeblossom->closed_eyeblossom'],
+  );
 });
 
 test('Given a command without a changed structured result, JobDirector enters recovery instead of advancing', async () => {

@@ -3,7 +3,7 @@ import settings from '../settings.js';
 import convoManager from '../conversation.js';
 import { requestBotSpawn, sendSquadRadio, serverProxy } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
-import { createWorkOrder } from '../runtime/work-order.js';
+import { createWorkOrder, workOrderCollectionExclusions } from '../runtime/work-order.js';
 import {
     builderWorksiteCollectionExclusion,
     createBuilderConstructionOrder,
@@ -41,9 +41,12 @@ const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
  * durable work order is visible, and pass one compact box to the physical
  * collector instead of teaching every material path what a building is.
  */
-export function collectionExclusionsForAgent(agent) {
+export function collectionExclusionsForAgent(agent, requestedName = null) {
     const goalExclusions = agent?.goal_director?.collectionExclusions?.();
     const exclusions = Array.isArray(goalExclusions) ? [...goalExclusions] : [];
+    // Match GoalDirector's compact source-region exclusion: an unsafe mining
+    // stance is evidence about the local vein/approach, not one block face.
+    exclusions.push(...workOrderCollectionExclusions(agent?.job_director?.activeOrder, requestedName));
     const worksite = builderWorksiteCollectionExclusion(agent?.job_director?.activeOrder);
     if (worksite) exclusions.push(worksite);
     return exclusions;
@@ -164,8 +167,12 @@ function submitRoleOrder(agent, expectedRole, order) {
     return submitRoleOrderResult(agent, expectedRole, order).message;
 }
 
-function submitRememberedStructure(agent, order) {
-    const boundOrder = bindStructureAccessoryMaterials(order, agent.bot);
+function submitRememberedStructure(agent, order, {
+    structuralMaterialAlternatives = false,
+} = {}) {
+    const boundOrder = bindStructureAccessoryMaterials(order, agent.bot, {
+        structuralMaterialAlternatives,
+    });
     const submission = submitRoleOrderResult(agent, 'builder', boundOrder);
     if (submission.result?.accepted === true) {
         try {
@@ -851,7 +858,7 @@ export const actionsList = [
                 agent.bot,
                 type,
                 num,
-                collectionExclusionsForAgent(agent),
+                collectionExclusionsForAgent(agent, type),
                 64,
                 {
                     relocate: true,
@@ -872,30 +879,31 @@ export const actionsList = [
     },
     {
         name: '!collectBlocksInRange',
-        description: 'Collect a bounded number of exact target blocks within an explicit work-order search radius.',
+        description: 'Collect a bounded number of exact target blocks using an explicit scan radius and optional bounded relocation.',
         params: {
             'type': { type: 'BlockName', description: 'The exact block type to collect.' },
             'num': { type: 'int', description: 'Maximum number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] },
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
+            'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
         },
-        perform: runAsAction(async (agent, type, num, range) => {
+        perform: runAsAction(async (agent, type, num, range, relocate = false) => {
             if (skills.isWoodBlockType(type)) {
                 return await skills.collectWood(
                     agent.bot,
                     num,
                     range,
-                    collectionExclusionsForAgent(agent),
-                    { relocate: false, woodType: type },
+                    collectionExclusionsForAgent(agent, type),
+                    { relocate: relocate === true, woodType: type },
                 );
             }
             return await skills.collectBlock(
                 agent.bot,
                 type,
                 num,
-                collectionExclusionsForAgent(agent),
+                collectionExclusionsForAgent(agent, type),
                 range,
                 {
-                    relocate: false,
+                    relocate: relocate === true,
                     preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
                 },
             );
@@ -972,18 +980,19 @@ export const actionsList = [
     },
     {
         name: '!collectWoodInRange',
-        description: 'Collect a bounded number of safe reachable logs within an explicit work-order search radius.',
+        description: 'Collect a bounded number of safe reachable logs using an explicit scan radius and optional bounded relocation.',
         params: {
             'num': { type: 'int', description: 'Maximum number of logs to collect.', domain: [1, 64, '[]'] },
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
+            'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
         },
-        perform: runAsAction(async (agent, num, range) => {
+        perform: runAsAction(async (agent, num, range, relocate = false) => {
             return await skills.collectWood(
                 agent.bot,
                 num,
                 range,
                 collectionExclusionsForAgent(agent),
-                { relocate: false },
+                { relocate: relocate === true },
             );
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
@@ -1275,13 +1284,14 @@ export const actionsList = [
     {
         name: '!designStructure',
         description: `Compile and persist one complete bounded multi-block arrangement that is NOT in the known list - a spiral tower, a bridge with railings, a machine layout, a track, or anything else a player describes. Call this BEFORE gathering or placing anything: the Builder derives and acquires every blueprint material through the shared prerequisite planner, then places and verifies the supported cells. Write the shape yourself as design data; never micromanage its materials or individual placements. ${designLanguageHelp()}`,
-        compactDescription: 'Persist one complete validated blueprint before gathering. DESIGN MUST BE THIS DSL, NEVER PROSE. Separate operations with ;. Operations: box X Y Z W H D [MATERIAL]; shell X Y Z W H D [MATERIAL]; room X Y Z W H D [MATERIAL]; slab X Y Z W D [MATERIAL]; ring X Y Z W D [MATERIAL]; line X1 Y1 Z1 X2 Y2 Z2 [MATERIAL]; block X Y Z MATERIAL; roof X Y Z W D flat|gable|pyramid [MATERIAL]; carve X Y Z W H D; put X Y Z door|glass|torch|chest|ladder|fence|gate|crafting|furnace|bed. Coordinates are relative, x east/y up/z south, EACH 0..31 ONLY: start every axis at 0 and never use negatives. SUPPORT RULE: put the full support layer at y=0 and non-solid functional cells at y=1; never overwrite their support cells. Exact mixed example: !designStructure("mixed_platform", "cobblestone", "slab 0 0 0 5 5 cobblestone; ring 0 1 0 5 5 rail; block 2 1 0 powered_rail; block 2 1 1 redstone_torch")',
+        compactDescription: 'Persist one complete validated blueprint before gathering. DESIGN MUST BE THIS DSL, NEVER PROSE. Separate operations with ;. Never write brackets, and give each operation exactly the listed values. Operations: box X Y Z W H D then optional MATERIAL; shell X Y Z W H D then optional MATERIAL; room X Y Z W H D then optional MATERIAL; slab X Y Z W D then optional MATERIAL; ring X Y Z W D then optional MATERIAL; line X1 Y1 Z1 X2 Y2 Z2 then optional MATERIAL; block X Y Z MATERIAL; roof X Y Z W D flat|gable|pyramid then optional MATERIAL; carve X Y Z W H D; put X Y Z door|glass|torch|chest|ladder|fence|gate|crafting|furnace|bed then optional FACING. FACING, when supplied, must be north, south, east, or west. Fixtures MUST use put, never block. Coordinates are relative, x east/y up/z south, EACH 0..31 ONLY: start every axis at 0 and never use negatives. SUPPORT RULE: ground fixtures go above solid floor; wall fixtures such as torches go in interior air adjacent to a same-height solid wall. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace roof/support with a fixture. The fourth lock_material argument is true only when the player explicitly named the structural material; otherwise omit it or pass false so Builder binds the cheapest feasible safe material for the full blueprint. Exact mixed example: !designStructure("mixed_platform", "cobblestone", "slab 0 0 0 5 5 cobblestone; ring 0 1 0 5 5 rail; block 2 1 0 powered_rail; block 2 1 1 redstone_torch")',
         params: {
             'name': { type: 'string', description: 'Short name for the building, such as watchtower or barn.' },
             'material': { type: 'BlockName', description: 'Canonical full support block for the structure. Fixtures like doors, glass, and chests are chosen automatically.' },
             'design': { type: 'string', description: 'The design steps, separated by semicolons. No commas or quotes inside.' },
+            'lock_material': { type: 'boolean', description: 'True only when the player explicitly named this structural material; otherwise Builder may bind a cheaper feasible safe material.', optional: true, default: false },
         },
-        perform: persistentJobCommand(function (agent, name, material, design) {
+        perform: persistentJobCommand(function (agent, name, material, design, lock_material = false) {
             try {
                 const canonicalMaterial = String(material || '').trim().toLowerCase();
                 const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
@@ -1302,7 +1312,9 @@ export const actionsList = [
                     canSupportMaterial: name => blockCanSupportPlacement(agent.bot?.registry, name),
                 });
                 const order = bindSafeConstructionOrder(agent, provisional, position);
-                return submitRememberedStructure(agent, order);
+                return submitRememberedStructure(agent, order, {
+                    structuralMaterialAlternatives: lock_material !== true,
+                });
             } catch (error) {
                 // The design language reports the exact step or the exact block
                 // that cannot stand, which is what lets a rejected design be
@@ -1353,6 +1365,8 @@ export const actionsList = [
                     phase: 'assess',
                     resumePhase: null,
                     attempts: 0,
+                    recoveries: 0,
+                    preemptions: 0,
                     checkpoint: {},
                     evidence: null,
                     createdAt: now,
@@ -1544,7 +1558,7 @@ export const actionsList = [
             'method': { type: 'string', description: 'Registered harvest mechanic.' },
             'count': { type: 'int', description: 'Minimum inventory increase to collect.', domain: [1, 64, '[]'] },
             'range': { type: 'int', description: 'Bounded source-search radius.', domain: [16, 512, '[]'] },
-            'allow_alternative': { type: 'boolean', description: 'Allow the owning planner to bind a physically observed material-family alternative.' },
+            'allow_alternative': { type: 'boolean', description: 'Allow the owning planner to bind a physically observed material-family alternative.', optional: true, default: false },
         },
         perform: runAsAction(async (agent, source, output, method, count, range, allow_alternative=false) => {
             return await skills.harvestEntityDrop(agent.bot, source, output, method, count, range, allow_alternative);

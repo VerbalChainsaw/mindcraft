@@ -33,6 +33,12 @@ import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import { selectFarmSites, selectRememberedFarmStances } from '../runtime/farm-site-selector.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
 import {
+    bindCarriedPlankRecipe,
+    carriedPlankCount,
+    createPlankFamilyRecipe,
+    isPlankFamilyRecipe,
+} from '../../utils/recipe-families.js';
+import {
     familyInventoryCount,
     familyInventoryEntries,
     familyTransferManifest,
@@ -187,6 +193,8 @@ const RETRYABLE_COLLECTION_TARGET_OUTCOMES = new Set([
     'path_timeout',
     'path_stalled',
     'goal_not_reached',
+    'no_safe_stance',
+    'stance_unverified',
     'not_broken',
     'target_unloaded',
     'collect_blocked',
@@ -2110,14 +2118,31 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
         if (!Number.isInteger(itemId)) {
             return finish(false, { kind: 'craft', outcome: 'invalid_recipe', target, retryable: false }, `${itemName} is not a craftable Minecraft item.`);
         }
+        const mixedPlankRecipe = craftingTableAvailable => {
+            const template = createPlankFamilyRecipe(
+                bot.registry,
+                bot.recipesAll(itemId, null, craftingTableAvailable),
+            );
+            return template
+                ? bindCarriedPlankRecipe(bot.registry, template, bot.inventory.items())
+                : null;
+        };
         let recipes = exactWorkstation
             ? []
             : bot.recipesFor(itemId, null, 1, null);
+        if (!recipes?.length && !exactWorkstation) {
+            const mixed = mixedPlankRecipe(false);
+            if (mixed) recipes = [mixed];
+        }
         let craftingTable = null;
         const craftingTableRange = 64;
 
         if (!recipes?.length) {
             recipes = bot.recipesFor(itemId, null, 1, true);
+            if (!recipes?.length) {
+                const mixed = mixedPlankRecipe(true);
+                if (mixed) recipes = [mixed];
+            }
             if (!recipes?.length) {
                 const ingredients = Object.entries(recipeDocs[0]?.[0] || {}).map(([key, value]) => `${key}: ${value}`).join(', ');
                 return finish(false, { kind: 'craft', outcome: 'missing_material', target, retryable: true }, `You do not have the resources to craft ${itemName}${ingredients ? `. It requires: ${ingredients}.` : '.'}`);
@@ -2188,6 +2213,10 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
                 craftingTable = localTable.block;
             }
             recipes = bot.recipesFor(itemId, null, 1, craftingTable);
+            if (!recipes?.length) {
+                const mixed = mixedPlankRecipe(true);
+                if (mixed) recipes = [mixed];
+            }
         }
 
         if (!recipes?.length) {
@@ -2197,7 +2226,26 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
         const recipe = recipes[0];
         const inventory = world.getInventoryCounts(bot);
         const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe);
-        const craftLimit = mc.calculateLimitingResource(inventory, requiredIngredients);
+        const craftLimit = (() => {
+            if (!isPlankFamilyRecipe(recipe)) {
+                return mc.calculateLimitingResource(inventory, requiredIngredients);
+            }
+            const exactIngredients = Object.fromEntries(
+                Object.entries(requiredIngredients)
+                    .filter(([name]) => !name.endsWith('_planks')),
+            );
+            const exactLimit = mc.calculateLimitingResource(inventory, exactIngredients);
+            const familyLimit = Math.floor(
+                carriedPlankCount(bot.inventory.items())
+                / Math.max(1, Number(recipe.mindcraftIngredientFamily.count) || 1)
+            );
+            return {
+                num: Math.min(familyLimit, Math.max(0, Number(exactLimit.num) || 0)),
+                limitingResource: familyLimit <= exactLimit.num
+                    ? 'planks'
+                    : exactLimit.limitingResource,
+            };
+        })();
         const craftAttempts = Math.min(Math.max(0, Math.floor(Number(craftLimit?.num) || 0)), requestedCrafts);
         if (craftAttempts < 1) {
             return finish(false, { kind: 'craft', outcome: 'missing_material', target, retryable: true }, `You do not have enough materials to craft ${itemName}.`);
@@ -2217,6 +2265,9 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             const protectedNames = new Set([
                 itemName,
                 ...Object.keys(requiredIngredients),
+                ...(isPlankFamilyRecipe(recipe)
+                    ? recipe.mindcraftIngredientFamily.members
+                    : []),
             ]);
             await freeCollectionWorkingSlots(bot, protectedNames, requiredFreeSlots);
             outputCapacity = carriedOutputCapacity(bot, itemName);
@@ -2237,7 +2288,15 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
 
         const beforeCount = inventoryCount(bot, itemName);
         try {
-            await bot.craft(recipe, craftAttempts, craftingTable);
+            if (isPlankFamilyRecipe(recipe)) {
+                for (let attempt = 0; attempt < craftAttempts; attempt += 1) {
+                    const rebound = mixedPlankRecipe(Boolean(craftingTable));
+                    if (!rebound) throw new Error('mixed plank recipe no longer has enough carried planks');
+                    await bot.craft(rebound, 1, craftingTable);
+                }
+            } else {
+                await bot.craft(recipe, craftAttempts, craftingTable);
+            }
         } catch (error) {
             return finish(false, { kind: 'craft', outcome: 'craft_blocked', target, error: error.message, retryable: true }, `Could not craft ${itemName}: ${error.message}.`);
         }
@@ -2259,6 +2318,7 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             requestedCrafts,
             craftAttempts,
             outputCount,
+            ...(isPlankFamilyRecipe(recipe) ? { ingredientFamily: 'planks' } : {}),
             workstation: exactWorkstation,
             retryable: false,
         }, `Crafted ${outputCount} ${itemName}.`);
@@ -4241,6 +4301,8 @@ function createEntityHarvestSearch(origin, range) {
     };
 }
 
+const MAX_ENTITY_HARVEST_RELOCATIONS_PER_ACTION = 1;
+
 async function relocateEntityHarvestSearch(bot, sourceName, search) {
     while (
         !bot.interrupt_code
@@ -4430,6 +4492,12 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
                 return true;
             }
         }
+        // One local miss plus one verified region move is enough evidence for
+        // this capability action. Return control to the durable planner after
+        // rescanning that new region instead of hiding twenty long journeys
+        // inside one opaque action. The next invocation starts from the bot's
+        // physically advanced position and can bind the next region or method.
+        if (search.relocations >= MAX_ENTITY_HARVEST_RELOCATIONS_PER_ACTION) break;
         if (!await relocateEntityHarvestSearch(bot, sourceName, search)) break;
         lastReachedPosition = bot.entity.position.clone();
     }
@@ -5533,9 +5601,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         if (!directReach) {
                             const outcome = bot.interrupt_code
                                 ? 'interrupted'
-                                : approachNavigation?.outcome
-                                    || (!miningAssessment?.safe ? miningAssessment?.code : null)
-                                    || 'unreachable';
+                                : !reached
+                                    ? approachNavigation?.outcome || 'unreachable'
+                                    : !miningAssessment?.safe
+                                        ? miningAssessment?.code || 'no_safe_stance'
+                                        : 'stance_unverified';
                             setActionEvidence(bot, {
                                 kind: 'collect',
                                 outcome,
@@ -5546,6 +5616,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             log(bot, bot.interrupt_code
                                 ? `Stopped before collecting ${block.name}.`
                                 : `No verified stable stance reached ${block.name}.`);
+                            if (retryDifferentCollectionTarget(outcome, target)) {
+                                i -= 1;
+                                continue;
+                            }
                             return false;
                         }
                     }
@@ -6578,6 +6652,20 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
         }
         if (bot.game.gameMode !== 'creative') {
             const requireHarvest = options?.requireHarvest !== false;
+            const durability = requireHarvest
+                ? assessMiningRouteDurability(bot, [], { targetBlock: block })
+                : null;
+            const toolRequirement = (
+                durability?.ok === false
+                && durability.replacementTool
+            ) ? {
+                    name: durability.replacementTool,
+                    minimumUsableDurability: Math.max(
+                        1,
+                        Number(durability.minimumUsableDurability) || 1,
+                    ),
+                }
+                : null;
             let harvestable = false;
             try {
                 await equipBestToolForBlock(bot, block, {
@@ -6585,7 +6673,14 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
                 });
             } catch (err) {
                 if (requireHarvest) {
-                    setActionEvidence(bot, { kind: 'break', outcome: 'missing_tool', target, error: err.message, retryable: true });
+                    setActionEvidence(bot, {
+                        kind: 'break',
+                        outcome: 'missing_tool',
+                        target,
+                        error: err.message,
+                        ...(toolRequirement ? { toolRequirement } : {}),
+                        retryable: true,
+                    });
                     log(bot, `Could not prepare a tool for ${block.name}: ${err.message}.`);
                     return false;
                 }
@@ -6593,7 +6688,13 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             const itemId = bot.heldItem ? bot.heldItem.type : null
             try { harvestable = block.canHarvest(itemId); } catch { harvestable = false; }
             if (requireHarvest && !harvestable) {
-                setActionEvidence(bot, { kind: 'break', outcome: 'missing_tool', target, retryable: true });
+                setActionEvidence(bot, {
+                    kind: 'break',
+                    outcome: 'missing_tool',
+                    target,
+                    ...(toolRequirement ? { toolRequirement } : {}),
+                    retryable: true,
+                });
                 log(bot, `Don't have right tools to break ${block.name}.`);
                 return false;
             }

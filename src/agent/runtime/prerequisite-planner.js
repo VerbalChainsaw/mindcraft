@@ -1,9 +1,15 @@
 import * as mc from '../../utils/mcdata.js';
 import {
+  entityHarvestAlternativeSearchCost,
   entityMatchesHarvestSource,
   entityHarvestSearchCost,
   entityHarvestSources,
 } from '../../utils/entity-harvest-semantics.js';
+import {
+  createPlankFamilyRecipe,
+  isPlankFamilyRecipe,
+  plankRecipeAlternativeGroups,
+} from '../../utils/recipe-families.js';
 import { createCapabilityPlanAction } from './capability-catalogue.js';
 import { completionRequirementSatisfied } from './goal-contract.js';
 
@@ -204,6 +210,107 @@ function recipeIngredientEntries(bot, recipe) {
   return [...ingredients.entries()].map(([name, count]) => ({ name, count }));
 }
 
+function planningRecipeIngredientEntries(bot, recipe) {
+  const ingredients = recipeIngredientEntries(bot, recipe);
+  if (!isPlankFamilyRecipe(recipe)) return ingredients;
+  return [
+    ...ingredients.filter(ingredient => !ingredient.name.endsWith('_planks')),
+    {
+      name: 'planks',
+      count: Math.max(1, Number(recipe.mindcraftIngredientFamily.count) || 1),
+      family: 'planks',
+      members: [...(recipe.mindcraftIngredientFamily.members || [])],
+    },
+  ];
+}
+
+function ledgerFamilyCount(context, family) {
+  if (family !== 'planks') return 0;
+  return [...context.ledger.entries()].reduce((total, [name, count]) => (
+    name.endsWith('_planks') ? total + Math.max(0, Number(count) || 0) : total
+  ), 0);
+}
+
+function consumeLedgerFamily(context, family, amount) {
+  let remaining = Math.max(0, Number(amount) || 0);
+  if (family !== 'planks') return false;
+  const members = [...context.ledger.entries()]
+    .filter(([name, count]) => name.endsWith('_planks') && Number(count) > 0)
+    .sort((left, right) => Number(right[1]) - Number(left[1]) || left[0].localeCompare(right[0]));
+  if (members.reduce((total, [, count]) => total + Number(count), 0) < remaining) return false;
+  for (const [name, count] of members) {
+    if (remaining <= 0) break;
+    const used = Math.min(Number(count), remaining);
+    setLedgerCount(context, name, Number(count) - used);
+    remaining -= used;
+  }
+  return remaining === 0;
+}
+
+function ensureLedgerFamily(bot, context, ingredient, amount, trail) {
+  if (ledgerFamilyCount(context, ingredient.family) >= amount) {
+    return consumeLedgerFamily(context, ingredient.family, amount)
+      ? null
+      : blocked(
+          'missing_recipe_family',
+          `${trail.at(-1)} requires ${amount} interchangeable ${ingredient.family}.`,
+          trail.at(-1),
+          trail,
+        );
+  }
+  if (ingredient.family !== 'planks') {
+    return blocked(
+      'missing_recipe_family',
+      `${trail.at(-1)} requires ${amount} interchangeable ${ingredient.family}.`,
+      trail.at(-1),
+      trail,
+    );
+  }
+
+  const missing = amount - ledgerFamilyCount(context, ingredient.family);
+  const baselineActionCount = context.actions.length;
+  const baselineLedger = new Map(context.ledger);
+  const rankedMembers = [...new Set(ingredient.members || [])]
+    .filter(name => Boolean(bot.registry?.itemsByName?.[name]))
+    .sort((left, right) => (
+      (ledgerCount(context, right) + immediateCarriedProduction(bot, context, right))
+        - (ledgerCount(context, left) + immediateCarriedProduction(bot, context, left))
+      || left.localeCompare(right)
+    ));
+  const materiallyGrounded = rankedMembers.filter(name => (
+    hasCarriedProductionPath(bot, context, name)
+  ));
+  const members = (materiallyGrounded.length > 0 ? materiallyGrounded : rankedMembers).slice(0, 4);
+  const candidates = [];
+  for (const member of members) {
+    const candidate = cloneContext(context);
+    const requiredMemberCount = ledgerCount(candidate, member) + missing;
+    const failure = ensureItem(
+      bot,
+      candidate,
+      member,
+      requiredMemberCount,
+      [...trail, `${ingredient.family}:${member}`],
+    );
+    if (failure || !consumeLedgerFamily(candidate, ingredient.family, amount)) continue;
+    candidates.push({ kind: 'recipe', member, candidate });
+  }
+  candidates.sort((left, right) => (
+    compareDerivedPlans(left, right, baselineActionCount, baselineLedger)
+    || left.member.localeCompare(right.member)
+  ));
+  if (candidates.length === 0) {
+    return blocked(
+      'missing_recipe_family',
+      `${trail.at(-1)} requires ${amount} interchangeable ${ingredient.family}, and no bounded member plan succeeded.`,
+      trail.at(-1),
+      trail,
+    );
+  }
+  acceptContext(context, candidates[0].candidate);
+  return null;
+}
+
 function recipeOutputCount(recipe) {
   return Math.max(1, Math.floor(Number(recipe?.result?.count) || 1));
 }
@@ -291,6 +398,10 @@ function sourceBlocks(bot, target) {
   for (const block of Object.values(bot.registry?.blocks || {})) {
     if (
       block?.diggable === true
+      // Potted plants are player-placed decorations, not renewable world
+      // sources. Treating them as generic acquisition leaves both threatens
+      // structures and disguises one missing flower as a second strategy.
+      && !String(block.name || '').startsWith('potted_')
       && Array.isArray(block.drops)
       && block.drops.includes(item.id)
     ) sources.push(block);
@@ -306,7 +417,10 @@ function selfDroppingSourceIsGrounded(bot, context, source, target, trail) {
   // block exists in the world. Require a real local observation before using
   // that placed-block shortcut; otherwise let the causal search try another
   // recipe or acquisition method.
-  if (trail.length <= 1 || connectedRecipes(bot, target).length === 0) return true;
+  if (
+    (context.allowUnobservedSelfDropRoot && trail.length <= 1)
+    || connectedRecipes(bot, target).length === 0
+  ) return true;
   return Boolean(nearbyBlock(
     bot,
     source.name,
@@ -388,11 +502,59 @@ function sourceScore(context, block, target) {
 }
 
 function recipeLearningKey(bot, target, recipe) {
-  const ingredients = recipeIngredientEntries(bot, recipe)
+  const ingredients = planningRecipeIngredientEntries(bot, recipe)
     .map(ingredient => `${ingredient.count}x${ingredient.name}`)
     .sort()
     .join('+');
   return `craft:${canonicalName(target)}<-${ingredients}`.slice(0, 160);
+}
+
+function recipeVariantInputs(bot, target, recipe) {
+  const separator = target.lastIndexOf('_');
+  if (separator < 1) return [];
+  const suffix = target.slice(separator);
+  return recipeIngredientEntries(bot, recipe)
+    .filter(ingredient => (
+      ingredient.name !== target
+      && ingredient.name.endsWith(suffix)
+    ));
+}
+
+function pruneUnboundVariantTransforms(bot, context, target, recipes) {
+  const hasIndependentRecipe = recipes.some(recipe => recipeVariantInputs(bot, target, recipe).length === 0);
+  const independentEntityHarvestAvailable = entityHarvestSources(bot.registry, target).length > 0;
+  const carriedOrIndependent = recipes.filter(recipe => {
+    const variants = recipeVariantInputs(bot, target, recipe);
+    if (variants.length === 0) return true;
+    return variants.some(ingredient => ledgerCount(context, ingredient.name) >= ingredient.count);
+  });
+  if (hasIndependentRecipe || context.allowEntityAlternatives) return carriedOrIndependent;
+  if (!independentEntityHarvestAvailable) return recipes;
+  if (carriedOrIndependent.length > 0) return carriedOrIndependent;
+
+  // When the exact target has an entity-harvest method but no family
+  // alternative may be rebound, retain one cheapest renewable transform (for
+  // example common white wool plus dye for a rare colour). Expanding every
+  // uncarried colour is combinatorial and cannot improve that decision.
+  const renewable = recipes
+    .map(recipe => ({
+      recipe,
+      cost: recipeVariantInputs(bot, target, recipe).reduce((best, ingredient) => (
+        Math.min(
+          best,
+          ...entityHarvestSources(bot.registry, ingredient.name)
+            .map(source => entityHarvestSearchCost(source)),
+        )
+      ), Number.POSITIVE_INFINITY),
+    }))
+    .filter(candidate => Number.isFinite(candidate.cost))
+    .sort((left, right) => (
+      left.cost - right.cost
+      || recipeLearningKey(bot, target, left.recipe).localeCompare(
+        recipeLearningKey(bot, target, right.recipe),
+      )
+    ));
+  return renewable.length > 0 ? [renewable[0].recipe] : recipes;
 }
 
 // Rough per-unit cost of obtaining an item the bot does not have. Surface wood
@@ -476,6 +638,19 @@ function immediateCarriedProduction(bot, context, target) {
   return best;
 }
 
+function hasCarriedProductionPath(bot, context, target, depth = 0, trail = []) {
+  if (ledgerCount(context, target) > 0) return true;
+  if (depth >= 2 || trail.includes(target)) return false;
+  const nextTrail = [...trail, target];
+  return connectedRecipes(bot, target).slice(0, 32).some(recipe => {
+    const ingredients = recipeIngredientEntries(bot, recipe);
+    return ingredients.length > 0 && ingredients.every(ingredient => (
+      ledgerCount(context, ingredient.name) >= ingredient.count
+      || hasCarriedProductionPath(bot, context, ingredient.name, depth + 1, nextTrail)
+    ));
+  });
+}
+
 function logTransformForPlanks(bot, plankName) {
   return connectedRecipes(bot, plankName)
     .map(recipe => {
@@ -554,14 +729,15 @@ function planUnboundPlankFamily(bot, context, target, amount, recipes, trail) {
   const representative = family
     .slice()
     .sort((left, right) => left.plank.name.localeCompare(right.plank.name))[0];
+  const candidate = cloneContext(context);
   const batches = Math.max(1, Math.ceil(amount / recipeOutputCount(representative.recipe)));
   const planksNeeded = representative.plank.count * batches;
   const logsNeeded = Math.max(1, Math.ceil(
     (planksNeeded * representative.transform.logCount) / representative.transform.plankCount,
   ));
-  const actionFailure = addCapabilityAction(bot, context, 'collect_wood', {
+  const actionFailure = addCapabilityAction(bot, candidate, 'collect_wood', {
     count: logsNeeded,
-    range: context.range,
+    range: candidate.range,
     expectedIncrease: logsNeeded,
   }, {
     kind: 'collect',
@@ -573,25 +749,92 @@ function planUnboundPlankFamily(bot, context, target, amount, recipes, trail) {
     trail: [...trail, target, 'plank_family'],
     learningKey,
   });
-  if (actionFailure) return actionFailure;
+  if (actionFailure) return { failure: actionFailure };
 
   // This representative log exists only inside the speculative remainder of
-  // this plan. The family collection is always the next physical action, and
-  // GoalDirector replans from the actual collected log before any craft runs.
+  // this candidate. The family collection is always its next physical action,
+  // and the mandatory post-action replan binds the actual species found.
   setLedgerCount(
-    context,
+    candidate,
     representative.transform.logName,
-    ledgerCount(context, representative.transform.logName) + logsNeeded,
+    ledgerCount(candidate, representative.transform.logName) + logsNeeded,
   );
-  return null;
+  const recipeFailure = planFromRecipe(
+    bot,
+    candidate,
+    target,
+    amount,
+    representative.recipe,
+    trail,
+  );
+  return recipeFailure
+    ? { failure: recipeFailure }
+    : {
+        candidate,
+        score: recipeScore(bot, context, target, representative.recipe),
+      };
+}
+
+function collapsePlankRecipeAlternatives(bot, context, target, amount, recipes, trail) {
+  const discarded = new Set();
+  for (const group of plankRecipeAlternativeGroups(bot.registry, recipes)) {
+    const candidates = [];
+    const baselineLedger = new Map(context.ledger);
+    const groundedRecipes = group.filter(recipe => {
+      const plank = recipeIngredientEntries(bot, recipe)
+        .find(ingredient => ingredient.name.endsWith('_planks'));
+      return plank && hasCarriedProductionPath(bot, context, plank.name);
+    });
+    for (const recipe of groundedRecipes.length > 0 ? groundedRecipes : group) {
+      const plank = recipeIngredientEntries(bot, recipe)
+        .find(ingredient => ingredient.name.endsWith('_planks'));
+      if (!plank) continue;
+      const candidate = cloneContext(context);
+      const batches = Math.max(1, Math.ceil(amount / recipeOutputCount(recipe)));
+      const baselineActionCount = candidate.actions.length;
+      const failure = ensureItem(
+        bot,
+        candidate,
+        plank.name,
+        plank.count * batches,
+        [...trail, target, 'plank_family_binding'],
+      );
+      if (failure) continue;
+      candidates.push({
+        recipe,
+        rank: derivedPlanRank(candidate, baselineActionCount, baselineLedger),
+        score: recipeScore(bot, context, target, recipe),
+      });
+    }
+    candidates.sort((left, right) => (
+      left.rank.effectiveCost - right.rank.effectiveCost
+      || left.rank.cost - right.rank.cost
+      || right.rank.preference - left.rank.preference
+      || left.rank.actions - right.rank.actions
+      || right.score - left.score
+      || recipeLearningKey(bot, target, left.recipe).localeCompare(recipeLearningKey(bot, target, right.recipe))
+    ));
+    const selected = candidates[0]?.recipe;
+    if (!selected) continue;
+    for (const recipe of group) {
+      if (recipe !== selected) discarded.add(recipe);
+    }
+  }
+  return recipes.filter(recipe => !discarded.has(recipe));
 }
 
 function recipeScore(bot, context, target, recipe) {
-  const ingredients = recipeIngredientEntries(bot, recipe);
+  const ingredients = planningRecipeIngredientEntries(bot, recipe);
   let score = 0;
   for (const ingredient of ingredients) {
-    const available = ledgerCount(context, ingredient.name);
+    const available = ingredient.family
+      ? ledgerFamilyCount(context, ingredient.family)
+      : ledgerCount(context, ingredient.name);
     score += Math.min(ingredient.count, available) * 100;
+    // When two recipes are already satisfiable, preserve the scarce exact
+    // ingredient for downstream recipes. Fifty bamboo is a better source for
+    // sticks than the bot's last two planks, even though both can craft now.
+    score += Math.min(24, Math.max(0, available - ingredient.count));
     if (available < ingredient.count) {
       const missing = ingredient.count - available;
       score += Math.min(
@@ -634,7 +877,10 @@ function recipeScore(bot, context, target, recipe) {
 }
 
 function entityHarvestMethodScore(bot, context, source, amount) {
-  const rarityCost = entityHarvestSearchCost(source) * Math.max(1, amount);
+  const searchCost = context.allowEntityAlternatives
+    ? entityHarvestAlternativeSearchCost(bot.registry, source)
+    : entityHarvestSearchCost(source);
+  const rarityCost = searchCost * Math.max(1, amount);
   const toolAdjustment = source.requiredItem
     ? ledgerCount(context, source.requiredItem) > 0
       ? 20
@@ -668,11 +914,20 @@ function toolScore(name) {
   return TOOL_TIER[prefix] ?? 100;
 }
 
-function requiredHarvestTools(bot, block) {
+function requiredHarvestTools(bot, block, context = null) {
   return Object.keys(block?.harvestTools || {})
     .map(id => itemName(bot, id))
     .filter(Boolean)
-    .sort((left, right) => toolScore(left) - toolScore(right) || left.localeCompare(right));
+    .sort((left, right) => {
+      if (context) {
+        const preparationScore = tool => connectedRecipes(bot, tool).reduce((best, recipe) => (
+          Math.max(best, recipeScore(bot, context, tool, recipe))
+        ), Number.NEGATIVE_INFINITY);
+        const readinessDifference = preparationScore(right) - preparationScore(left);
+        if (readinessDifference !== 0) return readinessDifference;
+      }
+      return toolScore(left) - toolScore(right) || left.localeCompare(right);
+    });
 }
 
 function reserveFuel(bot, context, amount, trail) {
@@ -725,13 +980,24 @@ function ensurePersistentItem(bot, context, name, trail) {
 function planFromRecipe(bot, context, target, amount, recipe, trail) {
   const outputCount = recipeOutputCount(recipe);
   const batches = Math.max(1, Math.ceil(amount / outputCount));
-  const ingredients = recipeIngredientEntries(bot, recipe);
+  const ingredients = planningRecipeIngredientEntries(bot, recipe);
   if (ingredients.length === 0) {
     return blocked('recipe_without_ingredients', `The connected registry exposed an unusable recipe for ${target}.`, target, trail);
   }
 
   for (const ingredient of ingredients) {
     const required = ingredient.count * batches;
+    if (ingredient.family) {
+      const familyFailure = ensureLedgerFamily(
+        bot,
+        context,
+        ingredient,
+        required,
+        [...trail, target],
+      );
+      if (familyFailure) return familyFailure;
+      continue;
+    }
     const ingredientFailure = ensureItem(bot, context, ingredient.name, required, [...trail, target]);
     if (ingredientFailure) return ingredientFailure;
     setLedgerCount(context, ingredient.name, ledgerCount(context, ingredient.name) - required);
@@ -818,7 +1084,7 @@ function planFromWorldSource(bot, context, target, amount, trail) {
   const failures = [];
   for (const source of sources.slice(0, 12)) {
     const candidate = cloneContext(context);
-    const tools = requiredHarvestTools(bot, source);
+    const tools = requiredHarvestTools(bot, source, candidate);
     if (tools.length > 0 && !tools.some(tool => ledgerCount(candidate, tool) > 0)) {
       let toolPrepared = false;
       for (const tool of tools) {
@@ -931,6 +1197,44 @@ function planFromEntityHarvestSource(bot, context, target, amount, trail) {
   );
 }
 
+function depletedCarriedInputs(candidate, baselineLedger) {
+  if (!(baselineLedger instanceof Map)) return 0;
+  let depleted = 0;
+  for (const [name, count] of baselineLedger.entries()) {
+    if (Number(count) > 0 && ledgerCount(candidate, name) === 0) depleted += 1;
+  }
+  return depleted;
+}
+
+function derivedPlanRank(candidate, baselineActionCount, baselineLedger = null) {
+  const actions = candidate.actions.slice(baselineActionCount);
+  const cost = actions.reduce((total, action) => (
+    total + Math.max(0, Number(action.capability?.cost) || 0)
+  ), 0);
+  const depletedInputs = depletedCarriedInputs(candidate, baselineLedger);
+  return {
+    cost,
+    effectiveCost: cost + (depletedInputs * 2),
+    depletedInputs,
+    preference: actions.reduce((total, action) => (
+      total + Number(action.learnedPreference || 0)
+    ), 0),
+    actions: actions.length,
+  };
+}
+
+function compareDerivedPlans(left, right, baselineActionCount, baselineLedger = null) {
+  const leftRank = derivedPlanRank(left.candidate, baselineActionCount, baselineLedger);
+  const rightRank = derivedPlanRank(right.candidate, baselineActionCount, baselineLedger);
+  return (left.kind === right.kind ? 0 : right.score - left.score)
+    || leftRank.effectiveCost - rightRank.effectiveCost
+    || leftRank.cost - rightRank.cost
+    || rightRank.preference - leftRank.preference
+    || leftRank.actions - rightRank.actions
+    || right.score - left.score
+    || left.kind.localeCompare(right.kind);
+}
+
 function produceItem(bot, context, target, amount, trail) {
   const nodeFailure = enterNode(context, target, trail);
   if (nodeFailure) return nodeFailure;
@@ -949,13 +1253,19 @@ function produceItem(bot, context, target, amount, trail) {
   }
 
   const directSources = sourceBlocks(bot, target);
+  const hasObservedDirectSource = directSources.some(block => Boolean(nearbyBlock(
+    bot,
+    block.name,
+    context.range,
+    context.blockProximityCache,
+  )));
   const hasNaturalTransformSource = directSources.some(block => (
     block.name !== target
     && block.name !== `${target}_block`
     && !block.name.endsWith(`_${target}_block`)
     && /(?:_ore|stone|deepslate|gravel|clay)$/.test(block.name)
   ));
-  if (hasNaturalTransformSource) {
+  if (hasNaturalTransformSource || hasObservedDirectSource) {
     const sourceCandidate = cloneContext(context);
     const sourceFailure = planFromWorldSource(bot, sourceCandidate, target, amount, nextTrail);
     if (!sourceFailure) {
@@ -964,17 +1274,34 @@ function produceItem(bot, context, target, amount, trail) {
     }
   }
 
-  const recipes = connectedRecipes(bot, target)
-    .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe)));
-  const plankFamilyFailure = planUnboundPlankFamily(
+  const connectedRecipeCandidates = pruneUnboundVariantTransforms(
+    bot,
+    context,
+    target,
+    connectedRecipes(bot, target)
+      .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe))),
+  );
+  const plankFamilyMethod = planUnboundPlankFamily(
     bot,
     context,
     target,
     amount,
-    recipes,
+    connectedRecipeCandidates,
     nextTrail,
   );
-  if (plankFamilyFailure) return plankFamilyFailure;
+  const familyRecipe = createPlankFamilyRecipe(bot.registry, connectedRecipeCandidates);
+  const recipes = collapsePlankRecipeAlternatives(
+    bot,
+    context,
+    target,
+    amount,
+    connectedRecipeCandidates,
+    nextTrail,
+  );
+  if (
+    familyRecipe
+    && !methodExcluded(context, recipeLearningKey(bot, target, familyRecipe))
+  ) recipes.push(familyRecipe);
   recipes.sort((left, right) => (
       recipeScore(bot, context, target, right) - recipeScore(bot, context, target, left)
     ));
@@ -997,14 +1324,41 @@ function produceItem(bot, context, target, amount, trail) {
     right.score - left.score
     || left.kind.localeCompare(right.kind)
   ));
+  const baselineActionCount = context.actions.length;
+  const baselineLedger = new Map(context.ledger);
+  const successfulMethods = [];
+  if (plankFamilyMethod?.candidate) {
+    // Generic wood collection is one recipe candidate, not a gate in front of
+    // the causal search. A completely carried transform (for example bamboo
+    // into planks) can now outrank a blind regional tree search.
+    successfulMethods.push({
+      kind: 'recipe',
+      score: plankFamilyMethod.score,
+      candidate: plankFamilyMethod.candidate,
+    });
+  } else if (plankFamilyMethod?.failure) {
+    methodFailures.push(plankFamilyMethod.failure);
+    recipeFailures.push(plankFamilyMethod.failure);
+  }
   for (const method of acquisitionMethods) {
+    const dominantAlternativeHarvest = successfulMethods.find(candidate => (
+      candidate.kind === 'entity_harvest'
+      && candidate.score > method.score
+    ));
+    if (dominantAlternativeHarvest && method.kind === 'recipe') {
+      // The entity capability has one aggregated deterministic binding. A
+      // lower-scored recipe is a different method kind, so the comparator
+      // cannot select it; recursively expanding all dye-family recipes here
+      // only burns the global node budget.
+      break;
+    }
     const candidate = cloneContext(context);
     const failure = method.kind === 'recipe'
       ? planFromRecipe(bot, candidate, target, amount, method.recipe, nextTrail)
       : planFromEntityHarvestSource(bot, candidate, target, amount, nextTrail);
     if (!failure) {
-      acceptContext(context, candidate);
-      return null;
+      successfulMethods.push({ ...method, candidate });
+      continue;
     }
     methodFailures.push(failure);
     if (method.kind === 'recipe') recipeFailures.push(failure);
@@ -1013,7 +1367,13 @@ function produceItem(bot, context, target, amount, trail) {
   const sourceCandidate = cloneContext(context);
   const sourceFailure = planFromWorldSource(bot, sourceCandidate, target, amount, nextTrail);
   if (!sourceFailure) {
-    acceptContext(context, sourceCandidate);
+    successfulMethods.push({ kind: 'world_source', score: 0, candidate: sourceCandidate });
+  }
+  if (successfulMethods.length > 0) {
+    successfulMethods.sort((left, right) => (
+      compareDerivedPlans(left, right, baselineActionCount, baselineLedger)
+    ));
+    acceptContext(context, successfulMethods[0].candidate);
     return null;
   }
 
@@ -1059,6 +1419,7 @@ export function buildPrerequisitePlan(bot, {
   workstationConstraint = null,
   blockProximityCache = null,
   allowEntityAlternatives = false,
+  allowUnobservedSelfDropRoot = true,
   excludedMethods = [],
 } = {}) {
   const canonicalTarget = canonicalName(target);
@@ -1077,7 +1438,19 @@ export function buildPrerequisitePlan(bot, {
     };
   }
 
-  const current = plannedInventoryCount(bot, canonicalTarget);
+  const requiredTool = canonicalName(toolRequirement?.name);
+  const minimumUsableDurability = boundedInteger(
+    toolRequirement?.minimumUsableDurability,
+    1,
+    1,
+    10_000,
+  );
+  // When the requested output IS the discovered replacement tool, raw item
+  // count is not completion: a worn-out carried tool must not satisfy the
+  // durability contract and send the caller straight back to the same failure.
+  const current = requiredTool === canonicalTarget
+    ? usableDurableItemCount(bot, canonicalTarget, minimumUsableDurability)
+    : plannedInventoryCount(bot, canonicalTarget);
   const completionKind = completion?.kind || completion || 'inventory';
   if (current >= desired) {
     if (
@@ -1138,6 +1511,7 @@ export function buildPrerequisitePlan(bot, {
       .map(value => String(value || '').slice(0, 160))
       .filter(Boolean)),
     allowEntityAlternatives: allowEntityAlternatives === true,
+    allowUnobservedSelfDropRoot: allowUnobservedSelfDropRoot === true,
     proximityCache: new Map(),
     blockProximityCache: blockProximityCache instanceof Map ? blockProximityCache : new Map(),
     workstationRequirement: {
@@ -1160,13 +1534,6 @@ export function buildPrerequisitePlan(bot, {
         }
       : null,
   };
-  const requiredTool = canonicalName(toolRequirement?.name);
-  const minimumUsableDurability = boundedInteger(
-    toolRequirement?.minimumUsableDurability,
-    1,
-    1,
-    10_000,
-  );
   let failure = null;
   if (accessRequirement?.kind === 'surface') {
     failure = addCapabilityAction(bot, context, 'reach_surface', {}, {
@@ -1198,7 +1565,9 @@ export function buildPrerequisitePlan(bot, {
         context,
         requiredTool,
         1,
-        [canonicalTarget, 'tool_durability'],
+        requiredTool === canonicalTarget
+          ? ['tool_durability']
+          : [canonicalTarget, 'tool_durability'],
       );
     }
   }

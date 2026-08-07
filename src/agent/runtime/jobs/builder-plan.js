@@ -391,6 +391,133 @@ export function builderWorksiteCollectionExclusion(order) {
   });
 }
 
+function toolPrerequisiteStep(order, snapshot, priorSkill, planItem) {
+  const requirement = order.checkpoint?.toolRequirement;
+  if (!requirement?.name) return null;
+  if (typeof planItem !== 'function') {
+    return {
+      terminal: true,
+      code: 'tool_planner_unavailable',
+      detail: `No prerequisite planner is available for ${requirement.name}.`,
+      retryable: false,
+    };
+  }
+  const surfaceReached = priorSkill?.kind === 'surface_navigation'
+    && priorSkill?.outcome === 'surface_reached';
+  const accessRequirement = surfaceReached
+    ? null
+    : priorSkill?.accessRequirement || order.checkpoint?.accessRequirement || null;
+  const plan = planItem({
+    target: requirement.name,
+    quantity: 1,
+    completion: 'inventory',
+    range: order.constraints?.maxDistance,
+    toolRequirement: requirement,
+    accessRequirement,
+    excludedMethods: order.checkpoint?.failedMethods || [],
+    allowEntityAlternatives: false,
+  });
+  if (plan?.status === 'complete') {
+    return {
+      phase: order.resumePhase || 'execute',
+      code: 'tool_prerequisite_ready',
+      checkpoint: {
+        ...order.checkpoint,
+        toolRequirement: null,
+        accessRequirement: null,
+      },
+    };
+  }
+  if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
+    return {
+      terminal: true,
+      code: plan?.code || 'tool_plan_blocked',
+      detail: plan?.detail || `No deterministic prerequisite plan exists for ${requirement.name}.`,
+      retryable: false,
+    };
+  }
+  return {
+    capability: plan.nextStep.capability,
+    methodKey: plan.nextStep.learningKey || null,
+    nextPhase: 'recover',
+    code: 'tool_prerequisite_planned',
+    target: { name: requirement.name },
+    reason: plan.nextStep.reason,
+    checkpoint: {
+      ...order.checkpoint,
+      toolRequirement: requirement,
+      accessRequirement,
+    },
+  };
+}
+
+function materialAcquisitionStep(order, snapshot, priorSkill, requirement, planItem) {
+  if (typeof planItem !== 'function') {
+    return {
+      terminal: true,
+      code: 'material_planner_unavailable',
+      detail: `No prerequisite planner is available for ${requirement.target}.`,
+      retryable: false,
+    };
+  }
+  const toolRequirement = priorSkill?.toolRequirement
+    || order.checkpoint?.toolRequirement
+    || null;
+  const workstationRequirement = priorSkill?.workstationRequirement
+    || order.checkpoint?.workstationRequirement
+    || null;
+  const surfaceReached = priorSkill?.kind === 'surface_navigation'
+    && priorSkill?.outcome === 'surface_reached';
+  const accessRequirement = surfaceReached
+    ? null
+    : priorSkill?.accessRequirement || order.checkpoint?.accessRequirement || null;
+  const plan = planItem({
+    target: requirement.target,
+    quantity: requirement.quantity,
+    completion: 'inventory',
+    range: order.constraints?.maxDistance,
+    toolRequirement,
+    workstationRequirement,
+    accessRequirement,
+    excludedMethods: order.checkpoint?.failedMethods || [],
+    allowEntityAlternatives: order.checkpoint?.acquisitionVariantCommitted !== true,
+  });
+  if (plan?.status === 'complete') {
+    return {
+      phase: 'execute',
+      code: 'materials_ready',
+      checkpoint: {
+        ...order.checkpoint,
+        acquisitionRequirement: null,
+        acquisitionVariantCommitted: null,
+      },
+    };
+  }
+  if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
+    return {
+      terminal: true,
+      code: plan?.code || 'material_plan_blocked',
+      detail: plan?.detail || `No deterministic prerequisite plan exists for ${requirement.target}.`,
+      retryable: false,
+    };
+  }
+  return {
+    capability: plan.nextStep.capability,
+    methodKey: plan.nextStep.learningKey || null,
+    nextPhase: 'acquire',
+    code: 'material_prerequisite_planned',
+    target: { name: requirement.target },
+    reason: plan.nextStep.reason,
+    checkpoint: {
+      ...order.checkpoint,
+      acquisitionRequirement: requirement,
+      ...(toolRequirement ? { toolRequirement } : {}),
+      ...(workstationRequirement ? { workstationRequirement } : {}),
+      accessRequirement,
+    },
+  };
+}
+
 export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planItem = null } = {}) {
   if (order.kind === 'build' && order.source !== 'player') {
     return { terminal: true, code: 'construction_not_authorized', retryable: false };
@@ -413,6 +540,33 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
   const carriedBuildCell = order.kind === 'build'
     ? carriedCellInCurrentStage(snapshot.blueprintAudit?.missing, snapshot)
     : null;
+  const acquisitionRequirement = order.checkpoint?.acquisitionRequirement;
+  const toolStep = toolPrerequisiteStep(order, snapshot, priorSkill, planItem);
+  if (toolStep) return toolStep;
+  if (
+    ['acquire', 'recover'].includes(order.phase)
+    && acquisitionRequirement
+    && snapshot.blueprintAudit?.code === 'unloaded'
+  ) {
+    if (count(snapshot, acquisitionRequirement.target) >= acquisitionRequirement.quantity) {
+      return {
+        phase: 'execute',
+        code: 'remote_materials_ready',
+        checkpoint: {
+          ...order.checkpoint,
+          acquisitionRequirement: null,
+          acquisitionVariantCommitted: null,
+        },
+      };
+    }
+    return materialAcquisitionStep(
+      order,
+      snapshot,
+      priorSkill,
+      acquisitionRequirement,
+      planItem,
+    );
+  }
   if (
     Number(snapshot.freeSlots) <= reserveSlots
     && order.kind === 'stockpile'
@@ -568,11 +722,29 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
 
   if (order.phase === 'assess' || order.phase === 'recover') {
     return carriedCellInCurrentStage(missing, snapshot)
-      ? { phase: 'execute', code: 'worksite_verified' }
+      ? {
+        phase: 'execute',
+        code: 'worksite_verified',
+        checkpoint: {
+          ...order.checkpoint,
+          acquisitionRequirement: null,
+          acquisitionVariantCommitted: null,
+        },
+      }
       : { phase: 'acquire', code: 'materials_required' };
   }
   if (order.phase === 'acquire') {
-    if (carriedBuildCell) return { phase: 'execute', code: 'carried_material_ready' };
+    if (carriedBuildCell) {
+      return {
+        phase: 'execute',
+        code: 'carried_material_ready',
+        checkpoint: {
+          ...order.checkpoint,
+          acquisitionRequirement: null,
+          acquisitionVariantCommitted: null,
+        },
+      };
+    }
     const requirements = new Map();
     for (const cell of missing) {
       const material = resolvedMaterial(cell, snapshot);
@@ -581,60 +753,25 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
     const needed = [...requirements.entries()]
       .map(([material, required]) => ({ material, missing: Math.max(0, required - count(snapshot, material)) }))
       .find(entry => entry.missing > 0);
-    if (!needed) return { phase: 'execute', code: 'materials_ready' };
-    if (typeof planItem !== 'function') {
+    if (!needed) {
       return {
-        terminal: true,
-        code: 'material_planner_unavailable',
-        detail: `No prerequisite planner is available for ${needed.material}.`,
-        retryable: false,
+        phase: 'execute',
+        code: 'materials_ready',
+        checkpoint: {
+          ...order.checkpoint,
+          acquisitionRequirement: null,
+          acquisitionVariantCommitted: null,
+        },
       };
     }
     const desired = count(snapshot, needed.material) + needed.missing;
-    const toolRequirement = priorSkill?.toolRequirement
-      || order.checkpoint?.toolRequirement
-      || null;
-    const workstationRequirement = priorSkill?.workstationRequirement
-      || order.checkpoint?.workstationRequirement
-      || null;
-    const surfaceReached = priorSkill?.kind === 'surface_navigation'
-      && priorSkill?.outcome === 'surface_reached';
-    const accessRequirement = surfaceReached
-      ? null
-      : priorSkill?.accessRequirement || order.checkpoint?.accessRequirement || null;
-    const plan = planItem({
-      target: needed.material,
-      quantity: desired,
-      completion: 'inventory',
-      range: order.constraints?.maxDistance,
-      toolRequirement,
-      workstationRequirement,
-      accessRequirement,
-      excludedMethods: order.checkpoint?.failedMethods || [],
-    });
-    if (plan?.status === 'complete') return { phase: 'execute', code: 'materials_ready' };
-    if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
-      return {
-        terminal: true,
-        code: plan?.code || 'material_plan_blocked',
-        detail: plan?.detail || `No deterministic prerequisite plan exists for ${needed.material}.`,
-        retryable: false,
-      };
-    }
-    return {
-      capability: plan.nextStep.capability,
-      methodKey: plan.nextStep.learningKey || null,
-      nextPhase: 'assess',
-      code: 'material_prerequisite_planned',
-      target: { name: needed.material },
-      reason: plan.nextStep.reason,
-      checkpoint: {
-        ...order.checkpoint,
-        ...(toolRequirement ? { toolRequirement } : {}),
-        ...(workstationRequirement ? { workstationRequirement } : {}),
-        accessRequirement,
-      },
-    };
+    return materialAcquisitionStep(
+      order,
+      snapshot,
+      priorSkill,
+      { target: needed.material, quantity: desired },
+      planItem,
+    );
   }
   if (order.phase === 'execute') {
     const ordered = orderedSupportedMissing(missing);

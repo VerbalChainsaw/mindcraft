@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..2ca8205 100644
+index b38bd30..9a88750 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
 @@ -14,6 +14,7 @@ const interactableBlocks = require('./lib/interactable.json')
@@ -64,16 +64,24 @@ index b38bd30..2ca8205 100644
                  if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.returnPos) returningPos = placingBlock.returnPos.clone()
                })
                .catch(_ignoreError => {
-@@ -611,6 +631,9 @@ function inject (bot) {
-     if (bot.entity.isInWater) {
-       bot.setControlState('jump', true)
-       bot.setControlState('sprint', false)
-+    } else if (bot.entity.isInLava) {
+@@ -608,7 +628,15 @@ function inject (bot) {
+     bot.setControlState('forward', true)
+     bot.setControlState('jump', false)
+-
++
+-    if (bot.entity.isInWater) {
++    // Mineflayer's entity flag can clear for a tick while the body's floored
++    // feet cell is still water at the surface. Treat physical water occupancy
++    // as water traversal too, or a route to an adjacent dry bank degrades into
++    // a same-level walk and never supplies the upward swim input.
++    const feetBlock = bot.blockAt(p.floored())
++    if (bot.entity.isInWater || feetBlock?.type === waterType) {
 +      bot.setControlState('jump', true)
 +      bot.setControlState('sprint', false)
++    } else if (bot.entity.isInLava) {
+       bot.setControlState('jump', true)
+       bot.setControlState('sprint', false)
      } else if (stateMovements.allowSprinting && physics.canStraightLine(path, true)) {
-       bot.setControlState('jump', false)
-       bot.setControlState('sprint', true)
 diff --git a/node_modules/mineflayer-pathfinder/lib/movements.js b/node_modules/mineflayer-pathfinder/lib/movements.js
 index a7e3505..84a0841 100644
 --- a/node_modules/mineflayer-pathfinder/lib/movements.js

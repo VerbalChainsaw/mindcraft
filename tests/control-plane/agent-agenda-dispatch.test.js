@@ -105,6 +105,7 @@ test('dispatchPlayerAgenda queues a construction barrier and returns it for mode
   assert.deepEqual(calls.added.map(entry => entry.kind), ['construction', 'sleep']);
   assert.equal(outcome.deferredConstruction.entryId, 'agenda-test-1');
   assert.match(outcome.deferredConstruction.modelInstruction, /bounded blueprint/i);
+  assert.match(outcome.deferredConstruction.modelInstruction, /bed occupies its anchor plus one block/i);
   assert.equal(calls.operatorHoldReleased, 0, 'Stop remains held until the exact Builder order is bound');
 });
 

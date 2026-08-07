@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseCommandMessage } from '../../src/agent/commands/index.js';
+import { getCommand, parseCommandMessage } from '../../src/agent/commands/index.js';
 
 test('Phase 0 parser accepts equivalent single-quoted and double-quoted follow commands', () => {
   const doubleQuoted = parseCommandMessage('!followPlayer("PlayerName", 4)');
@@ -29,4 +29,5 @@ test('Command parsing preserves existing callers when a trailing parameter is op
       args: ['acquire', 'iron_pickaxe', 1, 'ADMIN', 'main_hand'],
     },
   );
+  assert.equal(getCommand('!harvestEntityDrop').params.allow_alternative.optional, true);
 });

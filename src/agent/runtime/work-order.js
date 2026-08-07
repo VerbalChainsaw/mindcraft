@@ -23,6 +23,8 @@ const SAFE_REQUESTER = /^[A-Za-z0-9_ -]{0,32}$/;
 const MAX_BLUEPRINT_CELLS = 4096;
 const MAX_BLUEPRINT_FIXTURES = 64;
 const MAX_FAILED_METHODS = 24;
+const MAX_FAILED_TARGETS = 24;
+const DEFAULT_MAX_RECOVERIES = 8;
 const FIXTURE_KINDS = new Set(['bed', 'door']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 // A preemption is not the work order failing. The bot was mid-swing when a
@@ -249,13 +251,59 @@ function normalizeCheckpoint(checkpoint) {
   if (checkpoint.accessRequirement?.kind === 'surface') {
     normalized.accessRequirement = Object.freeze({ kind: 'surface' });
   }
+  const acquisitionTarget = boundedText(checkpoint.acquisitionRequirement?.target, 64);
+  const acquisitionQuantity = Number(checkpoint.acquisitionRequirement?.quantity);
+  if (CANONICAL_NAME.test(acquisitionTarget) && Number.isFinite(acquisitionQuantity)) {
+    normalized.acquisitionRequirement = Object.freeze({
+      target: acquisitionTarget,
+      quantity: finiteInteger(acquisitionQuantity, 1, 1, 2304),
+    });
+  }
+  if (checkpoint.acquisitionVariantCommitted === true) {
+    normalized.acquisitionVariantCommitted = true;
+  }
   if (Array.isArray(checkpoint.failedMethods)) {
     normalized.failedMethods = Object.freeze([...new Set(checkpoint.failedMethods
       .slice(0, MAX_FAILED_METHODS)
       .map(value => boundedText(value, 160))
       .filter(Boolean))]);
   }
+  if (Array.isArray(checkpoint.failedTargets)) {
+    const targets = new Map();
+    for (const rawTarget of checkpoint.failedTargets.slice(-MAX_FAILED_TARGETS)) {
+      const target = normalizeTarget(rawTarget);
+      if (![target?.x, target?.y, target?.z].every(Number.isFinite)) continue;
+      targets.set(`${target.name || ''}:${target.x}:${target.y}:${target.z}`, target);
+    }
+    if (targets.size > 0) normalized.failedTargets = Object.freeze([...targets.values()]);
+  }
   return Object.freeze(normalized);
+}
+
+function discoveredPrerequisiteCheckpoint(result, currentCheckpoint) {
+  const skill = result?.evidence?.skill;
+  if (!skill || typeof skill !== 'object' || Array.isArray(skill)) return null;
+  const candidate = normalizeCheckpoint({
+    ...currentCheckpoint,
+    ...(skill.toolRequirement ? { toolRequirement: skill.toolRequirement } : {}),
+    ...(skill.workstationRequirement ? { workstationRequirement: skill.workstationRequirement } : {}),
+    ...(skill.accessRequirement ? { accessRequirement: skill.accessRequirement } : {}),
+  });
+  const changed = ['toolRequirement', 'workstationRequirement', 'accessRequirement']
+    .some(key => JSON.stringify(candidate[key] || null) !== JSON.stringify(currentCheckpoint?.[key] || null));
+  return changed ? candidate : null;
+}
+
+function surfaceRecoveryObservation(result) {
+  const skill = result?.evidence?.skill;
+  if (skill?.kind !== 'surface_navigation') return null;
+  return Object.freeze({
+    reached: result.phase === 'succeeded' && skill.outcome === 'surface_reached',
+    progressed: (
+      skill.supported === true
+      && Number(skill.verticalProgress) >= 1
+    ),
+  });
 }
 
 function normalizeConstraints(constraints) {
@@ -307,6 +355,8 @@ export function normalizeWorkOrder(raw) {
   const quota = finiteInteger(raw.quota, 1, 1, 2304);
   const attempts = finiteInteger(raw.attempts, 0, 0, 32);
   const maxAttempts = finiteInteger(raw.maxAttempts, 3, 1, 8);
+  const recoveries = finiteInteger(raw.recoveries, 0, 0, 32);
+  const maxRecoveries = finiteInteger(raw.maxRecoveries, DEFAULT_MAX_RECOVERIES, 1, 24);
   const preemptions = finiteInteger(raw.preemptions, 0, 0, MAX_PREEMPTIONS);
   const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
   const updatedAt = Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt;
@@ -324,6 +374,8 @@ export function normalizeWorkOrder(raw) {
     resumePhase,
     attempts,
     maxAttempts,
+    recoveries,
+    maxRecoveries,
     preemptions,
     anchor: normalizeAnchor(raw.anchor),
     checkpoint: normalizeCheckpoint(raw.checkpoint),
@@ -339,6 +391,8 @@ export function createWorkOrder(input = {}) {
     phase: 'assess',
     attempts: 0,
     maxAttempts: 3,
+    recoveries: 0,
+    maxRecoveries: DEFAULT_MAX_RECOVERIES,
     source: 'role',
     requester: '',
     checkpoint: {},
@@ -346,14 +400,85 @@ export function createWorkOrder(input = {}) {
   });
 }
 
+export function workOrderCollectionExclusions(order, requestedName = null) {
+  const canonicalRequested = boundedText(requestedName, 64);
+  const targets = (order?.checkpoint?.failedTargets || [])
+    .filter(target => [target?.x, target?.y, target?.z].every(Number.isFinite))
+    .filter(target => !canonicalRequested || target.name === canonicalRequested);
+  // One rejected block excludes its compact vein. Two repeat rejections are
+  // evidence that the local approach/region is unsuitable, so the next
+  // binding must move materially farther instead of draining the budget on
+  // adjacent coordinates.
+  const boundedRadius = targets.length >= 2 ? 16 : 4;
+  return targets
+    .map(target => ({
+      x: Math.floor(target.x),
+      y: Math.floor(target.y),
+      z: Math.floor(target.z),
+      radius: boundedRadius,
+    }));
+}
+
 export function advanceWorkOrder(order, result, {
   previousActionId = null,
   nextPhase = null,
   failedMethod = null,
+  failedTarget = null,
   now = Date.now(),
 } = {}) {
   const current = normalizeWorkOrder(order);
   if (!result?.actionId || result.actionId === previousActionId) return current;
+  const surfaceRecovery = surfaceRecoveryObservation(result);
+  if (surfaceRecovery?.reached && nextPhase && PHASES.has(nextPhase)) {
+    // Reaching the surface satisfies a physical access prerequisite; it is not
+    // productive work on the requested build/mine/harvest outcome. Preserve
+    // both budgets until a later material or blueprint action verifies real
+    // output, while allowing the planner to clear the access requirement.
+    return normalizeWorkOrder({
+      ...current,
+      phase: nextPhase,
+      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      updatedAt: now,
+    });
+  }
+  if (surfaceRecovery && result.retryable === true) {
+    if (surfaceRecovery.progressed) {
+      // A bounded ascent may stop before its full surface-access effect while
+      // still ending higher on verified support. Rebind from that checkpoint
+      // without pretending the effect completed or charging either budget.
+      return normalizeWorkOrder({
+        ...current,
+        evidence: {
+          code: 'capability_verified_partial_progress',
+          detail: result.detail || 'Surface recovery advanced to a higher supported stance.',
+          actionId: result.actionId,
+        },
+        updatedAt: now,
+      });
+    }
+    if (current.recoveries < current.maxRecoveries) {
+      // Surface navigation is bounded recovery, never a failed attempt at the
+      // player's requested production. No-progress legs spend only the
+      // recovery ceiling and re-derive the same access step from fresh state.
+      return normalizeWorkOrder({
+        ...current,
+        recoveries: current.recoveries + 1,
+        evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+        updatedAt: now,
+      });
+    }
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'failed',
+      resumePhase: null,
+      evidence: {
+        code: 'surface_recovery_exhausted',
+        detail: result.detail || 'Surface access remained unavailable after bounded recovery.',
+        actionId: result.actionId,
+      },
+      updatedAt: now,
+    });
+  }
   if (result.phase === 'succeeded' && nextPhase && PHASES.has(nextPhase)) {
     return normalizeWorkOrder({
       ...current,
@@ -364,6 +489,7 @@ export function advanceWorkOrder(order, result, {
       // already finished.
       preemptions: 0,
       attempts: 0,
+      recoveries: 0,
       evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
       updatedAt: now,
     });
@@ -401,6 +527,54 @@ export function advanceWorkOrder(order, result, {
       evidence: {
         code: 'inventory_capacity_blocked',
         detail: result.detail || 'No safe working inventory slot can be released.',
+        actionId: result.actionId,
+      },
+      updatedAt: now,
+    });
+  }
+  const prerequisiteCheckpoint = discoveredPrerequisiteCheckpoint(result, current.checkpoint);
+  if (result.retryable === true && prerequisiteCheckpoint) {
+    // A newly discovered physical prerequisite is planning information, not a
+    // failed attempt at the selected acquisition method. Persist it before the
+    // next reducer pass so restart cannot lose the replacement requirement,
+    // and preserve both the productive-attempt budget and the viable source.
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'recover',
+      resumePhase: current.phase,
+      checkpoint: prerequisiteCheckpoint,
+      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      updatedAt: now,
+    });
+  }
+  const target = failedTarget && typeof failedTarget === 'object'
+    ? normalizeCheckpoint({ failedTargets: [failedTarget] }).failedTargets?.[0] || null
+    : null;
+  if (result.retryable === true && target) {
+    if (current.recoveries < current.maxRecoveries) {
+      return normalizeWorkOrder({
+        ...current,
+        phase: 'recover',
+        resumePhase: current.phase,
+        recoveries: current.recoveries + 1,
+        checkpoint: {
+          ...current.checkpoint,
+          failedTargets: [...(current.checkpoint.failedTargets || []), target].slice(-MAX_FAILED_TARGETS),
+        },
+        evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+        updatedAt: now,
+      });
+    }
+    // A bounded target-recovery budget is independent of the productive
+    // method budget. Exhausting it fails truthfully; it must not silently
+    // convert candidate rejections into productive attempts.
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'failed',
+      resumePhase: null,
+      evidence: {
+        code: 'target_recovery_exhausted',
+        detail: result.detail || 'Concrete acquisition targets remained unsafe after bounded recovery.',
         actionId: result.actionId,
       },
       updatedAt: now,

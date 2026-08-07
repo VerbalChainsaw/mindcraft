@@ -9,6 +9,7 @@ import { buildPrerequisitePlan } from '../prerequisite-planner.js';
 import { createWorkOrder } from '../work-order.js';
 
 const LOCAL_BIND_RANGE = 16;
+const BASIC_STRUCTURAL_MATERIALS = new Set(['cobblestone', 'dirt', 'stone']);
 
 const FAMILY_DEFAULTS = Object.freeze({
   oak_door: Object.freeze({
@@ -60,6 +61,75 @@ function recipeIngredientNames(registry, recipe) {
     .map(value => typeof value === 'number' ? value : Number(value?.id))
     .map(id => registry?.items?.[id]?.name)
     .filter(Boolean);
+}
+
+function recipeIngredientCounts(registry, recipe) {
+  const rawIngredients = recipe?.inShape
+    ? recipe.inShape.flat()
+    : Array.isArray(recipe?.ingredients)
+      ? recipe.ingredients
+      : [];
+  const counts = new Map();
+  for (const ingredient of rawIngredients) {
+    if (ingredient == null) continue;
+    const id = typeof ingredient === 'number' ? ingredient : Number(ingredient?.id);
+    const name = registry?.items?.[id]?.name;
+    if (!name) continue;
+    const amount = typeof ingredient === 'number'
+      ? 1
+      : Math.max(1, Math.abs(Number(ingredient?.count) || 1));
+    counts.set(name, (counts.get(name) || 0) + amount);
+  }
+  return counts;
+}
+
+function recipesForItem(bot, name) {
+  const id = bot?.registry?.itemsByName?.[name]?.id;
+  return Number.isInteger(id) ? bot.registry?.recipes?.[id] || [] : [];
+}
+
+function variantSpecificCarriedProgress(bot, target, competingTarget) {
+  const recipes = recipesForItem(bot, target);
+  const competingIngredients = new Set(
+    recipesForItem(bot, competingTarget).flatMap(recipe => recipeIngredientNames(bot.registry, recipe)),
+  );
+  const distinctive = new Set(
+    recipes.flatMap(recipe => recipeIngredientNames(bot.registry, recipe))
+      .filter(name => !competingIngredients.has(name)),
+  );
+  if (distinctive.size === 0) return 0;
+  return recipes.reduce((best, recipe) => {
+    const counts = recipeIngredientCounts(bot.registry, recipe);
+    const covered = [...distinctive].reduce((total, name) => (
+      total + Math.min(counts.get(name) || 0, inventoryCount(bot, name))
+    ), 0);
+    return Math.max(best, covered);
+  }, 0);
+}
+
+function shouldPreserveCurrentFamilyMaterial(bot, cells, forcedMaterial) {
+  if (!forcedMaterial) return false;
+  const currentMaterials = [...new Set(cells.map(cell => cell?.material).filter(Boolean))];
+  const ranked = currentMaterials
+    .filter(material => material !== forcedMaterial)
+    .map(material => ({
+      material,
+      progress: variantSpecificCarriedProgress(bot, material, forcedMaterial),
+    }))
+    .sort((left, right) => right.progress - left.progress || left.material.localeCompare(right.material));
+  const current = ranked[0];
+  if (!current || current.progress <= 0) return false;
+  const forcedProgress = variantSpecificCarriedProgress(bot, forcedMaterial, current.material);
+  return current.progress >= forcedProgress;
+}
+
+export function preservesStructureAccessoryProgress(order, bot, alternativeOutput) {
+  const forcedBedMaterial = String(alternativeOutput || '').endsWith('_wool')
+    ? `${String(alternativeOutput).slice(0, -'_wool'.length)}_bed`
+    : null;
+  if (!forcedBedMaterial) return false;
+  const cells = (order?.blueprint?.cells || []).filter(cell => cell?.materialFamily === 'bed');
+  return shouldPreserveCurrentFamilyMaterial(bot, cells, forcedBedMaterial);
 }
 
 function familyCandidates(bot, family) {
@@ -125,14 +195,15 @@ function planCost(bot, plan) {
   );
 }
 
-function rankCandidate(bot, name, range, planItem, blockProximityCache) {
+function rankCandidate(bot, name, range, planItem, blockProximityCache, requiredQuantity = 1) {
   const carried = inventoryCount(bot, name);
   const plan = planItem(bot, {
     target: name,
-    quantity: carried + 1,
+    quantity: Math.max(carried + 1, Math.floor(Number(requiredQuantity) || 1)),
     completion: 'inventory',
     range,
     blockProximityCache,
+    allowUnobservedSelfDropRoot: false,
   });
   if (!['complete', 'ready'].includes(plan?.status)) return null;
   const distance = firstCollectionDistance(bot, plan);
@@ -143,6 +214,38 @@ function rankCandidate(bot, name, range, planItem, blockProximityCache) {
     distance,
     cost: planCost(bot, plan),
   };
+}
+
+function isSafeStructuralMaterial(name) {
+  return BASIC_STRUCTURAL_MATERIALS.has(name) || String(name || '').endsWith('_planks');
+}
+
+function structuralMaterialCandidates(bot) {
+  return Object.values(bot?.registry?.itemsByName || {})
+    .map(item => item?.name)
+    .filter(isSafeStructuralMaterial)
+    .filter(name => Boolean(bot?.registry?.blocksByName?.[name]))
+    .sort();
+}
+
+function selectStructuralMaterial(bot, order, cells, range, planItem) {
+  const candidates = structuralMaterialCandidates(bot);
+  const observed = observedFamilyMaterial(bot, order, cells, candidates);
+  if (observed) return observed;
+  const blockProximityCache = new Map();
+  const required = cells.length;
+  const ranked = candidates
+    .map(name => rankCandidate(bot, name, range, planItem, blockProximityCache, required))
+    .filter(Boolean)
+    .sort((left, right) => (
+      left.cost - right.cost
+      || left.plan.actions.length - right.plan.actions.length
+      || Number.isFinite(right.distance) - Number.isFinite(left.distance)
+      || left.distance - right.distance
+      || right.carried - left.carried
+      || left.name.localeCompare(right.name)
+    ));
+  return ranked[0]?.name || null;
 }
 
 function familyDefaultForCell(cell, rebindRest = false) {
@@ -182,7 +285,12 @@ function selectFamilyMaterial(bot, order, material, cells, range, planItem, forc
   const candidates = familyCandidates(bot, family);
   const observed = observedFamilyMaterial(bot, order, cells, candidates);
   if (observed) return observed;
-  if (forcedMaterial && candidates.includes(forcedMaterial)) return forcedMaterial;
+  if (forcedMaterial && candidates.includes(forcedMaterial)) {
+    if (shouldPreserveCurrentFamilyMaterial(bot, cells, forcedMaterial)) {
+      return cells.map(cell => cell.material).find(candidate => candidates.includes(candidate)) || material;
+    }
+    return forcedMaterial;
+  }
 
   const blockProximityCache = new Map();
   const ranked = candidates
@@ -207,6 +315,7 @@ function selectFamilyMaterial(bot, order, material, cells, range, planItem, forc
 export function bindStructureAccessoryMaterials(order, bot, {
   planItem = buildPrerequisitePlan,
   alternativeOutput = null,
+  structuralMaterialAlternatives = false,
 } = {}) {
   if (!order?.blueprint?.cells?.length || !order?.target) return order;
   const range = Math.max(16, Math.min(512, Number(order.constraints?.maxDistance) || 64));
@@ -214,6 +323,23 @@ export function bindStructureAccessoryMaterials(order, bot, {
     ? `${String(alternativeOutput).slice(0, -'_wool'.length)}_bed`
     : null;
   const rebindRest = Boolean(forcedBedMaterial);
+  const structuralFamilyCells = order.blueprint.cells.filter(cell => (
+    cell?.materialFamily === 'survival_building_block'
+  ));
+  if (structuralMaterialAlternatives && structuralFamilyCells.length === 0) {
+    const structuralCounts = new Map();
+    for (const cell of order.blueprint.cells) {
+      if (cell?.fixtureId || !isSafeStructuralMaterial(cell?.material)) continue;
+      structuralCounts.set(cell.material, (structuralCounts.get(cell.material) || 0) + 1);
+    }
+    const primary = [...structuralCounts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
+    if (primary) {
+      structuralFamilyCells.push(...order.blueprint.cells.filter(cell => (
+        !cell?.fixtureId && cell.material === primary
+      )));
+    }
+  }
   const grouped = new Map();
   for (const cell of order.blueprint.cells) {
     const familyDefault = familyDefaultForCell(cell, rebindRest);
@@ -221,7 +347,7 @@ export function bindStructureAccessoryMaterials(order, bot, {
     if (!grouped.has(familyDefault)) grouped.set(familyDefault, []);
     grouped.get(familyDefault).push(cell);
   }
-  if (grouped.size === 0) return order;
+  if (grouped.size === 0 && structuralFamilyCells.length === 0) return order;
 
   const bindings = new Map();
   for (const [material, cells] of grouped) {
@@ -235,7 +361,18 @@ export function bindStructureAccessoryMaterials(order, bot, {
       material === 'red_bed' ? forcedBedMaterial : null,
     ));
   }
+  const structuralMaterial = structuralFamilyCells.length > 0
+    ? selectStructuralMaterial(bot, order, structuralFamilyCells, range, planItem)
+    : null;
+  const structuralKeys = new Set(structuralFamilyCells.map(cell => `${cell.x}:${cell.y}:${cell.z}`));
   const reboundCells = order.blueprint.cells.map(cell => {
+    if (structuralMaterial && structuralKeys.has(`${cell.x}:${cell.y}:${cell.z}`)) {
+      return {
+        ...cell,
+        material: structuralMaterial,
+        materialFamily: 'survival_building_block',
+      };
+    }
     const familyDefault = familyDefaultForCell(cell, rebindRest);
     return {
       ...cell,

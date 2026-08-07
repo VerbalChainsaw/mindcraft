@@ -372,6 +372,44 @@ function inject (bot) {
     return block.position.plus(p)
   }
 
+  // A composter or cauldron has a low interior floor surrounded by a tall
+  // rim. A* correctly binds the safe adjacent landing cell as a drop from the
+  // graph node above that rim, but an ordinary drop deliberately withholds
+  // jump. Detect the physical enclosure from collision shapes so the native
+  // executor can perform the jump a player needs to leave it.
+  function mustJumpOutOfEnclosingBlock (position, nextPoint) {
+    const block = bot.blockAt(position.floored())
+    if (!block || !Array.isArray(block.shapes) || block.shapes.length < 2) return false
+
+    const localX = position.x - block.position.x
+    const localY = position.y - block.position.y
+    const localZ = position.z - block.position.z
+    const epsilon = 0.02
+    const standingOnInteriorFloor = block.shapes.some(shape => (
+      localX >= shape[0] - epsilon && localX <= shape[3] + epsilon &&
+      localZ >= shape[2] - epsilon && localZ <= shape[5] + epsilon &&
+      Math.abs(localY - shape[4]) <= 0.08
+    ))
+    if (!standingOnInteriorFloor) return false
+
+    const dx = nextPoint.x - position.x
+    const dz = nextPoint.z - position.z
+    if (Math.max(Math.abs(dx), Math.abs(dz)) > 1.75) return false
+    const exitsWest = dx < -epsilon && Math.abs(dx) >= Math.abs(dz)
+    const exitsEast = dx > epsilon && Math.abs(dx) >= Math.abs(dz)
+    const exitsNorth = dz < -epsilon && Math.abs(dz) > Math.abs(dx)
+    const exitsSouth = dz > epsilon && Math.abs(dz) > Math.abs(dx)
+    if (!exitsWest && !exitsEast && !exitsNorth && !exitsSouth) return false
+
+    return block.shapes.some(shape => {
+      if (shape[4] <= localY + 0.5) return false
+      if (exitsWest) return shape[0] <= epsilon && shape[3] > epsilon
+      if (exitsEast) return shape[3] >= 1 - epsilon && shape[0] < 1 - epsilon
+      if (exitsNorth) return shape[2] <= epsilon && shape[5] > epsilon
+      return shape[5] >= 1 - epsilon && shape[2] < 1 - epsilon
+    })
+  }
+
   /**
    * Stop the bot's movement and recenter to the center off the block when the bot's hitbox is partially beyond the
    * current blocks dimensions.
@@ -1045,8 +1083,9 @@ function inject (bot) {
       bot.setControlState('jump', true)
       bot.setControlState('sprint', false)
     } else if (locomotionType === 'drop_down') {
-      executionMode = 'drop_down'
-      bot.setControlState('jump', false)
+      const jumpOut = mustJumpOutOfEnclosingBlock(p, nextPoint)
+      executionMode = jumpOut ? 'jump_out' : 'drop_down'
+      bot.setControlState('jump', jumpOut)
       bot.setControlState('sprint', false)
     } else if (locomotionType === 'fall_down') {
       executionMode = 'fall_down'

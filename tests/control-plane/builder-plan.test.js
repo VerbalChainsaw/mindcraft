@@ -7,7 +7,10 @@ import {
   createConstructionBlueprint,
   nextBuilderStep,
 } from '../../src/agent/runtime/jobs/builder-plan.js';
-import { expandStructureDesign } from '../../src/agent/runtime/jobs/structure-design.js';
+import {
+  expandStructureDesign,
+  parseStructureDesign,
+} from '../../src/agent/runtime/jobs/structure-design.js';
 import { bindStructureAccessoryMaterials } from '../../src/agent/runtime/jobs/structure-material-binder.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 import { getCommandDocs } from '../../src/agent/commands/index.js';
@@ -16,6 +19,9 @@ test('general construction compiler creates bounded supported shapes with a safe
   const compactDocs = getCommandDocs({ blocked_actions: [] }, { compact: true });
   assert.match(compactDocs, /DESIGN MUST BE THIS DSL, NEVER PROSE/);
   assert.match(compactDocs, /block X Y Z MATERIAL/);
+  assert.match(compactDocs, /Fixtures MUST use put, never block/);
+  assert.match(compactDocs, /torches go in interior air adjacent to a same-height solid wall/);
+  assert.match(compactDocs, /bed occupies its anchor plus one block in its facing direction/i);
 
   const mixed = expandStructureDesign(
     'slab 0 0 0 5 5 cobblestone; ring 0 1 0 5 5 rail; block 2 1 0 powered_rail; block 2 1 1 redstone_torch',
@@ -33,7 +39,7 @@ test('general construction compiler creates bounded supported shapes with a safe
   ), /no path down to the ground/i);
 
   const habitable = expandStructureDesign(
-    'room 0 0 0 5 4 5 cobblestone; carve 0 1 2 1 2 1; put 0 1 2 door east; put 1 1 1 bed south',
+    'room 0 0 0 5 4 5 cobblestone; put 0 1 2 door east; put 1 1 1 bed south',
     'cobblestone',
     { canSupportMaterial: name => name === 'cobblestone' },
   );
@@ -67,12 +73,18 @@ test('general construction compiler creates bounded supported shapes with a safe
     'shell 0 0 0 5 4 5 cobblestone; carve 2 1 0 1 2 1; put 2 1 0 door north; put 1 1 1 bed east',
     'cobblestone',
     { canSupportMaterial: name => name === 'cobblestone' },
-  ), /lacks planned solid support.*room or slab/i);
+  ), /lacks planned solid support.*bed occupies its anchor plus one block/i);
+  assert.throws(() => expandStructureDesign(
+    'room 0 0 0 7 4 5 cobblestone; put 1 1 4 bed south',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), /bed occupies its anchor plus one block.*move it inward.*supported interior floor/i);
   assert.throws(() => expandStructureDesign(
     'room 0 0 0 5 4 5 cobblestone; put 1 1 1 bed north',
     'cobblestone',
     { canSupportMaterial: name => name === 'cobblestone' },
-  ), /occupied head cell/i, 'an explicit facing must not silently rotate to another clear direction');
+  ), /occupied head cell.*move it or face it into clear interior space/i,
+  'an explicit facing must not silently rotate, and its correction must describe the occupancy defect');
 
   const platform = createConstructionBlueprint({
     shape: 'platform',
@@ -158,7 +170,46 @@ test('general construction compiler creates bounded supported shapes with a safe
   });
   assert.deepEqual(plannerRequest.excludedMethods, ['collect:stone->stone_bricks']);
   assert.equal(acquire.methodKey, 'craft:stone_bricks<-4xstone');
+  assert.equal(acquire.nextPhase, 'acquire');
+  assert.deepEqual(acquire.checkpoint.acquisitionRequirement, {
+    target: 'stone_bricks',
+    quantity: 1,
+  });
+  assert.equal(plannerRequest.allowEntityAlternatives, true);
   assert.deepEqual(acquire.checkpoint.toolRequirement, plannerRequest.toolRequirement);
+
+  const remoteAcquire = nextBuilderStep(
+    {
+      ...order,
+      phase: 'recover',
+      checkpoint: {
+        acquisitionRequirement: { target: 'stone_bricks', quantity: 1 },
+        acquisitionVariantCommitted: true,
+      },
+    },
+    {
+      inventory: {},
+      freeSlots: 12,
+      blueprintAudit: { valid: false, code: 'unloaded' },
+    },
+    null,
+    {
+      planItem: request => {
+        assert.equal(request.allowEntityAlternatives, false);
+        return {
+          status: 'ready',
+          nextStep: {
+            capability: { id: 'collect', arguments: { item: request.target, quantity: 1 } },
+            reason: 'Continue acquisition in the verified search region.',
+          },
+        };
+      },
+    },
+  );
+  assert.equal(remoteAcquire.command, undefined);
+  assert.equal(remoteAcquire.capability.id, 'collect');
+  assert.equal(remoteAcquire.nextPhase, 'acquire');
+  assert.deepEqual(remoteAcquire.target, { name: 'stone_bricks' });
 
   const capacity = nextBuilderStep(
     { ...createBuilderStockpileOrder({ material: 'stone_bricks', quota: 16 }), phase: 'acquire' },
@@ -250,6 +301,18 @@ test('general construction compiler creates bounded supported shapes with a safe
   assert.equal(carriedOutOfSequence.code, 'carried_material_ready');
 });
 
+test('structure design parser normalizes unambiguous model notation without shifting extra values', () => {
+  const operations = parseStructureDesign(
+    'room 0 0 0 5 4 5 [oak_planks]; put 1 1 1 crafting_table',
+  );
+  assert.equal(operations[0].material, 'oak_planks');
+  assert.equal(operations[1].thing, 'crafting');
+  assert.throws(
+    () => parseStructureDesign('slab 0 0 0 5 7 5 oak_planks'),
+    /accepts at most 6 values but got 7/,
+  );
+});
+
 test('generic fixture defaults bind once to the locally feasible registry family member', () => {
   const items = {
     1: { id: 1, name: 'oak_door' },
@@ -271,9 +334,10 @@ test('generic fixture defaults bind once to the locally feasible registry family
     17: { id: 17, name: 'white_bed' },
     18: { id: 18, name: 'brown_bed' },
   };
+  let carriedItems = [];
   const bot = {
     entity: { position: { x: 0, y: 64, z: 0, distanceTo: position => Math.hypot(position.x, position.y - 64, position.z) } },
-    inventory: { items: () => [] },
+    inventory: { items: () => carriedItems },
     registry: {
       items,
       itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
@@ -343,6 +407,96 @@ test('generic fixture defaults bind once to the locally feasible registry family
   assert.equal(
     bindStructureAccessoryMaterials(discoveredAlternative, bot, { planItem, alternativeOutput: 'brown_wool' }),
     discoveredAlternative,
+  );
+
+  const whiteProgressOrder = createWorkOrder({
+    ...order,
+    blueprint: {
+      id: 'progress_preserving_rebinding',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{
+        x: 0,
+        y: 0,
+        z: 0,
+        material: 'white_bed',
+        materialFamily: 'bed',
+        stage: 0,
+        function: 'rest',
+      }],
+    },
+  });
+  carriedItems = [{ name: 'white_wool', count: 2 }];
+  assert.equal(
+    bindStructureAccessoryMaterials(whiteProgressOrder, bot, { planItem, alternativeOutput: 'brown_wool' }),
+    whiteProgressOrder,
+  );
+  carriedItems = [{ name: 'white_wool', count: 2 }, { name: 'brown_wool', count: 3 }];
+  assert.equal(
+    bindStructureAccessoryMaterials(whiteProgressOrder, bot, { planItem, alternativeOutput: 'brown_wool' })
+      .blueprint.cells[0].material,
+    'brown_bed',
+  );
+});
+
+test('an unlocked designed structure binds one feasible material for its full structural quantity', () => {
+  const items = {
+    1: { id: 1, name: 'oak_planks' },
+    2: { id: 2, name: 'dirt' },
+    3: { id: 3, name: 'cobblestone' },
+  };
+  const blocks = {
+    11: { id: 11, name: 'oak_planks' },
+    12: { id: 12, name: 'dirt' },
+    13: { id: 13, name: 'cobblestone' },
+  };
+  const bot = {
+    inventory: { items: () => [{ name: 'dirt', type: 2, count: 12 }] },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks,
+      blocksByName: Object.fromEntries(Object.values(blocks).map(block => [block.name, block])),
+    },
+    blockAt() { return { name: 'air' }; },
+  };
+  const order = createWorkOrder({
+    id: 'builder-structural-binding',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    target: { name: 'construction_site', x: 20, y: 64, z: 20 },
+    quota: 3,
+    blueprint: {
+      id: 'structural_binding',
+      width: 3,
+      depth: 1,
+      height: 1,
+      cells: [0, 1, 2].map(x => ({
+        x, y: 0, z: 0, material: 'oak_planks', stage: 0, function: 'foundation',
+      })),
+    },
+  });
+  const planItem = (_bot, { target, quantity, allowUnobservedSelfDropRoot }) => ({
+    status: target === 'dirt' ? 'complete' : 'ready',
+    actions: target === 'dirt' ? [] : [{
+      kind: 'collect',
+      capability: { arguments: { source: target }, cost: quantity * 4 },
+    }],
+    allowUnobservedSelfDropRoot,
+  });
+
+  const bound = bindStructureAccessoryMaterials(order, bot, {
+    planItem,
+    structuralMaterialAlternatives: true,
+  });
+
+  assert.deepEqual(new Set(bound.blueprint.cells.map(cell => cell.material)), new Set(['dirt']));
+  assert.ok(bound.blueprint.cells.every(cell => cell.materialFamily === 'survival_building_block'));
+  assert.equal(
+    bindStructureAccessoryMaterials(order, bot, { planItem, structuralMaterialAlternatives: false }),
+    order,
   );
 });
 
@@ -439,23 +593,58 @@ test('Given a hazardous, occupied, or trapping worksite, Builder chooses the saf
   assert.equal(occupied.code, 'blueprint_occupied');
   assert.equal(occupied.retryable, true);
 
+  const naturalObstructionAudit = {
+    valid: true,
+    missing: [],
+    incorrect: [{
+      x: 2,
+      y: 64,
+      z: 1,
+      expected: 'stone',
+      observed: 'dirt',
+      clearable: true,
+    }],
+  };
   const naturalObstruction = nextBuilderStep({ ...order, phase: 'execute' }, {
-    blueprintAudit: {
-      valid: true,
-      missing: [],
-      incorrect: [{
-        x: 2,
-        y: 64,
-        z: 1,
-        expected: 'stone',
-        observed: 'dirt',
-        clearable: true,
-      }],
-    },
+    blueprintAudit: naturalObstructionAudit,
   });
   assert.equal(naturalObstruction.command, '!breakBlock(2, 64, 1)');
   assert.equal(naturalObstruction.nextPhase, 'execute');
   assert.equal(naturalObstruction.code, 'worksite_clearing');
+
+  let toolPlannerRequest = null;
+  const toolRecovery = nextBuilderStep({
+    ...order,
+    phase: 'recover',
+    resumePhase: 'execute',
+    checkpoint: {
+      toolRequirement: { name: 'wooden_pickaxe', minimumUsableDurability: 1 },
+      accessRequirement: { kind: 'surface' },
+    },
+  }, {
+    inventory: {},
+    blueprintAudit: naturalObstructionAudit,
+  }, null, {
+    planItem: request => {
+      toolPlannerRequest = request;
+      return {
+        status: 'ready',
+        nextStep: {
+          capability: { id: 'craft', arguments: { output: 'wooden_pickaxe', count: 1 } },
+          learningKey: 'craft:wooden_pickaxe',
+          reason: 'Replace the missing worksite-clearing tool.',
+        },
+      };
+    },
+  });
+  assert.deepEqual(toolPlannerRequest.toolRequirement, {
+    name: 'wooden_pickaxe',
+    minimumUsableDurability: 1,
+  });
+  assert.deepEqual(toolPlannerRequest.accessRequirement, { kind: 'surface' });
+  assert.equal(toolRecovery.capability.id, 'craft');
+  assert.equal(toolRecovery.nextPhase, 'recover');
+  assert.equal(toolRecovery.command, undefined, 'Builder must not retry the obstruction before its tool prerequisite');
 
   const structuralObstruction = nextBuilderStep({ ...order, phase: 'execute' }, {
     blueprintAudit: {
