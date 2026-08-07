@@ -382,7 +382,9 @@ export const actionsList = [
         name: '!stop',
         description: 'Force stop all actions and commands that are currently executing.',
         perform: async function (agent) {
-            const holdGeneration = agent.holdPosition('operator stop command');
+            const holdGeneration = agent.holdPosition('operator stop command', {
+                preserveDurableWork: true,
+            });
             const stopOutcome = await agent.actions.stop({
                 continueWhile: () => agent.isCurrentOperatorHold(holdGeneration),
             });

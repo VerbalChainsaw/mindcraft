@@ -677,7 +677,7 @@ export class Agent {
         return true;
     }
 
-    holdPosition(reason = 'operator stop') {
+    holdPosition(reason = 'operator stop', { preserveDurableWork = false } = {}) {
         this.operator_hold_generation += 1;
         this.operator_hold = true;
         this.operator_hold_reason = String(reason || 'operator stop').slice(0, 160);
@@ -686,9 +686,11 @@ export class Agent {
         }
         this.companion_context?.clearControl?.();
         this.actions?.cancelResume?.();
-        this.goal_director?.cancel?.(this.operator_hold_reason);
+        if (!preserveDurableWork) {
+            this.goal_director?.cancel?.(this.operator_hold_reason);
+        }
         if (/operator stop/i.test(this.operator_hold_reason)) {
-            this.job_director?.cancel?.(this.operator_hold_reason);
+            if (!preserveDurableWork) this.job_director?.cancel?.(this.operator_hold_reason);
             this.prompter?.cancelPendingModelGeneration?.();
         }
         this.self_prompter?.stop(false);

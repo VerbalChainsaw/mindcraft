@@ -1017,6 +1017,50 @@ export class JobDirector extends RoleDirector {
     return true;
   }
 
+  resumeOperatorStoppedOrder(orderId) {
+    if (this.activeOrder) {
+      return this.activeOrder.id === orderId
+        ? { accepted: true, code: 'already_active', id: this.activeOrder.id }
+        : { accepted: false, code: 'job_busy', id: this.activeOrder.id };
+    }
+    const receipt = this.lastReceipt;
+    const stoppedOrder = receipt?.order;
+    if (
+      !orderId
+      || receipt?.orderId !== orderId
+      || receipt?.phase !== 'cancelled'
+      || receipt?.code !== 'job_cancelled'
+      || stoppedOrder?.source !== 'player'
+      || !/operator stop/i.test(stoppedOrder?.evidence?.detail || '')
+    ) {
+      return { accepted: false, code: 'operator_stop_receipt_missing', id: orderId || null };
+    }
+
+    this.activeOrder = normalizeWorkOrder({
+      ...stoppedOrder,
+      phase: 'assess',
+      resumePhase: null,
+      evidence: {
+        code: 'operator_stop_resumed',
+        detail: 'Resumed the exact persisted player work order after Operator Stop.',
+        actionId: '',
+      },
+      updatedAt: this.now(),
+    });
+    this.lastOrder = null;
+    this.lastReceipt = null;
+    this.invalidateDispatch();
+    this.store.save(this.activeOrder, null);
+    this.setStatus(
+      'waiting',
+      'operator_stop_resumed',
+      this.activeOrder.target?.name || null,
+      'The exact persisted work order is held and ready to resume.',
+      true,
+    );
+    return { accepted: true, code: 'operator_stop_resumed', id: this.activeOrder.id };
+  }
+
   invalidateDispatch() {
     this.dispatchGeneration += 1;
     this.activeDispatch = null;

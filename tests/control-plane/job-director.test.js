@@ -525,6 +525,45 @@ test('Given Stop during an asynchronous family handoff, its late settlement cann
   }]);
 });
 
+test('Given a legacy Operator Stop receipt, the exact player work order re-arms without losing its checkpoint or budgets', () => {
+  const agent = createAgent('builder');
+  const store = memoryStore();
+  const director = new JobDirector(agent, { store, now: () => 20_000 });
+  const accepted = director.submit(createWorkOrder({
+    id: 'operator-stopped-builder',
+    role: 'builder',
+    kind: 'stockpile',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'cobblestone' },
+    quota: 16,
+  }));
+  assert.equal(accepted.accepted, true);
+  director.activeOrder = {
+    ...director.activeOrder,
+    phase: 'acquire',
+    attempts: 2,
+    recoveries: 1,
+    checkpoint: { ...director.activeOrder.checkpoint, collected: 7 },
+  };
+
+  assert.equal(director.cancel('operator stop command'), true);
+  const resumed = director.resumeOperatorStoppedOrder('operator-stopped-builder');
+
+  assert.deepEqual(resumed, {
+    accepted: true,
+    code: 'operator_stop_resumed',
+    id: 'operator-stopped-builder',
+  });
+  assert.equal(director.activeOrder.phase, 'assess');
+  assert.equal(director.activeOrder.attempts, 2);
+  assert.equal(director.activeOrder.recoveries, 1);
+  assert.equal(director.activeOrder.checkpoint.collected, 7);
+  assert.equal(director.activeOrder.evidence.code, 'operator_stop_resumed');
+  assert.equal(director.lastReceipt, null);
+  assert.equal(store.saved.at(-1).id, 'operator-stopped-builder');
+});
+
 test('Given replacement order B, late settlement from cancelled order A cannot mutate or release B', async () => {
   const agent = familyDeliveryAgent();
   const store = memoryStore();

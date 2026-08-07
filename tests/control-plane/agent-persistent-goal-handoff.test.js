@@ -68,3 +68,40 @@ test('failed body handoff preserves the work order and refuses the player item g
     'hold:persistent job handoff failed',
   ]);
 });
+
+test('Operator Stop holds the body without cancelling durable player work', () => {
+  const calls = [];
+  const agent = {
+    operator_hold: false,
+    operator_hold_generation: 0,
+    operator_control: { hold(reason) { calls.push(`persist:${reason}`); } },
+    companion_context: { clearControl() { calls.push('clear-control'); } },
+    actions: { cancelResume() { calls.push('cancel-resume'); } },
+    goal_director: { cancel() { calls.push('cancel-goal'); } },
+    job_director: { cancel() { calls.push('cancel-job'); } },
+    prompter: { cancelPendingModelGeneration() { calls.push('cancel-model'); } },
+    self_prompter: { stop() { calls.push('stop-prompter'); } },
+    requestInterrupt() { calls.push('interrupt-body'); },
+    history: { save() { calls.push('save-history'); } },
+  };
+
+  const generation = Agent.prototype.holdPosition.call(
+    agent,
+    'operator stop command',
+    { preserveDurableWork: true },
+  );
+
+  assert.equal(generation, 1);
+  assert.equal(agent.operator_hold, true);
+  assert.equal(calls.includes('cancel-goal'), false);
+  assert.equal(calls.includes('cancel-job'), false);
+  assert.deepEqual(calls, [
+    'persist:operator stop command',
+    'clear-control',
+    'cancel-resume',
+    'cancel-model',
+    'stop-prompter',
+    'interrupt-body',
+    'save-history',
+  ]);
+});

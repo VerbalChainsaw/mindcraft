@@ -186,6 +186,46 @@ test('a bound construction barrier releases sleep only after the exact Builder c
   assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'complete');
 });
 
+test('a restored active construction re-arms only its exact legacy Operator-stopped executor', () => {
+  let persisted = [];
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) { persisted = JSON.parse(JSON.stringify(entries)); },
+  };
+  const order = { id: 'builder-operator-stopped', phase: 'acquire', evidence: {} };
+  const agent = {
+    name: 'TestBot',
+    operator_hold_reason: '',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: order, lastOrder: null },
+    isOperatorHeld: () => false,
+  };
+  let director = new AgendaDirector(agent, { store, now: () => 65_000 });
+  const construction = director.add({ kind: 'construction', requester: 'Gabriel' });
+  assert.equal(director.bindConstruction(construction.id, order.id).accepted, true);
+
+  const resumeCalls = [];
+  agent.operator_hold_reason = 'operator stop command';
+  agent.isOperatorHeld = () => true;
+  agent.job_director = {
+    activeOrder: null,
+    lastOrder: { ...order, phase: 'cancelled' },
+    resumeOperatorStoppedOrder(orderId) {
+      resumeCalls.push(orderId);
+      this.activeOrder = { ...order, phase: 'assess' };
+      return { accepted: true, code: 'operator_stop_resumed', id: orderId };
+    },
+  };
+
+  director = new AgendaDirector(agent, { store, now: () => 66_000 });
+
+  assert.deepEqual(resumeCalls, ['builder-operator-stopped']);
+  assert.equal(agent.job_director.activeOrder.id, 'builder-operator-stopped');
+  assert.equal(director.activeEntry().executorId, 'builder-operator-stopped');
+});
+
 test('a failed construction barrier blocks its dependent sleep step', () => {
   const order = { id: 'builder-outpost-failed', phase: 'acquire', evidence: {} };
   const agent = {

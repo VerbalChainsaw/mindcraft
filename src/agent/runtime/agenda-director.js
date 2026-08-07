@@ -132,6 +132,19 @@ export class AgendaDirector {
         });
         this.store.save(this.entries);
       }
+      const stoppedJobEntry = this.entries.find(entry => (
+        entry.state === 'active'
+        && entry.executor === 'job'
+        && entry.executorId
+      ));
+      if (
+        stoppedJobEntry
+        && this.agent.isOperatorHeld?.()
+        && /operator stop/i.test(this.agent.operator_hold_reason || '')
+        && !this.agent.job_director?.activeOrder
+      ) {
+        this.agent.job_director?.resumeOperatorStoppedOrder?.(stoppedJobEntry.executorId);
+      }
       // Restored ids must not collide with ids minted this session.
       this.sequence = this.entries.length;
       if (this.store.lastError) {
