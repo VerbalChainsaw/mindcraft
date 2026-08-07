@@ -3414,18 +3414,23 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             bot.inventory.items(),
             Math.max(0, amount - existingFuelCapacity),
         );
+        const availableSmelts = existingFuelCapacity + fuelPlan.availableSmelts;
+        let plannedAmount = amount;
         if (!fuelPlan.ok) {
-            const availableSmelts = existingFuelCapacity + fuelPlan.availableSmelts;
-            log(bot, `Available furnace fuel can cook ${availableSmelts} of ${amount} ${itemName}.`);
-            return finish(false, availableSmelts > 0 ? 'insufficient_fuel' : 'missing_fuel', {
-                requiredSmelts: amount,
-                availableSmelts,
-                fuels: fuelPlan.entries.map(entry => ({
-                    name: entry.name,
-                    count: entry.count,
-                    outputPerItem: entry.outputPerItem,
-                })),
-            });
+            plannedAmount = Math.min(amount, Math.floor(availableSmelts));
+            if (plannedAmount < 1) {
+                log(bot, `Available furnace fuel cannot cook any of ${amount} ${itemName}.`);
+                return finish(false, availableSmelts > 0 ? 'insufficient_fuel' : 'missing_fuel', {
+                    requiredSmelts: amount,
+                    availableSmelts,
+                    fuels: fuelPlan.entries.map(entry => ({
+                        name: entry.name,
+                        count: entry.count,
+                        outputPerItem: entry.outputPerItem,
+                    })),
+                });
+            }
+            log(bot, `Fuel can cook ${plannedAmount} of ${amount} ${itemName}; completing that verified partial batch.`);
         }
         let nextFuelEntry = 0;
         const refuelIfEmpty = async () => {
@@ -3436,12 +3441,12 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
         };
         await refuelIfEmpty();
 
-        await furnace.putInput(mc.getItemId(itemName), null, amount);
+        await furnace.putInput(mc.getItemId(itemName), null, plannedAmount);
         let total = 0;
         let observedOutput = outputName;
         let lastProgressAt = Date.now();
-        const deadline = Date.now() + Math.min(660_000, Math.max(25_000, (amount * 11_000) + 15_000));
-        while (total < amount && Date.now() < deadline) {
+        const deadline = Date.now() + Math.min(660_000, Math.max(25_000, (plannedAmount * 11_000) + 15_000));
+        while (total < plannedAmount && Date.now() < deadline) {
             if (bot.interrupt_code) break;
             await new Promise(resolve => setTimeout(resolve, 500));
             // Furnace slots consume the active fuel stack before its burn
@@ -3468,7 +3473,12 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
         }
         if (total < amount) {
             log(bot, `The furnace produced ${total} of ${amount} requested ${observedOutput || 'items'}.`);
-            return finish(false, total > 0 ? 'partial' : 'stalled', { count: total, observedOutput });
+            return finish(false, total > 0 ? 'partial' : 'stalled', {
+                count: total,
+                plannedAmount,
+                availableSmelts,
+                observedOutput,
+            });
         }
         log(bot, `Smelted ${amount} ${itemName} into ${total} ${observedOutput || outputName || 'items'}.`);
         return finish(true, 'smelted', { count: total, observedOutput, retryable: false });

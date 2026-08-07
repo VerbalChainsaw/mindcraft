@@ -21,6 +21,17 @@ test('smelting fuel planning combines individually insufficient compatible stack
   ]);
 });
 
+test('smelting fuel planning reports a useful bounded partial batch', () => {
+  const plan = selectSmeltingFuelPlan([
+    { name: 'spruce_sapling', type: 10, count: 3, slot: 9 },
+    { name: 'stick', type: 11, count: 2, slot: 10 },
+  ], 3);
+
+  assert.equal(plan.ok, false);
+  assert.equal(plan.availableSmelts, 2.5);
+  assert.equal(Math.floor(plan.availableSmelts), 2);
+});
+
 test('the repository smelting catalogue gives planning and execution the same transform', () => {
   assert.deepEqual(smeltingInputsForOutput('stone'), ['cobblestone']);
   assert.equal(smeltingOutputForInput('cobblestone'), 'stone');
