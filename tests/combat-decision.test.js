@@ -32,6 +32,18 @@ test('a projectile threat selects shielded closing when shield and melee are rea
   assert.equal(decision.reason, 'projectile_block_and_close');
 });
 
+test('an unarmed bot fully disengages from a projectile threat', () => {
+  const decision = chooseTacticalCombatDecision({
+    health: 20,
+    equipment: { melee: false, shield: false, bow: false, arrows: false },
+    hostiles: [{ id: 10, name: 'skeleton', distance: 12, disposition: 'combat_safe' }],
+  });
+
+  assert.equal(decision.response, 'retreat');
+  assert.equal(decision.reason, 'unsafe_projectile_engagement');
+  assert.equal(decision.selected.desiredRange, 24);
+});
+
 test('an explosive threat outranks a nearer zombie and preserves bow distance', () => {
   const decision = chooseTacticalCombatDecision({
     health: 20,
@@ -45,6 +57,18 @@ test('an explosive threat outranks a nearer zombie and preserves bow distance', 
   assert.equal(decision.selected.name, 'creeper');
   assert.equal(decision.response, 'ranged');
   assert.equal(decision.selected.desiredRange, 8);
+});
+
+test('even an armed bot retreats from a creeper already inside fuse range', () => {
+  const decision = chooseTacticalCombatDecision({
+    health: 20,
+    equipment: ready,
+    hostiles: [{ id: 11, name: 'creeper', distance: 3, disposition: 'combat_safe' }],
+  });
+
+  assert.equal(decision.response, 'retreat');
+  assert.equal(decision.reason, 'immediate_explosive_threat');
+  assert.equal(decision.selected.desiredRange, 10);
 });
 
 test('critical health overrides equipment and selects retreat', () => {
@@ -62,7 +86,7 @@ test('a creeper without a ranged option selects a ten-block disengagement', () =
   const decision = chooseTacticalCombatDecision({
     health: 20,
     equipment: { melee: true, shield: true, bow: false, arrows: false },
-    hostiles: [{ id: 7, name: 'creeper', distance: 5, disposition: 'combat_safe' }],
+    hostiles: [{ id: 7, name: 'creeper', distance: 7, disposition: 'combat_safe' }],
   });
 
   assert.equal(decision.response, 'retreat');

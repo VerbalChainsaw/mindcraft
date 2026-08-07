@@ -272,6 +272,28 @@ export class ActionManager {
         return true;
     }
 
+    discardInterruptedActionAttempt(actionLabel, actionOwner, requestContext = null) {
+        const signature = actionAttemptSignature(actionLabel, requestContext);
+        for (let index = this.recentActionAttempts.length - 1; index >= 0; index -= 1) {
+            const attempt = this.recentActionAttempts[index];
+            if (attempt.owner !== actionOwner || attempt.signature !== signature) continue;
+            this.recentActionAttempts.splice(index, 1);
+            return true;
+        }
+        return false;
+    }
+
+    settleActionAttempt(actionLabel, actionOwner, result, requestContext = null) {
+        // A higher-priority lane stopped this action before it could establish
+        // progress or failure. WorkOrder owns a separate bounded preemption
+        // ceiling; counting the same event here falsely turns safe resumption
+        // into an automatic-action loop.
+        if (result?.phase === 'interrupted' || result?.code === 'interrupted') {
+            return this.discardInterruptedActionAttempt(actionLabel, actionOwner, requestContext);
+        }
+        return this.recordActionProgress(actionLabel, actionOwner, result, requestContext);
+    }
+
     isOwnerBlocked(owner) {
         const requestedOwner = normalizeActionOwner(owner);
         const activeOwner = normalizeActionOwner(this.currentActionOwner);
@@ -605,7 +627,7 @@ export class ActionManager {
                 startedAt,
             });
             this.lastResult = result;
-            this.recordActionProgress(actionLabel, actionOwner, result, commandRequest);
+            this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
             this.agent.recordActionResult?.(result);
             return { success: result.phase === 'succeeded', message: output, interrupted, timedout, result };
         } catch (err) {
@@ -654,6 +676,7 @@ export class ActionManager {
                     request: commandRequest || null,
                 },
             });
+            this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
             this.lastResult = result;
             this.agent.recordActionResult?.(result);
             return { success: false, message, interrupted, timedout: false, result, error: err };

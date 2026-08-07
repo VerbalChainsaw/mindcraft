@@ -50,6 +50,9 @@ function responseFor(threat, state) {
     return { response: 'retreat', reason: 'avoid_only_threat', desiredRange: 24 };
   }
   if (classification === 'explosive') {
+    if (finiteDistance(threat?.distance) <= 6) {
+      return { response: 'retreat', reason: 'immediate_explosive_threat', desiredRange: 10 };
+    }
     if (rangedReady) {
       return { response: 'ranged', reason: 'explosive_standoff', desiredRange: 8 };
     }
@@ -63,7 +66,10 @@ function responseFor(threat, state) {
       return { response: 'ranged', reason: 'answer_range_with_range', desiredRange: 8 };
     }
     if (!meleeReady || health <= 12) {
-      return { response: 'retreat', reason: 'unsafe_projectile_engagement', desiredRange: 16 };
+      // Do not stop on the edge of the same projectile engagement envelope.
+      // The shared survival policy already defines 24 blocks as a bounded
+      // disengagement distance; Pathfinder owns the physical retreat.
+      return { response: 'retreat', reason: 'unsafe_projectile_engagement', desiredRange: 24 };
     }
   }
   if (!meleeReady && health <= 12) {

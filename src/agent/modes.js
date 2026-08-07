@@ -48,8 +48,32 @@ const SURVIVAL_FALLBACK_DISTANCE = 12;
 const SURVIVAL_RETREAT_COOLDOWN_MS = 4_000;
 const DROWNING_REFLEX_OXYGEN = 12;
 const FALL_REFLEX_VELOCITY = -0.7;
-const SELF_DEFENSE_RANGE = 8;
+const IMMEDIATE_EXPLOSIVE_RANGE = 10;
+// Match the ordinary tactical-combat observation envelope. Projectile mobs can
+// damage the bot well before they enter an eight-block melee bubble, so a
+// recent hit must be allowed to bind the loaded attacker while useful health
+// remains for the existing deterministic retreat response.
+const SELF_DEFENSE_RANGE = 16;
 const COMBAT_PRIORITY_ROLES = new Set(['defender', 'attacker']);
+
+function getImmediateExplosiveThreat(agent) {
+    const bot = agent?.bot;
+    if (!bot?.entity?.position) return null;
+    try {
+        const threat = world.getNearestEntityWhere(
+            bot,
+            entity => entity?.name === 'creeper' && mc.isCombatSafeHostile(entity),
+            IMMEDIATE_EXPLOSIVE_RANGE,
+        );
+        if (!threat) return null;
+        // A solid wall is already valid blast protection. Unknown visibility is
+        // treated conservatively because an unloaded ray sample must not turn a
+        // lethal approach into permission to stand still.
+        return world.hasLineOfSightToEntity(bot, threat) === false ? null : threat;
+    } catch {
+        return null;
+    }
+}
 
 function isExplicitGuardOrder(agent) {
     return agent?.actions?.currentActionLabel === 'action:guardPlayer';
@@ -217,6 +241,7 @@ const modes_list = [
         last_retreat_at: 0,
         update: function (agent) {
             const bot = agent.bot;
+            let explosiveThreat = null;
             let block = bot.blockAt(bot.entity.position);
             let blockAbove = bot.blockAt(bot.entity.position.offset(0, 1, 0));
             if (!block) block = {name: 'air'}; // hacky fix when blocks are not loaded
@@ -257,6 +282,16 @@ const modes_list = [
                     const success = await skills.escapeBurning(bot);
                     if (success) say(agent, 'I reached safe ground.');
                     return success;
+                });
+            }
+            else if ((explosiveThreat = getImmediateExplosiveThreat(agent))) {
+                say(agent, `A ${explosiveThreat.name.replaceAll('_', ' ')} is too close—moving clear!`);
+                void execute(this, agent, async () => {
+                    return await skills.resolveTacticalCombat(
+                        bot,
+                        SELF_DEFENSE_RANGE,
+                        explosiveThreat.id,
+                    );
                 });
             }
             else if (

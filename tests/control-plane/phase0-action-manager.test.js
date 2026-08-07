@@ -199,3 +199,19 @@ test('Repeated success at one unchanged coordinate still trips the no-progress g
   assert.equal(outcome.result.phase, 'blocked');
   assert.equal(outcome.result.code, 'action_pattern_detected');
 });
+
+test('Reflex interruptions do not turn deterministic job resumption into a false loop', async () => {
+  const agent = createHarness();
+  const outcomes = [];
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    outcomes.push(await agent.actions.runAction('action:goToCoordinates', () => {
+      agent.bot.interrupt_code = true;
+      return false;
+    }, { owner: 'job' }));
+  }
+
+  assert.equal(outcomes.every(outcome => outcome.result.phase === 'interrupted'), true);
+  assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
+  assert.equal(agent.actions.recentActionAttempts.length, 0);
+});

@@ -135,6 +135,29 @@ test('guard protection requires attributed loaded hostile and operator Stop clea
   assert.equal(context.snapshot().attention, null);
 });
 
+test('command autonomy admits a recently damaging ranged threat at tactical distance', () => {
+  const { agent, bot } = fixture();
+  const skeleton = { type: 'hostile', name: 'skeleton', id: 13, position: { x: 12, y: 64, z: 0 } };
+  bot.entity = {
+    position: {
+      x: 0,
+      y: 64,
+      z: 0,
+      distanceTo(position) {
+        return Math.hypot(position.x - this.x, position.y - this.y, position.z - this.z);
+      },
+    },
+  };
+  bot.entities[13] = skeleton;
+  bot.nearestEntity = predicate => Object.values(bot.entities).find(predicate) || null;
+  bot.lastDamageTime = Date.now();
+
+  assert.equal(getModeSuppressionReason(agent, { name: 'self_defense' }), null);
+
+  skeleton.position.x = 17;
+  assert.equal(getModeSuppressionReason(agent, { name: 'self_defense' }), 'command_autonomy');
+});
+
 test('attention remains bounded advisory state and never owns movement', () => {
   const { context, clock } = fixture();
   const attention = context.requestAttention('human_chat', { ttlMs: 500 });
