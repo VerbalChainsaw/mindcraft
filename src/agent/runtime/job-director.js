@@ -1126,21 +1126,24 @@ export class JobDirector extends RoleDirector {
     this.setStatus('suppressed', 'manual_command', null, reason, true);
   }
 
+  rememberPlayerStructure(order) {
+    if (
+      order?.role !== 'builder'
+      || order.kind !== 'build'
+      || !PLAYER_JOB_SOURCES.has(order.source)
+    ) return;
+    try {
+      this.agent.home_state?.rememberStructure?.(order);
+    } catch (error) {
+      console.warn(`[builder-checkpoint] Could not persist ${order.id}: ${String(error?.message || error).slice(0, 180)}`);
+    }
+  }
+
   persist(order) {
     const previousPhase = this.activeOrder?.phase;
     this.activeOrder = normalizeWorkOrder(order);
     this.store.save(this.activeOrder);
-    if (
-      this.activeOrder.role === 'builder'
-      && this.activeOrder.kind === 'build'
-      && PLAYER_JOB_SOURCES.has(this.activeOrder.source)
-    ) {
-      try {
-        this.agent.home_state?.rememberStructure?.(this.activeOrder);
-      } catch (error) {
-        console.warn(`[builder-checkpoint] Could not persist ${this.activeOrder.id}: ${String(error?.message || error).slice(0, 180)}`);
-      }
-    }
+    this.rememberPlayerStructure(this.activeOrder);
     if (previousPhase && previousPhase !== this.activeOrder.phase) {
       this.agent.publishBehaviorEvent?.({
         type: 'job.changed',
@@ -1228,6 +1231,7 @@ export class JobDirector extends RoleDirector {
       evidence: { code, detail, actionId: this.activeOrder?.evidence?.actionId || '' },
       updatedAt: this.now(),
     });
+    this.rememberPlayerStructure(terminal);
     this.lastOrder = terminal;
     this.lastReceipt = terminalReceiptFor(this.agent, terminal, code, this.now());
     if (phase === 'complete') this.completedOrderIds.add(terminal.id);

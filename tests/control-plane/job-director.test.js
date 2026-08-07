@@ -241,6 +241,8 @@ test('Accepting a new work order atomically clears an older terminal receipt', (
 
 test('A failed player job blocks autonomous shelter substitution until new direction arrives', () => {
   const agent = createAgent('builder');
+  const remembered = [];
+  agent.home_state = { rememberStructure: order => remembered.push(order) };
   const director = new JobDirector(agent, {
     store: memoryStore(),
     getSnapshot: () => ({ inventory: {} }),
@@ -263,6 +265,10 @@ test('A failed player job blocks autonomous shelter substitution until new direc
     },
   }));
   director.finishOrder('failed', 'material_unavailable', 'Waiting for player direction.', false);
+
+  assert.equal(remembered.at(-1).id, 'player-build');
+  assert.equal(remembered.at(-1).phase, 'failed');
+  assert.equal(remembered.at(-1).evidence.code, 'material_unavailable');
 
   assert.deepEqual(director.requestWorkOrder({ kind: 'emergency_shelter' }), {
     accepted: false,
