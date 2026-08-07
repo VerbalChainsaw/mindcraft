@@ -3,15 +3,25 @@ import test from 'node:test';
 
 import {
   fixtureOrientationStances,
+  isClearableWorksiteBlock,
+  isNaturalFillBlock,
   placeBlock,
 } from '../../src/agent/library/skills.js';
 import Vec3 from 'vec3';
 
-test('oriented fixtures use a safe lower stance outside a raised foundation', () => {
-  const anchor = new Vec3(10, 65, 10);
-  const lowerStance = new Vec3(10, 64, 8);
+test('processed cobblestone structures are not classified as clearable natural terrain', () => {
+  const bot = {};
+
+  assert.equal(isNaturalFillBlock(bot, { name: 'stone' }), true);
+  assert.equal(isClearableWorksiteBlock(bot, { name: 'cobblestone' }), false);
+  assert.equal(isClearableWorksiteBlock(bot, { name: 'cobbled_deepslate' }), false);
+});
+
+test('oriented fixtures use a reachable orientation ray down a raised worksite slope', () => {
+  const anchor = new Vec3(10, 69, 10);
+  const lowerStance = new Vec3(10, 67, 7);
   const bot = {
-    entity: { position: new Vec3(10.5, 64, 7.5) },
+    entity: { position: new Vec3(10.5, 67, 6.5) },
     blockAt(position) {
       if (position.equals(lowerStance.offset(0, -1, 0))) {
         return { name: 'stone', boundingBox: 'block', position };

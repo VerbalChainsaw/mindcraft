@@ -227,7 +227,10 @@ export function nextWorksiteReturnStep(order, snapshot) {
     builderExecution
     && (
       surfaceAccessRequired
-      || Number(order.target?.y) - snapshot.y > BUILDER_SURFACE_RETURN_DEPTH
+      || (
+        !surfaceAccessSatisfied
+        && Number(order.target?.y) - snapshot.y > BUILDER_SURFACE_RETURN_DEPTH
+      )
     )
   ) {
     return {

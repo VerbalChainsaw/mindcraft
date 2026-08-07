@@ -729,6 +729,34 @@ test('Verified capability effects supersede a stale executor failure', async () 
   assert.equal(outcome.result.evidence.capability.executorResult.code, 'skill_unreachable');
 });
 
+test('Verified partial inventory acquisition advances without spending a productive attempt', async () => {
+  const bot = plannerBot();
+  const plan = buildPrerequisitePlan(bot, { target: 'test_gem', quantity: 4 });
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(plan.nextStep.capability, {
+    agent,
+    executeCommand: () => {
+      bot.inventory.slots = [{ name: 'test_gem', count: 2 }];
+      agent.last_action_result = {
+        actionId: 'bounded-partial-collection',
+        phase: 'failed',
+        code: 'timeout',
+        detail: 'The bounded collection lease ended after making physical progress.',
+        retryable: true,
+        evidence: { skill: { kind: 'collect', outcome: 'interrupted', count: 2 } },
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, false);
+  assert.equal(outcome.verification.observedIncrease, 2);
+  assert.equal(outcome.result.phase, 'succeeded');
+  assert.equal(outcome.result.code, 'capability_verified_partial_progress');
+  assert.equal(outcome.result.retryable, false);
+});
+
 test('Verified returnable mining progress advances a capability before its inventory effect', async () => {
   const bot = plannerBot();
   const plan = buildPrerequisitePlan(bot, { target: 'test_gem', quantity: 1 });

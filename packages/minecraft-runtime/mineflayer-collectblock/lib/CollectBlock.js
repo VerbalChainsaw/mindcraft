@@ -16,7 +16,6 @@ const Util_1 = require("./Util");
 const Inventory_1 = require("./Inventory");
 const BlockVeins_1 = require("./BlockVeins");
 const Targets_1 = require("./Targets");
-const events_1 = require("events");
 const util_1 = require("util");
 const DEFAULT_TARGET_TIMEOUT_MS = 12000;
 const DEFAULT_TARGET_STALL_TIMEOUT_MS = 3000;
@@ -401,6 +400,11 @@ class CollectBlock {
         };
         this.bot = bot;
         this.targets = new Targets_1.Targets(bot);
+        // Pending targets and a settled async operation are not equivalent.
+        // Keep the exact operation lease so cancellation cannot return during
+        // the empty-queue gap before collectBlock_finished.
+        this.activeTask = null;
+        this.nextTaskGeneration = 0;
         this.movements = new mineflayer_pathfinder_1.Movements(bot);
         /** Default total navigation ownership allowed for one target. */
         this.targetTimeoutMs = DEFAULT_TARGET_TIMEOUT_MS;
@@ -458,8 +462,27 @@ class CollectBlock {
                 this.movements.dontCreateFlow = false;
                 this.bot.pathfinder.setMovements(this.movements);
             }
+            if (optionsFull.append && this.activeTask != null) {
+                if (Array.isArray(target)) {
+                    this.targets.appendTargets(target);
+                }
+                else {
+                    this.targets.appendTarget(target);
+                }
+                yield this.activeTask.settled;
+                return;
+            }
             if (!optionsFull.append)
                 yield this.cancelTask();
+            let settleTask;
+            const task = {
+                generation: ++this.nextTaskGeneration,
+                cancelRequested: false,
+                settled: new Promise(resolve => { settleTask = resolve; })
+            };
+            const callerSatisfied = optionsFull.isSatisfied;
+            optionsFull.isSatisfied = () => task.cancelRequested || callerSatisfied();
+            this.activeTask = task;
             if (Array.isArray(target)) {
                 this.targets.appendTargets(target);
             }
@@ -477,8 +500,11 @@ class CollectBlock {
                     throw err;
             }
             finally {
+                if (this.activeTask === task)
+                    this.activeTask = null;
+                settleTask();
                 // @ts-expect-error
-                this.bot.emit('collectBlock_finished');
+                this.bot.emit('collectBlock_finished', task.generation);
             }
         });
     }
@@ -501,17 +527,29 @@ class CollectBlock {
      */
     cancelTask(cb) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (this.targets.empty) {
+            const task = this.activeTask;
+            if (task == null) {
                 if (cb != null)
                     cb();
                 return yield Promise.resolve();
             }
-            const finished = (0, events_1.once)(this.bot, 'collectBlock_finished');
+            task.cancelRequested = true;
             this.targets.clear();
-            this.bot.emit('collectBlock_cancelled');
+            this.bot.emit('collectBlock_cancelled', task.generation);
             this.bot.pathfinder.setGoal(null);
-            this.bot.stopDigging();
-            yield finished;
+            let stopError = null;
+            try {
+                yield Promise.resolve(this.bot.stopDigging());
+            }
+            catch (err) {
+                // Cancellation ownership still belongs to this exact lease.
+                // Never let a cleanup error release the caller while collectAll
+                // can continue moving or mining in the background.
+                stopError = err;
+            }
+            yield task.settled;
+            if (stopError != null)
+                throw stopError;
             if (cb != null)
                 cb();
         });

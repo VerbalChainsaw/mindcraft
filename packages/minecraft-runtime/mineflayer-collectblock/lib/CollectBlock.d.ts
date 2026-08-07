@@ -86,6 +86,10 @@ export declare class CollectBlock {
      * The list of active targets being collected.
      */
     private readonly targets;
+    /** The exact async collection lease, which may outlive an empty target queue. */
+    private activeTask;
+    /** Monotonic identity used to correlate cancellation with its owning lease. */
+    private nextTaskGeneration;
     /**
        * The movements configuration to be sent to the pathfinder plugin.
        */

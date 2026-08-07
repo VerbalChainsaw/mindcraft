@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
 import { Vec3 } from 'vec3';
@@ -9,7 +10,7 @@ import {
     selectMiningRouteTool,
 } from '../src/agent/library/skills.js';
 
-const { createDroppedItemPickupGoal, selectCollectionTool } = collectBlockRuntime;
+const { CollectBlock, createDroppedItemPickupGoal, selectCollectionTool } = collectBlockRuntime;
 import {
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
@@ -95,6 +96,46 @@ test('dropped-item pursuit preserves a native adjacent approach for the exact ca
     assert.equal(goal.isEnd(new Vec3(-381, 66, -40)), true);
     assert.equal(goal.isEnd(new Vec3(-380, 66, -40)), true);
     assert.equal(goal.isEnd(new Vec3(-378, 66, -40)), false);
+});
+
+test('CollectBlock cancellation waits for its active lease after the target queue becomes empty', async () => {
+    const bot = new EventEmitter();
+    let stoppedGoal = false;
+    let stoppedDigging = false;
+    const stopFailure = new Error('dig cleanup failed');
+    bot.pathfinder = { setGoal(goal) { stoppedGoal = goal === null; } };
+    bot.stopDigging = () => {
+        stoppedDigging = true;
+        return Promise.reject(stopFailure);
+    };
+
+    const collector = Object.create(CollectBlock.prototype);
+    collector.bot = bot;
+    collector.targets = { empty: true, clear() {} };
+    let settleLease;
+    collector.activeTask = {
+        generation: 7,
+        cancelRequested: false,
+        settled: new Promise(resolve => { settleLease = resolve; }),
+    };
+
+    let cancellationReturned = false;
+    let cancellationError = null;
+    const cancellation = collector.cancelTask().catch(error => {
+        cancellationError = error;
+        cancellationReturned = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(cancellationReturned, false);
+    assert.equal(collector.activeTask.cancelRequested, true);
+    assert.equal(stoppedGoal, true);
+    assert.equal(stoppedDigging, true);
+
+    settleLease();
+    await cancellation;
+    assert.equal(cancellationReturned, true);
+    assert.equal(cancellationError, stopFailure);
 });
 
 test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {

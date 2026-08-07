@@ -824,12 +824,19 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
       skill?.observedPosition?.z,
     ].every(Number.isFinite)
   );
+  const verifiedInventoryProgress = Boolean(
+    Number(verification?.observedIncrease) > 0
+    && binding?.expectedEffects?.some(effect => effect.kind === 'inventory_increase')
+  );
   const verifiedPartialProgress = verifiedMiningProgress
     || verifiedSurfaceProgress
-    || verifiedEntityHarvestProgress;
+    || verifiedEntityHarvestProgress
+    || verifiedInventoryProgress;
 
   if (!verification.ok && verifiedPartialProgress && result.phase === 'failed') {
-    const progressDetail = verifiedEntityHarvestProgress
+    const progressDetail = verifiedInventoryProgress
+      ? `Minecraft verified a partial inventory increase of ${verification.observedIncrease}`
+      : verifiedEntityHarvestProgress
       ? Number(skill?.collected) > 0
         ? 'Minecraft verified a partial entity-harvest inventory increase'
         : 'Minecraft verified movement into a distinct entity-search region'
@@ -936,7 +943,13 @@ export async function executeCapabilityAction(capability, {
       result: executorResult,
     });
     const result = executorResult?.actionId && executorResult.actionId !== previousActionId
-      ? reconcileCapabilityResult(executorResult, verification, identity, preconditions, binding)
+      ? reconcileCapabilityResult(
+        executorResult,
+        verification,
+        identity,
+        preconditions,
+        { ...binding, expectedEffects },
+      )
       : null;
     return {
       value,

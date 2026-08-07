@@ -1035,7 +1035,10 @@ const NATURAL_FILL_BLOCKS = new Set([
     'dirt', 'coarse_dirt', 'rooted_dirt', 'grass_block', 'podzol', 'mycelium', 'mud',
     'clay', 'gravel', 'sand', 'red_sand', 'snow_block', 'moss_block',
     'sandstone', 'red_sandstone',
-    'stone', 'cobblestone', 'deepslate', 'cobbled_deepslate', 'tuff',
+    // Cobblestone forms are processed/player-like structure materials. Raw
+    // stone and deepslate remain terrain; their cobbled outputs must not be
+    // bulldozed by navigation or treated as a clearable construction site.
+    'stone', 'deepslate', 'tuff',
     'andesite', 'diorite', 'granite', 'calcite', 'dripstone_block',
     'netherrack', 'soul_sand', 'soul_soil', 'basalt', 'blackstone',
     'end_stone',
@@ -5085,11 +5088,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
 
     let collected = 0;
     let lowestCollectedTarget = null;
+    const cancellationSignal = actionCancellationSignal();
 
     const selectionMovements = collectionSafetyMovements(bot);
     bot.pathfinder.setMovements(safeMovements(bot));
 
-    for (let i=0; i<num; i++) {
+    for (let i=0; i<num && !bot.interrupt_code && !cancellationSignal?.aborted; i++) {
         const targetMatches = block => {
             if (!blocktypes.includes(block?.name)) return false;
             if (!block.position) return true;
@@ -5626,6 +5630,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     recoveredFrom: collectionErrorOutcome(err),
                 });
                 log(bot, `Collected ${block.name}; reconciled the verified drop after the path helper timed out.`);
+                if (bot.interrupt_code || cancellationSignal?.aborted) break;
                 await autoLight(bot);
                 continue;
             }
@@ -5651,7 +5656,17 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         if (bot.interrupt_code)
             break;  
     }
-    if (collected > 0) {
+    const cancelled = Boolean(bot.interrupt_code || cancellationSignal?.aborted);
+    if (cancelled) {
+        setActionEvidence(bot, {
+            kind: 'collect',
+            outcome: 'interrupted',
+            target: lowestCollectedTarget || { name: blockType },
+            count: collected,
+            search: collectionSearchEvidence(bot, search),
+            retryable: false,
+        });
+    } else if (collected > 0) {
         setActionEvidence(bot, {
             kind: 'collect',
             outcome: 'collected',
@@ -5670,7 +5685,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         });
     }
     log(bot, `Collected ${collected} ${blockType}.`);
-    return collected > 0;
+    return collected > 0 && !cancelled;
 }
 
 const WOOD_BLOCK_TYPES = Object.freeze([
@@ -6983,9 +6998,18 @@ const FIXTURE_FACING_OFFSETS = Object.freeze({
 
 export function fixtureOrientationStances(bot, anchor, direction) {
     if (!anchor?.offset || !direction || !bot?.blockAt) return [];
-    const orientationLine = anchor.offset(-direction.x * 2, 0, -direction.z * 2);
-    return [0, -1, 1]
-        .map(yOffset => orientationLine.offset(0, yOffset, 0))
+    const candidates = [];
+    for (const distance of [2, 3, 4]) {
+        for (const yOffset of [-3, -2, -1, 0, 1, 2]) {
+            if (Math.hypot(distance, yOffset) > 4.25) continue;
+            candidates.push(anchor.offset(
+                -direction.x * distance,
+                yOffset,
+                -direction.z * distance,
+            ));
+        }
+    }
+    return candidates
         .filter(stance => (
             isReplaceableGameplayBlock(bot.blockAt(stance))
             && isReplaceableGameplayBlock(bot.blockAt(stance.offset(0, 1, 0)))
@@ -6994,6 +7018,7 @@ export function fixtureOrientationStances(bot, anchor, direction) {
         .sort((left, right) => (
             (bot.entity?.position?.distanceTo?.(left) ?? 0)
             - (bot.entity?.position?.distanceTo?.(right) ?? 0)
+            || left.distanceTo(anchor) - right.distanceTo(anchor)
             || left.y - right.y
         ));
 }
@@ -15861,14 +15886,28 @@ export async function goToSurface(bot) {
     }
 
     const observed = bot.entity.position;
+    const supported = observedSupportedStandingCell(bot);
+    const verticalProgress = observed.y - origin.y;
+    const verifiedProgress = Boolean(
+        !bot.interrupt_code
+        && supported
+        && verticalProgress > 0
+    );
     setActionEvidence(bot, {
         kind: 'surface_navigation',
         outcome: bot.interrupt_code ? 'interrupted' : 'surface_progress_incomplete',
         ...(lastTarget ? { target: { x: lastTarget.x, y: lastTarget.y, z: lastTarget.z } } : {}),
         observed: { x: observed.x, y: observed.y, z: observed.z },
         legs: MAX_SURFACE_ROUTE_LEGS,
-        verticalProgress: observed.y - origin.y,
-        supported: Boolean(observedSupportedStandingCell(bot)),
+        verticalProgress,
+        supported: Boolean(supported),
+        ...(verifiedProgress ? {
+            progress: {
+                verified: true,
+                kind: 'surface_route_cell',
+                position: { x: supported.x, y: supported.y, z: supported.z },
+            },
+        } : {}),
         retryable: !bot.interrupt_code,
     });
     log(bot, bot.interrupt_code

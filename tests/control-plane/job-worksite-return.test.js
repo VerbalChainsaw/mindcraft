@@ -48,6 +48,21 @@ test('Builder composes surface access and native worksite return before blueprin
   assert.equal(surfaceSatisfied.code, 'worksite_surface_access_satisfied');
   assert.equal(surfaceSatisfied.checkpoint.accessRequirement, null);
 
+  const uphillAfterSurface = nextWorksiteReturnStep({
+    ...order,
+    checkpoint: { accessRequirement: null },
+    evidence: { code: 'skill_surface_reached' },
+  }, {
+    x: 18,
+    y: 66,
+    z: -18,
+    blueprintAudit: {
+      missing: [{ index: 0, x: 12, y: 70, z: -18 }],
+    },
+  });
+  assert.equal(uphillAfterSurface.code, 'worksite_return_required');
+  assert.equal(uphillAfterSurface.command, '!goToCoordinates(12, 70, -18, 2)');
+
   const horizontal = nextWorksiteReturnStep(order, {
     x: 40,
     y: 70,
