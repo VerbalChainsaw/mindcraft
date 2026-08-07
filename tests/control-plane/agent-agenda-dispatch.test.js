@@ -186,6 +186,100 @@ test('a bound construction barrier releases sleep only after the exact Builder c
   assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'complete');
 });
 
+test('daylight keeps an exact sleep step waiting without spending attempts, including legacy restart repair', async () => {
+  let now = 100_000;
+  let dispatches = 0;
+  const agent = {
+    name: 'TestBot',
+    bot: { time: { timeOfDay: 6_000 }, isRaining: false, thunderState: 0 },
+    last_action_result: null,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null, lastOrder: null },
+  };
+  const store = { lastError: null, load: () => [], save() {} };
+  const executeCommand = (_agent, _command, options) => {
+    dispatches += 1;
+    agent.last_action_result = dispatches === 1
+      ? {
+          actionId: 'sleep-daylight',
+          phase: 'failed',
+          code: 'skill_not_sleep_time',
+          detail: 'It is not night and not a thunderstorm.',
+          retryable: true,
+          evidence: { request: { routeOrigin: options.routeOrigin } },
+        }
+      : {
+          actionId: 'sleep-night',
+          phase: 'succeeded',
+          code: 'skill_slept',
+          detail: 'Slept in the verified bed.',
+          retryable: false,
+          evidence: { request: { routeOrigin: options.routeOrigin } },
+        };
+    return Promise.resolve();
+  };
+  const director = new AgendaDirector(agent, { store, executeCommand, now: () => now });
+  const added = director.add({ kind: 'sleep', requester: 'Gabriel' });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  let sleep = director.entries.find(entry => entry.id === added.id);
+  assert.equal(sleep.state, 'pending');
+  assert.equal(sleep.attempts, 0, 'daylight is not a productive sleep attempt');
+  assert.equal(sleep.evidence.code, 'skill_not_sleep_time');
+
+  now += 6_000;
+  director.update();
+  assert.equal(dispatches, 1, 'daylight must not repeatedly touch the bed');
+  assert.equal(director.status.code, 'agenda_world_condition_pending');
+
+  agent.bot.time.timeOfDay = 13_000;
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  sleep = director.entries.find(entry => entry.id === added.id);
+  assert.equal(dispatches, 2);
+  assert.equal(sleep.state, 'complete');
+  assert.equal(sleep.attempts, 1);
+
+  let repaired = null;
+  const legacyStore = {
+    lastError: null,
+    load: () => [{
+      id: 'agenda-legacy-sleep',
+      kind: 'sleep',
+      requester: 'Gabriel',
+      state: 'failed',
+      attempts: 2,
+      finishedAt: 90_000,
+      dependsOnEntryId: 'agenda-legacy-construction',
+      dependencyPolicy: 'requires_success',
+      bindingRequest: { kind: 'structure_fixture', function: 'rest' },
+      bindingConstraint: {
+        kind: 'structure_fixture',
+        function: 'rest',
+        fixtureId: 'bed_1',
+        structureOrderId: 'builder-legacy-outpost',
+        position: { x: 10, y: 64, z: 20 },
+        dimension: 'overworld',
+        material: 'red_bed',
+        facing: 'south',
+        sourceEntryId: 'agenda-legacy-construction',
+      },
+      evidence: { code: 'skill_not_sleep_time', detail: 'Daylight.' },
+    }],
+    save(entries) { repaired = JSON.parse(JSON.stringify(entries)); },
+  };
+  const legacy = new AgendaDirector(agent, { store: legacyStore, now: () => now });
+  const rearmed = legacy.entries[0];
+  assert.equal(rearmed.state, 'pending');
+  assert.equal(rearmed.attempts, 0);
+  assert.equal(rearmed.bindingConstraint.structureOrderId, 'builder-legacy-outpost');
+  assert.equal(repaired[0].state, 'pending', 'legacy repair must be durable before redispatch');
+});
+
 test('a restored active construction re-arms only its exact legacy Operator-stopped executor', () => {
   let persisted = [];
   const store = {

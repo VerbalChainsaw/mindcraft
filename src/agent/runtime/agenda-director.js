@@ -22,6 +22,7 @@ import {
 const DISPATCH_COOLDOWN_MS = 750;
 const REJECTED_COOLDOWN_MS = 5_000;
 const MAX_ENTRY_ATTEMPTS = 2;
+const WAITABLE_DIRECT_OUTCOMES = new Set(['skill_not_sleep_time']);
 const JOB_ROLE_FOR_KIND = Object.freeze({
   mine: 'miner',
   harvest: 'lumberjack',
@@ -69,6 +70,13 @@ function inferredLegacyDependency(previous, entry) {
   return null;
 }
 
+function sleepIsCurrentlyAllowed(bot) {
+  const timeOfDay = Number(bot?.time?.timeOfDay);
+  const isNight = Number.isFinite(timeOfDay) && timeOfDay >= 12541 && timeOfDay <= 23458;
+  const isThunderstorm = bot?.isRaining === true && Number(bot?.thunderState) > 0;
+  return isNight || isThunderstorm;
+}
+
 export class AgendaDirector {
   constructor(agent, {
     store = null,
@@ -98,6 +106,28 @@ export class AgendaDirector {
         const inferred = inferredLegacyDependency(entries[index - 1], entry);
         return inferred ? normalizeAgendaEntry({ ...entry, ...inferred }) : entry;
       });
+      // Older versions treated daylight as a failed sleep action and could
+      // persist an otherwise valid bound step as terminal. Re-arm only that
+      // exact legacy outcome. Its predecessor and bed binding stay intact; the
+      // old attempt charges are removed because no productive action failed.
+      let repairedLegacyWait = false;
+      this.entries = this.entries.map(entry => {
+        if (
+          entry.kind !== 'sleep'
+          || entry.state !== 'failed'
+          || !WAITABLE_DIRECT_OUTCOMES.has(entry.evidence?.code)
+        ) return entry;
+        repairedLegacyWait = true;
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'pending',
+          startedAt: null,
+          finishedAt: null,
+          executorId: '',
+          attempts: 0,
+        });
+      });
+      if (repairedLegacyWait) this.store.save(this.entries);
       const orphanedConstructionIds = new Set(this.entries.filter(entry => (
         entry.kind === 'construction'
         && !isTerminalAgendaState(entry.state)
@@ -518,6 +548,14 @@ export class AgendaDirector {
   }
 
   directSettlement(result) {
+    if (result?.phase !== 'succeeded' && WAITABLE_DIRECT_OUTCOMES.has(result?.code)) {
+      return {
+        state: 'waiting',
+        code: result.code,
+        detail: result.detail || '',
+        retryable: true,
+      };
+    }
     return {
       state: result?.phase === 'succeeded' ? 'complete' : 'failed',
       code: result?.code || 'action_ended',
@@ -613,6 +651,29 @@ export class AgendaDirector {
   }
 
   commitSettlement(active, settled, { dependentEntryId = '', bindingConstraint = null } = {}) {
+    if (settled.state === 'waiting') {
+      this.entries = this.entries.map(entry => (
+        entry.id === active.id
+          ? normalizeAgendaEntry({
+              ...entry,
+              state: 'pending',
+              startedAt: null,
+              finishedAt: null,
+              executorId: '',
+              evidence: settled,
+            })
+          : entry
+      ));
+      this.persist();
+      this.setStatus(
+        'waiting',
+        settled.code,
+        `${describeAgendaEntry(active)}: ${settled.detail || 'Waiting for the world condition to change.'}`,
+        active.id,
+      );
+      this.nextEligibleAt = this.now() + REJECTED_COOLDOWN_MS;
+      return { settled: true, state: 'waiting', retryable: true, code: settled.code };
+    }
     const attempts = active.attempts + 1;
     const retryable = settled.state === 'failed'
       && settled.retryable !== false
@@ -938,6 +999,21 @@ export class AgendaDirector {
         });
         return;
       }
+    }
+
+    if (
+      next.kind === 'sleep'
+      && WAITABLE_DIRECT_OUTCOMES.has(next.evidence?.code)
+      && !sleepIsCurrentlyAllowed(this.agent.bot)
+    ) {
+      this.nextEligibleAt = this.now() + REJECTED_COOLDOWN_MS;
+      this.setStatus(
+        'waiting',
+        'agenda_world_condition_pending',
+        'The exact bed is bound; waiting for night or a thunderstorm before trying to sleep again.',
+        next.id,
+      );
+      return;
     }
 
     if (next.kind === 'construction' && !next.executorId) {
