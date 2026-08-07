@@ -1057,6 +1057,36 @@ export class JobDirector extends RoleDirector {
     }
   }
 
+  acceptStructureMaterialAlternative(order, result, { reassess = false } = {}) {
+    if (order?.role !== 'builder' || order.kind === 'stockpile') return false;
+    const harvestEvidence = result?.evidence?.skill;
+    const alternativeOutput = harvestEvidence?.outcome === 'alternative_source_observed'
+      ? harvestEvidence.alternativeOutput
+      : null;
+    if (!alternativeOutput) return false;
+    const rebound = bindStructureAccessoryMaterials(order, this.agent.bot, { alternativeOutput });
+    if (rebound === order) return false;
+    const persisted = {
+      ...rebound,
+      ...(reassess ? { phase: 'assess', resumePhase: null } : {}),
+      evidence: {
+        code: 'material_alternative_bound',
+        detail: `Bound the structure accessory to verified ${alternativeOutput}.`,
+        actionId: result?.actionId || '',
+      },
+      updatedAt: this.now(),
+    };
+    this.persist(persisted);
+    if (PLAYER_JOB_SOURCES.has(persisted.source)) {
+      try {
+        this.agent.home_state?.rememberStructure?.(this.activeOrder);
+      } catch (error) {
+        console.warn(`[builder-binding] Could not persist ${persisted.id}: ${String(error?.message || error).slice(0, 180)}`);
+      }
+    }
+    return true;
+  }
+
   beginTerminalHandoff(order, code) {
     if (!order || !PLAYER_JOB_SOURCES.has(order.source)) return null;
     return this.agent.behavior_arbiter?.beginTerminalHandoff?.({
@@ -1161,23 +1191,8 @@ export class JobDirector extends RoleDirector {
     while (this.activeOrder && transitions < 6) {
       transitions += 1;
       if (this.activeOrder.role === 'builder' && this.activeOrder.kind !== 'stockpile') {
-        const harvestEvidence = this.agent.last_action_result?.evidence?.skill;
-        const alternativeOutput = harvestEvidence?.outcome === 'alternative_source_observed'
-          ? harvestEvidence.alternativeOutput
-          : null;
-        const rebound = bindStructureAccessoryMaterials(this.activeOrder, this.agent.bot, {
-          alternativeOutput,
-        });
-        if (rebound !== this.activeOrder) {
+        if (this.acceptStructureMaterialAlternative(this.activeOrder, this.agent.last_action_result)) {
           materialBindingSupersededResult = true;
-          this.persist(rebound);
-          if (PLAYER_JOB_SOURCES.has(rebound.source)) {
-            try {
-              this.agent.home_state?.rememberStructure?.(rebound);
-            } catch (error) {
-              console.warn(`[builder-binding] Could not persist ${rebound.id}: ${String(error?.message || error).slice(0, 180)}`);
-            }
-          }
         }
       }
       const reducer = reducerFor(this.activeOrder);
@@ -1317,6 +1332,17 @@ export class JobDirector extends RoleDirector {
           }
           if (!this.canSettleDispatch(dispatchToken)) {
             this.retainCancelledTransfer(orderAtDispatch, step, outcome, result);
+            return;
+          }
+          if (this.acceptStructureMaterialAlternative(orderAtDispatch, result, { reassess: true })) {
+            this.setStatus(
+              'waiting',
+              'material_alternative_bound',
+              step.target?.name || orderAtDispatch.target?.name,
+              'A verified material-family alternative was bound; reassessing the same structure.',
+              true,
+            );
+            this.nextAttemptAt = this.now();
             return;
           }
           const preempted = isPreemption(result);

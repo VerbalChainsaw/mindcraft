@@ -664,6 +664,77 @@ test('Given retryable failure, JobDirector persists bounded recovery instead of 
   assert.equal(store.saved.at(-1).phase, 'recover');
 });
 
+test('A verified accessory alternative rebinds the durable structure without spending an attempt', () => {
+  const agent = createAgent('builder');
+  agent.bot.registry = {
+    itemsByName: {
+      brown_bed: { id: 1, name: 'brown_bed' },
+      brown_wool: { id: 2, name: 'brown_wool' },
+      oak_planks: { id: 3, name: 'oak_planks' },
+    },
+    items: {
+      1: { id: 1, name: 'brown_bed' },
+      2: { id: 2, name: 'brown_wool' },
+      3: { id: 3, name: 'oak_planks' },
+    },
+    blocksByName: { brown_bed: { id: 10, name: 'brown_bed' } },
+    recipes: {
+      1: [{ ingredients: [{ id: 2 }, { id: 3 }] }],
+    },
+  };
+  const remembered = [];
+  agent.home_state = { rememberStructure: order => remembered.push(order) };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({ inventory: {} }),
+    now: () => 10_000,
+  });
+  director.submit(createWorkOrder({
+    id: 'alternative-bed',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester: 'Director',
+    phase: 'acquire',
+    target: { name: 'construction_site', x: 0, y: 64, z: 0 },
+    quota: 1,
+    blueprint: {
+      id: 'alternative_bed',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{
+        x: 0,
+        y: 0,
+        z: 0,
+        material: 'white_bed',
+        materialFamily: 'bed',
+      }],
+    },
+  }));
+
+  const accepted = director.acceptStructureMaterialAlternative(director.activeOrder, {
+    actionId: 'harvest-alternative-1',
+    phase: 'failed',
+    code: 'skill_alternative_source_observed',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'entity_harvest',
+        outcome: 'alternative_source_observed',
+        alternativeOutput: 'brown_wool',
+      },
+    },
+  }, { reassess: true });
+
+  assert.equal(accepted, true);
+  assert.equal(director.activeOrder.phase, 'assess');
+  assert.equal(director.activeOrder.attempts, 0);
+  assert.equal(director.activeOrder.blueprint.cells[0].material, 'brown_bed');
+  assert.equal(director.activeOrder.evidence.code, 'material_alternative_bound');
+  assert.equal(remembered.at(-1).blueprint.cells[0].material, 'brown_bed');
+});
+
 test('Given a command without a changed structured result, JobDirector enters recovery instead of advancing', async () => {
   const agent = createAgent();
   agent.last_action_result = { actionId: 'old', phase: 'succeeded' };
