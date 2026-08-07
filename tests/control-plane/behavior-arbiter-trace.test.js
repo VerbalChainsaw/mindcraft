@@ -793,3 +793,31 @@ test('the compact reporter formats the representative v1 fixture', () => {
   assert.match(report, /preemption=player:!collect->attributed_protection/);
   assert.match(report, /outcome=interrupted:interrupted action=TraceBot-41-1785520800000/);
 });
+
+test('a throw in the update preamble degrades the tick and leaves the arbiter able to tick again', async () => {
+  // Regression guard. update() once set this.updating = true before opening its
+  // try, so a preamble throw left the guard set for the lifetime of the agent
+  // and every later tick short-circuited. The agent loop could not see it: a
+  // wedged arbiter returns a snapshot rather than throwing, so its consecutive
+  // failure counter reset each tick and the restart never fired.
+  const { agent } = fakeAgent();
+  let nowCalls = 0;
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => {
+      nowCalls += 1;
+      if (nowCalls === 1) throw new Error('simulated preamble failure');
+      return 0;
+    },
+  });
+
+  const first = await arbiter.update(0);
+
+  assert.equal(arbiter.updating, false);
+  assert.equal(first.code, 'arbiter_tick_failed');
+
+  // The tick after the failure must still be evaluated, not short-circuited.
+  const second = await arbiter.update(0);
+
+  assert.equal(arbiter.updating, false);
+  assert.notEqual(second.code, undefined);
+});
