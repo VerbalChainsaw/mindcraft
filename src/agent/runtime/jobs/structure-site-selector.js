@@ -23,11 +23,19 @@ function blockAt(bot, x, y, z) {
   }
 }
 
+// Dropped items, experience orbs, and loose projectiles have no collision and
+// do not obstruct block placement, so they must not veto a site. They are also
+// the normal by-product of the mining and harvesting that precedes a build,
+// which made site rejection intermittent: items despawn and orbs drift, so the
+// same anchor could pass or fail across attempts. Players and mobs still count.
+const NON_OBSTRUCTING_ENTITY_NAMES = new Set(['item', 'experience_orb', 'arrow']);
+
 function entityOccupies(bot, x, y, z) {
   const center = new Vec3(x + 0.5, y, z + 0.5);
   return Object.values(bot.entities || {}).some(entity => (
     entity?.id !== bot.entity?.id
     && entity?.position
+    && !NON_OBSTRUCTING_ENTITY_NAMES.has(entity?.name)
     && Math.abs(entity.position.y - center.y) < 1.8
     && Math.hypot(entity.position.x - center.x, entity.position.z - center.z) < 0.8
   ));
