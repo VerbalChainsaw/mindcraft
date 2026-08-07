@@ -935,7 +935,8 @@ export class JobDirector extends RoleDirector {
       }
       this.activeOrder = order;
       this.lastOrder = null;
-      this.store.save(order);
+      this.lastReceipt = null;
+      this.store.save(order, null);
       this.nextAttemptAt = 0;
       this.setStatus('waiting', 'job_accepted', order.target?.name || null, `Accepted work order ${order.id}.`, true);
       return { accepted: true, id: order.id };

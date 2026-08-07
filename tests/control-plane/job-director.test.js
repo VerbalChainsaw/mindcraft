@@ -195,6 +195,50 @@ test('Given work-order submissions, JobDirector owns exactly one active order', 
   assert.equal(director.activeOrder.checkpoint.collected, 5);
 });
 
+test('Accepting a new work order atomically clears an older terminal receipt', () => {
+  const completed = {
+    ...createWorkOrder({
+      id: 'completed-order',
+      role: 'builder',
+      kind: 'stockpile',
+      target: { name: 'oak_log' },
+      quota: 4,
+    }),
+    phase: 'complete',
+  };
+  const store = {
+    terminalReceipt: {
+      orderId: completed.id,
+      phase: completed.phase,
+      code: 'job_complete',
+      order: completed,
+    },
+    saved: [],
+    load: () => null,
+    save(order, receipt = store.terminalReceipt) {
+      store.terminalReceipt = receipt;
+      store.saved.push({ order, receipt });
+      return order;
+    },
+  };
+  const director = new JobDirector(createAgent('builder'), { store });
+
+  const accepted = director.submit(createWorkOrder({
+    id: 'new-order',
+    role: 'builder',
+    kind: 'stockpile',
+    target: { name: 'stone' },
+    quota: 8,
+  }));
+
+  assert.deepEqual(accepted, { accepted: true, id: 'new-order' });
+  assert.equal(director.activeOrder.id, 'new-order');
+  assert.equal(director.lastOrder, null);
+  assert.equal(director.lastReceipt, null);
+  assert.equal(store.terminalReceipt, null);
+  assert.equal(store.saved.at(-1).receipt, null);
+});
+
 test('A failed player job blocks autonomous shelter substitution until new direction arrives', () => {
   const agent = createAgent('builder');
   const director = new JobDirector(agent, {

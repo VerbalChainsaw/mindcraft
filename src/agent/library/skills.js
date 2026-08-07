@@ -15881,7 +15881,18 @@ function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY) {
 function surfaceArrivalObservation(bot, minY, maxY) {
     const observed = bot.entity?.position?.clone?.() || null;
     const supported = observedSupportedStandingCell(bot);
-    const scan = observed
+    // Keep remote surface selection strict so Pathfinder never seeks a
+    // treetop. If the bot already physically occupies a safe, supported cell
+    // with an open column overhead, however, that stance is usable surface
+    // access regardless of whether its support is terrain, leaves, a path, or
+    // a player-placed block.
+    const occupiedOpenSurface = Boolean(
+        supported
+        && world.getFirstBlockAboveHead(bot, null, 32) === 'none'
+    );
+    const scan = occupiedOpenSurface
+        ? { target: supported, diagnostics: null }
+        : observed
         ? nearestLoadedSurfaceStandingCell(bot, observed, minY, maxY)
         : { target: null, diagnostics: null };
     const target = scan.target;

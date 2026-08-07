@@ -6,6 +6,7 @@ import { Vec3 } from 'vec3';
 
 import collectBlockRuntime from '../packages/minecraft-runtime/mineflayer-collectblock/lib/index.js';
 import {
+    goToSurface,
     observedSupportedStandingCell,
     selectMiningDeadlinePrefix,
     selectMiningRouteTool,
@@ -48,6 +49,37 @@ test('observed standing geometry accepts a body touching but not intersecting ba
 
     bot.entity.position = new Vec3(2696.25, 52, 2701.25);
     assert.equal(observedSupportedStandingCell(bot), null);
+});
+
+test('surface recovery accepts an already occupied open stance without routing toward treetops', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox, shapes) => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes, position });
+    };
+    put(4, 72, -3, 'acacia_leaves', 'block', [[0, 0, 0, 1, 1, 1]]);
+    const bot = {
+        entity: {
+            position: new Vec3(4.5, 73, -2.5),
+            width: 0.6,
+            height: 1.8,
+        },
+        game: { minY: -64, height: 384 },
+        blockAt(position) {
+            return blocks.get(key(position)) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+        output: '',
+    };
+
+    assert.equal(await goToSurface(bot), true);
+    assert.equal(bot.lastActionEvidence.outcome, 'surface_reached');
+    assert.equal(bot.lastActionEvidence.support, 'acacia_leaves');
+    assert.equal(bot.lastActionEvidence.legs, 0);
 });
 
 test('corridor binding preserves the ore-tier pick when a capable stone pick is carried', () => {
