@@ -294,6 +294,23 @@ function sourceBlocks(bot, target) {
   return sources;
 }
 
+function selfDroppingSourceIsGrounded(bot, context, source, target, trail) {
+  if (source.name !== target) return true;
+  // A root request may deliberately search for its named world block, and an
+  // item with no recipe is a genuine collection leaf. Inside a recipe chain,
+  // though, a craftable block that merely drops itself is not proof that the
+  // block exists in the world. Require a real local observation before using
+  // that placed-block shortcut; otherwise let the causal search try another
+  // recipe or acquisition method.
+  if (trail.length <= 1 || connectedRecipes(bot, target).length === 0) return true;
+  return Boolean(nearbyBlock(
+    bot,
+    source.name,
+    context.range,
+    context.blockProximityCache,
+  ));
+}
+
 function blockDistance(bot, block) {
   if (!block) return null;
   const origin = bot.entity?.position;
@@ -669,6 +686,7 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
 
 function planFromWorldSource(bot, context, target, amount, trail) {
   const sources = sourceBlocks(bot, target)
+    .filter(source => selfDroppingSourceIsGrounded(bot, context, source, target, trail))
     .sort((left, right) => (
       sourceScore(context, right, target) - sourceScore(context, left, target)
       || left.name.localeCompare(right.name)

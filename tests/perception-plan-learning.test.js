@@ -194,6 +194,50 @@ function renewableWoolRecipeBot() {
   };
 }
 
+function recursivePlacedBlockBot({ observed = false } = {}) {
+  const items = {
+    1: { id: 1, name: 'white_dye' },
+    2: { id: 2, name: 'bone_meal' },
+    3: { id: 3, name: 'bone_block' },
+    4: { id: 4, name: 'bone' },
+  };
+  const blocks = {
+    10: { id: 10, name: 'bone_block', diggable: true, drops: [3], harvestTools: {} },
+  };
+  return {
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    entities: {},
+    inventory: { slots: [], items: () => [] },
+    findBlock({ matching }) {
+      return observed && matching === 10
+        ? { name: 'bone_block', position: { x: 4, y: 64, z: 0 } }
+        : null;
+    },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks,
+      blocksByName: Object.fromEntries(Object.values(blocks).map(block => [block.name, block])),
+      entitiesByName: {},
+      recipes: {
+        1: [{ ingredients: [{ id: 2, count: 1 }], result: { id: 1, count: 1 } }],
+        2: [
+          { ingredients: [{ id: 4, count: 1 }], result: { id: 2, count: 3 } },
+          { ingredients: [{ id: 3, count: 1 }], result: { id: 2, count: 9 } },
+        ],
+        3: [{
+          inShape: [
+            [2, 2, 2],
+            [2, 2, 2],
+            [2, 2, 2],
+          ],
+          result: { id: 3, count: 1 },
+        }],
+      },
+    },
+  };
+}
+
 test('Perception classifies closing motion and prioritizes visible approaching explosive threats', () => {
   const bot = {
     entity: {
@@ -387,6 +431,41 @@ test('The causal planner derives renewable entity harvests instead of searching 
   assert.equal(
     builderPlan.actions[0].capability.binding.command,
     '!harvestEntityDrop("sheep", "white_wool", "shear", 3, 192, true)',
+  );
+});
+
+test('Recursive recipes require evidence before treating a crafted self-drop block as a world source', () => {
+  const absent = buildPrerequisitePlan(recursivePlacedBlockBot(), {
+    target: 'white_dye',
+    quantity: 1,
+    range: 64,
+  });
+  assert.equal(absent.status, 'blocked');
+  assert.equal(
+    absent.actions.some(action => action.capability.binding.command.includes('"bone_block"')),
+    false,
+  );
+
+  const observed = buildPrerequisitePlan(recursivePlacedBlockBot({ observed: true }), {
+    target: 'white_dye',
+    quantity: 1,
+    range: 64,
+  });
+  assert.equal(observed.status, 'ready');
+  assert.equal(
+    observed.nextStep.capability.binding.command,
+    '!collectBlocksInRange("bone_block", 1, 64)',
+  );
+
+  const explicitWorldSearch = buildPrerequisitePlan(recursivePlacedBlockBot(), {
+    target: 'bone_block',
+    quantity: 1,
+    range: 64,
+  });
+  assert.equal(explicitWorldSearch.status, 'ready');
+  assert.equal(
+    explicitWorldSearch.nextStep.capability.binding.command,
+    '!collectBlocksInRange("bone_block", 1, 64)',
   );
 });
 
