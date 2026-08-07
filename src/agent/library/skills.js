@@ -14415,8 +14415,12 @@ export async function goToBed(bot, {
         log(bot, 'The selected bed changed before it could be used.');
         return false;
     }
+    // The owned Mineflayer bed primitive returns a transition receipt. This is
+    // required on a one-player server, where Paper can accept the bed and jump
+    // to dawn without ever leaving isSleeping true for a caller to sample.
+    let sleepTransition = null;
     try {
-        await bot.sleep(bed);
+        sleepTransition = await bot.sleep(bed);
     } catch (error) {
         const rejection = classifySleepRejection(error);
         setActionEvidence(bot, {
@@ -14430,6 +14434,23 @@ export async function goToBed(bot, {
         return false;
     }
     if (!bot.isSleeping) {
+        const completedTransition = sleepTransition?.enteredSleep === true
+            && sleepTransition?.woke === true;
+        if (completedTransition) {
+            bot.modes.pause('unstuck');
+            setActionEvidence(bot, {
+                kind: 'sleep',
+                outcome: 'slept',
+                target,
+                enteredSleep: true,
+                woke: true,
+                immediateDawn: sleepTransition?.immediateDawn === true,
+                transitionEvidence: sleepTransition.evidence,
+                retryable: false,
+            });
+            log(bot, 'You slept and woke at dawn.');
+            return true;
+        }
         setActionEvidence(bot, {
             kind: 'sleep',
             outcome: 'sleep_not_confirmed',

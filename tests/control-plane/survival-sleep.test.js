@@ -84,6 +84,31 @@ test('Given a multiplayer night, verified sleep remains owned past the old 20-se
   assert.equal(bot.lastActionEvidence.retryable, false);
 });
 
+test('Given an immediate one-player dawn, the owned Mineflayer receipt verifies the completed sleep cycle', async () => {
+  const { bot } = createBot();
+  const pauses = [];
+  bot.modes.pause = mode => pauses.push(mode);
+  bot.sleep = async function () {
+    return {
+      enteredSleep: true,
+      woke: true,
+      immediateDawn: true,
+      evidence: 'day_advance',
+    };
+  };
+
+  const result = await goToBed(bot, { navigate: () => true });
+
+  assert.equal(result, true);
+  assert.deepEqual(pauses, ['unstuck']);
+  assert.equal(bot.lastActionEvidence.outcome, 'slept');
+  assert.equal(bot.lastActionEvidence.enteredSleep, true);
+  assert.equal(bot.lastActionEvidence.woke, true);
+  assert.equal(bot.lastActionEvidence.immediateDawn, true);
+  assert.equal(bot.lastActionEvidence.transitionEvidence, 'day_advance');
+  assert.equal(bot.lastActionEvidence.retryable, false);
+});
+
 test('Given Mineflayer sleep rejections, evidence preserves the physical cause and retry policy', async () => {
   const cases = [
     ['there are monsters nearby', 'hostiles_near_bed', true],
