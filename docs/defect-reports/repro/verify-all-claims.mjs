@@ -136,5 +136,17 @@ check('B1.6', 'watchdog only fires at 5 consecutive throws', /consecutiveFailure
 check('B1.7', 'refreshPerception is internally guarded (NOT the risk)',
   /async refreshPerception\(\)[\s\S]{0,1800}?catch \(error\) \{[\s\S]{0,200}?return \{/.test(arbiter));
 
+console.log('\n--- VISION-01 (module-load hardening) ---');
+const vi = read('src/agent/vision/vision_interpreter.js');
+check('N1.1', 'Camera is not statically imported', !/^import \{ Camera \}/m.test(vi));
+check('N1.2', 'camera module is loaded lazily', /cameraModulePromise = import\('\.\/camera\.js'\)/.test(vi));
+check('N1.3', 'the load is settled before request validation', /if \(this\.cameraReady\) await this\.cameraReady;/.test(vi));
+let visionLoads = true;
+try { await import('../../../src/agent/vision/vision_interpreter.js'); } catch { visionLoads = false; }
+check('N1.4', 'vision_interpreter imports cleanly whatever state the canvas binary is in', visionLoads);
+let agentLoads = true;
+try { await import('../../../src/agent/agent.js'); } catch { agentLoads = false; }
+check('N1.5', 'agent.js imports cleanly (this is what took 4 test files down)', agentLoads);
+
 console.log(`\n================ ${pass} passed, ${fail} failed ================`);
 process.exit(fail ? 1 : 0);

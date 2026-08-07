@@ -229,3 +229,23 @@ raised as requirements, verifications, and corrections to my own claims.
   reports superseded by upstream fixes landed while they were being written, one partly stale, one
   strengthened, five fully intact. Corrected the misleading "64" framing in the README. Added a
   re-runnable verification harness so staleness is detectable in one command rather than by re-reading.
+
+## Chunk 19 — hardening pass (fixes applied)
+
+| # | Status | Item | Evidence | Disposition |
+|---|--------|------|----------|-------------|
+| 72 | **FIXED** | SAFETY-01 — three contact-damage blocks added to the hazard set | behavioural check: `isSafeGameplaySupport('pointed_dripstone')` now false, ordinary blocks unchanged; 26/26 adjacent tests | commit `3559afc` |
+| 73 | **FIXED** | SITE-01 — non-obstructing entities no longer veto a site | behavioural check: same anchor survives item + XP orb, still rejected by a zombie; 18/18 tests | commit `3abea39` |
+| 74 | **FIXED** | ARBITER-01 — try now covers the update preamble | injected-throw proof: degrades to `arbiter_tick_failed`, guard resets, next tick still evaluated; 130/130 behaviour tests | commit `48c023b` |
+| 75 | **NEAR MISS** | Moving `const perception` inside the try put it out of scope for the sibling `catch`, which reads it — every degraded tick would have thrown `ReferenceError`. **All 130 tests still passed.** Caught only by the injected-throw proof | — | Hoisted alongside `modes`/`modeCycleStarted`. The strongest argument in this log for behavioural proofs over suite-green. |
+| 76 | **FIXED** | VISION-01 — static `Camera` import made a broken `canvas` binary fatal to the entire agent, including vision-off bots | before: 462 tests / 5 failures / 4 files unable to load. after: **517 tests / 516 pass**, 59 restored | commit `d214b6d` |
+| 77 | NOTED | Two of the four dead files hold the regression tests added by `7a99d81` — that commit's own tests were never executing | test-run comparison | Now running and passing. |
+| 78 | **TEST ADDED** | Arbiter degraded tick had zero coverage (`arbiter_tick_failed` / `mode_cycle_failed` in no test file) | verified to **fail** against the pre-fix arbiter and pass against the fixed one | commit `016903a` |
+| 79 | OPEN | `dashboard-lifecycle.test.js` times out waiting for a start-agent response while standing up a real MindServer on port 15408 | fails in isolation; failing before any change here | Pre-existing, test-infrastructure timing, plausibly contention from the live bot. Deliberately not chased. |
+| 80 | DEFERRED | The `canvas` native binary is still broken | — | Reinstalling touches `node_modules` in a live environment. Owner's call; VISION-01 makes it non-fatal meanwhile. |
+
+## Chunk log (continued)
+
+- **Chunk 19** — applied four fixes and one regression test, each as a single-file, independently
+  revertable commit, with upstream/downstream mapping before each change and a behavioural proof after.
+  Net test signal: 462 → 517 running, 5 failures → 1 (pre-existing).

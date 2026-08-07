@@ -38,6 +38,33 @@ under active concurrent edit and reports go stale quickly. Last run: **43 passed
 | [SITE-01](SITE-01-any-entity-rejects-whole-build-site.md) | A dropped item rejects an entire construction site | ✅ **FIXED** in `3abea39` |
 | [ARBITER-01](ARBITER-01-preamble-throw-wedges-arbiter-silently.md) | Preamble throw wedges the arbiter and defeats its watchdog | ✅ **FIXED** in `48c023b` |
 
+## Open — environment / test signal
+
+| ID | Title | Status |
+|----|-------|--------|
+| VISION-01 | Static `Camera` import made a broken `canvas` native binary fatal to the whole agent | ✅ **FIXED** in `d214b6d` |
+
+`src/agent/vision/vision_interpreter.js` imported `Camera` statically, which reaches
+`prismarine-viewer` → `node-canvas-webgl` → the `canvas` native binary. That binary is currently
+unusable on this machine, so the import threw at module load and took down anything that transitively
+imports the agent — **including bots with vision switched off**.
+
+Measured before: `tests/control-plane` ran 462 tests with 5 failures across 4 files that could not load
+at all (`agent-lifecycle`, `agent-agenda-dispatch`, `agent-persistent-goal-handoff`,
+`floodgate-player-identity`). Two of those files hold the regression tests added by commit `7a99d81`,
+so that fix's own tests were never executing.
+
+Measured after: **517 tests run, 516 pass.** 59 previously unrunnable tests restored.
+
+The remaining single failure is **pre-existing and unrelated** — `dashboard-lifecycle.test.js` times out
+waiting for a start-agent response while standing up a real MindServer on port 15408. It fails in
+isolation too, and it was already failing before any change here. It looks like test-infrastructure
+timing under load rather than a product defect; it was left alone deliberately.
+
+> The underlying `canvas` binary is still broken. This change makes that non-fatal; it does not repair
+> it. Vision itself will still answer `camera_unavailable` until the binary is reinstalled. That was
+> left as a decision for the owner because it touches `node_modules` in a live environment.
+
 ### Fixes applied here, and how to roll each one back
 
 Each fix is a single self-contained commit touching exactly one source file, so any one can be reverted
@@ -45,9 +72,14 @@ without disturbing the others:
 
 ```bash
 git revert 3559afc   # SAFETY-01  — hazard set, +7 lines
-git revert 3abea39   # SITE-01    — entity filter, +9 lines
+git revert 3abea39   # SITE-01    — entity filter, +8 lines
 git revert 48c023b   # ARBITER-01 — try/finally coverage in behavior-arbiter
+git revert d214b6d   # VISION-01  — lazy camera module load
+git revert 016903a   # test only  — arbiter degraded-tick regression test
 ```
+
+Each touches exactly one file and none depends on another, so they revert in any order. `016903a` is
+test-only; reverting `48c023b` without it leaves a test that correctly fails.
 
 `SURVIVAL-01` and `SHELTER-01` were deliberately **not** applied. Both reorder survival branches that
 other behaviour depends on, and both reports ask for one live idle-at-night observation first.
