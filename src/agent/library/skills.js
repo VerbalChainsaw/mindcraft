@@ -2498,7 +2498,7 @@ function materialInventoryCount(bot, material) {
     return inventoryCount(bot, material);
 }
 
-export async function prepareTool(bot, toolName) {
+export async function prepareTool(bot, toolName, collectionExclusions=null) {
     const normalizedTool = String(toolName || '').trim();
     const spec = TOOL_PREPARATION_SPECS[normalizedTool];
     const target = { name: normalizedTool || 'tool' };
@@ -2582,7 +2582,7 @@ export async function prepareTool(bot, toolName) {
             const convertible = bot.inventory.items().find(item => WOOD_TO_PLANKS[item.name]);
             if (!convertible) {
                 const deficit = boundedMinimum - plankInventoryCount(bot);
-                if (!await collectWood(bot, Math.max(1, Math.ceil(deficit / 4)))) return false;
+                if (!await collectWood(bot, Math.max(1, Math.ceil(deficit / 4)), 64, collectionExclusions)) return false;
                 continue;
             }
             const plankName = WOOD_TO_PLANKS[convertible.name];
@@ -2634,7 +2634,7 @@ export async function prepareTool(bot, toolName) {
             : minimumTier >= 3
                 ? 'stone_pickaxe'
                 : 'wooden_pickaxe';
-        return await prepareTool(bot, prerequisite);
+        return await prepareTool(bot, prerequisite, collectionExclusions);
     };
 
     const ensureCobblestone = async (minimum) => {
@@ -2644,7 +2644,7 @@ export async function prepareTool(bot, toolName) {
         const collectMissing = async () => {
             const missing = minimum - inventoryCount(bot, 'cobblestone');
             if (missing <= 0) return true;
-            await collectBlock(bot, 'cobblestone', missing);
+            await collectBlock(bot, 'cobblestone', missing, collectionExclusions);
             return inventoryCount(bot, 'cobblestone') >= minimum;
         };
 
@@ -2703,7 +2703,7 @@ export async function prepareTool(bot, toolName) {
 
     const ensureFuel = async () => {
         if (mc.getSmeltingFuel(bot)) return true;
-        if (!await collectWood(bot, 2) || interrupt()) return false;
+        if (!await collectWood(bot, 2, 64, collectionExclusions) || interrupt()) return false;
         return Boolean(mc.getSmeltingFuel(bot));
     };
 
@@ -2722,7 +2722,7 @@ export async function prepareTool(bot, toolName) {
         if (inventoryCount(bot, 'raw_iron') < ingotDeficit) {
             const ore = nearestResource(['iron_ore', 'deepslate_iron_ore']);
             const rawDeficit = ingotDeficit - inventoryCount(bot, 'raw_iron');
-            if (!await collectBlock(bot, ore, rawDeficit) || interrupt()) return false;
+            if (!await collectBlock(bot, ore, rawDeficit, collectionExclusions) || interrupt()) return false;
         }
         if (inventoryCount(bot, 'raw_iron') < ingotDeficit) {
             setActionEvidence(bot, {
@@ -2745,7 +2745,7 @@ export async function prepareTool(bot, toolName) {
         if (!await ensurePickaxeTier(4) || interrupt()) return false;
         const ore = nearestResource(['diamond_ore', 'deepslate_diamond_ore']);
         const missing = minimum - inventoryCount(bot, 'diamond');
-        if (!await collectBlock(bot, ore, missing) || interrupt()) return false;
+        if (!await collectBlock(bot, ore, missing, collectionExclusions) || interrupt()) return false;
         return inventoryCount(bot, 'diamond') >= minimum;
     };
 
@@ -2767,7 +2767,7 @@ export async function prepareTool(bot, toolName) {
     return await equipPreparedTool();
 }
 
-export async function prepareMaterial(bot, materialName, num=1, range=64) {
+export async function prepareMaterial(bot, materialName, num=1, range=64, collectionExclusions=null) {
     const material = String(materialName || '').trim();
     const amount = Math.max(1, Math.min(2304, Math.floor(Number(num) || 1)));
     const searchRange = Math.max(16, Math.min(512, Math.floor(Number(range) || 64)));
@@ -2820,8 +2820,8 @@ export async function prepareMaterial(bot, materialName, num=1, range=64) {
                 const remaining = neededTotal - materialInventoryCount(bot, plankName);
                 const logsNeeded = Math.max(1, Math.ceil(remaining / 4));
                 const gathered = exact
-                    ? await collectBlock(bot, matchingLog, logsNeeded, null, searchRange)
-                    : await collectWood(bot, Math.min(64, logsNeeded), searchRange);
+                    ? await collectBlock(bot, matchingLog, logsNeeded, collectionExclusions, searchRange)
+                    : await collectWood(bot, Math.min(64, logsNeeded), searchRange, collectionExclusions);
                 if (!gathered || interrupted()) return false;
                 logItem = exact
                     ? bot.inventory.items().find(item => item.name === matchingLog)
@@ -2839,7 +2839,7 @@ export async function prepareMaterial(bot, materialName, num=1, range=64) {
     if (material === 'planks' || material.endsWith('_planks')) {
         success = await preparePlanks(material, desired);
     } else if (material === 'cobblestone') {
-        success = await prepareTool(bot, 'stone_pickaxe')
+        success = await prepareTool(bot, 'stone_pickaxe', collectionExclusions)
             && !interrupted()
             && (
                 materialInventoryCount(bot, material) >= desired
@@ -2847,12 +2847,12 @@ export async function prepareMaterial(bot, materialName, num=1, range=64) {
                     bot,
                     'cobblestone',
                     desired - materialInventoryCount(bot, material),
-                    null,
+                    collectionExclusions,
                     searchRange,
                 )
             );
     } else if (material === 'dirt') {
-        success = await collectBlock(bot, 'dirt', amount, null, searchRange);
+        success = await collectBlock(bot, 'dirt', amount, collectionExclusions, searchRange);
     } else if (material === 'torch') {
         if (inventoryCount(bot, 'stick') < 1) {
             if (plankInventoryCount(bot) < 2 && !await preparePlanks('planks', 2)) {
@@ -2863,10 +2863,10 @@ export async function prepareMaterial(bot, materialName, num=1, range=64) {
             }
         }
         if (inventoryCount(bot, 'coal') < 1) {
-            if (!await prepareTool(bot, 'wooden_pickaxe') || interrupted()) {
+            if (!await prepareTool(bot, 'wooden_pickaxe', collectionExclusions) || interrupted()) {
                 return finish(false, 'coal_tool_unavailable');
             }
-            if (!await collectBlock(bot, 'coal_ore', Math.max(1, Math.ceil(amount / 4)), null, searchRange)) {
+            if (!await collectBlock(bot, 'coal_ore', Math.max(1, Math.ceil(amount / 4)), collectionExclusions, searchRange)) {
                 return finish(false, 'coal_unavailable');
             }
         }
@@ -3125,8 +3125,8 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
     });
 }
 
-export async function prepareWoodenTool(bot, toolName) {
-    return await prepareTool(bot, toolName);
+export async function prepareWoodenTool(bot, toolName, collectionExclusions=null) {
+    return await prepareTool(bot, toolName, collectionExclusions);
 }
 
 export async function wait(bot, milliseconds) {
@@ -5081,12 +5081,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             Math.floor(searchOptions.preferredPosition.z),
         )
         : null;
-    const excludedPositions = Array.isArray(exclude)
-        ? exclude.filter(position => (
-            position
-            && [position.x, position.y, position.z].every(Number.isFinite)
-        ))
-        : [];
+    const excludedPositions = normalizeCollectionExclusions(exclude);
 
     let collected = 0;
     let lowestCollectedTarget = null;
@@ -5725,7 +5720,7 @@ function treeCanopyBlock(name) {
         || ['nether_wart_block', 'warped_wart_block', 'shroomlight'].includes(name);
 }
 
-function discoverNaturalTree(bot, seedBlock) {
+function discoverNaturalTree(bot, seedBlock, exclusions=null) {
     if (!seedBlock?.position || !WOOD_BLOCK_TYPES.includes(seedBlock.name)) {
         return { natural: false, logs: seedBlock ? [seedBlock] : [], base: null };
     }
@@ -5737,6 +5732,7 @@ function discoverNaturalTree(bot, seedBlock) {
         const position = queue.shift();
         const block = bot.blockAt(position);
         if (!block?.position || block.name !== seedBlock.name) continue;
+        if (collectionPositionExcluded(block.position, exclusions)) continue;
         if (
             Math.abs(block.position.x - seed.x) > TREE_HORIZONTAL_RADIUS
             || Math.abs(block.position.z - seed.z) > TREE_HORIZONTAL_RADIUS
@@ -5833,10 +5829,44 @@ function collectionCandidateShortlist(bot, blocks, collapseVerticalColumns = fal
     return selected;
 }
 
-function collectionPositionExcluded(position, exclusions) {
+function validCollectionExclusion(exclusion) {
+    if (!exclusion || typeof exclusion !== 'object') return false;
+    const isBox = [
+        exclusion.minX,
+        exclusion.maxX,
+        exclusion.minY,
+        exclusion.maxY,
+        exclusion.minZ,
+        exclusion.maxZ,
+    ].every(Number.isFinite);
+    return isBox || [exclusion.x, exclusion.y, exclusion.z].every(Number.isFinite);
+}
+
+function normalizeCollectionExclusions(exclusions) {
+    return Array.isArray(exclusions)
+        ? exclusions.filter(validCollectionExclusion)
+        : [];
+}
+
+export function collectionPositionExcluded(position, exclusions) {
     if (!position) return false;
     return (exclusions || []).some(exclusion => {
-        if (!exclusion || ![exclusion.x, exclusion.y, exclusion.z].every(Number.isFinite)) return false;
+        if (!validCollectionExclusion(exclusion)) return false;
+        if ([
+            exclusion.minX,
+            exclusion.maxX,
+            exclusion.minY,
+            exclusion.maxY,
+            exclusion.minZ,
+            exclusion.maxZ,
+        ].every(Number.isFinite)) {
+            return position.x >= Math.min(exclusion.minX, exclusion.maxX)
+                && position.x <= Math.max(exclusion.minX, exclusion.maxX)
+                && position.y >= Math.min(exclusion.minY, exclusion.maxY)
+                && position.y <= Math.max(exclusion.minY, exclusion.maxY)
+                && position.z >= Math.min(exclusion.minZ, exclusion.maxZ)
+                && position.z <= Math.max(exclusion.minZ, exclusion.maxZ);
+        }
         const radius = Math.max(0, Math.min(16, Math.floor(Number(exclusion.radius) || 0)));
         return Math.max(
             Math.abs(position.x - exclusion.x),
@@ -5946,9 +5976,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     const target = Math.max(1, Math.min(64, Number(num) || 1));
     const searchRange = Math.max(1, Math.min(512, Math.floor(Number(range) || 64)));
     const search = createCollectionSearch(bot, searchRange, searchOptions);
-    const failedTargets = Array.isArray(exclude)
-        ? exclude.filter(position => position && [position.x, position.y, position.z].every(Number.isFinite))
-        : [];
+    const failedTargets = normalizeCollectionExclusions(exclude);
     let collected = 0;
     let stumpTarget = null;
     let completeTrees = 0;
@@ -5972,7 +6000,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             );
             nearest = candidates.selection.selected?.block || null;
             if (nearest) {
-                const tree = discoverNaturalTree(bot, nearest);
+                const tree = discoverNaturalTree(bot, nearest, failedTargets);
                 if (tree.natural) {
                     if (
                         !hasInventoryRoomFor(bot, nearest.name)

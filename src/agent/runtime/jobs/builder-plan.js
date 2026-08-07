@@ -357,6 +357,40 @@ export function createBuilderConstructionOrder({
   });
 }
 
+/**
+ * Describe the active blueprint as one compact no-collection region. Builder
+ * placement and clearance remain authoritative inside this box; generic
+ * resource gathering must look elsewhere.
+ */
+export function builderWorksiteCollectionExclusion(order) {
+  const cells = order?.blueprint?.cells;
+  const anchor = order?.target;
+  if (
+    order?.role !== 'builder'
+    || !['build', 'emergency_shelter'].includes(order?.kind)
+    || ['complete', 'failed', 'cancelled'].includes(order?.phase)
+    || !Array.isArray(cells)
+    || cells.length === 0
+    || ![anchor?.x, anchor?.y, anchor?.z].every(Number.isFinite)
+  ) return null;
+
+  const absolute = cells.map(cell => ({
+    x: anchor.x + cell.x,
+    y: anchor.y + cell.y,
+    z: anchor.z + cell.z,
+  }));
+  return Object.freeze({
+    minX: Math.min(...absolute.map(position => position.x)),
+    maxX: Math.max(...absolute.map(position => position.x)),
+    minY: Math.min(...absolute.map(position => position.y)),
+    maxY: Math.max(...absolute.map(position => position.y)),
+    minZ: Math.min(...absolute.map(position => position.z)),
+    maxZ: Math.max(...absolute.map(position => position.z)),
+    reason: 'active_builder_worksite',
+    orderId: order.id,
+  });
+}
+
 export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planItem = null } = {}) {
   if (order.kind === 'build' && order.source !== 'player') {
     return { terminal: true, code: 'construction_not_authorized', retryable: false };

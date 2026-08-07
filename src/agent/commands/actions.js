@@ -5,6 +5,7 @@ import { requestBotSpawn, sendSquadRadio, serverProxy } from '../mindserver_prox
 import { actionResultToMessage } from '../runtime/action-result.js';
 import { createWorkOrder } from '../runtime/work-order.js';
 import {
+    builderWorksiteCollectionExclusion,
     createBuilderConstructionOrder,
     createBuilderFunctionalShelterOrder,
     createBuilderShelterOrder,
@@ -33,6 +34,20 @@ import {
 
 const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
 const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
+
+/**
+ * Collection is allowed to search the world, but it may not treat the active
+ * Builder worksite as a resource deposit. Keep the policy here, where the
+ * durable work order is visible, and pass one compact box to the physical
+ * collector instead of teaching every material path what a building is.
+ */
+export function collectionExclusionsForAgent(agent) {
+    const goalExclusions = agent?.goal_director?.collectionExclusions?.();
+    const exclusions = Array.isArray(goalExclusions) ? [...goalExclusions] : [];
+    const worksite = builderWorksiteCollectionExclusion(agent?.job_director?.activeOrder);
+    if (worksite) exclusions.push(worksite);
+    return exclusions;
+}
 
 function runAsAction (actionFn, resume = false, timeout = -1) {
     let actionLabel = null;  // Will be set on first use
@@ -829,7 +844,7 @@ export const actionsList = [
                 agent.bot,
                 type,
                 num,
-                agent.goal_director?.collectionExclusions?.() || null,
+                collectionExclusionsForAgent(agent),
                 64,
                 {
                     relocate: true,
@@ -862,7 +877,7 @@ export const actionsList = [
                     agent.bot,
                     num,
                     range,
-                    agent.goal_director?.collectionExclusions?.() || null,
+                    collectionExclusionsForAgent(agent),
                     { relocate: false, woodType: type },
                 );
             }
@@ -870,7 +885,7 @@ export const actionsList = [
                 agent.bot,
                 type,
                 num,
-                agent.goal_director?.collectionExclusions?.() || null,
+                collectionExclusionsForAgent(agent),
                 range,
                 {
                     relocate: false,
@@ -888,7 +903,13 @@ export const actionsList = [
             'range': { type: 'int', description: 'Maximum resource search radius.', domain: [16, 512, '[]'] },
         },
         perform: runAsAction(async (agent, material_name, num, range) => {
-            return await skills.prepareMaterial(agent.bot, material_name, num, range);
+            return await skills.prepareMaterial(
+                agent.bot,
+                material_name,
+                num,
+                range,
+                collectionExclusionsForAgent(agent),
+            );
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
@@ -909,7 +930,7 @@ export const actionsList = [
             'tool_name': { type: 'ItemName', description: 'Supported tool such as stone_pickaxe, iron_pickaxe, diamond_pickaxe, or an axe of the same tiers.' }
         },
         perform: runAsAction(async (agent, tool_name) => {
-            return await skills.prepareTool(agent.bot, tool_name);
+            return await skills.prepareTool(agent.bot, tool_name, collectionExclusionsForAgent(agent));
         }, false, 10)
     },
     {
@@ -919,7 +940,11 @@ export const actionsList = [
             'tool_name': { type: 'ItemName', description: 'Supported tool: wooden_pickaxe or wooden_axe.' }
         },
         perform: runAsAction(async (agent, tool_name) => {
-            return await skills.prepareWoodenTool(agent.bot, tool_name);
+            return await skills.prepareWoodenTool(
+                agent.bot,
+                tool_name,
+                collectionExclusionsForAgent(agent),
+            );
         }, false, 10)
     },
     {
@@ -933,7 +958,7 @@ export const actionsList = [
                 agent.bot,
                 num,
                 64,
-                agent.goal_director?.collectionExclusions?.() || null,
+                collectionExclusionsForAgent(agent),
                 { relocate: true },
             );
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
@@ -950,7 +975,7 @@ export const actionsList = [
                 agent.bot,
                 num,
                 range,
-                agent.goal_director?.collectionExclusions?.() || null,
+                collectionExclusionsForAgent(agent),
                 { relocate: false },
             );
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
@@ -2015,7 +2040,7 @@ export const actionsList = [
                 agent.bot,
                 block_type,
                 quantity,
-                null,
+                collectionExclusionsForAgent(agent),
                 64,
                 { relocate: true },
             );
