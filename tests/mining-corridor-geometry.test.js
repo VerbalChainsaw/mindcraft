@@ -11,7 +11,12 @@ import {
     selectMiningRouteTool,
 } from '../src/agent/library/skills.js';
 
-const { CollectBlock, createDroppedItemPickupGoal, selectCollectionTool } = collectBlockRuntime;
+const {
+    CollectBlock,
+    createDroppedItemPickupGoal,
+    isDropFromMinedBlock,
+    selectCollectionTool,
+} = collectBlockRuntime;
 import {
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
@@ -123,6 +128,25 @@ test('dropped-item pursuit preserves a native adjacent approach for the exact ca
     assert.equal(goal.isEnd(new Vec3(-381, 66, -40)), true);
     assert.equal(goal.isEnd(new Vec3(-380, 66, -40)), true);
     assert.equal(goal.isEnd(new Vec3(-378, 66, -40)), false);
+});
+
+test('CollectBlock retains the exact mined drop after it falls below the source voxel', () => {
+    const block = {
+        position: new Vec3(2530, 71, 2864),
+        drops: [14],
+    };
+    const fallingCobblestone = {
+        name: 'item',
+        position: new Vec3(2530.62, 69.4, 2864.38),
+        getDroppedItem: () => ({ type: 14, name: 'cobblestone' }),
+    };
+    const unrelatedItem = {
+        ...fallingCobblestone,
+        getDroppedItem: () => ({ type: 15, name: 'dirt' }),
+    };
+
+    assert.equal(isDropFromMinedBlock(block, fallingCobblestone), true);
+    assert.equal(isDropFromMinedBlock(block, unrelatedItem), false);
 });
 
 test('CollectBlock cancellation waits for its active lease after the target queue becomes empty', async () => {

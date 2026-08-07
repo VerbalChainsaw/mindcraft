@@ -6,4 +6,4 @@ declare module 'mineflayer' {
     }
 }
 export declare function plugin(bot: Bot): void;
-export { CollectBlock, Callback, CollectionToolPolicy, CollectionToolSelection, CollectOptions, createDroppedItemPickupGoal, selectCollectionTool } from './CollectBlock';
+export { CollectBlock, Callback, CollectionToolPolicy, CollectionToolSelection, CollectOptions, createDroppedItemPickupGoal, isDropFromMinedBlock, selectCollectionTool } from './CollectBlock';

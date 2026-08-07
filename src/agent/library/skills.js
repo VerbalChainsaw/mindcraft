@@ -148,6 +148,7 @@ const MIN_COLLECTION_SEARCH_STEP = 24;
 const MAX_COLLECTION_SEARCH_STEP = 40;
 const MIN_COLLECTION_RESCAN_PROGRESS = 4;
 const MAX_COLLECTION_TARGET_FAILURES = 1;
+const COLLECTION_FAILED_TARGET_EXCLUSION_RADIUS = 4;
 const MAX_COLLECTION_ACCESS_RECOVERIES = 2;
 const COLLECTION_ACCESS_PROGRESS_DISTANCE = 1;
 const MINING_COLLECTION_SLOT_RESERVE = 3;
@@ -5131,6 +5132,27 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         )
         : null;
     const excludedPositions = normalizeCollectionExclusions(exclude);
+    const retryDifferentCollectionTarget = (outcome, target) => {
+        if (
+            preferredPosition
+            || !RETRYABLE_COLLECTION_TARGET_OUTCOMES.has(outcome)
+            || ![target?.x, target?.y, target?.z].every(Number.isFinite)
+            || search.candidateFailures >= MAX_COLLECTION_TARGET_FAILURES
+        ) return false;
+        excludedPositions.push({
+            x: target.x,
+            y: target.y,
+            z: target.z,
+            radius: COLLECTION_FAILED_TARGET_EXCLUSION_RADIUS,
+        });
+        search.candidateFailures += 1;
+        log(
+            bot,
+            `Skipping the failed ${target.name || blockType} source at ${target.x}, ${target.y}, ${target.z}; `
+                + 'selecting one different safe candidate before returning control.',
+        );
+        return true;
+    };
 
     let collected = 0;
     let lowestCollectedTarget = null;
@@ -5444,6 +5466,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     { targetPosition: block.position, priorEntityIds: priorDropEntityIds },
                 )) {
                     setActionEvidence(bot, { kind: 'collect', outcome: 'not_collected', target, retryable: true });
+                    if (retryDifferentCollectionTarget('not_collected', target)) {
+                        i -= 1;
+                        continue;
+                    }
                     return false;
                 }
                 success = true;
@@ -5636,6 +5662,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         retryable: true,
                     });
                     log(bot, `${block.name} was broken, but its drop did not enter this bot's inventory.`);
+                    if (retryDifferentCollectionTarget('not_collected', target)) {
+                        i -= 1;
+                        continue;
+                    }
                     return false;
                 }
                 success = true;

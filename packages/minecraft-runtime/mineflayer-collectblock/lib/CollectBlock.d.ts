@@ -14,6 +14,7 @@ export interface CollectionToolSelection {
 }
 export declare function selectCollectionTool(bot: Bot, block: Block, policy?: CollectionToolPolicy): CollectionToolSelection | null;
 export declare function createDroppedItemPickupGoal(entity: Entity): goals.GoalFollow;
+export declare function isDropFromMinedBlock(block: Block, entity: Entity): boolean;
 /**
  * A set of options to apply when collecting the given targets.
  */

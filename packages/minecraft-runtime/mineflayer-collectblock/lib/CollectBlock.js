@@ -23,7 +23,34 @@ const DROPPED_ITEM_APPROACH_RANGE = 1;
 const DROPPED_ITEM_NUDGE_TIMEOUT_MS = 1000;
 const DROPPED_ITEM_NUDGE_STALL_MS = 250;
 const DROPPED_ITEM_NUDGE_MAX_DISTANCE = 2.25;
+const BLOCK_DROP_BIND_HORIZONTAL_RADIUS = 1.5;
+const BLOCK_DROP_BIND_MAX_RISE = 1.5;
+const BLOCK_DROP_BIND_MAX_FALL = 3.5;
 const SKIPPABLE_TARGET_ERRORS = new Set(['NoPath', 'Timeout', 'TargetStalled', 'TargetTimeout']);
+function isDropFromMinedBlock(block, entity) {
+    if (!block?.position || entity?.name !== 'item' || !entity.position)
+        return false;
+    const source = block.position.offset(0.5, 0.5, 0.5);
+    const dx = Math.abs(entity.position.x - source.x);
+    const dy = entity.position.y - source.y;
+    const dz = Math.abs(entity.position.z - source.z);
+    if (dx > BLOCK_DROP_BIND_HORIZONTAL_RADIUS
+        || dz > BLOCK_DROP_BIND_HORIZONTAL_RADIUS
+        || dy > BLOCK_DROP_BIND_MAX_RISE
+        || dy < -BLOCK_DROP_BIND_MAX_FALL)
+        return false;
+    const expectedTypes = new Set((Array.isArray(block.drops) ? block.drops : [])
+        .filter(type => Number.isInteger(type)));
+    if (expectedTypes.size === 0)
+        return true;
+    try {
+        return expectedTypes.has(entity.getDroppedItem?.()?.type);
+    }
+    catch (_a) {
+        return false;
+    }
+}
+exports.isDropFromMinedBlock = isDropFromMinedBlock;
 function createDroppedItemPickupGoal(entity) {
     // Item voxels are often not standable: drops can rest beneath a low
     // ceiling, inside a mined block cavity, or against a wall. Minecraft
@@ -328,7 +355,11 @@ function mineBlock(bot, block, options) {
         }
         const tempEvents = new TemporarySubscriber_1.TemporarySubscriber(bot);
         tempEvents.subscribeTo('itemDrop', (entity) => {
-            if (entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5)) <= 0.5) {
+            // Mineflayer emits itemDrop only after item metadata is available.
+            // By then gravity may have carried the exact mined drop below its
+            // source voxel. Bind by source corridor plus expected item type,
+            // then let the native entity collector own pursuit and pickup.
+            if (isDropFromMinedBlock(block, entity)) {
                 options.targets.appendTarget(entity);
             }
         });
