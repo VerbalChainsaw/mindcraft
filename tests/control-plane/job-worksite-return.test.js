@@ -56,6 +56,32 @@ test('Builder composes surface access and native worksite return before blueprin
   assert.equal(horizontal.code, 'worksite_return_required');
   assert.equal(horizontal.command, '!goToCoordinates(10, 70, -20, 2)');
   assert.equal(horizontal.keepAnchor, true);
+
+  const staleAcquisitionAnchor = nextWorksiteReturnStep({
+    ...order,
+    anchor: { x: -12, y: 20, z: 8 },
+  }, {
+    x: -12,
+    y: 20,
+    z: 8,
+  });
+  assert.equal(staleAcquisitionAnchor.code, 'worksite_surface_access_required');
+  assert.deepEqual(staleAcquisitionAnchor.target, { name: 'surface_access' });
+
+  const remoteFromNextCell = nextWorksiteReturnStep({
+    ...order,
+    anchor: { x: -12, y: 70, z: 8 },
+    checkpoint: { nextCell: 44 },
+  }, {
+    x: -12,
+    y: 70,
+    z: 8,
+    blueprintAudit: {
+      missing: [{ index: 44, x: 12, y: 72, z: -18 }],
+    },
+  });
+  assert.equal(remoteFromNextCell.code, 'worksite_return_required');
+  assert.equal(remoteFromNextCell.command, '!goToCoordinates(12, 70, -18, 2)');
 });
 
 test('Construction escape candidates include safe one-block descents outside the footprint', () => {

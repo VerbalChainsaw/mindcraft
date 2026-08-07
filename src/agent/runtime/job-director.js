@@ -50,6 +50,8 @@ const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|not_collected|unreacha
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
 const WORKSITE_RETURN_DISTANCE = 16;
+const BUILDER_EXECUTION_RETURN_DISTANCE = 4;
+const BUILDER_SURFACE_RETURN_DEPTH = 2;
 // After a manual command, hold off resuming autonomous job work briefly so the
 // two do not fight over the body. Two minutes was long enough that a paused
 // miner looked broken -- the player gave one order and the bot then stood inert
@@ -196,7 +198,19 @@ export function nextWorksiteReturnStep(order, snapshot) {
     && ['execute', 'deliver', 'verify'].includes(order.phase);
   const preempted = order.evidence?.code === 'preempted';
   if (!builderExecution && !preempted) return null;
-  const anchor = order.anchor || (builderExecution ? order.target : null);
+  const pendingCells = Array.isArray(snapshot.blueprintAudit?.missing)
+    ? snapshot.blueprintAudit.missing
+    : [];
+  const pendingCell = builderExecution
+    ? pendingCells.find(cell => cell.index === order.checkpoint?.nextCell) || pendingCells[0]
+    : null;
+  const anchor = builderExecution
+    ? {
+      x: Number.isFinite(pendingCell?.x) ? pendingCell.x : order.target?.x,
+      y: order.target?.y,
+      z: Number.isFinite(pendingCell?.z) ? pendingCell.z : order.target?.z,
+    }
+    : order.anchor;
   if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isFinite)) return null;
   if (![snapshot.x, snapshot.y, snapshot.z].every(Number.isFinite)) return null;
   const surfaceAccessRequired = order.checkpoint?.accessRequirement?.kind === 'surface';
@@ -209,7 +223,13 @@ export function nextWorksiteReturnStep(order, snapshot) {
       keepAnchor: true,
     };
   }
-  if (builderExecution && (surfaceAccessRequired || anchor.y - snapshot.y > 8)) {
+  if (
+    builderExecution
+    && (
+      surfaceAccessRequired
+      || Number(order.target?.y) - snapshot.y > BUILDER_SURFACE_RETURN_DEPTH
+    )
+  ) {
     return {
       capability: { id: 'reach_surface', arguments: {} },
       nextPhase: order.phase,
@@ -222,12 +242,13 @@ export function nextWorksiteReturnStep(order, snapshot) {
       },
     };
   }
-  const distance = Math.hypot(
-    snapshot.x - anchor.x,
-    snapshot.y - anchor.y,
-    snapshot.z - anchor.z,
-  );
-  if (distance <= WORKSITE_RETURN_DISTANCE) return null;
+  const distance = builderExecution
+    ? Math.hypot(snapshot.x - anchor.x, snapshot.z - anchor.z)
+    : Math.hypot(snapshot.x - anchor.x, snapshot.y - anchor.y, snapshot.z - anchor.z);
+  const returnDistance = builderExecution
+    ? BUILDER_EXECUTION_RETURN_DISTANCE
+    : WORKSITE_RETURN_DISTANCE;
+  if (distance <= returnDistance) return null;
   return {
     command: `!goToCoordinates(${anchor.x}, ${anchor.y}, ${anchor.z}, 2)`,
     nextPhase: order.phase,
