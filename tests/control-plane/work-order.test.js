@@ -392,7 +392,12 @@ test('an explicit player resume re-arms the same failed order and preserves its 
     attempts: 3,
     recoveries: 4,
     preemptions: 7,
-    checkpoint: { verifiedCount: 5, nextCell: 5 },
+    checkpoint: {
+      verifiedCount: 5,
+      nextCell: 5,
+      failedMethods: ['collect:acacia_log->acacia_log'],
+      failedTargets: [{ name: 'acacia_log', x: 9, y: 70, z: 12 }],
+    },
     evidence: { code: 'action_pattern_detected', detail: 'old failure', actionId: 'old-action' },
   });
 
@@ -403,7 +408,10 @@ test('an explicit player resume re-arms the same failed order and preserves its 
   assert.equal(resumed.attempts, 0);
   assert.equal(resumed.recoveries, 0);
   assert.equal(resumed.preemptions, 0);
-  assert.deepEqual(resumed.checkpoint, failed.checkpoint);
+  assert.equal(resumed.checkpoint.verifiedCount, 5);
+  assert.equal(resumed.checkpoint.nextCell, 5);
+  assert.equal(resumed.checkpoint.failedMethods, undefined);
+  assert.deepEqual(resumed.checkpoint.failedTargets, failed.checkpoint.failedTargets);
   assert.equal(resumed.evidence.code, 'player_resume_requested');
 
   const completed = normalizeWorkOrder({ ...failed, phase: 'complete' });

@@ -626,6 +626,10 @@ export function reconcileWorkOrder(order, currentSnapshot = {}, now = Date.now()
 export function resumeFailedWorkOrder(order, now = Date.now()) {
   const current = normalizeWorkOrder(order);
   if (current.phase !== 'failed' || current.source !== 'player') return current;
+  const {
+    failedMethods: _failedMethods,
+    ...checkpoint
+  } = current.checkpoint;
   return normalizeWorkOrder({
     ...current,
     phase: 'assess',
@@ -633,6 +637,12 @@ export function resumeFailedWorkOrder(order, now = Date.now()) {
     attempts: 0,
     recoveries: 0,
     preemptions: 0,
+    // An explicit player resume is a new bounded attempt against freshly
+    // audited Minecraft state. Preserve concrete failed targets so the bot
+    // does not revisit known-bad blocks, but re-arm method selection; keeping
+    // the old method blacklist can make the only valid acquisition source
+    // disappear before the repaired executor is tried.
+    checkpoint,
     evidence: {
       code: 'player_resume_requested',
       detail: 'The player explicitly resumed this exact failed work order; Minecraft state must be reassessed before execution.',
