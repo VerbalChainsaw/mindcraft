@@ -132,11 +132,15 @@ function actionProgressTarget(result) {
     }
     const target = result?.target;
     if (
-        result?.phase !== 'succeeded'
+        !(
+            result?.phase === 'succeeded'
+            || (result?.phase === 'failed' && result?.retryable === true)
+        )
         || !target
         || ![target.x, target.y, target.z].every(Number.isFinite)
     ) return null;
     return JSON.stringify([
+        result.phase === 'failed' ? 'failed_target' : 'verified_target',
         String(target.name || target.type || ''),
         target.x,
         target.y,
@@ -261,11 +265,11 @@ export class ActionManager {
         this.lastProgressTargetByAction.set(key, target);
         if (previousTarget === target) return false;
 
-        // A deterministic skill just changed a verified progress marker. That
-        // ends the owner's whole no-progress streak, even when the next step
-        // uses another primitive (for example, surface return between two
-        // different blueprint placements). Unchanged targets do not clear the
-        // streak, so alternating no-op actions still reach the safety ceiling.
+        // A deterministic skill changed either a verified progress marker or
+        // the concrete target that failed retryably. The latter remains a
+        // failure and is charged to the Director's target-recovery budget; it
+        // only proves that the next automatic action is not the same local
+        // failure signature. Unchanged targets still reach this safety ceiling.
         this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
             attempt.owner !== actionOwner
         ));

@@ -155,6 +155,26 @@ test('Verified primitive progress markers prevent false loop detection across bo
   assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
 });
 
+test('Different concrete acquisition failures defer to the bounded target-recovery budget', async () => {
+  const agent = createHarness();
+  const outcomes = [];
+
+  for (let x = 20; x < 26; x += 1) {
+    outcomes.push(await agent.actions.runAction('action:collectBlocksInRange', () => {
+      agent.bot.lastActionEvidence = {
+        kind: 'collect',
+        outcome: 'unreachable',
+        target: { name: 'acacia_log', x, y: 64, z: 20 },
+        retryable: true,
+      };
+      return false;
+    }, { owner: 'job' }));
+  }
+
+  assert.equal(outcomes.every(outcome => outcome.result.code === 'skill_unreachable'), true);
+  assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
+});
+
 test('Verified progress in one job action resets no-progress history for another job action', async () => {
   const agent = createHarness();
   const surfaceOutcomes = [];
