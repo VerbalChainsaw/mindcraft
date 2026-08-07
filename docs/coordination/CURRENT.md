@@ -1,12 +1,12 @@
 # Current Minecraft Companion checkpoint
 Branch: recovery/iron-pickaxe-20260803
-Active checkpoint: 02715c9 generic mixed-material construction engine
-Milestone: one persisted blueprint planned, supplied, resumed, returned to, placed, and exactly verified end to end
+Functional checkpoint: cad4bf3 bounded functional workshop
+Milestone: one custom 72-cell workshop planned, supplied, resumed, built, and Paper-verified end to end
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: blueprint effects, dependency planning, safe placement, durable worksite return, and exact verification
-Live blocker: none for this campaign; stateful/oriented functional components remain unproven
-Last physical result: 44/44 cells and four powered rails Paper-verified; attempts 0; health 20
-Runtime: Paper 1.21.11 healthy; bot Operator Stop-held at (-644.5, 66, -308.46)
-Repository: 02715c9 pushed; protected audit files untouched; accidental nested `C:` path absent
-Next campaign: one materially different custom functional workshop on unchanged generic construction code
-Jordan review: requested C2J-20260806-1806-generic-construction
+Owned subsystem: deferred construction ownership, safe site binding, shared prerequisite planning, and Builder verification
+Live blocker: none; oriented, stateful, multiblock, and functional-use semantics remain unproven
+Last physical result: 72/72 cells, attempts 0, health 20; entrance, light, table, furnace, and chest Paper-verified
+Runtime: Paper 1.21.11 healthy; bot Operator Stop-held near (-633.52, 67, -307.67)
+Repository: cad4bf3 pushed; protected audit/debt files remain untracked
+Next campaign: broad usable overnight outpost at a player-designated site after review
+Jordan review: requested C2J-20260806-1945-functional-workshop
