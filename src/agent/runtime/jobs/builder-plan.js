@@ -647,7 +647,9 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
     const material = resolvedMaterial(cell, snapshot);
     if (count(snapshot, material) <= 0) return { phase: 'acquire', code: 'material_exhausted' };
     return {
-      command: `!placeBlockAt(${JSON.stringify(material)}, ${cell.x}, ${cell.y}, ${cell.z})`,
+      command: cell.fixture
+        ? `!placeFixtureAt(${JSON.stringify(material)}, ${cell.x}, ${cell.y}, ${cell.z}, ${JSON.stringify(cell.fixture.kind)}, ${JSON.stringify(cell.fixture.facing)})`
+        : `!placeBlockAt(${JSON.stringify(material)}, ${cell.x}, ${cell.y}, ${cell.z})`,
       nextPhase: 'verify',
       target: { name: material, x: cell.x, y: cell.y, z: cell.z },
       checkpoint: {

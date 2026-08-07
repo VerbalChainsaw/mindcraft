@@ -6974,6 +6974,86 @@ function findPortalTraversalSite(bot, range, preferredPosition=null) {
     return candidates[0] || null;
 }
 
+const FIXTURE_FACING_OFFSETS = Object.freeze({
+    north: Object.freeze({ x: 0, y: 0, z: -1 }),
+    south: Object.freeze({ x: 0, y: 0, z: 1 }),
+    east: Object.freeze({ x: 1, y: 0, z: 0 }),
+    west: Object.freeze({ x: -1, y: 0, z: 0 }),
+});
+
+export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
+    const fixtureKind = String(kind || '').trim().toLowerCase();
+    const fixtureFacing = String(facing || '').trim().toLowerCase();
+    const direction = FIXTURE_FACING_OFFSETS[fixtureFacing];
+    const validMaterial = fixtureKind === 'bed'
+        ? String(blockType || '').endsWith('_bed')
+        : fixtureKind === 'door'
+            ? String(blockType || '').endsWith('_door') && blockType !== 'iron_door'
+            : false;
+    const anchor = new Vec3(Math.floor(Number(x)), Math.floor(Number(y)), Math.floor(Number(z)));
+    const target = { name: blockType, x: anchor.x, y: anchor.y, z: anchor.z };
+    if (!validMaterial || !direction || ![x, y, z].every(Number.isFinite)) {
+        setActionEvidence(bot, { kind: 'fixture_place', outcome: 'invalid_fixture', target, retryable: false });
+        return false;
+    }
+    const occupied = fixtureKind === 'door'
+        ? [
+            { position: anchor, part: 'lower' },
+            { position: anchor.offset(0, 1, 0), part: 'upper' },
+        ]
+        : [
+            { position: anchor, part: 'foot' },
+            { position: anchor.offset(direction.x, 0, direction.z), part: 'head' },
+        ];
+    const supports = fixtureKind === 'door'
+        ? [anchor.offset(0, -1, 0)]
+        : occupied.map(cell => cell.position.offset(0, -1, 0));
+    if (supports.some(position => !isSafeGameplaySupport(bot.blockAt(position)))) {
+        setActionEvidence(bot, { kind: 'fixture_place', outcome: 'missing_support', target, retryable: false });
+        return false;
+    }
+    for (const cell of occupied) {
+        const current = bot.blockAt(cell.position);
+        if (!current || (!isReplaceableGameplayBlock(current) && !blockMatchesPlacement(bot.registry, blockType, current))) {
+            setActionEvidence(bot, {
+                kind: 'fixture_place',
+                outcome: 'occupied',
+                target: { ...target, x: cell.position.x, y: cell.position.y, z: cell.position.z },
+                observed: current?.name || 'unloaded',
+                retryable: false,
+            });
+            return false;
+        }
+    }
+    const stance = anchor.offset(-direction.x * 2, 0, -direction.z * 2);
+    const stanceSafe = isReplaceableGameplayBlock(bot.blockAt(stance))
+        && isReplaceableGameplayBlock(bot.blockAt(stance.offset(0, 1, 0)))
+        && isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)));
+    if (!stanceSafe || !await goToPosition(bot, stance.x, stance.y, stance.z, 0.75)) {
+        setActionEvidence(bot, { kind: 'fixture_place', outcome: 'orientation_stance_unreachable', target, retryable: true });
+        return false;
+    }
+    await bot.lookAt(anchor.offset(0.5, 0.5, 0.5), true);
+    if (!await placeBlock(bot, blockType, anchor.x, anchor.y, anchor.z, 'bottom', true, false)) return false;
+    const verified = occupied.every(cell => {
+        const block = bot.blockAt(cell.position);
+        if (!blockMatchesPlacement(bot.registry, blockType, block)) return false;
+        const properties = block.getProperties?.() || {};
+        const part = fixtureKind === 'door' ? properties.half : properties.part;
+        return part === cell.part && properties.facing === fixtureFacing;
+    });
+    setActionEvidence(bot, {
+        kind: 'fixture_place',
+        outcome: verified ? 'placed' : 'state_unverified',
+        target: { ...target, fixtureKind, facing: fixtureFacing },
+        retryable: !verified,
+    });
+    log(bot, verified
+        ? `Placed and verified ${fixtureFacing}-facing ${blockType}.`
+        : `Placed ${blockType}, but Minecraft did not confirm its complete ${fixtureFacing}-facing geometry.`);
+    return verified;
+}
+
 async function walkTowardPositionUntil(bot, position, predicate, timeoutMs) {
     try {
         await bot.lookAt(position.offset(0.5, 0.8, 0.5), true);
@@ -13962,6 +14042,8 @@ export async function goToBed(bot, {
     now = Date.now,
     delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
     sleepTimeoutMs = 20_000,
+    exactPosition = null,
+    expectedDimension = null,
 } = {}) {
     /**
      * Sleep in the nearest bed.
@@ -13972,11 +14054,23 @@ export async function goToBed(bot, {
      **/
     let beds;
     try {
-        beds = bot.findBlocks({
-            matching: block => block?.name?.endsWith('_bed'),
-            maxDistance: 32,
-            count: 4,
-        });
+        if (exactPosition) {
+            if (
+                ![exactPosition.x, exactPosition.y, exactPosition.z].every(Number.isFinite)
+                || (expectedDimension && normalizedDimension(bot.game?.dimension) !== normalizedDimension(expectedDimension))
+            ) throw new TypeError('The exact bed position or dimension does not match the current world.');
+            beds = [new Vec3(
+                Math.floor(exactPosition.x),
+                Math.floor(exactPosition.y),
+                Math.floor(exactPosition.z),
+            )];
+        } else {
+            beds = bot.findBlocks({
+                matching: block => block?.name?.endsWith('_bed'),
+                maxDistance: 32,
+                count: 4,
+            });
+        }
     } catch (error) {
         setActionEvidence(bot, {
             kind: 'sleep',
@@ -14001,6 +14095,7 @@ export async function goToBed(bot, {
         x: loc.x,
         y: loc.y,
         z: loc.z,
+        dimension: normalizedDimension(bot.game?.dimension),
     };
     if (!bed?.name?.endsWith('_bed')) {
         setActionEvidence(bot, { kind: 'sleep', outcome: 'bed_unloaded', target, retryable: true });

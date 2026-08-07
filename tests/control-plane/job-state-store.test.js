@@ -31,6 +31,52 @@ test('Given one active order, JobStateStore atomically roundtrips normalized res
   assert.equal(raw.activeOrder.id, 'build-1');
 });
 
+test('Given a completed structure, JobStateStore preserves one exact terminal receipt until Agenda consumes it', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'mindcraft-job-store-'));
+  t.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(root, { recursive: true, force: true });
+  });
+  const store = new JobStateStore('Builder_2', { root });
+  const order = createWorkOrder({
+    id: 'outpost-1',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester: 'Director',
+    phase: 'complete',
+    target: { name: 'worksite', x: 10, y: 64, z: 20 },
+  });
+  const receipt = {
+    orderId: order.id,
+    phase: 'complete',
+    code: 'blueprint_complete',
+    dimension: 'overworld',
+    order,
+    structure: {
+      habitable: true,
+      fixtures: [{
+        id: 'bed_1',
+        function: 'rest',
+        material: 'red_bed',
+        facing: 'south',
+        position: { x: 11, y: 65, z: 21 },
+      }],
+    },
+    finishedAt: 123_456,
+  };
+
+  store.save(null, receipt);
+  const restarted = new JobStateStore('Builder_2', { root });
+  assert.equal(restarted.load(), null);
+  assert.deepEqual(restarted.terminalReceipt, receipt);
+
+  restarted.save(null, null);
+  const consumed = new JobStateStore('Builder_2', { root });
+  assert.equal(consumed.load(), null);
+  assert.equal(consumed.terminalReceipt, null);
+});
+
 test('Given corrupt persisted state, load preserves the corrupt file and fails closed', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'mindcraft-job-store-'));
   t.after(async () => {

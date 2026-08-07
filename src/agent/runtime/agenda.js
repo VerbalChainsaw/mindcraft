@@ -24,6 +24,29 @@ const MAX_QUANTITY = 2304;
 const MAX_NOTE = 160;
 const ACQUIRE_COMPLETIONS = new Set(['inventory', 'main_hand', 'off_hand']);
 const SAFE_ENTRY_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
+const CONSTRUCTION_ASSIGNMENT_STATES = new Set([
+  'queued',
+  'compiling',
+  'accepted_and_bound',
+  'rejected',
+  'interrupted',
+  'cancelled',
+  'compilation_exhausted',
+]);
+const CONSTRUCTION_FUNCTIONS = new Set([
+  'access',
+  'crafting',
+  'daylight',
+  'enclosure',
+  'interior_light',
+  'rest',
+  'smelting',
+  'storage',
+  'weather_cover',
+]);
+const DEPENDENCY_POLICIES = new Set(['requires_success']);
+const BINDING_KINDS = new Set(['world_block', 'structure_fixture']);
+const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
@@ -106,6 +129,77 @@ function finiteInteger(value, fallback, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Math.floor(number)));
 }
 
+function normalizeBindingRequest(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda binding request must be an object.');
+  }
+  const kind = canonical(raw.kind);
+  if (!BINDING_KINDS.has(kind)) throw new TypeError('Agenda binding request kind is unsupported.');
+  if (kind === 'world_block') {
+    const name = canonical(raw.name);
+    if (!CANONICAL_NAME.test(name) || !isNameFaithful(raw.name, name)) {
+      throw new TypeError('World-block binding needs a canonical block name.');
+    }
+    return Object.freeze({ kind, name });
+  }
+  const fixtureFunction = canonical(raw.function);
+  if (!CONSTRUCTION_FUNCTIONS.has(fixtureFunction)) {
+    throw new TypeError('Structure-fixture binding needs a supported function.');
+  }
+  return Object.freeze({ kind, function: fixtureFunction });
+}
+
+function normalizeBindingConstraint(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda binding constraint must be an object.');
+  }
+  const kind = canonical(raw.kind);
+  if (!BINDING_KINDS.has(kind)) throw new TypeError('Agenda binding constraint kind is unsupported.');
+  const position = {
+    x: finiteInteger(raw.position?.x, NaN, -30e6, 30e6),
+    y: finiteInteger(raw.position?.y, NaN, -256, 512),
+    z: finiteInteger(raw.position?.z, NaN, -30e6, 30e6),
+  };
+  if (Object.values(position).some(value => !Number.isFinite(value))) {
+    throw new TypeError('Agenda binding constraint needs finite coordinates.');
+  }
+  const dimension = canonical(raw.dimension);
+  const sourceEntryId = boundedText(raw.sourceEntryId, 96);
+  if (!CANONICAL_NAME.test(dimension) || !SAFE_ENTRY_ID.test(sourceEntryId)) {
+    throw new TypeError('Agenda binding constraint identity is invalid.');
+  }
+  if (kind === 'world_block') {
+    const name = canonical(raw.name);
+    if (!CANONICAL_NAME.test(name)) throw new TypeError('World-block binding name is invalid.');
+    return Object.freeze({ kind, name, position: Object.freeze(position), dimension, sourceEntryId });
+  }
+  const fixtureFunction = canonical(raw.function);
+  const material = canonical(raw.material);
+  const facing = canonical(raw.facing);
+  const structureOrderId = boundedText(raw.structureOrderId, 96);
+  const fixtureId = canonical(raw.fixtureId);
+  if (
+    !CONSTRUCTION_FUNCTIONS.has(fixtureFunction)
+    || !CANONICAL_NAME.test(material)
+    || !CANONICAL_NAME.test(fixtureId)
+    || !SAFE_ENTRY_ID.test(structureOrderId)
+    || !HORIZONTAL_FACINGS.has(facing)
+  ) throw new TypeError('Structure-fixture binding identity is invalid.');
+  return Object.freeze({
+    kind,
+    function: fixtureFunction,
+    fixtureId,
+    structureOrderId,
+    position: Object.freeze(position),
+    dimension,
+    material,
+    facing,
+    sourceEntryId,
+  });
+}
+
 /**
  * Validate and canonicalize one agenda entry. Throws with a specific reason so
  * a rejected request can tell the player exactly what was wrong.
@@ -170,6 +264,36 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   // patches the rest of the plan out of existence.
   const identity = boundedText(raw.id, 64)
     || `agenda-${createdAt}-${Number.isFinite(sequence) ? sequence : Math.floor(Math.random() * 1e9)}`;
+  const dependsOnEntryId = boundedText(raw.dependsOnEntryId, 96);
+  if (dependsOnEntryId && (!SAFE_ENTRY_ID.test(dependsOnEntryId) || dependsOnEntryId === identity)) {
+    throw new TypeError('Agenda dependency identity is invalid.');
+  }
+  const dependencyPolicy = dependsOnEntryId
+    ? canonical(raw.dependencyPolicy || 'requires_success')
+    : '';
+  if (dependencyPolicy && !DEPENDENCY_POLICIES.has(dependencyPolicy)) {
+    throw new TypeError('Agenda dependency policy is unsupported.');
+  }
+  const bindingRequest = normalizeBindingRequest(raw.bindingRequest);
+  const bindingConstraint = normalizeBindingConstraint(raw.bindingConstraint);
+  if ((bindingRequest || bindingConstraint) && !dependsOnEntryId) {
+    throw new TypeError('Agenda binding requires an exact predecessor entry.');
+  }
+  if (bindingRequest && bindingConstraint && bindingRequest.kind !== bindingConstraint.kind) {
+    throw new TypeError('Agenda binding request and constraint kinds do not match.');
+  }
+  const requiredFunctions = kind === 'construction'
+    ? [...new Set((Array.isArray(raw.constructionIntent?.requiredFunctions)
+      ? raw.constructionIntent.requiredFunctions
+      : [])
+      .map(canonical)
+      .filter(value => CONSTRUCTION_FUNCTIONS.has(value)))]
+    : [];
+  const assignmentState = kind === 'construction'
+    ? (CONSTRUCTION_ASSIGNMENT_STATES.has(canonical(raw.assignmentState))
+      ? canonical(raw.assignmentState)
+      : 'queued')
+    : '';
 
   return Object.freeze({
     id: identity,
@@ -187,6 +311,14 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     workstationConstraint: normalizedWorkstation
       ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
       : null,
+    dependsOnEntryId,
+    dependencyPolicy,
+    bindingRequest,
+    bindingConstraint,
+    constructionIntent: kind === 'construction'
+      ? Object.freeze({ requiredFunctions: Object.freeze(requiredFunctions) })
+      : null,
+    assignmentState,
     note: boundedText(raw.note),
     state,
     // Correlates a durable agenda entry with the exact GoalDirector or

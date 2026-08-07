@@ -70,7 +70,7 @@ export function designLanguageHelp() {
   'box, shell, room, slab, ring, line, and roof accept an optional MATERIAL as their last value.',
   'roof X Y Z W D STYLE - flat, gable, or pyramid; stepped and solid so it supports itself.',
   'carve X Y Z W H D - remove already-planned blocks to cut a doorway, window, or interior.',
-  `put X Y Z THING - place one fixture: ${ACCESSORY_NAMES.join(' ')}.`,
+  `put X Y Z THING [FACING] - place one fixture: ${ACCESSORY_NAMES.join(' ')}; door and bed optionally face north, south, east, or west.`,
   ].join(' ');
 }
 
@@ -351,12 +351,17 @@ export function parseStructureDesign(text) {
         if (!ACCESSORIES[thing]) {
           throw new TypeError(`Design ${step} fixture must be one of: ${ACCESSORY_NAMES.join(', ')}.`);
         }
+        const facing = tokens[5] ? String(tokens[5]).toLowerCase() : null;
+        if (facing && !['north', 'south', 'east', 'west'].includes(facing)) {
+          throw new TypeError(`Design ${step} fixture facing must be north, south, east, or west.`);
+        }
         return {
           op,
           x: coordinate(tokens[1], `${step} x`),
           y: coordinate(tokens[2], `${step} y`),
           z: coordinate(tokens[3], `${step} z`),
           thing,
+          facing,
         };
       }
       default:
@@ -402,8 +407,8 @@ function floatingCells(placed, canSupportMaterial) {
 
 function applyOperation(placed, operation, block) {
   const material = operation.material || block;
-  const set = (x, y, z, cellMaterial, cellFunction) => {
-    placed.set(`${x}:${y}:${z}`, { material: cellMaterial, function: cellFunction });
+  const set = (x, y, z, cellMaterial, cellFunction, extra = {}) => {
+    placed.set(`${x}:${y}:${z}`, { material: cellMaterial, function: cellFunction, ...extra });
   };
 
   switch (operation.op) {
@@ -429,7 +434,13 @@ function applyOperation(placed, operation, block) {
               ? onWall
               : onWall || onFloor || onCeiling;
             if (!include) continue;
-            const role = onFloor ? 'foundation' : onCeiling ? 'weather_cover' : 'enclosure';
+            const role = operation.op === 'shell'
+              ? 'enclosure'
+              : onFloor
+                ? 'foundation'
+                : onCeiling
+                  ? 'weather_cover'
+                  : 'enclosure';
             set(operation.x + x, operation.y + y, operation.z + z, material, role);
           }
         }
@@ -523,12 +534,94 @@ function applyOperation(placed, operation, block) {
     }
     case 'put': {
       const accessory = ACCESSORIES[operation.thing];
-      set(operation.x, operation.y, operation.z, accessory.material, accessory.function);
+      set(operation.x, operation.y, operation.z, accessory.material, accessory.function, {
+        fixtureKind: ['door', 'bed'].includes(operation.thing) ? operation.thing : null,
+        requestedFacing: operation.facing,
+      });
       return;
     }
     default:
       throw new TypeError(`Design operation '${operation.op}' is not supported.`);
   }
+}
+
+const FACING_OFFSETS = Object.freeze({
+  north: Object.freeze({ x: 0, y: 0, z: -1 }),
+  south: Object.freeze({ x: 0, y: 0, z: 1 }),
+  east: Object.freeze({ x: 1, y: 0, z: 0 }),
+  west: Object.freeze({ x: -1, y: 0, z: 0 }),
+});
+
+function logicalFixtures(placed, canSupportMaterial) {
+  const fixtureEntries = [...placed.entries()].filter(([, value]) => value.fixtureKind);
+  if (fixtureEntries.length === 0) return [];
+  const parsedPositions = [...placed.keys()].map(key => key.split(':').map(Number));
+  const minX = Math.min(...parsedPositions.map(([x]) => x));
+  const maxX = Math.max(...parsedPositions.map(([x]) => x));
+  const minZ = Math.min(...parsedPositions.map(([, , z]) => z));
+  const maxZ = Math.max(...parsedPositions.map(([, , z]) => z));
+  const counts = new Map();
+  const fixtures = [];
+
+  for (const [key, value] of fixtureEntries) {
+    const [x, y, z] = key.split(':').map(Number);
+    const ordinal = (counts.get(value.fixtureKind) || 0) + 1;
+    counts.set(value.fixtureKind, ordinal);
+    const id = `${value.fixtureKind}_${ordinal}`;
+    const perimeterFacing = x === minX
+      ? 'east'
+      : x === maxX
+        ? 'west'
+        : z === minZ
+          ? 'south'
+          : z === maxZ
+            ? 'north'
+            : null;
+    const candidates = [
+      value.requestedFacing,
+      value.fixtureKind === 'door' ? perimeterFacing : null,
+      'north',
+      'south',
+      'east',
+      'west',
+    ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+    const facing = candidates.find(candidate => {
+      if (value.fixtureKind === 'door') {
+        const upperKey = `${x}:${y + 1}:${z}`;
+        const support = placed.get(`${x}:${y - 1}:${z}`);
+        return !placed.has(upperKey)
+          && Boolean(support)
+          && canSupportMaterial(support.material);
+      }
+      const offset = FACING_OFFSETS[candidate];
+      const headKey = `${x + offset.x}:${y}:${z + offset.z}`;
+      const headSupport = placed.get(`${x + offset.x}:${y - 1}:${z + offset.z}`);
+      return !placed.has(headKey)
+        && Boolean(headSupport)
+        && canSupportMaterial(headSupport.material);
+    });
+    if (!facing) throw new TypeError(`Fixture ${id} has no clear supported ${value.fixtureKind} orientation.`);
+    const direction = FACING_OFFSETS[facing];
+    const occupiedOffsets = value.fixtureKind === 'door'
+      ? [{ x: 0, y: 0, z: 0, part: 'lower' }, { x: 0, y: 1, z: 0, part: 'upper' }]
+      : [{ x: 0, y: 0, z: 0, part: 'foot' }, { ...direction, part: 'head' }];
+    const supportOffsets = value.fixtureKind === 'door'
+      ? [{ x: 0, y: -1, z: 0 }]
+      : [{ x: 0, y: -1, z: 0 }, { x: direction.x, y: -1, z: direction.z }];
+    value.fixtureId = id;
+    value.facing = facing;
+    fixtures.push({
+      id,
+      kind: value.fixtureKind,
+      material: value.material,
+      function: value.function,
+      facing,
+      anchor: { x, y, z },
+      occupiedOffsets,
+      supportOffsets,
+    });
+  }
+  return fixtures;
 }
 
 /**
@@ -557,6 +650,8 @@ export function expandStructureDesign(design, material, {
     );
   }
 
+  const fixtures = logicalFixtures(placed, canSupportMaterial);
+
   const entries = [...placed.entries()].map(([key, value]) => {
     const [x, y, z] = key.split(':').map(Number);
     return { x, y, z, ...value };
@@ -577,6 +672,8 @@ export function expandStructureDesign(design, material, {
       material: cell.material,
       stage: Math.min(cell.y - minY, MAX_STAGE),
       function: cell.function,
+      ...(cell.fixtureId ? { fixtureId: cell.fixtureId } : {}),
+      ...(cell.facing ? { facing: cell.facing } : {}),
     }))
     .sort((left, right) => left.stage - right.stage || left.x - right.x || left.z - right.z);
 
@@ -588,6 +685,14 @@ export function expandStructureDesign(design, material, {
     height: Math.max(...cells.map(cell => cell.y)) + 1,
     functions: Object.freeze([...new Set(cells.map(cell => cell.function))]),
     cells,
+    fixtures: fixtures.map(fixture => ({
+      ...fixture,
+      anchor: {
+        x: fixture.anchor.x - minX,
+        y: fixture.anchor.y - minY,
+        z: fixture.anchor.z - minZ,
+      },
+    })),
   };
 
   const problems = validateStructureBlueprint(blueprint, { canSupportMaterial });

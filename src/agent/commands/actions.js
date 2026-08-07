@@ -123,7 +123,12 @@ function submitRoleOrderResult(agent, expectedRole, order) {
             message: `Work order was not accepted: ${expectedRole} job director unavailable.`,
         };
     }
-    const result = director.submit(order);
+    const intentValidation = expectedRole === 'builder' && !director.activeOrder
+        ? agent.agenda_director?.validateConstructionSubmission?.(order)
+        : null;
+    const result = intentValidation?.accepted === false
+        ? intentValidation
+        : director.submit(order);
     const request = agent.actions?.currentRequestContext?.() || null;
     const previousGeneration = Number(agent.last_persistent_job_submission?.generation) || 0;
     agent.last_persistent_job_submission = Object.freeze({
@@ -138,7 +143,9 @@ function submitRoleOrderResult(agent, expectedRole, order) {
     if (result?.accepted !== true) {
         return {
             result,
-            message: `Work order was not accepted: ${result?.code || 'job director unavailable'}.`,
+            message: result?.detail
+                ? `Work order was not accepted: ${result.detail}`
+                : `Work order was not accepted: ${result?.code || 'job director unavailable'}.`,
         };
     }
     const defaultRole = agent.runtime?.role || 'companion';
@@ -1494,6 +1501,21 @@ export const actionsList = [
         })
     },
     {
+        name: '!placeFixtureAt',
+        description: 'Place one prevalidated logical door or bed fixture at an exact blueprint anchor and verify every occupied Minecraft block and facing state.',
+        params: {
+            'type': { type: 'BlockOrItemName', description: 'The exact door or bed item.' },
+            'x': { type: 'float', description: 'The validated anchor X coordinate.' },
+            'y': { type: 'float', description: 'The validated anchor Y coordinate.' },
+            'z': { type: 'float', description: 'The validated anchor Z coordinate.' },
+            'kind': { type: 'string', description: 'Logical fixture kind: door or bed.' },
+            'facing': { type: 'string', description: 'Persisted horizontal facing.' },
+        },
+        perform: runAsAction(async (agent, type, x, y, z, kind, facing) => {
+            return await skills.placeFixture(agent.bot, type, x, y, z, kind, facing);
+        })
+    },
+    {
         name: '!buildNetherPortal',
         description: 'Build and ignite one verified ten-obsidian Nether portal on a nearby clear supported footprint. Requires ten total frame obsidian, flint and steel or a fire charge, and three expendable scaffold blocks; missing dirt scaffolds are gathered through the normal collection skill.',
         params: {
@@ -1580,6 +1602,22 @@ export const actionsList = [
         description: 'Go to the nearest bed and sleep.',
         perform: runAsAction(async (agent) => {
             return await skills.goToBed(agent.bot);
+        })
+    },
+    {
+        name: '!goToBedAt',
+        description: 'Go to one exact persisted bed fixture in the required dimension and sleep there; never substitute a nearer bed.',
+        params: {
+            'x': { type: 'float', description: 'Exact bed foot X coordinate.' },
+            'y': { type: 'float', description: 'Exact bed foot Y coordinate.' },
+            'z': { type: 'float', description: 'Exact bed foot Z coordinate.' },
+            'dimension': { type: 'string', description: 'Required Minecraft dimension.' },
+        },
+        perform: runAsAction(async (agent, x, y, z, dimension) => {
+            return await skills.goToBed(agent.bot, {
+                exactPosition: { x, y, z },
+                expectedDimension: dimension,
+            });
         })
     },
     {

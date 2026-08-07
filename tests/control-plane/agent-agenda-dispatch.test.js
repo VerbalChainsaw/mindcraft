@@ -160,6 +160,19 @@ test('a bound construction barrier releases sleep only after the exact Builder c
     phase: 'complete',
     evidence: { code: 'blueprint_complete', detail: 'Outpost verified.' },
   };
+  agent.job_director.lastReceipt = {
+    orderId: order.id,
+    dimension: 'overworld',
+    structure: {
+      fixtures: [{
+        id: 'bed_1',
+        function: 'rest',
+        material: 'red_bed',
+        facing: 'south',
+        position: { x: 10, y: 64, z: 20 },
+      }],
+    },
+  };
   director.update();
   assert.equal(director.entries.find(entry => entry.id === construction.id).state, 'complete');
   assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'pending');
@@ -168,7 +181,7 @@ test('a bound construction barrier releases sleep only after the exact Builder c
   director.update();
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.deepEqual(commands, ['!goToBed']);
+  assert.deepEqual(commands, ['!goToBedAt(10, 64, 20, "overworld")']);
   assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'complete');
 });
 
@@ -200,8 +213,65 @@ test('a failed construction barrier blocks its dependent sleep step', () => {
   assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'failed');
   assert.equal(
     director.entries.find(entry => entry.id === sleep.id).evidence.code,
-    'construction_prerequisite_failed',
+    'agenda_dependency_failed',
   );
+});
+
+test('a restart fails closed when construction compilation never bound a durable Builder order', () => {
+  let persisted = [];
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) { persisted = JSON.parse(JSON.stringify(entries)); },
+  };
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null, lastOrder: null },
+  };
+  let director = new AgendaDirector(agent, { store, now: () => 80_000 });
+  const construction = director.add({
+    kind: 'construction',
+    requester: 'Gabriel',
+    constructionIntent: { requiredFunctions: ['enclosure', 'weather_cover', 'rest'] },
+  });
+  const sleep = director.add({ kind: 'sleep', requester: 'Gabriel' });
+  assert.equal(director.beginConstructionCompilation(construction.id).accepted, true);
+
+  director = new AgendaDirector(agent, { store, now: () => 81_000 });
+  assert.equal(director.entries.find(entry => entry.id === construction.id).state, 'failed');
+  assert.equal(director.entries.find(entry => entry.id === construction.id).assignmentState, 'interrupted');
+  assert.equal(director.entries.find(entry => entry.id === sleep.id).state, 'failed');
+  assert.equal(
+    director.entries.find(entry => entry.id === sleep.id).evidence.code,
+    'agenda_dependency_failed',
+  );
+});
+
+test('a new sleep request does not inherit a completed legacy construction job', () => {
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null, lastOrder: null },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => 90_000,
+  });
+  const construction = director.add({ kind: 'construction', requester: 'Gabriel' });
+  director.replace(construction.id, {
+    state: 'complete',
+    assignmentState: 'accepted_and_bound',
+    executorId: 'builder-old-outpost',
+    finishedAt: 89_000,
+  });
+
+  const sleep = director.add({ kind: 'sleep', requester: 'Gabriel' });
+  const entry = director.entries.find(candidate => candidate.id === sleep.id);
+  assert.equal(entry.dependsOnEntryId, '');
+  assert.equal(entry.bindingRequest, null);
 });
 
 test('agenda acquire snapshots current family inventory for each dispatched step', () => {

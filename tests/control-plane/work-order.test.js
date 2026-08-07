@@ -22,7 +22,31 @@ test('Given a valid construction request, work-order normalization preserves bou
       width: 3,
       depth: 3,
       height: 3,
-      cells: [{ x: 0, y: 0, z: 0, material: 'oak_planks' }],
+      cells: [
+        { x: 0, y: 0, z: 0, material: 'oak_planks' },
+        {
+          x: 0,
+          y: 1,
+          z: 0,
+          material: 'oak_door',
+          function: 'access',
+          fixtureId: 'door_1',
+          facing: 'east',
+        },
+      ],
+      fixtures: [{
+        id: 'door_1',
+        kind: 'door',
+        material: 'oak_door',
+        function: 'access',
+        facing: 'east',
+        anchor: { x: 0, y: 1, z: 0 },
+        occupiedOffsets: [
+          { x: 0, y: 0, z: 0, part: 'lower' },
+          { x: 0, y: 1, z: 0, part: 'upper' },
+        ],
+        supportOffsets: [{ x: 0, y: -1, z: 0 }],
+      }],
     },
     checkpoint: {
       toolRequirement: { name: 'stone_pickaxe', minimumUsableDurability: 24 },
@@ -35,6 +59,8 @@ test('Given a valid construction request, work-order normalization preserves bou
   assert.equal(order.attempts, 0);
   assert.deepEqual(order.target, { name: 'worksite', x: 10, y: 64, z: -4 });
   assert.equal(Object.isFrozen(order), true);
+  assert.equal(Object.isFrozen(order.blueprint.fixtures), true);
+  assert.equal(order.blueprint.fixtures[0].facing, 'east');
   assert.deepEqual(normalizeWorkOrder(JSON.parse(JSON.stringify(order))), order);
 });
 

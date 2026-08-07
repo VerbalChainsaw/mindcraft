@@ -98,6 +98,75 @@ export function validateStructureBlueprint(blueprint, { canSupportMaterial = () 
       );
     }
   }
+  const reservationOwners = new Map();
+  for (const fixture of blueprint?.fixtures || []) {
+    const anchorKey = `${fixture.anchor?.x}:${fixture.anchor?.y}:${fixture.anchor?.z}`;
+    const anchorCell = cellAt.get(anchorKey);
+    if (
+      !anchorCell
+      || anchorCell.fixtureId !== fixture.id
+      || anchorCell.material !== fixture.material
+      || anchorCell.facing !== fixture.facing
+    ) {
+      problems.push(`fixture ${fixture.id} has no matching anchor cell`);
+      continue;
+    }
+    for (const offset of fixture.occupiedOffsets || []) {
+      const key = `${fixture.anchor.x + offset.x}:${fixture.anchor.y + offset.y}:${fixture.anchor.z + offset.z}`;
+      const prior = reservationOwners.get(key);
+      if (prior && prior !== fixture.id) problems.push(`fixtures ${prior} and ${fixture.id} overlap at ${key}`);
+      reservationOwners.set(key, fixture.id);
+      if (key !== anchorKey && cellAt.has(key)) {
+        problems.push(`fixture ${fixture.id} companion cell collides with a planned block at ${key}`);
+      }
+    }
+    for (const offset of fixture.supportOffsets || []) {
+      const key = `${fixture.anchor.x + offset.x}:${fixture.anchor.y + offset.y}:${fixture.anchor.z + offset.z}`;
+      const support = cellAt.get(key);
+      if (!support || !canSupportMaterial(support.material)) {
+        problems.push(`fixture ${fixture.id} lacks planned support at ${key}`);
+      }
+    }
+  }
+
+  const restFixtures = (blueprint?.fixtures || []).filter(fixture => fixture.function === 'rest');
+  if (restFixtures.length > 0) {
+    const functions = new Set(cells.map(cell => cell.function));
+    for (const required of ['enclosure', 'weather_cover']) {
+      if (!functions.has(required)) problems.push(`habitable structure lacks ${required}`);
+    }
+    if (!(blueprint.fixtures || []).some(fixture => fixture.function === 'access')) {
+      problems.push('habitable structure lacks a logical access fixture');
+    }
+    const foundations = cells.filter(cell => cell.function === 'foundation');
+    if (foundations.length === 0) {
+      problems.push('habitable structure lacks a foundation');
+      return problems;
+    }
+    for (const floor of foundations) {
+      const covered = cells.some(cell => (
+        cell.function === 'weather_cover'
+        && cell.x === floor.x
+        && cell.z === floor.z
+        && cell.y > floor.y
+      ));
+      if (!covered) problems.push(`habitable floor column ${floor.x},${floor.z} is open to the sky`);
+    }
+    const minX = Math.min(...foundations.map(cell => cell.x));
+    const maxX = Math.max(...foundations.map(cell => cell.x));
+    const minZ = Math.min(...foundations.map(cell => cell.z));
+    const maxZ = Math.max(...foundations.map(cell => cell.z));
+    const access = (blueprint.fixtures || []).find(fixture => fixture.function === 'access');
+    if (
+      !access
+      || ![
+        access.anchor.x === minX,
+        access.anchor.x === maxX,
+        access.anchor.z === minZ,
+        access.anchor.z === maxZ,
+      ].some(Boolean)
+    ) problems.push('habitable access fixture is not on the enclosure perimeter');
+  }
   return problems;
 }
 

@@ -43,6 +43,32 @@ function boundedText(value, maximum = 240) {
     .slice(0, maximum);
 }
 
+function inferredLegacyDependency(previous, entry) {
+  // This is a restart migration for an unfinished legacy chain, not a rule
+  // that makes a new request depend on whatever happened most recently.
+  if (
+    !previous
+    || !entry
+    || entry.dependsOnEntryId
+    || isTerminalAgendaState(previous.state)
+  ) return null;
+  if (previous.kind === 'construction' && entry.kind === 'sleep') {
+    return {
+      dependsOnEntryId: previous.id,
+      dependencyPolicy: 'requires_success',
+      bindingRequest: { kind: 'structure_fixture', function: 'rest' },
+    };
+  }
+  if (previous.kind === 'follow_until' && entry.kind === 'smelt') {
+    return {
+      dependsOnEntryId: previous.id,
+      dependencyPolicy: 'requires_success',
+      bindingRequest: { kind: 'world_block', name: previous.target },
+    };
+  }
+  return null;
+}
+
 export class AgendaDirector {
   constructor(agent, {
     store = null,
@@ -68,6 +94,44 @@ export class AgendaDirector {
     try {
       this.store = store || new AgendaStore(agent.name);
       this.entries = this.store.load();
+      this.entries = this.entries.map((entry, index, entries) => {
+        const inferred = inferredLegacyDependency(entries[index - 1], entry);
+        return inferred ? normalizeAgendaEntry({ ...entry, ...inferred }) : entry;
+      });
+      const orphanedConstructionIds = new Set(this.entries.filter(entry => (
+        entry.kind === 'construction'
+        && !isTerminalAgendaState(entry.state)
+        && !entry.executorId
+      )).map(entry => entry.id));
+      if (orphanedConstructionIds.size > 0) {
+        this.entries = this.entries.map(entry => {
+          if (orphanedConstructionIds.has(entry.id)) {
+            return normalizeAgendaEntry({
+              ...entry,
+              state: 'failed',
+              assignmentState: 'interrupted',
+              finishedAt: this.now(),
+              evidence: {
+                code: 'construction_compilation_interrupted',
+                detail: 'The process restarted before the bounded construction assignment was accepted.',
+              },
+            });
+          }
+          if (orphanedConstructionIds.has(entry.dependsOnEntryId)) {
+            return normalizeAgendaEntry({
+              ...entry,
+              state: 'failed',
+              finishedAt: this.now(),
+              evidence: {
+                code: 'agenda_dependency_failed',
+                detail: 'The required construction assignment did not survive compilation.',
+              },
+            });
+          }
+          return entry;
+        });
+        this.store.save(this.entries);
+      }
       // Restored ids must not collide with ids minted this session.
       this.sequence = this.entries.length;
       if (this.store.lastError) {
@@ -117,8 +181,10 @@ export class AgendaDirector {
     let entry;
     try {
       this.sequence += 1;
+      const previous = this.entries.at(-1) || null;
+      const inferred = inferredLegacyDependency(previous, raw);
       entry = normalizeAgendaEntry(
-        { ...raw, id: '', createdAt: this.now() },
+        { ...raw, ...inferred, id: '', createdAt: this.now() },
         { now: this.now, sequence: this.sequence },
       );
     } catch (error) {
@@ -152,7 +218,13 @@ export class AgendaDirector {
     this.entries = this.entries.map(entry => (
       isTerminalAgendaState(entry.state)
         ? entry
-        : normalizeAgendaEntry({ ...entry, state: 'cancelled', finishedAt: this.now(), evidence: { code: 'agenda_cleared', detail: reason } })
+        : normalizeAgendaEntry({
+            ...entry,
+            state: 'cancelled',
+            ...(entry.kind === 'construction' ? { assignmentState: 'cancelled' } : {}),
+            finishedAt: this.now(),
+            evidence: { code: 'agenda_cleared', detail: reason },
+          })
     ));
     this.persist();
     this.setStatus('cancelled', 'agenda_cleared', reason);
@@ -168,7 +240,12 @@ export class AgendaDirector {
     }
     this.directDispatchGeneration += 1;
     this.dispatching = false;
-    this.replace(entry.id, { state: 'skipped', finishedAt: this.now(), evidence: { code: 'agenda_skipped', detail: reason } });
+    this.replace(entry.id, {
+      state: 'skipped',
+      ...(entry.kind === 'construction' ? { assignmentState: 'cancelled' } : {}),
+      finishedAt: this.now(),
+      evidence: { code: 'agenda_skipped', detail: reason },
+    });
     this.nextEligibleAt = 0;
     return { skipped: describeAgendaEntry(entry) };
   }
@@ -178,6 +255,63 @@ export class AgendaDirector {
       entry.id === id ? normalizeAgendaEntry({ ...entry, ...patch }) : entry
     ));
     this.persist();
+  }
+
+  beginConstructionCompilation(entryId) {
+    const entry = this.entries.find(candidate => candidate.id === entryId);
+    if (!entry || entry.kind !== 'construction' || isTerminalAgendaState(entry.state)) {
+      return { accepted: false, code: 'construction_barrier_missing' };
+    }
+    if (entry.executorId) return { accepted: false, code: 'construction_already_bound' };
+    this.replace(entry.id, {
+      assignmentState: 'compiling',
+      evidence: { code: 'construction_compiling', detail: 'Compiling a bounded blueprint while physical work remains held.' },
+    });
+    this.setStatus('waiting', 'construction_compiling', 'Compiling the requested bounded structure.', entry.id);
+    return { accepted: true, id: entry.id };
+  }
+
+  activeConstructionIntent() {
+    return this.entries.find(entry => (
+      entry.kind === 'construction'
+      && !isTerminalAgendaState(entry.state)
+      && entry.assignmentState === 'compiling'
+      && !entry.executorId
+    )) || null;
+  }
+
+  validateConstructionSubmission(order) {
+    const entry = this.activeConstructionIntent();
+    if (!entry) return { accepted: true, code: 'no_pending_construction_intent' };
+    const observed = new Set((order?.blueprint?.cells || [])
+      .map(cell => cell?.function)
+      .filter(Boolean));
+    const missing = (entry.constructionIntent?.requiredFunctions || [])
+      .filter(required => !observed.has(required));
+    return missing.length === 0
+      ? { accepted: true, code: 'construction_intent_satisfied', entryId: entry.id }
+      : {
+          accepted: false,
+          code: 'construction_intent_incomplete',
+          entryId: entry.id,
+          detail: `The bounded design is missing required function(s): ${missing.join(', ')}.`,
+          missing,
+        };
+  }
+
+  failConstructionAssignment(entryId, assignmentState, code, detail) {
+    const entry = this.entries.find(candidate => candidate.id === entryId);
+    if (!entry || entry.kind !== 'construction' || isTerminalAgendaState(entry.state)) {
+      return { settled: false, code: 'construction_barrier_missing' };
+    }
+    const settled = {
+      state: 'failed',
+      code,
+      detail,
+      retryable: false,
+      assignmentState,
+    };
+    return this.commitSettlement(entry, settled);
   }
 
   bindConstruction(entryId, orderId) {
@@ -196,6 +330,7 @@ export class AgendaDirector {
       state: 'active',
       startedAt: entry.startedAt || this.now(),
       executorId: orderId,
+      assignmentState: 'accepted_and_bound',
       evidence: { code: 'construction_bound', detail: `Bound to Builder work order ${orderId}.` },
     });
     this.nextEligibleAt = 0;
@@ -326,37 +461,56 @@ export class AgendaDirector {
     return this.entries.slice(activeIndex + 1).find(candidate => candidate.state === 'pending') || null;
   }
 
-  dependentWorkstationBinding(entry, next, result) {
+  dependentBinding(entry, next, result, terminalReceipt = null) {
     if (
-      result?.phase !== 'succeeded'
-      || entry?.kind !== 'follow_until'
-      || entry.target !== 'furnace'
-      || next?.kind !== 'smelt'
+      !next?.bindingRequest
+      || next.dependsOnEntryId !== entry?.id
+      || next.dependencyPolicy !== 'requires_success'
     ) return null;
-    const skill = result.evidence?.skill;
-    const completion = skill?.completion;
-    const position = completion?.position;
-    const dimension = boundedText(completion?.dimension, 64).toLowerCase();
-    if (
-      skill?.kind !== 'follow'
-      || completion?.kind !== 'shared_world_block'
-      || completion?.name !== entry.target
-      || !position
-      || ![position.x, position.y, position.z].every(Number.isFinite)
-      || !dimension
-    ) return null;
-    return {
-      name: entry.target,
-      position: {
-        x: Math.floor(position.x),
-        y: Math.floor(position.y),
-        z: Math.floor(position.z),
-      },
-      dimension,
-      source: 'agenda_follow_until',
-      observedAt: Number.isFinite(skill.recordedAt) ? skill.recordedAt : this.now(),
-      sourceEntryId: entry.id,
-    };
+    if (next.bindingRequest.kind === 'world_block') {
+      if (result?.phase !== 'succeeded') return null;
+      const skill = result.evidence?.skill;
+      const completion = skill?.completion;
+      const position = completion?.position;
+      const dimension = boundedText(completion?.dimension, 64).toLowerCase();
+      if (
+        skill?.kind !== 'follow'
+        || completion?.kind !== 'shared_world_block'
+        || completion?.name !== next.bindingRequest.name
+        || !position
+        || ![position.x, position.y, position.z].every(Number.isFinite)
+        || !dimension
+      ) return null;
+      return {
+        kind: 'world_block',
+        name: completion.name,
+        position: {
+          x: Math.floor(position.x),
+          y: Math.floor(position.y),
+          z: Math.floor(position.z),
+        },
+        dimension,
+        sourceEntryId: entry.id,
+      };
+    }
+    if (next.bindingRequest.kind === 'structure_fixture') {
+      const fixture = terminalReceipt?.structure?.fixtures?.find(candidate => (
+        candidate?.function === next.bindingRequest.function
+      ));
+      if (!fixture) return null;
+      return {
+        kind: 'structure_fixture',
+        function: fixture.function,
+        fixtureId: fixture.id,
+        structureOrderId: terminalReceipt.orderId,
+        position: fixture.position,
+        dimension: terminalReceipt.dimension,
+        material: fixture.material,
+        facing: fixture.facing,
+        sourceEntryId: entry.id,
+      };
+    }
+    return null;
   }
 
   commitDirectResult(entry, dispatchGeneration, result) {
@@ -368,55 +522,76 @@ export class AgendaDirector {
     // allowed while Operator Stop is held because it records an effect already
     // produced; it never starts another action.
     const dependent = this.nextPendingAfter(active);
-    const needsWorkstationBinding = result?.phase === 'succeeded'
-      && active.kind === 'follow_until'
-      && active.target === 'furnace'
-      && dependent?.kind === 'smelt';
-    const workstationConstraint = this.dependentWorkstationBinding(active, dependent, result);
-    const settlement = needsWorkstationBinding && !workstationConstraint
+    const needsBinding = result?.phase === 'succeeded'
+      && dependent?.dependsOnEntryId === active.id
+      && Boolean(dependent.bindingRequest);
+    const bindingConstraint = this.dependentBinding(active, dependent, result);
+    const settlement = needsBinding && !bindingConstraint
       ? {
-          state: 'failed',
-          code: 'agenda_workstation_binding_missing',
-          detail: 'The designated furnace identity was not available at the Agenda handoff, so smelting was not started.',
-          retryable: false,
-        }
+        state: 'failed',
+        code: 'agenda_binding_missing',
+        detail: 'The exact world binding required by the dependent step was unavailable, so dependent work was not started.',
+        retryable: false,
+      }
       : this.directSettlement(result);
     this.commitSettlement(active, settlement, {
-      dependentEntryId: workstationConstraint ? dependent.id : '',
-      workstationConstraint,
+      dependentEntryId: bindingConstraint ? dependent.id : '',
+      bindingConstraint,
     });
     return true;
   }
 
-  commitSettlement(active, settled, { dependentEntryId = '', workstationConstraint = null } = {}) {
+  commitSettlement(active, settled, { dependentEntryId = '', bindingConstraint = null } = {}) {
     const attempts = active.attempts + 1;
     const retryable = settled.state === 'failed'
       && settled.retryable !== false
       && attempts < MAX_ENTRY_ATTEMPTS;
+    const assignmentPatch = settled.assignmentState ? { assignmentState: settled.assignmentState } : {};
     const activePatch = retryable
-      ? { state: 'pending', startedAt: null, executorId: '', attempts, evidence: settled }
-      : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled };
+      ? { state: 'pending', startedAt: null, executorId: '', attempts, evidence: settled, ...assignmentPatch }
+      : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled, ...assignmentPatch };
     // Persist the terminal step and its dependent exact-workstation handoff in
     // one store write. A restart can therefore never observe arrival complete
     // while the following smelt remains free to select a different furnace.
-    const blockedSleep = settled.state !== 'complete' && active.kind === 'construction'
-      ? this.nextPendingAfter(active)
-      : null;
+    const blockedDependents = settled.state !== 'complete'
+      ? new Set(this.entries.filter(entry => (
+        entry.state === 'pending'
+        && entry.dependsOnEntryId === active.id
+        && entry.dependencyPolicy === 'requires_success'
+      )).map(entry => entry.id))
+      : new Set();
     this.entries = this.entries.map(entry => {
       if (entry.id === active.id) return normalizeAgendaEntry({ ...entry, ...activePatch });
-      if (blockedSleep?.kind === 'sleep' && entry.id === blockedSleep.id) {
+      if (blockedDependents.has(entry.id)) {
         return normalizeAgendaEntry({
           ...entry,
           state: 'failed',
           finishedAt: this.now(),
           evidence: {
-            code: 'construction_prerequisite_failed',
-            detail: 'Sleep was not attempted because the requested structure did not complete.',
+            code: 'agenda_dependency_failed',
+            detail: `Dependent work was not attempted because ${describeAgendaEntry(active)} did not complete.`,
           },
         });
       }
-      if (workstationConstraint && entry.id === dependentEntryId) {
-        return normalizeAgendaEntry({ ...entry, workstationConstraint });
+      if (bindingConstraint && entry.id === dependentEntryId) {
+        return normalizeAgendaEntry({
+          ...entry,
+          bindingConstraint,
+          ...(bindingConstraint.kind === 'world_block'
+            ? {
+                workstationConstraint: {
+                  name: bindingConstraint.name,
+                  position: bindingConstraint.position,
+                  dimension: bindingConstraint.dimension,
+                  source: active.kind === 'follow_until'
+                    ? 'agenda_follow_until'
+                    : 'agenda_typed_binding',
+                  observedAt: this.now(),
+                  sourceEntryId: active.id,
+                },
+              }
+            : {}),
+        });
       }
       return entry;
     });
@@ -547,9 +722,19 @@ export class AgendaDirector {
       farm_visit: () => '!goToFarm',
       maintain_farm: () => '!maintainFarm',
       deposit: () => `!putInChest("${entry.target}", ${entry.quantity})`,
-      sleep: () => '!goToBed',
+      sleep: () => entry.bindingConstraint?.kind === 'structure_fixture'
+        ? `!goToBedAt(${entry.bindingConstraint.position.x}, ${entry.bindingConstraint.position.y}, ${entry.bindingConstraint.position.z}, ${JSON.stringify(entry.bindingConstraint.dimension)})`
+        : '!goToBed',
     };
-    const command = (DIRECT_COMMANDS[entry.kind] || DIRECT_COMMANDS.goto)();
+    const commandBuilder = DIRECT_COMMANDS[entry.kind];
+    if (!commandBuilder) {
+      return {
+        accepted: false,
+        code: 'unsupported_direct_agenda_kind',
+        detail: `No bounded direct dispatcher exists for agenda kind ${entry.kind}.`,
+      };
+    }
+    const command = commandBuilder();
     const previousActionId = this.agent.last_action_result?.actionId || null;
     const dispatchGeneration = this.directDispatchGeneration + 1;
     this.directDispatchGeneration = dispatchGeneration;
@@ -609,8 +794,34 @@ export class AgendaDirector {
         this.setStatus('acting', 'agenda_step_running', describeAgendaEntry(active), active.id);
         return;
       }
-      const settled = this.settleActive(active);
-      this.commitSettlement(active, settled);
+      let settled = this.settleActive(active);
+      const dependent = this.nextPendingAfter(active);
+      const needsBinding = settled.state === 'complete'
+        && dependent?.dependsOnEntryId === active.id
+        && Boolean(dependent.bindingRequest);
+      const bindingConstraint = needsBinding
+        ? this.dependentBinding(
+            active,
+            dependent,
+            null,
+            this.agent.job_director?.lastReceipt,
+          )
+        : null;
+      if (needsBinding && !bindingConstraint) {
+        settled = {
+          state: 'failed',
+          code: 'agenda_binding_missing',
+          detail: 'The completed executor did not provide the exact world binding required by dependent work.',
+          retryable: false,
+        };
+      }
+      this.commitSettlement(active, settled, {
+        dependentEntryId: bindingConstraint ? dependent.id : '',
+        bindingConstraint,
+      });
+      if (active.executor === 'job') {
+        this.agent.job_director?.acknowledgeTerminalReceipt?.(active.executorId);
+      }
       return;
     }
 
@@ -624,6 +835,38 @@ export class AgendaDirector {
         }
       }
       return;
+    }
+
+    if (next.dependsOnEntryId) {
+      const predecessor = this.entries.find(entry => entry.id === next.dependsOnEntryId);
+      if (!predecessor) {
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: { code: 'agenda_dependency_missing', detail: 'The required predecessor entry is unavailable.' },
+        });
+        return;
+      }
+      if (predecessor.state !== 'complete') {
+        if (isTerminalAgendaState(predecessor.state)) {
+          this.replace(next.id, {
+            state: 'failed',
+            finishedAt: this.now(),
+            evidence: { code: 'agenda_dependency_failed', detail: 'The required predecessor did not complete.' },
+          });
+        } else {
+          this.setStatus('waiting', 'agenda_dependency_pending', `Waiting for: ${describeAgendaEntry(predecessor)}.`, next.id);
+        }
+        return;
+      }
+      if (next.bindingRequest && !next.bindingConstraint) {
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: { code: 'agenda_binding_missing', detail: 'The predecessor completed without the exact requested binding.' },
+        });
+        return;
+      }
     }
 
     if (next.kind === 'construction' && !next.executorId) {

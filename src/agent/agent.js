@@ -871,10 +871,24 @@ export class Agent {
         const queued = [];
         const rejected = [];
         let deferredConstruction = null;
+        let previousQueuedEntryId = '';
         for (const step of plan.steps) {
-            const result = director.add(step.entry);
+            if (step.dependency && !previousQueuedEntryId) {
+                rejected.push(`${step.segment} (required predecessor was not queued)`);
+                continue;
+            }
+            const entry = step.dependency
+                ? {
+                    ...step.entry,
+                    dependsOnEntryId: previousQueuedEntryId,
+                    dependencyPolicy: step.dependency.policy,
+                    bindingRequest: step.dependency.bindingRequest,
+                }
+                : step.entry;
+            const result = director.add(entry);
             if (result?.accepted) {
                 queued.push(result.description || step.segment);
+                previousQueuedEntryId = result.id;
                 if (step.requiresModelAssignment === true) {
                     deferredConstruction = {
                         entryId: result.id,
@@ -1029,10 +1043,21 @@ export class Agent {
                 // validated construction command releases it at the same
                 // ownership boundary as every other player action. Capturing
                 // the generation lets a NEW Stop still cancel this prompt.
+                if (queuedConstruction?.entryId) {
+                    const compiling = this.agenda_director?.beginConstructionCompilation?.(
+                        queuedConstruction.entryId,
+                    );
+                    if (compiling?.accepted !== true) {
+                        this.holdPosition('construction assignment could not begin');
+                        this.routeResponse(source, 'I could not safely begin that construction assignment, so I am holding position.');
+                        return true;
+                    }
+                }
+                if (!this.isOperatorHeld()) {
+                    this.holdPosition('construction assignment pending');
+                }
                 deferredModelAssignment = {
-                    holdGeneration: this.isOperatorHeld()
-                        ? this.operator_hold_generation
-                        : null,
+                    holdGeneration: this.operator_hold_generation,
                     agendaEntryId: queuedConstruction?.entryId || null,
                 };
                 this.self_prompter.interruptForManualCommand();
@@ -1119,10 +1144,11 @@ export class Agent {
 
         if (!self_prompt && this.self_prompter.isActive()) // message is from user during self-prompting
             max_responses = 1; // force only respond to this message, then let self-prompting take over
-        for (let i=0; i<max_responses; i++) {
-            if (checkInterrupt()) break;
-            let history = this.history.getHistory();
-            let res = await this.prompter.promptConvo(history);
+        try {
+            for (let i=0; i<max_responses; i++) {
+                if (checkInterrupt()) break;
+                let history = this.history.getHistory();
+                let res = await this.prompter.promptConvo(history);
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
@@ -1286,6 +1312,29 @@ export class Agent {
             }
             
             this.history.save();
+            }
+        } finally {
+            if (deferredModelAssignment) {
+                const interrupted = checkInterrupt();
+                const assignmentState = interrupted ? 'interrupted' : 'compilation_exhausted';
+                const code = interrupted
+                    ? 'construction_compilation_interrupted'
+                    : 'construction_compilation_exhausted';
+                const detail = interrupted
+                    ? 'Construction compilation was interrupted before an exact Builder order was accepted.'
+                    : 'Construction compilation ended without an accepted and bound Builder order.';
+                if (deferredModelAssignment.agendaEntryId) {
+                    this.agenda_director?.failConstructionAssignment?.(
+                        deferredModelAssignment.agendaEntryId,
+                        assignmentState,
+                        code,
+                        detail,
+                    );
+                }
+                if (!this.isOperatorHeld()) this.holdPosition('construction assignment did not settle');
+                await this.history.add('system', detail);
+                deferredModelAssignment = null;
+            }
         }
 
         return used_command;

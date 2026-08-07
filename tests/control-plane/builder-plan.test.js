@@ -32,6 +32,38 @@ test('general construction compiler creates bounded supported shapes with a safe
     { canSupportMaterial: name => name === 'cobblestone' },
   ), /no path down to the ground/i);
 
+  const habitable = expandStructureDesign(
+    'room 0 0 0 5 4 5 cobblestone; carve 0 1 2 1 2 1; put 0 1 2 door east; put 1 1 1 bed south',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  );
+  assert.deepEqual(
+    habitable.fixtures.map(({ kind, facing, occupiedOffsets }) => ({ kind, facing, occupiedOffsets })),
+    [
+      {
+        kind: 'door',
+        facing: 'east',
+        occupiedOffsets: [
+          { x: 0, y: 0, z: 0, part: 'lower' },
+          { x: 0, y: 1, z: 0, part: 'upper' },
+        ],
+      },
+      {
+        kind: 'bed',
+        facing: 'south',
+        occupiedOffsets: [
+          { x: 0, y: 0, z: 0, part: 'foot' },
+          { x: 0, y: 0, z: 1, part: 'head' },
+        ],
+      },
+    ],
+  );
+  assert.throws(() => expandStructureDesign(
+    'slab 0 0 0 5 5 cobblestone; shell 0 1 0 5 3 5 cobblestone; carve 0 1 2 1 2 1; put 0 1 2 door east; put 1 1 1 bed south',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), /weather_cover|open to the sky/i);
+
   const platform = createConstructionBlueprint({
     shape: 'platform',
     width: 4,
@@ -524,6 +556,71 @@ test('Given verified cells and inventory, Builder places only the next missing c
   assert.equal(complete.complete, true);
   assert.equal(complete.code, 'blueprint_complete');
   assert.deepEqual(complete.checkpoint, { verifiedCount: 2, nextCell: 2 });
+});
+
+test('Given a missing logical fixture, Builder dispatches one fixture placement instead of one block placement', () => {
+  const order = createWorkOrder({
+    id: 'build-door',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    requester: 'Director',
+    phase: 'execute',
+    target: { name: 'worksite', x: 10, y: 64, z: 10 },
+    blueprint: {
+      id: 'doorway',
+      width: 1,
+      depth: 1,
+      height: 3,
+      cells: [
+        { x: 0, y: 0, z: 0, material: 'cobblestone', stage: 0 },
+        {
+          x: 0,
+          y: 1,
+          z: 0,
+          material: 'oak_door',
+          stage: 1,
+          function: 'access',
+          fixtureId: 'door_1',
+          facing: 'east',
+        },
+      ],
+      fixtures: [{
+        id: 'door_1',
+        kind: 'door',
+        material: 'oak_door',
+        function: 'access',
+        facing: 'east',
+        anchor: { x: 0, y: 1, z: 0 },
+        occupiedOffsets: [
+          { x: 0, y: 0, z: 0, part: 'lower' },
+          { x: 0, y: 1, z: 0, part: 'upper' },
+        ],
+        supportOffsets: [{ x: 0, y: -1, z: 0 }],
+      }],
+    },
+  });
+  const step = nextBuilderStep(order, {
+    inventory: { oak_door: 1 },
+    blueprintAudit: {
+      valid: true,
+      missing: [{
+        x: 10,
+        y: 65,
+        z: 10,
+        material: 'oak_door',
+        stage: 1,
+        index: 1,
+        supported: true,
+        fixture: { kind: 'door', facing: 'east' },
+      }],
+      incorrect: [],
+      correct: 1,
+    },
+  });
+
+  assert.equal(step.command, '!placeFixtureAt("oak_door", 10, 65, 10, "door", "east")');
+  assert.equal(step.nextPhase, 'verify');
 });
 
 test('A verified emergency shelter completes only after the bot occupies its protected interior', () => {

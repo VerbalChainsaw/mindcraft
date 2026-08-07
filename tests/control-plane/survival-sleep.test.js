@@ -53,6 +53,7 @@ test('Given an unreachable bed, verified sleep fails without calling Mineflayer 
     x: 4,
     y: 64,
     z: 0,
+    dimension: '',
   });
   assert.equal(bot.lastActionEvidence.retryable, true);
 });
@@ -78,4 +79,41 @@ test('Given a safe reachable bed, verified sleep records entry and wake postcond
   assert.equal(bot.lastActionEvidence.enteredSleep, true);
   assert.equal(bot.lastActionEvidence.woke, true);
   assert.equal(bot.lastActionEvidence.retryable, false);
+});
+
+test('Given an exact structure bed, sleep ignores a closer decoy and verifies the requested dimension', async () => {
+  const { bot, bedPosition } = createBot();
+  bot.game = { dimension: 'overworld' };
+  let searches = 0;
+  bot.findBlocks = () => {
+    searches += 1;
+    return [position(1, 64, 0)];
+  };
+  const navigated = [];
+  let now = 2_000;
+  const result = await goToBed(bot, {
+    exactPosition: bedPosition,
+    expectedDimension: 'overworld',
+    navigate: (_bot, x, y, z) => {
+      navigated.push({ x, y, z });
+      return true;
+    },
+    now: () => now,
+    delay: () => {
+      now += 250;
+      bot.isSleeping = false;
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(searches, 0);
+  assert.deepEqual(navigated, [{ x: 4, y: 64, z: 0 }]);
+  assert.equal(bot.lastActionEvidence.target.dimension, 'overworld');
+
+  const wrongWorld = await goToBed(bot, {
+    exactPosition: bedPosition,
+    expectedDimension: 'the_nether',
+  });
+  assert.equal(wrongWorld, false);
+  assert.equal(bot.lastActionEvidence.outcome, 'bed_search_failed');
 });

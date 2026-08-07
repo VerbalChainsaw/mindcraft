@@ -53,7 +53,7 @@ const CONNECTIVE_PATTERNS = [
   /\bnext\b/gi,
   /\balso\b/gi,
   /\s*;\s*/g,
-  /,\s+and\b/gi,
+  /,\s+and\s+(?=(?:build|make|craft|prepare|go|walk|head|travel|run|use|smelt|harvest|replant|put|store|stash|deposit|come|return|sleep|follow|mine|collect|bring|deliver|give)\b)/gi,
   /,\s+(?=(?:go|walk|head|travel|run|use|smelt|craft|harvest|replant|put|store|stash|deposit|come|return)\b)/gi,
 ];
 
@@ -65,6 +65,49 @@ const SEGMENT_DELIMITER = '\u0000';
 // instead of truncating it to whichever registry item the single-goal parser
 // happens to notice first.
 const COLLECTIVE_DELIVERY = /^(?:please\s+)?(?:make|craft|prepare)\s+(?:me\s+)?([\s\S]+?)(?:,\s*)?(?:and\s+)?then\s+(?:bring|deliver|give)\s+(?:them|those|all(?:\s+of\s+them)?)\s+(?:here|to\s+me)\s*[.!?]*$/i;
+
+function constructionRequiredFunctions(segment) {
+  const text = String(segment || '').toLowerCase();
+  const required = new Set();
+  if (/\b(?:safe|shelter|house|hut|outpost|overnight|inside)\b/.test(text)) {
+    required.add('enclosure');
+    required.add('weather_cover');
+    required.add('access');
+  }
+  if (/\b(?:window|windows|daylight)\b/.test(text)) required.add('daylight');
+  if (/\b(?:light|lighting|lit|torch|torches)\b/.test(text)) required.add('interior_light');
+  if (/\b(?:door|entrance|entry)\b/.test(text)) required.add('access');
+  if (/\b(?:bed|sleep|overnight)\b/.test(text)) required.add('rest');
+  if (/\b(?:crafting table|workbench)\b/.test(text)) required.add('crafting');
+  if (/\b(?:furnace|smelter|stove)\b/.test(text)) required.add('smelting');
+  if (/\b(?:chest|storage)\b/.test(text)) required.add('storage');
+  return [...required].sort();
+}
+
+function attachTypedDependencies(steps) {
+  return steps.map((step, index) => {
+    const predecessor = steps[index - 1];
+    if (predecessor?.entry?.kind === 'construction' && step.entry?.kind === 'sleep') {
+      return {
+        ...step,
+        dependency: {
+          policy: 'requires_success',
+          bindingRequest: { kind: 'structure_fixture', function: 'rest' },
+        },
+      };
+    }
+    if (predecessor?.entry?.kind === 'follow_until' && step.entry?.kind === 'smelt') {
+      return {
+        ...step,
+        dependency: {
+          policy: 'requires_success',
+          bindingRequest: { kind: 'world_block', name: predecessor.entry.target },
+        },
+      };
+    }
+    return step;
+  });
+}
 
 function normalizeMessage(message) {
   return String(message ?? '').slice(0, MAX_MESSAGE_CHARS);
@@ -324,7 +367,11 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
         segment,
         command: null,
         response: '',
-        entry: { kind: 'construction', requester: playerName },
+        entry: {
+          kind: 'construction',
+          requester: playerName,
+          constructionIntent: { requiredFunctions: constructionRequiredFunctions(segment) },
+        },
         segmentIndex,
         requiresModelAssignment: true,
         modelInstruction: directive.modelInstruction || '',
@@ -358,7 +405,7 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   return {
     disposition,
     multiStep: steps.length > 1,
-    steps,
+    steps: attachTypedDependencies(steps),
     unresolved,
   };
 }

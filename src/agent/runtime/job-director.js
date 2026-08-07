@@ -398,6 +398,7 @@ function auditBlueprint(bot, order, inventory) {
   if (!order.blueprint || !order.target) return { valid: false, code: 'not_audited', missing: [], incorrect: [] };
   const anchor = order.target;
   const blueprintPositions = new Map(order.blueprint.cells.map(cell => [`${cell.x}:${cell.y}:${cell.z}`, cell]));
+  const fixturesById = new Map((order.blueprint.fixtures || []).map(fixture => [fixture.id, fixture]));
   const missing = [];
   const incorrect = [];
   let correct = 0;
@@ -407,15 +408,59 @@ function auditBlueprint(bot, order, inventory) {
       && inventory[name] > 0
     )) || 'cobblestone'
     : cell.material;
+  for (const fixture of fixturesById.values()) {
+    for (const offset of fixture.occupiedOffsets || []) {
+      if (offset.x === 0 && offset.y === 0 && offset.z === 0) continue;
+      const x = anchor.x + fixture.anchor.x + offset.x;
+      const y = anchor.y + fixture.anchor.y + offset.y;
+      const z = anchor.z + fixture.anchor.z + offset.z;
+      const current = blockAt(bot, x, y, z);
+      if (!current) return { valid: false, code: 'unloaded', missing: [], incorrect: [] };
+      if (blockMatchesPlacement(bot.registry, fixture.material, current)) continue;
+      if (['water', 'lava'].includes(current.name)) {
+        return { valid: false, code: 'liquid', missing: [], incorrect: [] };
+      }
+      if (isProtectedGameplayBlock(current)) {
+        return { valid: false, code: 'protected', missing: [], incorrect: [] };
+      }
+      if (entityOccupies(bot, x, y, z)) {
+        return { valid: false, code: 'occupied', missing: [], incorrect: [] };
+      }
+      if (!isReplaceableGameplayBlock(current)) {
+        incorrect.push({
+          x,
+          y,
+          z,
+          expected: fixture.material,
+          observed: current.name,
+          index: -1,
+          clearable: isClearableWorksiteBlock(bot, current),
+        });
+      }
+    }
+  }
   for (let index = 0; index < order.blueprint.cells.length; index += 1) {
     const cell = order.blueprint.cells[index];
     const x = anchor.x + cell.x;
     const y = anchor.y + cell.y;
     const z = anchor.z + cell.z;
     const expected = materialFor(cell);
+    const fixture = cell.fixtureId ? fixturesById.get(cell.fixtureId) : null;
     const current = blockAt(bot, x, y, z);
     if (!current) return { valid: false, code: 'unloaded', missing: [], incorrect: [] };
     if (blockMatchesPlacement(bot.registry, expected, current)) {
+      if (fixture) {
+        const fixtureValid = fixture.occupiedOffsets.every(offset => {
+          const part = blockAt(bot, x + offset.x, y + offset.y, z + offset.z);
+          if (!blockMatchesPlacement(bot.registry, fixture.material, part)) return false;
+          const properties = part.getProperties?.() || {};
+          const observedPart = fixture.kind === 'door' ? properties.half : properties.part;
+          return observedPart === offset.part && properties.facing === fixture.facing;
+        });
+        if (!fixtureValid) {
+          return { valid: false, code: 'fixture_state_invalid', missing: [], incorrect: [] };
+        }
+      }
       correct += 1;
       continue;
     }
@@ -480,6 +525,7 @@ function auditBlueprint(bot, order, inventory) {
       supported,
       stage: cell.stage,
       function: cell.function || null,
+      ...(fixture ? { fixture } : {}),
     });
   }
   const botX = Math.floor(bot.entity?.position?.x ?? Infinity);
@@ -716,6 +762,38 @@ function immutableOrderPayload(order) {
   });
 }
 
+function terminalReceiptFor(agent, order, code, finishedAt) {
+  const fixtures = (order?.blueprint?.fixtures || []).map(fixture => ({
+    id: fixture.id,
+    function: fixture.function,
+    material: fixture.material,
+    facing: fixture.facing,
+    position: {
+      x: order.target.x + fixture.anchor.x,
+      y: order.target.y + fixture.anchor.y,
+      z: order.target.z + fixture.anchor.z,
+    },
+  }));
+  const functions = new Set((order?.blueprint?.cells || []).map(cell => cell.function));
+  return {
+    orderId: order.id,
+    phase: order.phase,
+    code,
+    dimension: dimensionName(agent.bot?.game?.dimension),
+    order,
+    structure: order.role === 'builder' && order.kind === 'build'
+      ? {
+          habitable: functions.has('enclosure')
+            && functions.has('weather_cover')
+            && fixtures.some(fixture => fixture.function === 'access')
+            && fixtures.some(fixture => fixture.function === 'rest'),
+          fixtures,
+        }
+      : null,
+    finishedAt,
+  };
+}
+
 export class JobDirector extends RoleDirector {
   constructor(agent, {
     executeCommand = executeAgentCommand,
@@ -730,11 +808,14 @@ export class JobDirector extends RoleDirector {
     this.store = store || new JobStateStore(agent.name);
     this.activeOrder = null;
     this.lastOrder = null;
+    this.lastReceipt = null;
     this.completedOrderIds = new Set();
     this.dispatchGeneration = 0;
     this.activeDispatch = null;
     try {
       const persisted = this.store.load();
+      this.lastReceipt = this.store.terminalReceipt || null;
+      this.lastOrder = this.lastReceipt?.order || null;
       if (this.store.lastError) {
         this.setStatus('failed', 'job_state_load_failed', null, this.store.lastError, false);
       } else if (persisted && !TERMINAL_PHASES.has(persisted.phase)) {
@@ -877,9 +958,10 @@ export class JobDirector extends RoleDirector {
       updatedAt: this.now(),
     });
     this.lastOrder = cancelled;
+    this.lastReceipt = terminalReceiptFor(this.agent, cancelled, 'job_cancelled', this.now());
     this.activeOrder = null;
     this.invalidateDispatch();
-    this.store.save(null);
+    this.store.save(null, this.lastReceipt);
     this.setStatus('cancelled', 'job_cancelled', cancelled.target?.name || null, reason, false);
     this.beginTerminalHandoff(cancelled, 'job_cancelled');
     return true;
@@ -889,6 +971,13 @@ export class JobDirector extends RoleDirector {
     this.dispatchGeneration += 1;
     this.activeDispatch = null;
     this.inFlight = false;
+  }
+
+  acknowledgeTerminalReceipt(orderId) {
+    if (!orderId || this.lastReceipt?.orderId !== orderId) return false;
+    this.lastReceipt = null;
+    this.store.save(this.activeOrder, null);
+    return true;
   }
 
   ownsDispatch(token) {
@@ -978,10 +1067,11 @@ export class JobDirector extends RoleDirector {
       updatedAt: this.now(),
     });
     this.lastOrder = terminal;
+    this.lastReceipt = terminalReceiptFor(this.agent, terminal, code, this.now());
     if (phase === 'complete') this.completedOrderIds.add(terminal.id);
     this.activeOrder = null;
     this.invalidateDispatch();
-    this.store.save(null);
+    this.store.save(null, this.lastReceipt);
     this.nextAttemptAt = this.now() + JOB_RETRY_MS;
     this.setStatus(phase, code, terminal.target?.name || null, detail || code, retryable);
     this.agent.publishBehaviorEvent?.({

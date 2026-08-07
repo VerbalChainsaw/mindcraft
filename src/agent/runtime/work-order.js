@@ -21,6 +21,9 @@ const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_REQUESTER = /^[A-Za-z0-9_ -]{0,32}$/;
 const MAX_BLUEPRINT_CELLS = 4096;
+const MAX_BLUEPRINT_FIXTURES = 64;
+const FIXTURE_KINDS = new Set(['bed', 'door']);
+const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 // A preemption is not the work order failing. The bot was mid-swing when a
 // creeper arrived: nothing about the order became wrong, and the same step is
 // still the right next step. Folding one in as a retryable failure burned an
@@ -108,6 +111,10 @@ function normalizeBlueprint(blueprint) {
     const key = `${cell.x}:${cell.y}:${cell.z}`;
     if (occupied.has(key)) throw new TypeError('Blueprint contains a duplicate cell.');
     occupied.add(key);
+    const fixtureId = cell.fixtureId == null ? '' : boundedText(cell.fixtureId, 64);
+    if (fixtureId && !CANONICAL_NAME.test(fixtureId)) throw new TypeError('Blueprint fixture id must be canonical.');
+    const facing = cell.facing == null ? '' : boundedText(cell.facing, 16);
+    if (facing && !HORIZONTAL_FACINGS.has(facing)) throw new TypeError('Blueprint fixture facing is invalid.');
     return Object.freeze({
       x: cell.x,
       y: cell.y,
@@ -116,9 +123,82 @@ function normalizeBlueprint(blueprint) {
       ...(hasStage ? { stage } : {}),
       ...(cellFunction ? { function: cellFunction } : {}),
       ...(materialFamily ? { materialFamily } : {}),
+      ...(fixtureId ? { fixtureId } : {}),
+      ...(facing ? { facing } : {}),
     });
   });
-  return Object.freeze({ id, width, depth, height, cells: Object.freeze(cells) });
+  const fixtureOffsets = (values, label) => {
+    if (!Array.isArray(values) || values.length === 0 || values.length > 4) {
+      throw new TypeError(`Blueprint fixture ${label} are invalid.`);
+    }
+    return Object.freeze(values.map(value => {
+      if (
+        !value
+        || !Number.isInteger(value.x)
+        || !Number.isInteger(value.y)
+        || !Number.isInteger(value.z)
+        || Math.max(Math.abs(value.x), Math.abs(value.y), Math.abs(value.z)) > 2
+      ) throw new TypeError(`Blueprint fixture ${label} contain an invalid offset.`);
+      const part = value.part == null ? '' : boundedText(value.part, 16);
+      if (part && !CANONICAL_NAME.test(part)) throw new TypeError('Blueprint fixture part must be canonical.');
+      return Object.freeze({ x: value.x, y: value.y, z: value.z, ...(part ? { part } : {}) });
+    }));
+  };
+  const rawFixtures = Array.isArray(blueprint.fixtures) ? blueprint.fixtures : [];
+  if (rawFixtures.length > MAX_BLUEPRINT_FIXTURES) throw new TypeError('Blueprint has too many logical fixtures.');
+  const fixtureIds = new Set();
+  const fixtures = rawFixtures.map(raw => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('Blueprint fixture is invalid.');
+    const fixtureId = boundedText(raw.id, 64);
+    const kind = boundedText(raw.kind, 16);
+    const material = boundedText(raw.material, 64);
+    const fixtureFunction = boundedText(raw.function, 64);
+    const facing = boundedText(raw.facing, 16);
+    if (
+      !CANONICAL_NAME.test(fixtureId)
+      || fixtureIds.has(fixtureId)
+      || !FIXTURE_KINDS.has(kind)
+      || !CANONICAL_NAME.test(material)
+      || !CANONICAL_NAME.test(fixtureFunction)
+      || !HORIZONTAL_FACINGS.has(facing)
+    ) throw new TypeError('Blueprint fixture identity is invalid.');
+    fixtureIds.add(fixtureId);
+    const anchor = raw.anchor;
+    if (
+      !anchor
+      || !Number.isInteger(anchor.x)
+      || !Number.isInteger(anchor.y)
+      || !Number.isInteger(anchor.z)
+    ) throw new TypeError('Blueprint fixture anchor is invalid.');
+    const occupiedOffsets = fixtureOffsets(raw.occupiedOffsets, 'occupied offsets');
+    const supportOffsets = fixtureOffsets(raw.supportOffsets, 'support offsets');
+    const anchorCell = cells.find(cell => (
+      cell.x === anchor.x
+      && cell.y === anchor.y
+      && cell.z === anchor.z
+      && cell.fixtureId === fixtureId
+      && cell.material === material
+    ));
+    if (!anchorCell) throw new TypeError('Blueprint fixture has no matching placement cell.');
+    return Object.freeze({
+      id: fixtureId,
+      kind,
+      material,
+      function: fixtureFunction,
+      facing,
+      anchor: Object.freeze({ x: anchor.x, y: anchor.y, z: anchor.z }),
+      occupiedOffsets,
+      supportOffsets,
+    });
+  });
+  return Object.freeze({
+    id,
+    width,
+    depth,
+    height,
+    cells: Object.freeze(cells),
+    fixtures: Object.freeze(fixtures),
+  });
 }
 
 /**

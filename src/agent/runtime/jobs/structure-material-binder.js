@@ -249,11 +249,17 @@ export function bindStructureAccessoryMaterials(order, bot, {
   ));
   if (!changed) return order;
 
+  const reboundFixtures = (order.blueprint.fixtures || []).map(fixture => {
+    const anchorCell = reboundCells.find(cell => cell.fixtureId === fixture.id);
+    return anchorCell ? { ...fixture, material: anchorCell.material } : fixture;
+  });
+
   return createWorkOrder({
     ...order,
     blueprint: {
       ...order.blueprint,
       cells: reboundCells,
+      fixtures: reboundFixtures,
     },
     updatedAt: Date.now(),
   });

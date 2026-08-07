@@ -43,6 +43,10 @@ test('splitAgendaSegments does not split on a bare comma', () => {
     splitAgendaSegments('get 5 logs, please'),
     ['get 5 logs, please'],
   );
+  assert.deepEqual(
+    splitAgendaSegments('build an outpost with a bed, a furnace, and a chest, and come here'),
+    ['build an outpost with a bed, a furnace, and a chest', 'come here'],
+  );
 });
 
 test('directiveToAgendaEntry maps agenda-worthy commands to typed entries', () => {
@@ -160,10 +164,43 @@ test('parsePlayerAgenda preserves custom construction as a barrier before sleep'
   assert.ok(plan);
   assert.equal(plan.multiStep, true);
   assert.deepEqual(plan.steps.map(step => step.entry), [
-    { kind: 'construction', requester: 'Gabriel' },
+    {
+      kind: 'construction',
+      requester: 'Gabriel',
+      constructionIntent: {
+        requiredFunctions: ['access', 'daylight', 'enclosure', 'rest', 'weather_cover'],
+      },
+    },
     { kind: 'sleep', requester: 'Gabriel' },
   ]);
+  assert.deepEqual(plan.steps[1].dependency, {
+    policy: 'requires_success',
+    bindingRequest: { kind: 'structure_fixture', function: 'rest' },
+  });
   assert.equal(plan.steps[0].requiresModelAssignment, true);
+  assert.deepEqual(plan.unresolved, []);
+});
+
+test('parsePlayerAgenda keeps the complete overnight outpost contract in one construction intent', () => {
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    'Build a small safe overnight outpost with a clear entrance, windows, lighting, a door, a bed, a crafting table, a furnace, and a chest. Then go inside and sleep in the bed.',
+    {},
+  );
+
+  assert.ok(plan);
+  assert.deepEqual(plan.steps[0].entry.constructionIntent.requiredFunctions, [
+    'access',
+    'crafting',
+    'daylight',
+    'enclosure',
+    'interior_light',
+    'rest',
+    'smelting',
+    'storage',
+    'weather_cover',
+  ]);
+  assert.deepEqual(plan.steps.map(step => step.entry.kind), ['construction', 'sleep']);
   assert.deepEqual(plan.unresolved, []);
 });
 
