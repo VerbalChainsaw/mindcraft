@@ -6084,7 +6084,14 @@ function findCollectibleBlockSelection(bot, blockTypes, range=64, exclude=null, 
         collapseVerticalColumns ? MAX_COLLECTION_SCAN_CANDIDATES : MAX_COLLECTION_CANDIDATES,
     ).filter(Boolean);
     const blocks = collectionCandidateShortlist(bot, scanned, collapseVerticalColumns);
-    return { blocks, selection: selectCollectionCandidate(bot, blocks) };
+    // Probe with the same no-pillar locomotion policy used by the eventual
+    // CollectBlock tree queue. An empty target set keeps route excavation
+    // disabled during selection; execution may additionally break only the
+    // explicitly bound tree targets.
+    const routeMovements = targetScopedCollectionMovements(bot, [], {
+        allowPillars: false,
+    });
+    return { blocks, selection: selectCollectionCandidate(bot, blocks, routeMovements) };
 }
 
 export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=null) {
