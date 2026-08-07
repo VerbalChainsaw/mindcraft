@@ -6,6 +6,7 @@ import { Vec3 } from 'vec3';
 
 import collectBlockRuntime from '../packages/minecraft-runtime/mineflayer-collectblock/lib/index.js';
 import {
+    observedSupportedStandingCell,
     selectMiningDeadlinePrefix,
     selectMiningRouteTool,
 } from '../src/agent/library/skills.js';
@@ -17,6 +18,32 @@ import {
 } from '../src/agent/runtime/mining-corridor-planner.js';
 
 const key = position => `${position.x}:${position.y}:${position.z}`;
+
+test('observed standing geometry accepts a body touching but not intersecting bamboo', () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox, shapes) => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes, position });
+    };
+    put(2696, 51, 2701, 'podzol', 'block', [[0, 0, 0, 1, 1, 1]]);
+    put(2696, 52, 2701, 'bamboo', 'block', [[0.15625, 0, 0.15625, 0.34375, 1, 0.34375]]);
+    put(2696, 53, 2701, 'bamboo', 'block', [[0.15625, 0, 0.15625, 0.34375, 1, 0.34375]]);
+    const bot = {
+        entity: {
+            position: new Vec3(2696.3309871781084, 52, 2701.64375),
+            width: 0.6,
+            height: 1.8,
+        },
+        blockAt(position) {
+            return blocks.get(key(position)) || null;
+        },
+    };
+
+    assert.deepEqual(observedSupportedStandingCell(bot), new Vec3(2696, 52, 2701));
+
+    bot.entity.position = new Vec3(2696.25, 52, 2701.25);
+    assert.equal(observedSupportedStandingCell(bot), null);
+});
 
 test('corridor binding preserves the ore-tier pick when a capable stone pick is carried', () => {
     const stonePick = {

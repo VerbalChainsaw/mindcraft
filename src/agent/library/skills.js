@@ -1289,6 +1289,52 @@ function isCollectionStandingCellClear(block) {
     );
 }
 
+function observedBodyIntersectsBlock(bot, block) {
+    const position = bot.entity?.position;
+    if (!position || !block) return true;
+    if (block.boundingBox === 'empty') return false;
+    if (!block.position || !Array.isArray(block.shapes)) return true;
+
+    const width = Number(bot.entity?.width);
+    const height = Number(bot.entity?.height);
+    const halfWidth = Number.isFinite(width) && width > 0 ? width / 2 : 0.3;
+    const bodyHeight = Number.isFinite(height) && height > 0 ? height : 1.8;
+    const epsilon = 1e-6;
+    const body = {
+        minX: position.x - halfWidth,
+        maxX: position.x + halfWidth,
+        minY: position.y,
+        maxY: position.y + bodyHeight,
+        minZ: position.z - halfWidth,
+        maxZ: position.z + halfWidth,
+    };
+
+    return block.shapes.some(shape => {
+        if (!Array.isArray(shape) || shape.length < 6 || !shape.every(Number.isFinite)) return true;
+        const minX = block.position.x + shape[0];
+        const minY = block.position.y + shape[1];
+        const minZ = block.position.z + shape[2];
+        const maxX = block.position.x + shape[3];
+        const maxY = block.position.y + shape[4];
+        const maxZ = block.position.z + shape[5];
+        return body.minX < maxX - epsilon
+            && body.maxX > minX + epsilon
+            && body.minY < maxY - epsilon
+            && body.maxY > minY + epsilon
+            && body.minZ < maxZ - epsilon
+            && body.maxZ > minZ + epsilon;
+    });
+}
+
+function isObservedStandingCellClear(bot, block) {
+    return Boolean(
+        block
+        && !isLiquidGameplayBlock(block)
+        && !isHazardousGameplayBlock(block)
+        && !observedBodyIntersectsBlock(bot, block)
+    );
+}
+
 function physicallyOccupiesStandingCell(bot, expected) {
     const position = bot.entity?.position;
     if (!position || !expected) return false;
@@ -1303,13 +1349,13 @@ function physicallyOccupiesStandingCell(bot, expected) {
         || Math.abs(position.y - expected.y) > 0.2
     ) return false;
     return Boolean(
-        isCollectionStandingCellClear(bot.blockAt(expected))
-        && isCollectionStandingCellClear(bot.blockAt(expected.offset(0, 1, 0)))
+        isObservedStandingCellClear(bot, bot.blockAt(expected))
+        && isObservedStandingCellClear(bot, bot.blockAt(expected.offset(0, 1, 0)))
         && isAnchoredGameplaySupport(bot, bot.blockAt(expected.offset(0, -1, 0)))
     );
 }
 
-function observedSupportedStandingCell(bot) {
+export function observedSupportedStandingCell(bot) {
     const floored = bot.entity?.position?.floored?.();
     if (!floored) return null;
     return [floored, floored.offset(0, 1, 0)]
