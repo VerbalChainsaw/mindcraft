@@ -269,6 +269,28 @@ test('daylight keeps an exact sleep step waiting without spending attempts, incl
         sourceEntryId: 'agenda-legacy-construction',
       },
       evidence: { code: 'skill_not_sleep_time', detail: 'Daylight.' },
+    }, {
+      id: 'agenda-legacy-unconfirmed-sleep',
+      kind: 'sleep',
+      requester: 'Gabriel',
+      state: 'failed',
+      attempts: 1,
+      finishedAt: 95_000,
+      dependsOnEntryId: 'agenda-legacy-construction',
+      dependencyPolicy: 'requires_success',
+      bindingRequest: { kind: 'structure_fixture', function: 'rest' },
+      bindingConstraint: {
+        kind: 'structure_fixture',
+        function: 'rest',
+        fixtureId: 'bed_1',
+        structureOrderId: 'builder-legacy-outpost',
+        position: { x: 10, y: 64, z: 20 },
+        dimension: 'overworld',
+        material: 'red_bed',
+        facing: 'south',
+        sourceEntryId: 'agenda-legacy-construction',
+      },
+      evidence: { code: 'skill_sleep_not_confirmed', detail: 'The old primitive missed instant dawn.' },
     }],
     save(entries) { repaired = JSON.parse(JSON.stringify(entries)); },
   };
@@ -278,6 +300,10 @@ test('daylight keeps an exact sleep step waiting without spending attempts, incl
   assert.equal(rearmed.attempts, 0);
   assert.equal(rearmed.bindingConstraint.structureOrderId, 'builder-legacy-outpost');
   assert.equal(repaired[0].state, 'pending', 'legacy repair must be durable before redispatch');
+  const rearmedUnconfirmed = legacy.entries[1];
+  assert.equal(rearmedUnconfirmed.state, 'pending');
+  assert.equal(rearmedUnconfirmed.attempts, 1, 'ambiguous activation keeps its productive attempt');
+  assert.equal(rearmedUnconfirmed.bindingConstraint.structureOrderId, 'builder-legacy-outpost');
 });
 
 test('a restored active construction re-arms only its exact legacy Operator-stopped executor', () => {

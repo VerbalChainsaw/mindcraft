@@ -23,6 +23,10 @@ const DISPATCH_COOLDOWN_MS = 750;
 const REJECTED_COOLDOWN_MS = 5_000;
 const MAX_ENTRY_ATTEMPTS = 2;
 const WAITABLE_DIRECT_OUTCOMES = new Set(['skill_not_sleep_time']);
+const LEGACY_REARMABLE_SLEEP_OUTCOMES = new Set([
+  ...WAITABLE_DIRECT_OUTCOMES,
+  'skill_sleep_not_confirmed',
+]);
 const JOB_ROLE_FOR_KIND = Object.freeze({
   mine: 'miner',
   harvest: 'lumberjack',
@@ -108,14 +112,15 @@ export class AgendaDirector {
       });
       // Older versions treated daylight as a failed sleep action and could
       // persist an otherwise valid bound step as terminal. Re-arm only that
-      // exact legacy outcome. Its predecessor and bed binding stay intact; the
-      // old attempt charges are removed because no productive action failed.
+      // exact legacy outcomes. Its predecessor and bed binding stay intact.
+      // Daylight charges are removed; an ambiguous activation keeps its one
+      // productive attempt and receives only the remaining bounded attempt.
       let repairedLegacyWait = false;
       this.entries = this.entries.map(entry => {
         if (
           entry.kind !== 'sleep'
           || entry.state !== 'failed'
-          || !WAITABLE_DIRECT_OUTCOMES.has(entry.evidence?.code)
+          || !LEGACY_REARMABLE_SLEEP_OUTCOMES.has(entry.evidence?.code)
         ) return entry;
         repairedLegacyWait = true;
         return normalizeAgendaEntry({
@@ -124,7 +129,7 @@ export class AgendaDirector {
           startedAt: null,
           finishedAt: null,
           executorId: '',
-          attempts: 0,
+          attempts: WAITABLE_DIRECT_OUTCOMES.has(entry.evidence?.code) ? 0 : entry.attempts,
         });
       });
       if (repairedLegacyWait) this.store.save(this.entries);

@@ -113,6 +113,7 @@ test('Given Mineflayer sleep rejections, evidence preserves the physical cause a
   const cases = [
     ['there are monsters nearby', 'hostiles_near_bed', true],
     ["it's not night and it's not a thunderstorm", 'not_sleep_time', true],
+    ['bot is not sleeping', 'sleep_not_confirmed', true],
     ["there's only half bed", 'bed_incomplete', false],
     ['wrong block : not a bed block', 'bed_changed', false],
   ];

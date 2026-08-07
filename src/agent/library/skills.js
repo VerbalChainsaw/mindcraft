@@ -14326,7 +14326,7 @@ function classifySleepRejection(error) {
         'wrong block : not a bed block': { outcome: 'bed_changed', retryable: false },
         'already sleeping': { outcome: 'sleep_state_conflict', retryable: false },
         'already awake': { outcome: 'sleep_state_conflict', retryable: false },
-        'bot is not sleeping': { outcome: 'sleep_not_confirmed', retryable: false },
+        'bot is not sleeping': { outcome: 'sleep_not_confirmed', retryable: true },
     };
     return {
         message,
