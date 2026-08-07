@@ -101,6 +101,10 @@ function normalizeBlueprint(blueprint) {
     if (cellFunction && !CANONICAL_NAME.test(cellFunction)) {
       throw new TypeError('Blueprint cell function must be canonical.');
     }
+    const materialFamily = cell.materialFamily == null ? '' : boundedText(cell.materialFamily, 64);
+    if (materialFamily && !CANONICAL_NAME.test(materialFamily)) {
+      throw new TypeError('Blueprint cell material family must be canonical.');
+    }
     const key = `${cell.x}:${cell.y}:${cell.z}`;
     if (occupied.has(key)) throw new TypeError('Blueprint contains a duplicate cell.');
     occupied.add(key);
@@ -111,6 +115,7 @@ function normalizeBlueprint(blueprint) {
       material,
       ...(hasStage ? { stage } : {}),
       ...(cellFunction ? { function: cellFunction } : {}),
+      ...(materialFamily ? { materialFamily } : {}),
     });
   });
   return Object.freeze({ id, width, depth, height, cells: Object.freeze(cells) });

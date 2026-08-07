@@ -476,7 +476,11 @@ const modes_list = [
         prev_item: null,
         noticed_at: -1,
         update: async function (agent) {
-            let item = world.getNearestEntityWhere(agent.bot, entity => entity.name === 'item', 8);
+            let item = world.getNearestEntityWhere(
+                agent.bot,
+                entity => entity.name === 'item' && !skills.isIgnoredPickupEntity(agent.bot, entity),
+                8,
+            );
             let empty_inv_slots = agent.bot.inventory.emptySlotCount();
             if (item && item !== this.prev_item && await world.isClearPath(agent.bot, item) && empty_inv_slots > 1) {
                 if (this.noticed_at === -1) {

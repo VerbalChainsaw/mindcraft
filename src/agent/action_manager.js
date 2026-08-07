@@ -149,6 +149,14 @@ function normalizeActionOwner(owner) {
     return Object.hasOwn(ACTION_OWNER_PRIORITY, normalized) ? normalized : 'player';
 }
 
+function actionAttemptSignature(actionLabel, requestContext = null) {
+    return JSON.stringify([
+        String(actionLabel || ''),
+        String(requestContext?.selectedSkill || ''),
+        Array.isArray(requestContext?.args) ? requestContext.args : [],
+    ]);
+}
+
 export class ActionManager {
     constructor(agent) {
         this.agent = agent;
@@ -204,7 +212,7 @@ export class ActionManager {
             && CRITICAL_REFLEX_ACTIONS.has(String(label || ''));
     }
 
-    recordActionAttempt(actionLabel, actionOwner) {
+    recordActionAttempt(actionLabel, actionOwner, requestContext = null) {
         const now = Date.now();
         this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
             now - attempt.startedAt <= ACTION_PATTERN_WINDOW_MS
@@ -220,9 +228,10 @@ export class ActionManager {
         if (this.isCriticalReflexAction(actionOwner, actionLabel)) return null;
 
         const position = actionPosition(this.agent);
+        const signature = actionAttemptSignature(actionLabel, requestContext);
         const repeats = this.recentActionAttempts.filter(attempt => (
             attempt.owner === actionOwner
-            && attempt.label === actionLabel
+            && attempt.signature === signature
             && isSameActionArea(attempt.position, position)
         ));
         if (repeats.length >= ACTION_PATTERN_MAX_REPEATS) {
@@ -231,6 +240,7 @@ export class ActionManager {
 
         this.recentActionAttempts.push({
             label: actionLabel,
+            signature,
             owner: actionOwner,
             position,
             startedAt: now,
@@ -238,10 +248,11 @@ export class ActionManager {
         return null;
     }
 
-    recordActionProgress(actionLabel, actionOwner, result) {
+    recordActionProgress(actionLabel, actionOwner, result, requestContext = null) {
         const target = actionProgressTarget(result);
         if (!target) return false;
-        const key = JSON.stringify([actionOwner, actionLabel]);
+        const signature = actionAttemptSignature(actionLabel, requestContext);
+        const key = JSON.stringify([actionOwner, signature]);
         const previousTarget = this.lastProgressTargetByAction.get(key);
         this.lastProgressTargetByAction.set(key, target);
         if (previousTarget === target) return false;
@@ -251,7 +262,7 @@ export class ActionManager {
         // a mining corridor), not the same no-progress action reclaiming one
         // patch of ground.
         this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
-            attempt.owner !== actionOwner || attempt.label !== actionLabel
+            attempt.owner !== actionOwner || attempt.signature !== signature
         ));
         return true;
     }
@@ -448,7 +459,7 @@ export class ActionManager {
                 return { success: false, message: result.detail, interrupted: false, timedout: true, result };
             }
 
-            const repeatedPattern = this.recordActionAttempt(actionLabel, actionOwner);
+            const repeatedPattern = this.recordActionAttempt(actionLabel, actionOwner, commandRequest);
             if (repeatedPattern) {
                 console.warn(`Repeated action pattern detected for '${actionLabel}' (${repeatedPattern.repeats} starts within ${ACTION_PATTERN_WINDOW_MS}ms).`);
                 this.cancelResume();
@@ -463,6 +474,8 @@ export class ActionManager {
                         repeats: repeatedPattern.repeats,
                         windowMs: ACTION_PATTERN_WINDOW_MS,
                         position: repeatedPattern.position,
+                        selectedSkill: commandRequest?.selectedSkill || null,
+                        args: commandRequest?.args || [],
                     },
                     retryable: false,
                     startedAt,
@@ -587,7 +600,7 @@ export class ActionManager {
                 startedAt,
             });
             this.lastResult = result;
-            this.recordActionProgress(actionLabel, actionOwner, result);
+            this.recordActionProgress(actionLabel, actionOwner, result, commandRequest);
             this.agent.recordActionResult?.(result);
             return { success: result.phase === 'succeeded', message: output, interrupted, timedout, result };
         } catch (err) {

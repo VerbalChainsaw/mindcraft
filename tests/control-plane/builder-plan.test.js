@@ -8,6 +8,7 @@ import {
   nextBuilderStep,
 } from '../../src/agent/runtime/jobs/builder-plan.js';
 import { expandStructureDesign } from '../../src/agent/runtime/jobs/structure-design.js';
+import { bindStructureAccessoryMaterials } from '../../src/agent/runtime/jobs/structure-material-binder.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 import { getCommandDocs } from '../../src/agent/commands/index.js';
 
@@ -126,6 +127,23 @@ test('general construction compiler creates bounded supported shapes with a safe
   assert.equal(capacity.nextPhase, 'acquire');
   assert.equal(capacity.code, 'inventory_capacity_release_required');
 
+  const buildCapacity = nextBuilderStep(
+    { ...order, phase: 'acquire' },
+    {
+      inventory: {},
+      freeSlots: 0,
+      deposit: { mode: 'inventory' },
+      blueprintAudit: {
+        valid: true,
+        incorrect: [],
+        missing: [{ x: 10, y: 64, z: -4, material: 'stone_bricks', supported: true }],
+      },
+    },
+  );
+  assert.equal(buildCapacity.command, '!releaseInventoryWorkingSlots("stone_bricks", 2)');
+  assert.equal(buildCapacity.nextPhase, 'acquire');
+  assert.equal(buildCapacity.code, 'inventory_capacity_release_required');
+
   const continueMining = nextBuilderStep(
     { ...order, phase: 'acquire' },
     {
@@ -181,6 +199,102 @@ test('general construction compiler creates bounded supported shapes with a safe
   );
   assert.equal(carriedOutOfSequence.phase, 'execute');
   assert.equal(carriedOutOfSequence.code, 'carried_material_ready');
+});
+
+test('generic fixture defaults bind once to the locally feasible registry family member', () => {
+  const items = {
+    1: { id: 1, name: 'oak_door' },
+    2: { id: 2, name: 'birch_door' },
+    3: { id: 3, name: 'oak_planks' },
+    4: { id: 4, name: 'birch_planks' },
+    5: { id: 5, name: 'oak_log' },
+    6: { id: 6, name: 'birch_log' },
+    7: { id: 7, name: 'white_bed' },
+    8: { id: 8, name: 'brown_bed' },
+    9: { id: 9, name: 'white_wool' },
+    10: { id: 10, name: 'brown_wool' },
+  };
+  const blocks = {
+    11: { id: 11, name: 'oak_door' },
+    12: { id: 12, name: 'birch_door' },
+    15: { id: 15, name: 'oak_log' },
+    16: { id: 16, name: 'birch_log' },
+    17: { id: 17, name: 'white_bed' },
+    18: { id: 18, name: 'brown_bed' },
+  };
+  const bot = {
+    entity: { position: { x: 0, y: 64, z: 0, distanceTo: position => Math.hypot(position.x, position.y - 64, position.z) } },
+    inventory: { items: () => [] },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks,
+      blocksByName: Object.fromEntries(Object.values(blocks).map(block => [block.name, block])),
+      recipes: {
+        1: [{ inShape: [[3, 3], [3, 3], [3, 3]], result: { id: 1, count: 3 } }],
+        2: [{ inShape: [[4, 4], [4, 4], [4, 4]], result: { id: 2, count: 3 } }],
+        7: [{ inShape: [[9, 9, 9], [4, 4, 4]], result: { id: 7, count: 1 } }],
+        8: [{ inShape: [[10, 10, 10], [4, 4, 4]], result: { id: 8, count: 1 } }],
+      },
+    },
+    findBlock({ matching }) {
+      return matching === 16 ? { position: { x: 4, y: 64, z: 0 } } : null;
+    },
+    blockAt() { return { name: 'air' }; },
+  };
+  const order = createWorkOrder({
+    id: 'builder-family-binding',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    target: { name: 'construction_site', x: 10, y: 64, z: 10 },
+    quota: 1,
+    blueprint: {
+      id: 'family_binding',
+      width: 1,
+      depth: 1,
+      height: 1,
+      cells: [{ x: 0, y: 0, z: 0, material: 'oak_door', stage: 0, function: 'access' }],
+    },
+  });
+  const planItem = (_bot, { target }) => ({
+    status: 'ready',
+    actions: [{
+      kind: 'collect',
+      capability: {
+        arguments: { source: target === 'birch_door' ? 'birch_log' : 'oak_log' },
+        cost: 8,
+      },
+    }],
+  });
+
+  const bound = bindStructureAccessoryMaterials(order, bot, { planItem });
+  assert.equal(bound.blueprint.cells[0].material, 'birch_door');
+  assert.equal(bound.blueprint.cells[0].materialFamily, 'wooden_door');
+  assert.equal(bound.id, order.id);
+
+  const discoveredAlternative = bindStructureAccessoryMaterials(createWorkOrder({
+    ...order,
+    blueprint: {
+      id: 'family_rebinding',
+      width: 2,
+      depth: 1,
+      height: 1,
+      cells: [
+        { x: 0, y: 0, z: 0, material: 'birch_door', materialFamily: 'wooden_door', stage: 0, function: 'access' },
+        { x: 1, y: 0, z: 0, material: 'white_bed', materialFamily: 'bed', stage: 0, function: 'rest' },
+      ],
+    },
+    quota: 2,
+  }), bot, { planItem, alternativeOutput: 'brown_wool' });
+  assert.equal(discoveredAlternative.blueprint.cells[0].material, 'birch_door');
+  assert.equal(discoveredAlternative.blueprint.cells[0].materialFamily, 'wooden_door');
+  assert.equal(discoveredAlternative.blueprint.cells[1].material, 'brown_bed');
+  assert.equal(discoveredAlternative.blueprint.cells[1].materialFamily, 'bed');
+  assert.equal(
+    bindStructureAccessoryMaterials(discoveredAlternative, bot, { planItem, alternativeOutput: 'brown_wool' }),
+    discoveredAlternative,
+  );
 });
 
 test('general construction compiler rejects unknown, excessive, and unsafe room geometry', () => {

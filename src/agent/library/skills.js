@@ -1,6 +1,11 @@
 import * as mc from "../../utils/mcdata.js";
 import * as world from "./world.js";
 import { cookingOutputForFood, isCookableFood } from '../../utils/food-semantics.js';
+import {
+    entityHarvestOutput,
+    entityHarvestSources,
+    entityMatchesHarvestSource,
+} from '../../utils/entity-harvest-semantics.js';
 import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.js';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
@@ -4144,6 +4149,294 @@ export async function attackNearest(bot, mobType, kill=true) {
     return false;
 }
 
+function loadedEntityHarvestCandidates(bot, source) {
+    const origin = bot.entity?.position;
+    return Object.values(bot.entities || {})
+        .filter(entity => entityMatchesHarvestSource(entity, source))
+        .filter(entity => entity.position && origin)
+        .sort((left, right) => (
+            origin.distanceTo(left.position) - origin.distanceTo(right.position)
+            || left.id - right.id
+        ));
+}
+
+function entityHarvestSearchWaypoints(origin, range) {
+    const step = Math.min(64, Math.max(32, Math.floor(range / 3)));
+    const rings = Math.max(1, Math.ceil(range / step));
+    const waypoints = [];
+    for (let ring = 1; ring <= rings; ring += 1) {
+        const radius = ring * step;
+        const offsets = [
+            [radius, 0], [radius, radius], [0, radius], [-radius, radius],
+            [-radius, 0], [-radius, -radius], [0, -radius], [radius, -radius],
+        ];
+        for (const [dx, dz] of offsets) {
+            if (Math.hypot(dx, dz) <= range + 0.5) {
+                waypoints.push({ x: origin.x + dx, z: origin.z + dz });
+            }
+        }
+    }
+    return waypoints;
+}
+
+function createEntityHarvestSearch(origin, range) {
+    return {
+        origin: { x: origin.x, y: origin.y, z: origin.z },
+        waypoints: entityHarvestSearchWaypoints(origin, range),
+        cursor: 0,
+        attempts: 0,
+        relocations: 0,
+        distanceMoved: 0,
+        lastMovementOutcome: null,
+    };
+}
+
+async function relocateEntityHarvestSearch(bot, sourceName, search) {
+    while (
+        !bot.interrupt_code
+        && remainingActionTimeMs() > 0
+        && search.cursor < search.waypoints.length
+    ) {
+        const waypoint = search.waypoints[search.cursor++];
+        const before = bot.entity?.position?.clone?.();
+        if (!before) return false;
+        search.attempts += 1;
+        log(
+            bot,
+            `No loaded ${sourceName} is harvestable here. Searching the next covered region `
+            + `(${search.cursor}/${search.waypoints.length}).`,
+        );
+        const reached = await goToGoal(
+            bot,
+            new pf.goals.GoalXZ(Math.floor(waypoint.x), Math.floor(waypoint.z)),
+            { movements: () => safeMovements(bot) },
+        );
+        const after = bot.entity?.position;
+        const moved = after?.distanceTo(before) || 0;
+        search.distanceMoved += moved;
+        search.lastMovementOutcome = bot.lastActionEvidence?.outcome || (reached ? 'reached' : 'blocked');
+        if (bot.interrupt_code) return false;
+        if (!reached || moved < MIN_COLLECTION_RESCAN_PROGRESS) continue;
+        search.relocations += 1;
+        await interruptibleDelay(bot, 350);
+        log(bot, `Reached a distinct entity-search region after ${moved.toFixed(1)} blocks; rescanning.`);
+        return true;
+    }
+    return false;
+}
+
+async function collectEntityHarvestDrops(bot, outputName, range) {
+    const before = inventoryCount(bot, outputName);
+    const candidates = droppedItemCandidates(
+        bot,
+        Math.max(8, Math.min(32, Number(range) || 12)),
+        item => item.name === outputName,
+    );
+    if (candidates.length === 0) return 0;
+    await collectDroppedItemQueue(bot, candidates, {
+        kind: 'entity_harvest_pickup',
+        requireAll: false,
+        successMessage: count => `Recovered ${count} ${outputName} from the entity harvest.`,
+    });
+    return Math.max(0, inventoryCount(bot, outputName) - before);
+}
+
+/**
+ * Harvest a registry-valid entity drop through its versioned mechanic. Source
+ * search is bounded and uses normal native navigation; the action succeeds
+ * only when the requested inventory effect is physically observed.
+ */
+export async function harvestEntityDrop(bot, sourceName, outputName, method='shear', count=1, range=64, allowAlternative=false) {
+    const requested = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
+    const boundedRange = Math.max(16, Math.min(512, Math.floor(Number(range) || 64)));
+    const source = entityHarvestSources(bot.registry, outputName)
+        .find(candidate => candidate.entity === sourceName && candidate.method === method);
+    if (!source) {
+        setActionEvidence(bot, {
+            kind: 'entity_harvest',
+            outcome: 'unsupported_source',
+            target: { source: sourceName, output: outputName, method },
+            retryable: false,
+        });
+        log(bot, `${sourceName} is not a verified ${method} source for ${outputName}.`);
+        return false;
+    }
+
+    const startedAt = Date.now();
+    const initialCount = inventoryCount(bot, outputName);
+    const desiredCount = initialCount + requested;
+    const origin = bot.entity?.position?.clone?.();
+    if (!origin) return false;
+    const attempted = new Set();
+    const search = createEntityHarvestSearch(origin, boundedRange);
+    let observedAlternative = null;
+
+    let lastReachedPosition = origin.clone();
+    searchLoop: while (!bot.interrupt_code && remainingActionTimeMs() > 0) {
+        if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
+
+        while (!bot.interrupt_code && remainingActionTimeMs() > 0) {
+            await collectEntityHarvestDrops(bot, outputName, boundedRange);
+            if (inventoryCount(bot, outputName) >= desiredCount) {
+                const currentCount = inventoryCount(bot, outputName);
+                setActionEvidence(bot, {
+                    kind: 'entity_harvest',
+                    outcome: 'drop_collected',
+                    target: { source: sourceName, output: outputName, method },
+                    collected: currentCount - initialCount,
+                    requested,
+                    elapsedMs: Date.now() - startedAt,
+                    retryable: false,
+                });
+                log(bot, `Collected ${currentCount - initialCount} ${outputName} by ${method}ing ${sourceName}.`);
+                return true;
+            }
+            const candidate = loadedEntityHarvestCandidates(bot, source)
+                .find(entity => !attempted.has(entity.id));
+            if (!candidate) {
+                const alternative = Object.values(bot.entities || {})
+                    .map(entity => ({ entity, output: entityHarvestOutput(entity, method) }))
+                    .filter(entry => entry.output && entry.output !== outputName && entry.entity?.position)
+                    .sort((left, right) => (
+                        bot.entity.position.distanceTo(left.entity.position)
+                        - bot.entity.position.distanceTo(right.entity.position)
+                        || left.entity.id - right.entity.id
+                    ))[0];
+                // Alternative-family evidence is useful only when the requested
+                // source was genuinely absent. Once a matching entity has been
+                // attempted (or produced a partial drop), switching variants
+                // would hide a physical interaction/pickup failure and can make
+                // a durable material binding oscillate between nearby colours.
+                if (
+                    alternative
+                    && !observedAlternative
+                    && attempted.size === 0
+                    && inventoryCount(bot, outputName) === initialCount
+                ) {
+                    observedAlternative = {
+                        output: alternative.output,
+                        entityId: alternative.entity.id,
+                        position: alternative.entity.position.clone(),
+                    };
+                    log(
+                        bot,
+                        `Observed ${alternative.output} from a nearby ${sourceName}; continuing the exact ${outputName} search first.`,
+                    );
+                    if (allowAlternative === true) break searchLoop;
+                }
+                break;
+            }
+            attempted.add(candidate.id);
+
+            if (source.requiredItem && !await equip(bot, source.requiredItem, 'hand')) {
+                setActionEvidence(bot, {
+                    kind: 'entity_harvest',
+                    outcome: 'tool_unavailable',
+                    target: { source: sourceName, output: outputName, method, entityId: candidate.id },
+                    retryable: true,
+                });
+                return false;
+            }
+            // Entity positions are observations, not destinations. Let native
+            // Pathfinder pursue the live entity so ordinary walking, jumping,
+            // and replanning remain valid while the animal moves.
+            const reached = await goToGoal(bot, new pf.goals.GoalFollow(candidate, 2.5));
+            const live = bot.entities?.[candidate.id];
+            const interactionDistance = live?.position
+                ? bot.entity.position.distanceTo(live.position)
+                : Number.POSITIVE_INFINITY;
+            if (
+                !reached
+                || !entityMatchesHarvestSource(live, source)
+                || interactionDistance > 4.5
+            ) continue;
+
+            try {
+                await bot.lookAt(live.position.offset(0, Math.max(0.5, Number(live.height) * 0.5 || 0.65), 0), true);
+                // Mineflayer distinguishes generic entity activation (villager
+                // interaction, mounting) from using the held item on an entity.
+                // Shearing is explicitly owned by useOn().
+                bot.useOn(live);
+                await interruptibleDelay(bot, 650);
+                await collectEntityHarvestDrops(bot, outputName, 12);
+            } catch (error) {
+                if (bot.interrupt_code) break;
+                console.warn(`[entity-harvest] ${method} ${sourceName} failed: ${String(error?.message || error).slice(0, 240)}`);
+                continue;
+            }
+
+            const currentCount = inventoryCount(bot, outputName);
+            if (currentCount >= desiredCount) {
+                setActionEvidence(bot, {
+                    kind: 'entity_harvest',
+                    outcome: 'drop_collected',
+                    target: { source: sourceName, output: outputName, method, entityId: candidate.id },
+                    collected: currentCount - initialCount,
+                    requested,
+                    elapsedMs: Date.now() - startedAt,
+                    retryable: false,
+                });
+                log(bot, `Collected ${currentCount - initialCount} ${outputName} by ${method}ing ${sourceName}.`);
+                return true;
+            }
+        }
+        if (!await relocateEntityHarvestSearch(bot, sourceName, search)) break;
+        lastReachedPosition = bot.entity.position.clone();
+    }
+
+    const collected = Math.max(0, inventoryCount(bot, outputName) - initialCount);
+    const interrupted = Boolean(bot.interrupt_code);
+    const relocationDistance = Math.max(
+        origin.distanceTo(lastReachedPosition),
+        Number(search.distanceMoved) || 0,
+    );
+    const searchAdvanced = !interrupted && relocationDistance >= 8;
+    const reportAlternative = Boolean(
+        !interrupted
+        && collected === 0
+        && attempted.size === 0
+        && observedAlternative
+    );
+    setActionEvidence(bot, {
+        kind: 'entity_harvest',
+        outcome: interrupted
+            ? 'interrupted'
+            : reportAlternative
+                ? 'alternative_source_observed'
+            : collected > 0
+                ? 'partial_drop_collected'
+                : searchAdvanced
+                    ? 'source_search_advanced'
+                    : 'source_not_found',
+        target: { source: sourceName, output: outputName, method },
+        collected,
+        requested,
+        searchAdvanced,
+        origin: { x: origin.x, y: origin.y, z: origin.z },
+        observedPosition: {
+            x: lastReachedPosition.x,
+            y: lastReachedPosition.y,
+            z: lastReachedPosition.z,
+        },
+        ...(reportAlternative ? {
+            alternativeOutput: observedAlternative.output,
+            entityId: observedAlternative.entityId,
+            alternativePosition: {
+                x: observedAlternative.position.x,
+                y: observedAlternative.position.y,
+                z: observedAlternative.position.z,
+            },
+        } : {}),
+        relocationDistance,
+        elapsedMs: Date.now() - startedAt,
+        retryable: !interrupted && !reportAlternative,
+    });
+    log(bot, interrupted
+        ? `Stopped harvesting ${outputName}.`
+        : `Could not find enough harvestable ${sourceName} for ${requested} ${outputName}.`);
+    return false;
+}
+
 export async function attackEntity(bot, entity, kill=true) {
     /**
      * Attack mob of the given type.
@@ -4468,6 +4761,62 @@ export async function defendPlayer(bot, username, range=10) {
     return await followPlayer(bot, username, normalizePlayerDistance(Math.min(3, Number(range) || 3), 3));
 }
 
+function ignoredPickupEntityIds(bot) {
+    if (!(bot._mindcraftIgnoredPickupEntityIds instanceof Set)) {
+        bot._mindcraftIgnoredPickupEntityIds = new Set();
+    }
+    if (!bot._mindcraftIgnoredPickupCleanupInstalled) {
+        bot._mindcraftIgnoredPickupCleanupInstalled = true;
+        bot.on('entityGone', entity => {
+            if (Number.isFinite(entity?.id)) bot._mindcraftIgnoredPickupEntityIds.delete(entity.id);
+        });
+    }
+    return bot._mindcraftIgnoredPickupEntityIds;
+}
+
+export function isIgnoredPickupEntity(bot, entity) {
+    return Number.isFinite(entity?.id)
+        && bot?._mindcraftIgnoredPickupEntityIds instanceof Set
+        && bot._mindcraftIgnoredPickupEntityIds.has(entity.id);
+}
+
+async function tossDiscardedStack(bot, item) {
+    const origin = bot.entity?.position?.clone?.();
+    const priorIds = new Set(Object.keys(bot.entities || {}).map(Number));
+    let observed = null;
+    const matchesDiscard = entity => {
+        if (
+            priorIds.has(Number(entity?.id))
+            || entity?.name !== 'item'
+            || !entity.position
+            || !origin
+            || origin.distanceTo(entity.position) > 3.5
+        ) return false;
+        try {
+            return entity.getDroppedItem?.()?.name === item.name;
+        } catch {
+            return false;
+        }
+    };
+    const onEntitySpawn = entity => {
+        if (matchesDiscard(entity)) observed = entity;
+    };
+    bot.on('entitySpawn', onEntitySpawn);
+    try {
+        await bot.tossStack(item);
+        // Item metadata may arrive just after entitySpawn. Keep physical action
+        // ownership through one bounded settlement window, then correlate the
+        // newly spawned nearby stack by identity and item type.
+        await interruptibleDelay(bot, 350);
+        observed ||= Object.values(bot.entities || {}).find(matchesDiscard) || null;
+        if (!Number.isFinite(observed?.id)) return false;
+        ignoredPickupEntityIds(bot).add(observed.id);
+        return true;
+    } finally {
+        bot.removeListener('entitySpawn', onEntitySpawn);
+    }
+}
+
 async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1, {
     allowLocalCache = true,
 } = {}) {
@@ -4497,6 +4846,7 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         }
     }
     let releaseActions = 0;
+    let discardedDropsQuarantined = true;
     while (
         !bot.interrupt_code
         && bot.inventory.emptySlotCount() < desiredSlots
@@ -4552,7 +4902,8 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             // untracked cache pile. The same bounded classification is still
             // safe to retire directly: this is a tiny natural-fill stack, not
             // a protected job material or essential item.
-            await bot.tossStack(candidate);
+            discardedDropsQuarantined = await tossDiscardedStack(bot, candidate)
+                && discardedDropsQuarantined;
             releaseActions += 1;
             log(bot, `Released one expendable ${candidate.count}-block ${candidate.name} stack without modifying the worksite.`);
             await interruptibleDelay(bot, 100);
@@ -4564,7 +4915,8 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             // Only the shared overflow policy's lowest-value, zero-reserve
             // class is eligible here. Unknown items, useful reserves, gear,
             // food, and every current job material remain fail-closed.
-            await bot.tossStack(disposableClutter);
+            discardedDropsQuarantined = await tossDiscardedStack(bot, disposableClutter)
+                && discardedDropsQuarantined;
             releaseActions += 1;
             log(bot, `Released one expendable ${disposableClutter.count}-item ${disposableClutter.name} stack.`);
             await interruptibleDelay(bot, 100);
@@ -4593,7 +4945,8 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         if (duplicateTool) {
             // Drop the exact worn stack selected above. toss(type, count)
             // may transfer a healthier same-type tool from an earlier slot.
-            await bot.tossStack(duplicateTool);
+            discardedDropsQuarantined = await tossDiscardedStack(bot, duplicateTool)
+                && discardedDropsQuarantined;
             releaseActions += 1;
             log(bot, `Retired one superseded ${duplicateTool.name} while preserving the healthiest carried copy.`);
             await interruptibleDelay(bot, 100);
@@ -4616,7 +4969,8 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         if (bulkDebris) {
             // Releasing the bound stack guarantees that this action actually
             // opens a slot instead of draining equivalent blocks elsewhere.
-            await bot.tossStack(bulkDebris);
+            discardedDropsQuarantined = await tossDiscardedStack(bot, bulkDebris)
+                && discardedDropsQuarantined;
             releaseActions += 1;
             log(
                 bot,
@@ -4630,7 +4984,7 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
     let released = bot.inventory.emptySlotCount() >= desiredSlots;
     if (released && releaseActions > 0 && !allowLocalCache) {
         const leftDisposalStance = await moveAway(bot, 3, { allowLocalRecovery: false });
-        if (!leftDisposalStance) {
+        if (!leftDisposalStance && !discardedDropsQuarantined) {
             log(bot, 'Working slots opened, but the bot could not leave the disposal pickup radius safely.');
             return false;
         }
@@ -5810,7 +6164,12 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
 function droppedItemCandidates(bot, range, itemFilter = () => true) {
     const candidates = [];
     for (const entity of Object.values(bot.entities || {})) {
-        if (entity?.name !== 'item' || !entity.position || !bot.entity?.position) continue;
+        if (
+            entity?.name !== 'item'
+            || isIgnoredPickupEntity(bot, entity)
+            || !entity.position
+            || !bot.entity?.position
+        ) continue;
         const distance = bot.entity.position.distanceTo(entity.position);
         if (distance > range) continue;
         let item;
@@ -9192,6 +9551,9 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
     let goalSignature = navigationGoalSignature(goal);
     let lastProgressAt = startedAt;
     let lastDigTarget = bot.targetDigBlock?.position?.toString?.() || null;
+    const visitedCells = new Set([
+        `${Math.floor(startPosition.x)}:${Math.floor(startPosition.y)}:${Math.floor(startPosition.z)}`,
+    ]);
     let interval = null;
     const stalled = new Promise(resolve => {
         interval = setInterval(() => {
@@ -9202,18 +9564,24 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
             const nextSignature = navigationGoalSignature(goal);
             const metric = navigationGoalMetric(goal, current);
             const targetChanged = nextSignature !== goalSignature;
-            const metricProgress = Number.isFinite(metric)
+            const cellKey = `${Math.floor(current.x)}:${Math.floor(current.y)}:${Math.floor(current.z)}`;
+            const novelCell = !visitedCells.has(cellKey);
+            visitedCells.add(cellKey);
+            const metricProgress = !targetChanged && Number.isFinite(metric)
                 && (!Number.isFinite(bestMetric) || metric <= bestMetric - NAVIGATION_GOAL_PROGRESS_DELTA);
             // Body displacement alone is not convergence: a stuck Pathfinder
             // can pace between two nearby cells forever. Native routes may
             // detour briefly, but they must improve the selected goal metric,
-            // advance a dig target, or rebind a moving goal within the bounded
-            // no-progress window.
-            if (targetChanged || metricProgress || digTarget !== lastDigTarget) {
-                if (targetChanged) {
-                    goalSignature = nextSignature;
-                    bestMetric = metric;
-                } else if (metricProgress) {
+            // advance a dig target, or move through a new cell while pursuing
+            // a moving goal within the bounded no-progress window. A target
+            // rebind alone is not physical progress and must not keep a
+            // stationary GoalFollow alive forever.
+            if (targetChanged) {
+                goalSignature = nextSignature;
+                bestMetric = metric;
+            }
+            if (metricProgress || digTarget !== lastDigTarget || (targetChanged && novelCell)) {
+                if (metricProgress) {
                     bestMetric = metric;
                 }
                 lastDigTarget = digTarget;

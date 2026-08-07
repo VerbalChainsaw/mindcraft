@@ -1,4 +1,9 @@
 import * as mc from '../../utils/mcdata.js';
+import {
+  entityMatchesHarvestSource,
+  entityHarvestSearchCost,
+  entityHarvestSources,
+} from '../../utils/entity-harvest-semantics.js';
 import { createCapabilityPlanAction } from './capability-catalogue.js';
 import { completionRequirementSatisfied } from './goal-contract.js';
 
@@ -199,6 +204,47 @@ function recipeOutputCount(recipe) {
   return Math.max(1, Math.floor(Number(recipe?.result?.count) || 1));
 }
 
+function connectedRecipes(bot, target) {
+  const itemId = bot.registry?.itemsByName?.[target]?.id;
+  const registryRecipes = Number.isInteger(itemId)
+    ? (bot.registry?.recipes?.[itemId] || []).slice()
+    : [];
+  if (!target.endsWith('_wool')) return registryRecipes;
+
+  const dyeName = `${target.slice(0, -'_wool'.length)}_dye`;
+  const dye = bot.registry?.itemsByName?.[dyeName];
+  const exposesWoolRecolor = dye && registryRecipes.some(recipe => {
+    const ingredients = recipeIngredientEntries(bot, recipe);
+    return ingredients.some(ingredient => ingredient.name === dyeName)
+      && ingredients.some(ingredient => ingredient.name.endsWith('_wool'));
+  });
+  if (!exposesWoolRecolor) return registryRecipes;
+
+  // minecraft-data flattens the vanilla wool tag in dye recipes to one
+  // representative colour. Expand that connected-registry family so the
+  // planner can rank every registered wool input instead of following an
+  // arbitrary colour-to-colour cycle.
+  const seen = new Set(registryRecipes.map(recipe => (
+    recipeIngredientEntries(bot, recipe)
+      .map(ingredient => `${ingredient.count}x${ingredient.name}`)
+      .sort()
+      .join('+')
+  )));
+  const expanded = registryRecipes.slice();
+  for (const wool of Object.values(bot.registry?.itemsByName || {})
+    .filter(item => item?.name?.endsWith('_wool') && item.name !== target)
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    const key = `1x${dyeName}+1x${wool.name}`.split('+').sort().join('+');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    expanded.push({
+      ingredients: [{ id: dye.id, count: 1 }, { id: wool.id, count: 1 }],
+      result: { id: itemId, count: 1 },
+    });
+  }
+  return expanded;
+}
+
 function recipeNeedsTable(recipe) {
   if (Array.isArray(recipe?.inShape)) {
     const height = recipe.inShape.length;
@@ -300,7 +346,7 @@ function acquisitionSourceDistance(bot, target, range, depth = 0, trail = [], bl
     consider(acquisitionSourceDistance(bot, smeltingInput, range, depth + 1, nextTrail, blockCache));
   }
   const itemId = bot.registry?.itemsByName?.[target]?.id;
-  for (const recipe of (bot.registry?.recipes?.[itemId] || []).slice(0, 32)) {
+  for (const recipe of connectedRecipes(bot, target).slice(0, 32)) {
     for (const ingredient of recipeIngredientEntries(bot, recipe)) {
       consider(acquisitionSourceDistance(bot, ingredient.name, range, depth + 1, nextTrail, blockCache));
     }
@@ -439,6 +485,11 @@ function recipeScore(bot, context, target, recipe) {
       if (Number.isFinite(distance) && distance <= context.range) {
         score += Math.max(1, Math.round(100 * (1 - (distance / context.range))));
       }
+      const renewableSearchCost = entityHarvestSources(bot.registry, ingredient.name)
+        .reduce((best, source) => Math.min(best, entityHarvestSearchCost(source)), Number.POSITIVE_INFINITY);
+      if (Number.isFinite(renewableSearchCost)) {
+        score += missing * Math.max(0, 50 - renewableSearchCost);
+      }
     }
     // What the bot still has to go and get is what actually costs it time.
     score -= Math.max(0, ingredient.count - available) * acquisitionCost(ingredient.name);
@@ -448,6 +499,36 @@ function recipeScore(bot, context, target, recipe) {
   return score - ingredients.length + learnedPreference(
     context,
     recipeLearningKey(bot, target, recipe),
+  );
+}
+
+function entityHarvestMethodScore(bot, context, source, amount) {
+  const rarityCost = entityHarvestSearchCost(source) * Math.max(1, amount);
+  const toolAdjustment = source.requiredItem
+    ? ledgerCount(context, source.requiredItem) > 0
+      ? 20
+      : -acquisitionCost(source.requiredItem)
+    : 0;
+  const origin = bot.entity?.position;
+  const observedDistance = Object.values(bot.entities || {})
+    .filter(entity => entityMatchesHarvestSource(entity, source))
+    .reduce((nearest, entity) => {
+      if (!origin || !entity?.position) return nearest;
+      const distance = typeof origin.distanceTo === 'function'
+        ? Number(origin.distanceTo(entity.position))
+        : Math.hypot(
+          Number(origin.x) - Number(entity.position.x),
+          Number(origin.y) - Number(entity.position.y),
+          Number(origin.z) - Number(entity.position.z),
+        );
+      return Number.isFinite(distance) ? Math.min(nearest, distance) : nearest;
+    }, Number.POSITIVE_INFINITY);
+  const observedBonus = Number.isFinite(observedDistance)
+    ? Math.max(200, 500 - Math.round(observedDistance * 2))
+    : 0;
+  return 100 - (rarityCost * 4) + toolAdjustment + observedBonus + learnedPreference(
+    context,
+    `harvest:${source.method}:${source.entity}->${source.output}`,
   );
 }
 
@@ -651,6 +732,68 @@ function planFromWorldSource(bot, context, target, amount, trail) {
   );
 }
 
+function planFromEntityHarvestSource(bot, context, target, amount, trail) {
+  const sources = entityHarvestSources(bot.registry, target);
+  if (sources.length === 0) {
+    return blocked(
+      'unsupported_entity_harvest_leaf',
+      `No verified entity-harvest source is known for ${target} in the connected Minecraft version.`,
+      target,
+      [...trail, target],
+    );
+  }
+
+  const failures = [];
+  for (const source of sources) {
+    const candidate = cloneContext(context);
+    if (source.requiredItem) {
+      const toolFailure = ensureItem(
+        bot,
+        candidate,
+        source.requiredItem,
+        1,
+        [...trail, target, `${source.entity}:${source.method}:tool`],
+      );
+      if (toolFailure) {
+        failures.push(toolFailure);
+        continue;
+      }
+    }
+    const actionFailure = addCapabilityAction(bot, candidate, 'harvest_entity_drop', {
+      source: source.entity,
+      output: target,
+      method: source.method,
+      count: amount,
+      // Mobile sources are much sparser than block resources. Give the
+      // deterministic entity-search primitive enough bounded terrain to cover
+      // several loaded regions without changing block-collection policy.
+      range: Math.max(192, context.range),
+      allowAlternative: context.allowEntityAlternatives,
+      expectedIncrease: amount,
+    }, {
+      kind: 'harvest_entity',
+      target,
+      expectedIncrease: amount,
+      reason: `${source.entity} is a versioned ${source.method} source whose verified drop produces ${target}.`,
+      trail: [...trail, target, source.entity, source.method],
+      learningKey: `harvest:${source.method}:${source.entity}->${target}`,
+    });
+    if (actionFailure) {
+      failures.push(actionFailure);
+      continue;
+    }
+    setLedgerCount(candidate, target, ledgerCount(candidate, target) + amount);
+    acceptContext(context, candidate);
+    return null;
+  }
+  return failures[0] || blocked(
+    'unavailable_entity_harvest_tool',
+    `Known ${target} entity sources require prerequisites that could not be satisfied.`,
+    target,
+    [...trail, target],
+  );
+}
+
 function produceItem(bot, context, target, amount, trail) {
   const nodeFailure = enterNode(context, target, trail);
   if (nodeFailure) return nodeFailure;
@@ -683,23 +826,40 @@ function produceItem(bot, context, target, amount, trail) {
     }
   }
 
-  const itemId = bot.registry?.itemsByName?.[target]?.id;
-  const recipes = Number.isInteger(itemId)
-    ? (bot.registry?.recipes?.[itemId] || [])
-      .slice()
-      .sort((left, right) => (
-        recipeScore(bot, context, target, right) - recipeScore(bot, context, target, left)
-      ))
-    : [];
+  const recipes = connectedRecipes(bot, target)
+    .sort((left, right) => (
+      recipeScore(bot, context, target, right) - recipeScore(bot, context, target, left)
+    ));
   const recipeFailures = [];
-  for (const recipe of recipes.slice(0, 32)) {
+  const methodFailures = [];
+  const entitySources = entityHarvestSources(bot.registry, target);
+  const acquisitionMethods = [
+    ...recipes.slice(0, 32).map(recipe => ({
+      kind: 'recipe',
+      recipe,
+      score: recipeScore(bot, context, target, recipe),
+    })),
+    ...(entitySources.length > 0 ? [{
+      kind: 'entity_harvest',
+      score: Math.max(...entitySources.map(source => (
+        entityHarvestMethodScore(bot, context, source, amount)
+      ))),
+    }] : []),
+  ].sort((left, right) => (
+    right.score - left.score
+    || left.kind.localeCompare(right.kind)
+  ));
+  for (const method of acquisitionMethods) {
     const candidate = cloneContext(context);
-    const failure = planFromRecipe(bot, candidate, target, amount, recipe, nextTrail);
+    const failure = method.kind === 'recipe'
+      ? planFromRecipe(bot, candidate, target, amount, method.recipe, nextTrail)
+      : planFromEntityHarvestSource(bot, candidate, target, amount, nextTrail);
     if (!failure) {
       acceptContext(context, candidate);
       return null;
     }
-    recipeFailures.push(failure);
+    methodFailures.push(failure);
+    if (method.kind === 'recipe') recipeFailures.push(failure);
   }
 
   const sourceCandidate = cloneContext(context);
@@ -709,7 +869,7 @@ function produceItem(bot, context, target, amount, trail) {
     return null;
   }
 
-  return recipeFailures[0] || smeltingFailures[0] || sourceFailure;
+  return methodFailures[0] || recipeFailures[0] || smeltingFailures[0] || sourceFailure;
 }
 
 function ensureItem(bot, context, targetName, requiredCount, trail = []) {
@@ -749,6 +909,8 @@ export function buildPrerequisitePlan(bot, {
   workstationRequirement = null,
   accessRequirement = null,
   workstationConstraint = null,
+  blockProximityCache = null,
+  allowEntityAlternatives = false,
 } = {}) {
   const canonicalTarget = canonicalName(target);
   const desired = boundedInteger(quantity, 1, 1, 100_000);
@@ -823,8 +985,9 @@ export function buildPrerequisitePlan(bot, {
     maxNodes: boundedInteger(maxNodes, DEFAULT_MAX_NODES, 32, 2_048),
     maxActions: boundedInteger(maxActions, DEFAULT_MAX_ACTIONS, 4, 128),
     experience: typeof experience === 'function' ? experience : null,
+    allowEntityAlternatives: allowEntityAlternatives === true,
     proximityCache: new Map(),
-    blockProximityCache: new Map(),
+    blockProximityCache: blockProximityCache instanceof Map ? blockProximityCache : new Map(),
     workstationRequirement: {
       name: canonicalName(workstationRequirement?.name),
       carried: workstationRequirement?.carried === true,

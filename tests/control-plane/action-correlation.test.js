@@ -143,6 +143,23 @@ test('ActionManager propagates the bounded request context to the exact action s
   assert.equal(acquisitions[0].requestedAt, 2000);
 });
 
+test('loop detection distinguishes concrete arguments behind one action label', async () => {
+  const { agent } = createHarness();
+  const outcomes = [];
+  for (const output of ['brown_wool', 'white_wool', 'black_wool', 'gray_wool', 'orange_wool']) {
+    const context = createCommandRequestContext({
+      routeOrigin: 'job-director',
+      selectedSkill: '!harvestEntityDrop',
+      args: ['sheep', output, 'shear', 3, 192],
+    });
+    outcomes.push(await agent.actions.runWithRequestContext(context, () => (
+      agent.actions.runAction('action:harvestEntityDrop', async () => false, { owner: 'job' })
+    )));
+  }
+
+  assert.equal(outcomes.some(outcome => outcome.result.code === 'action_pattern_detected'), false);
+});
+
 test('nested and overlapping nonphysical async request scopes do not bleed', async () => {
   const { agent } = createHarness();
   const outer = createCommandRequestContext({ selectedSkill: '!outer' });

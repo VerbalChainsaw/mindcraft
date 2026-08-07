@@ -515,6 +515,23 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
     };
   }
 
+  if (
+    order.phase === 'acquire'
+    && Number(snapshot.freeSlots) <= reserveSlots
+    && !carriedBuildCell
+    && !verifiedAcquisitionProgress
+  ) {
+    const protectedMaterials = [...new Set((order.blueprint?.cells || [])
+      .map(cell => resolvedMaterial(cell, snapshot))
+      .filter(Boolean))].join(',');
+    return {
+      command: `!releaseInventoryWorkingSlots(${JSON.stringify(protectedMaterials)}, ${Math.max(2, reserveSlots)})`,
+      nextPhase: order.phase,
+      code: 'inventory_capacity_release_required',
+      target: { name: 'working_inventory' },
+    };
+  }
+
   if (order.phase === 'assess' || order.phase === 'recover') {
     return carriedCellInCurrentStage(missing, snapshot)
       ? { phase: 'execute', code: 'worksite_verified' }

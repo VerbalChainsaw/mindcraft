@@ -21,6 +21,7 @@ import {
   createBuilderStockpileOrder,
   nextBuilderStep,
 } from './jobs/builder-plan.js';
+import { bindStructureAccessoryMaterials } from './jobs/structure-material-binder.js';
 import { canonicalMiningTarget, miningKnowledge, nextMinerStep } from './jobs/miner-plan.js';
 import { canonicalLogFamily, nextLumberjackStep } from './jobs/lumberjack-plan.js';
 import {
@@ -1018,8 +1019,29 @@ export class JobDirector extends RoleDirector {
     }
 
     let transitions = 0;
+    let materialBindingSupersededResult = false;
     while (this.activeOrder && transitions < 6) {
       transitions += 1;
+      if (this.activeOrder.role === 'builder' && this.activeOrder.kind !== 'stockpile') {
+        const harvestEvidence = this.agent.last_action_result?.evidence?.skill;
+        const alternativeOutput = harvestEvidence?.outcome === 'alternative_source_observed'
+          ? harvestEvidence.alternativeOutput
+          : null;
+        const rebound = bindStructureAccessoryMaterials(this.activeOrder, this.agent.bot, {
+          alternativeOutput,
+        });
+        if (rebound !== this.activeOrder) {
+          materialBindingSupersededResult = true;
+          this.persist(rebound);
+          if (PLAYER_JOB_SOURCES.has(rebound.source)) {
+            try {
+              this.agent.home_state?.rememberStructure?.(rebound);
+            } catch (error) {
+              console.warn(`[builder-binding] Could not persist ${rebound.id}: ${String(error?.message || error).slice(0, 180)}`);
+            }
+          }
+        }
+      }
       const reducer = reducerFor(this.activeOrder);
       if (!reducer) {
         this.finishOrder('failed', 'unsupported_job_role', 'No job plan exists for this work order.', false);
@@ -1029,9 +1051,12 @@ export class JobDirector extends RoleDirector {
       let step;
       try {
         snapshot = this.getJobSnapshot(this.agent, this.activeOrder);
+        const reducerResult = materialBindingSupersededResult
+          ? null
+          : this.agent.last_action_result;
         step = nextJobUpkeepStep(this.activeOrder, snapshot)
           || nextWorksiteReturnStep(this.activeOrder, snapshot)
-          || reducer(this.activeOrder, snapshot, this.agent.last_action_result, {
+          || reducer(this.activeOrder, snapshot, reducerResult, {
             planItem: ({
               target,
               quantity,
@@ -1039,19 +1064,21 @@ export class JobDirector extends RoleDirector {
               range,
               toolRequirement,
               workstationRequirement,
-              accessRequirement,
-            }) => buildPrerequisitePlan(
-              this.agent.bot,
-              {
+                accessRequirement,
+              }) => buildPrerequisitePlan(
+                this.agent.bot,
+                {
                 target,
                 quantity,
                 completion,
                 range: Number(range) || 64,
                 experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
                 toolRequirement,
-                workstationRequirement,
-                accessRequirement,
-              },
+                  workstationRequirement,
+                  accessRequirement,
+                  allowEntityAlternatives: this.activeOrder?.role === 'builder'
+                    && this.activeOrder?.kind !== 'stockpile',
+                },
             ),
           });
       } catch (error) {

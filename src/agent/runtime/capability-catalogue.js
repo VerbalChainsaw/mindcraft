@@ -124,6 +124,7 @@ export function captureCapabilitySnapshot(bot, { inventory = null } = {}) {
     hasItem: name => Boolean(bot?.registry?.itemsByName?.[canonicalName(name)]),
     hasBlock: name => Boolean(bot?.registry?.blocksByName?.[canonicalName(name)]
       || Object.values(bot?.registry?.blocks || {}).some(block => block?.name === canonicalName(name))),
+    hasEntity: name => Boolean(bot?.registry?.entitiesByName?.[canonicalName(name)]),
   });
 }
 
@@ -309,6 +310,43 @@ defineCapability({
   execute: executeBoundCommand,
   verify: verifyEffects,
   cost: (_snapshot, args) => args.count * Math.max(1, Math.ceil(args.range / 16)),
+});
+
+defineCapability({
+  id: 'harvest_entity_drop',
+  parameters: {
+    source: { type: 'entity_name' },
+    output: { type: 'item_name' },
+    method: { type: 'enum', values: ['shear'] },
+    count: { type: 'integer', minimum: 1, maximum: 64 },
+    range: { type: 'integer', minimum: 16, maximum: 512 },
+    allowAlternative: { type: 'boolean' },
+    expectedIncrease: { type: 'integer', minimum: 1 },
+  },
+  normalizeArguments: args => immutable({
+    source: canonicalName(args?.source),
+    output: canonicalName(args?.output),
+    method: canonicalName(args?.method),
+    count: boundedInteger(args?.count, 1, 1, 64),
+    range: boundedInteger(args?.range, 64, 16, 512),
+    allowAlternative: args?.allowAlternative === true,
+    expectedIncrease: boundedInteger(args?.expectedIncrease ?? args?.count, 1, 1, 64),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: `registered source entity ${args.source}`, satisfied: validName(args.source) && snapshot.hasEntity(args.source) },
+    { requirement: `registered output item ${args.output}`, satisfied: validName(args.output) && snapshot.hasItem(args.output) },
+    { requirement: 'supported entity harvest method', satisfied: args.method === 'shear' },
+    { requirement: 'positive bounded harvest count', satisfied: args.count >= 1 && args.count <= 64 },
+  ]),
+  expectedEffects: (_snapshot, args) => [inventoryEffect(args.output, args.expectedIncrease)],
+  bind: (_context, args, _signal) => immutable({
+    ok: true,
+    commandName: '!harvestEntityDrop',
+    command: `!harvestEntityDrop(${commandString(args.source)}, ${commandString(args.output)}, ${commandString(args.method)}, ${args.count}, ${args.range}${args.allowAlternative ? ', true' : ''})`,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyEffects,
+  cost: (_snapshot, args) => args.count * Math.max(2, Math.ceil(args.range / 16)),
 });
 
 defineCapability({
@@ -767,12 +805,37 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
       skill?.observed?.z,
     ].every(Number.isFinite)
   );
-  const verifiedPartialProgress = verifiedMiningProgress || verifiedSurfaceProgress;
+  const verifiedEntityHarvestProgress = Boolean(
+    skill?.kind === 'entity_harvest'
+    && (
+      (skill?.outcome === 'partial_drop_collected' && Number(skill?.collected) > 0)
+      || (
+        skill?.outcome === 'source_search_advanced'
+        && skill?.searchAdvanced === true
+        && Number(skill?.relocationDistance) >= 8
+      )
+    )
+    && [
+      skill?.origin?.x,
+      skill?.origin?.y,
+      skill?.origin?.z,
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
+  const verifiedPartialProgress = verifiedMiningProgress
+    || verifiedSurfaceProgress
+    || verifiedEntityHarvestProgress;
 
   if (!verification.ok && verifiedPartialProgress && result.phase === 'failed') {
-    const progressDetail = verifiedSurfaceProgress
-      ? 'Minecraft verified a supported upward surface advance'
-      : 'Minecraft verified a returnable mining-route advance';
+    const progressDetail = verifiedEntityHarvestProgress
+      ? Number(skill?.collected) > 0
+        ? 'Minecraft verified a partial entity-harvest inventory increase'
+        : 'Minecraft verified movement into a distinct entity-search region'
+      : verifiedSurfaceProgress
+        ? 'Minecraft verified a supported upward surface advance'
+        : 'Minecraft verified a returnable mining-route advance';
     return createActionResult({
       ...result,
       phase: 'succeeded',

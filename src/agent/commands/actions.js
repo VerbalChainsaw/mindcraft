@@ -20,6 +20,7 @@ import {
     designLanguageHelp,
 } from '../runtime/jobs/structure-design.js';
 import { selectConstructionSites } from '../runtime/jobs/structure-site-selector.js';
+import { bindStructureAccessoryMaterials } from '../runtime/jobs/structure-material-binder.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
 import { blockCanSupportPlacement } from '../runtime/block-placement-contract.js';
@@ -116,10 +117,11 @@ function submitRoleOrder(agent, expectedRole, order) {
 }
 
 function submitRememberedStructure(agent, order) {
-    const response = submitRoleOrder(agent, 'builder', order);
+    const boundOrder = bindStructureAccessoryMaterials(order, agent.bot);
+    const response = submitRoleOrder(agent, 'builder', boundOrder);
     if (response.startsWith('Accepted resumable')) {
         try {
-            agent.home_state?.rememberStructure?.(order);
+            agent.home_state?.rememberStructure?.(boundOrder);
         } catch (error) {
             return `${response} Warning: durable home tracking failed: ${String(error?.message || error).slice(0, 160)}.`;
         }
@@ -1258,7 +1260,7 @@ export const actionsList = [
         perform: persistentJobCommand(function (agent) {
             const order = agent.home_state?.snapshot?.().structureOrder;
             if (!order) return 'Construction was not resumed: there is no remembered structure blueprint.';
-            return submitRoleOrder(agent, 'builder', order);
+            return submitRememberedStructure(agent, order);
         }),
     },
     {
@@ -1458,6 +1460,21 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, quartz_count) => {
             return await skills.completeNetherQuartzRun(agent.bot, quartz_count);
+        }, false, 10)
+    },
+    {
+        name: '!harvestEntityDrop',
+        description: 'Harvest a verified renewable entity drop with its registered mechanic, using bounded native navigation and exact inventory verification.',
+        params: {
+            'source': { type: 'string', description: 'Registered source entity type.' },
+            'output': { type: 'ItemName', description: 'Exact expected inventory item.' },
+            'method': { type: 'string', description: 'Registered harvest mechanic.' },
+            'count': { type: 'int', description: 'Minimum inventory increase to collect.', domain: [1, 64, '[]'] },
+            'range': { type: 'int', description: 'Bounded source-search radius.', domain: [16, 512, '[]'] },
+            'allow_alternative': { type: 'boolean', description: 'Allow the owning planner to bind a physically observed material-family alternative.' },
+        },
+        perform: runAsAction(async (agent, source, output, method, count, range, allow_alternative=false) => {
+            return await skills.harvestEntityDrop(agent.bot, source, output, method, count, range, allow_alternative);
         }, false, 10)
     },
     {

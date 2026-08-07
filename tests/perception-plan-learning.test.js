@@ -163,6 +163,37 @@ function remoteTableRecipeBot() {
   };
 }
 
+function renewableWoolRecipeBot() {
+  const items = {
+    1: { id: 1, name: 'white_bed' },
+    2: { id: 2, name: 'white_wool' },
+    3: { id: 3, name: 'birch_planks' },
+    4: { id: 4, name: 'shears', maxDurability: 238 },
+    5: { id: 5, name: 'crafting_table' },
+  };
+  const carried = [
+    { name: 'shears', type: 4, count: 1 },
+    { name: 'birch_planks', type: 3, count: 3 },
+    { name: 'crafting_table', type: 5, count: 1 },
+  ];
+  return {
+    inventory: { slots: carried, items: () => carried },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks: {},
+      blocksByName: {},
+      entitiesByName: { sheep: { id: 111, name: 'sheep' } },
+      recipes: {
+        1: [{
+          inShape: [[2, 2, 2], [3, 3, 3]],
+          result: { id: 1, count: 1 },
+        }],
+      },
+    },
+  };
+}
+
 test('Perception classifies closing motion and prioritizes visible approaching explosive threats', () => {
   const bot = {
     entity: {
@@ -329,6 +360,103 @@ test('The causal planner uses carried smelting inputs before scavenging a placed
   assert.equal(
     plan.actions.some(action => action.capability.binding.command.includes('collectBlocksInRange("stone_bricks"')),
     false,
+  );
+});
+
+test('The causal planner derives renewable entity harvests instead of searching for placed drops', () => {
+  const plan = buildPrerequisitePlan(renewableWoolRecipeBot(), {
+    target: 'white_bed',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.deepEqual(plan.actions.map(action => action.capability.id), ['harvest_entity_drop', 'craft']);
+  assert.equal(
+    plan.actions[0].capability.binding.command,
+    '!harvestEntityDrop("sheep", "white_wool", "shear", 3, 192)',
+  );
+  assert.equal(plan.actions[0].expectedIncrease, 3);
+
+  const builderPlan = buildPrerequisitePlan(renewableWoolRecipeBot(), {
+    target: 'white_bed',
+    quantity: 1,
+    range: 64,
+    allowEntityAlternatives: true,
+  });
+  assert.equal(
+    builderPlan.actions[0].capability.binding.command,
+    '!harvestEntityDrop("sheep", "white_wool", "shear", 3, 192, true)',
+  );
+});
+
+test('The causal planner transforms common renewable wool instead of searching for a rare colour', () => {
+  const bot = renewableWoolRecipeBot();
+  Object.assign(bot.registry.items, {
+    6: { id: 6, name: 'brown_bed' },
+    7: { id: 7, name: 'brown_wool' },
+    8: { id: 8, name: 'brown_dye' },
+    9: { id: 9, name: 'cocoa_beans' },
+    10: { id: 10, name: 'black_wool' },
+  });
+  Object.assign(bot.registry.itemsByName, Object.fromEntries(
+    Object.values(bot.registry.items).map(item => [item.name, item]),
+  ));
+  const carried = [
+    ...bot.inventory.items(),
+    { name: 'brown_dye', type: 8, count: 1 },
+    { name: 'cocoa_beans', type: 9, count: 2 },
+  ];
+  bot.inventory.items = () => carried;
+  bot.inventory.slots = carried;
+  Object.assign(bot.registry.recipes, {
+    6: [{ inShape: [[7, 7, 7], [3, 3, 3]], result: { id: 6, count: 1 } }],
+    // minecraft-data exposes one representative member for the vanilla wool
+    // tag. The planner must expand and rank the whole connected family.
+    7: [{ ingredients: [8, 10], result: { id: 7, count: 1 } }],
+    8: [{ ingredients: [9], result: { id: 8, count: 1 } }],
+  });
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'brown_bed',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(
+    plan.actions.some(action => (
+      action.capability.id === 'harvest_entity_drop'
+      && action.capability.binding.command.includes('"brown_wool"')
+    )),
+    false,
+  );
+  assert.equal(
+    plan.actions.some(action => (
+      action.capability.id === 'harvest_entity_drop'
+      && action.capability.binding.command.includes('"white_wool"')
+    )),
+    true,
+  );
+  assert.equal(plan.actions.at(-1).capability.binding.command, '!craftRecipe("brown_bed", 1)');
+
+  bot.entity = { position: { x: 0, y: 64, z: 0 } };
+  bot.entities = {
+    42: {
+      id: 42,
+      name: 'sheep',
+      metadata: { 16: 0, 17: 12 },
+      position: { x: 8, y: 64, z: 4 },
+    },
+  };
+  const observedPlan = buildPrerequisitePlan(bot, {
+    target: 'brown_bed',
+    quantity: 1,
+    range: 64,
+  });
+  assert.equal(
+    observedPlan.actions[0].capability.binding.command,
+    '!harvestEntityDrop("sheep", "brown_wool", "shear", 3, 192)',
   );
 });
 
@@ -565,6 +693,82 @@ test('Verified supported surface progress advances without spending a productive
   assert.equal(outcome.result.phase, 'succeeded');
   assert.equal(outcome.result.code, 'capability_verified_partial_progress');
   assert.equal(outcome.result.retryable, false);
+});
+
+test('Verified entity-search relocation advances without spending a productive attempt', async () => {
+  const bot = renewableWoolRecipeBot();
+  const plan = buildPrerequisitePlan(bot, { target: 'white_bed', quantity: 1, range: 64 });
+  const capability = plan.actions[0].capability;
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(capability, {
+    agent,
+    executeCommand: () => {
+      agent.last_action_result = {
+        actionId: 'entity-search-progress',
+        phase: 'failed',
+        code: 'skill_source_search_advanced',
+        detail: 'Advanced into a distinct sheep-search region.',
+        retryable: true,
+        evidence: {
+          skill: {
+            kind: 'entity_harvest',
+            outcome: 'source_search_advanced',
+            searchAdvanced: true,
+            collected: 0,
+            relocationDistance: 90,
+            origin: { x: 0, y: 64, z: 0 },
+            observedPosition: { x: 64, y: 64, z: 64 },
+          },
+        },
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, false);
+  assert.equal(outcome.result.phase, 'succeeded');
+  assert.equal(outcome.result.code, 'capability_verified_partial_progress');
+  assert.equal(outcome.result.retryable, false);
+});
+
+test('An observed entity alternative remains failed until a durable binder accepts it', async () => {
+  const bot = renewableWoolRecipeBot();
+  const capability = createCapabilityPlanAction('harvest_entity_drop', {
+    source: 'sheep',
+    output: 'white_wool',
+    method: 'shear',
+    count: 3,
+    range: 192,
+    expectedIncrease: 3,
+  }, {}, { bot }).capability;
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(capability, {
+    agent,
+    executeCommand: () => {
+      agent.last_action_result = {
+        actionId: 'alternative-observed',
+        phase: 'failed',
+        code: 'skill_alternative_source_observed',
+        detail: 'Observed brown wool nearby.',
+        retryable: false,
+        evidence: {
+          skill: {
+            kind: 'entity_harvest',
+            outcome: 'alternative_source_observed',
+            alternativeOutput: 'brown_wool',
+            entityId: 42,
+            observedPosition: { x: 2, y: 64, z: 3 },
+          },
+        },
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.result.phase, 'failed');
+  assert.equal(outcome.result.code, 'skill_alternative_source_observed');
 });
 
 test('The causal planner schedules a verified source-access capability before nested acquisition', () => {
