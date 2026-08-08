@@ -570,16 +570,16 @@ Do not preempt supervised broad play to fix dormant debt. The crafting-window ge
 
 - Preserve the completed additional-bucket repeatability checkpoint. **Done: `b8f17d1`.**
 - Correct productive-attempt ceilings, target propagation, action-level deadlines, cancellation settlement, tool replacement, workstation recovery, and deterministic restart on the same live request. **Done and physically exercised.**
-- Introduce the minimal declarative capability contract around already-proven operations without adding item-specific routes.
-- Survival/reflex interruption followed by verified goal resumption.
+- Introduce the minimal declarative capability contract around already-proven operations without adding item-specific routes. **Done and physically exercised across unrelated crafting, smelting, equipment, delivery, and construction outcomes.**
+- Survival/reflex interruption followed by verified goal resumption. **Done and physically exercised in compound resource work and companion protection.**
 - Reject stale asynchronous job settlement after Stop or order replacement. **Done and physically exercised: `92c9e76`.**
 
 ### P1
 
-- Complete the broad natural `Bring me 16 glass.` campaign; narrow repairs are selected only by its first live blocker.
+- Complete the broad natural `Bring me 16 glass.` campaign. **Done and physically accepted; glass quantity/material permutations are frozen.**
 - Migrate existing collect, craft, place, smelt, equip, retrieve, and delivery operations into the catalogue without changing physical ownership.
 - Retire duplicated prerequisite planning in `prepareTool`, `prepareMaterial`, and autonomous progression as each replacement path is physically proven.
-- Return-to-player and verified delivery after remote work.
+- Return-to-player and verified delivery after remote work. **Done across exact/family delivery, remote worksite iron, farm return, and the five-tool storage campaign.**
 - Resource-search relocation that avoids cycling between the same unusable targets.
 - Natural-language phrasing coverage for proven goal types.
 - Clear progress and blocker reporting during long work.

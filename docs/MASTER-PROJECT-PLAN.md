@@ -90,9 +90,9 @@ The immediate working session begins with IronSuiteProof still Operator Stop-hel
 - [x] Run the approved broad farm companion session: Follow, attributed hostile preemption, defend the player, resume Follow without model restoration, and settle nearby gaze.
 - [x] Freeze natural Follow, standing attributed companion protection, deterministic resumption, settled gaze, and Stop after the accepted integrated session; do not rerun companion-control permutations without a later broad regression.
 - [x] Finish reliable swimming/follow settlement without oscillating through the player. The broad river campaign crossed meaningful water and settled on supported land through native Pathfinder; project policy only prevents false completion in water.
-- Distinguish orders addressed to the bot from nearby player conversation.
+- [x] Distinguish orders addressed to the bot from nearby player conversation. The shared-outpost campaign proved nearby first-person chatter remained conversation while the explicitly addressed stocking request entered durable work.
 - [x] Keep nearby gaze on the player without stealing active-action control during the integrated farm companion session.
-- Preserve self-defense and player-defense while idle; never resume stale or terminal work.
+- [x] Preserve self-defense and player-defense while idle; never resume stale or terminal work. Farm and river companion sessions proved attributed protection, deterministic Follow resumption, and authoritative Stop without resurrecting terminal work.
 
 ### 2. World stewardship and shared infrastructure
 
