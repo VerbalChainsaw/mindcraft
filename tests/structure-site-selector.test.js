@@ -9,10 +9,19 @@ function block(name, x, y, z, boundingBox = name === 'air' ? 'empty' : 'block') 
   return { name, boundingBox, position: new Vec3(x, y, z) };
 }
 
+const registry = {
+  blocksByName: {
+    cobblestone: { name: 'cobblestone', boundingBox: 'block' },
+    oak_planks: { name: 'oak_planks', boundingBox: 'block' },
+    torch: { name: 'torch', boundingBox: 'empty' },
+  },
+};
+
 test('construction site binding rejects the fixed offset inside stone and selects clear natural ground', () => {
   const bot = {
     entity: { id: 1, position: new Vec3(0.5, 10, 0.5) },
     entities: {},
+    registry,
     blockAt(position) {
       const { x, y, z } = position;
       if (y < 10) return block('stone', x, y, z);
@@ -54,6 +63,7 @@ test('construction site binding admits exact natural clearing already authorized
   const bot = {
     entity: { id: 1, position: new Vec3(0.5, 10, 0.5) },
     entities: {},
+    registry,
     blockAt(position) {
       const { x, y, z } = position;
       if (y === 9 && x >= 1 && x <= 5 && z >= 1 && z <= 5) {
@@ -90,6 +100,7 @@ test('construction site binding rejects a fully buried volume in favor of surfac
   const bot = {
     entity: { id: 1, position: new Vec3(0.5, 10, 0.5) },
     entities: {},
+    registry,
     blockAt(position) {
       const { x, y, z } = position;
       if (y <= 8) return block('stone', x, y, z);
@@ -120,4 +131,41 @@ test('construction site binding rejects a fully buried volume in favor of surfac
 
   assert.equal(selection.sites.length > 0, true);
   assert.equal(selection.sites.every(site => site.origin.y === 10), true);
+});
+
+test('construction site binding rejects an unsupported isolated base cell before Builder ownership', () => {
+  const bot = {
+    entity: { id: 1, position: new Vec3(0.5, 10, 0.5) },
+    entities: {},
+    registry,
+    blockAt(position) {
+      const { x, y, z } = position;
+      if (y === 9 && !(x === 5 && z === 5)) return block('stone', x, y, z);
+      return block('air', x, y, z, 'empty');
+    },
+  };
+  const blueprint = {
+    width: 5,
+    height: 2,
+    depth: 5,
+    cells: [
+      { x: 0, y: 0, z: 0, material: 'oak_planks' },
+      { x: 1, y: 0, z: 0, material: 'oak_planks' },
+      { x: 3, y: 0, z: 3, material: 'oak_planks' },
+      { x: 3, y: 1, z: 3, material: 'torch' },
+    ],
+  };
+
+  const selection = selectConstructionSites(bot, blueprint, {
+    origin: bot.entity.position,
+    radius: 6,
+    verticalRadius: 2,
+    isNaturalTerrain: candidate => candidate?.name === 'stone',
+  });
+
+  assert.equal(selection.sites.length > 0, true);
+  assert.equal(selection.sites.some(site => site.origin.x === 2 && site.origin.z === 2), false);
+  assert.equal(selection.sites.every(site => (
+    bot.blockAt(new Vec3(site.origin.x + 3, site.origin.y - 1, site.origin.z + 3)).name === 'stone'
+  )), true, 'the connected edge may bridge, but every isolated light post must have real ground');
 });

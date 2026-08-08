@@ -293,6 +293,29 @@ test('parsePlayerAgenda preserves custom construction as a barrier before sleep'
   assert.deepEqual(plan.unresolved, []);
 });
 
+test('parsePlayerAgenda preserves requested lighting instead of taking an incomplete pen shortcut', () => {
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    'Improve this outpost for us: build a safe fenced animal pen beside the farm with a working gate and lighting, use nearby resources and the workshop already here, and do not damage the house, crops, paths, chest, furnace, or crafting table.',
+    {},
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.steps.length, 1);
+  assert.equal(plan.steps[0].entry.kind, 'construction');
+  assert.deepEqual(plan.steps[0].entry.constructionIntent.requiredFunctions, [
+    'access',
+    'containment',
+    'interior_light',
+  ]);
+  assert.match(plan.steps[0].modelInstruction, /produce these functions: access, containment, interior_light/);
+  assert.match(plan.steps[0].modelInstruction, /Function names are metadata, never DSL arguments/);
+  assert.match(plan.steps[0].modelInstruction, /@pen 7 7; put 3 1 3 torch/);
+  assert.equal(plan.steps[0].requiresModelAssignment, true);
+  assert.equal(plan.unresolved.length, 1);
+  assert.match(plan.unresolved[0].segment, /do not damage the house/i);
+});
+
 test('parsePlayerAgenda keeps the complete overnight outpost contract in one construction intent', () => {
   const plan = parsePlayerAgenda(
     'Gabriel',

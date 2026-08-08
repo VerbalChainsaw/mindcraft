@@ -77,7 +77,7 @@ export function designLanguageHelp() {
   '@tower 5 12 gives a finished tower, and @tower 5 12; ring 0 12 0 7 7 adds a balcony to it.',
   `Templates, with optional arguments that have sensible defaults: ${describeTemplates()}.`,
   'Coordinates are relative to the build site: x east, y up, z south, all starting at 0.',
-  'Support rule: ground fixtures go above a solid floor; wall fixtures such as torches go in interior air face-adjacent to a same-height solid wall. Never replace a roof or required support with a fixture.',
+  'Support rule: ground fixtures go above a solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. Never replace a roof or required support with a fixture.',
   'A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture.',
   'A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor.',
   'box X Y Z W H D - solid block of material.',
@@ -156,11 +156,20 @@ const TEMPLATES = Object.freeze({
   pen: {
     args: ['width', 'depth'],
     defaults: [7, 7],
-    build: (w, d) => [
-      `ring 0 0 0 ${w} ${d}`,
-      `ring 0 1 0 ${w} ${d} oak_fence`,
-      `put 0 1 ${Math.floor(d / 2)} gate`,
-    ],
+    build: (w, d) => {
+      const fixtureX = Math.floor(w / 2);
+      const fixtureZ = Math.floor(d / 2);
+      return [
+        `ring 0 0 0 ${w} ${d}`,
+        `ring 0 1 0 ${w} ${d} oak_fence`,
+        `put 0 1 ${fixtureZ} gate`,
+        // One explicit interior post makes the template composable with a
+        // standing light or another single-cell fixture. It is ordinary
+        // blueprint data, so site selection, acquisition, placement, and the
+        // final audit all see it instead of assuming unknown terrain support.
+        `block ${fixtureX} 0 ${fixtureZ} auto`,
+      ];
+    },
   },
   pillar: {
     args: ['height'],
@@ -216,6 +225,11 @@ function expandTemplates(statements) {
     if (!template) {
       throw new TypeError(
         `Design step ${index + 1} uses unknown template '@${name}'. Available: ${describeTemplates()}.`,
+      );
+    }
+    if (tokens.length > template.args.length + 1) {
+      throw new TypeError(
+        `Template @${name} accepts ${template.args.length} value${template.args.length === 1 ? '' : 's'} but got ${tokens.length - 1}. Function names and other metadata are not template arguments.`,
       );
     }
     const values = template.defaults.map((fallback, position) => {
@@ -503,10 +517,11 @@ function applyOperation(placed, operation, block, displacedFoundations) {
       return;
     }
     case 'ring': {
+      const role = material.endsWith('_fence') ? 'containment' : 'enclosure';
       for (let x = 0; x < operation.w; x += 1) {
         for (let z = 0; z < operation.d; z += 1) {
           if (x !== 0 && z !== 0 && x !== operation.w - 1 && z !== operation.d - 1) continue;
-          set(operation.x + x, operation.y, operation.z + z, material, 'enclosure');
+          set(operation.x + x, operation.y, operation.z + z, material, role);
         }
       }
       return;
@@ -633,18 +648,24 @@ function wallFixtureProblems(placed, canSupportMaterial) {
     if (!fixture) continue;
     const [thing] = fixture;
     const [x, y, z] = key.split(':').map(Number);
-    const supported = Object.values(FACING_OFFSETS).some(offset => {
+    const supportedFromBelow = thing === 'torch' && (() => {
+      const support = placed.get(`${x}:${y - 1}:${z}`);
+      return support && canSupportMaterial(support.material);
+    })();
+    const supportedFromWall = Object.values(FACING_OFFSETS).some(offset => {
       const support = placed.get(`${x + offset.x}:${y}:${z + offset.z}`);
       return support && canSupportMaterial(support.material);
     });
-    if (!supported) {
+    if (!supportedFromBelow && !supportedFromWall) {
       const positions = unsupportedByKind.get(thing) || [];
       positions.push(`${x},${y},${z}`);
       unsupportedByKind.set(thing, positions);
     }
   }
   return [...unsupportedByKind].map(([thing, positions]) => (
-    `${thing} at ${positions.join(' and ')}: no adjacent solid wall; move beside a solid wall`
+    thing === 'torch'
+      ? `${thing} at ${positions.join(' and ')}: no solid support below or beside it; add floor or wall support`
+      : `${thing} at ${positions.join(' and ')}: no adjacent solid wall; move beside a solid wall`
   ));
 }
 

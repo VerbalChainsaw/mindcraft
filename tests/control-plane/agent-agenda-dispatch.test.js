@@ -104,12 +104,27 @@ test('dispatchPlayerAgenda appends onto a running agenda without preempting it',
   assert.equal(calls.cleared, 0);
 });
 
-test('dispatchPlayerAgenda ignores a lone task so the fast path handles it', async () => {
+test('dispatchPlayerAgenda ignores an ordinary lone task but retains a construction contract', async () => {
   const { agent, calls } = makeFakeAgent({ remaining: 0 });
   const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'mine 10 iron');
   assert.equal(handled, false, 'a single task with no chain stays on the single-directive path');
   assert.equal(calls.added.length, 0);
   assert.equal(calls.stop, 0);
+
+  const construction = makeFakeAgent({ remaining: 0 });
+  const outcome = await Agent.prototype.dispatchPlayerAgenda.call(
+    construction.agent,
+    'Gabriel',
+    'Gabriel',
+    'Build a fenced animal pen with a working gate and lighting.',
+  );
+  assert.equal(construction.calls.added.length, 1);
+  assert.deepEqual(construction.calls.added[0].constructionIntent.requiredFunctions, [
+    'access',
+    'containment',
+    'interior_light',
+  ]);
+  assert.equal(outcome.deferredConstruction.entryId, 'agenda-test-1');
 });
 
 test('dispatchPlayerAgenda queues a construction barrier and returns it for model binding', async () => {

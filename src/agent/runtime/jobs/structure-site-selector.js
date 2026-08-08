@@ -1,5 +1,6 @@
 import Vec3 from 'vec3';
 
+import { blockCanSupportPlacement } from '../block-placement-contract.js';
 import {
   isHazardousGameplayBlock,
   isLiquidGameplayBlock,
@@ -92,6 +93,16 @@ function serviceStances(bot, anchor, blueprint, isNaturalTerrain) {
 function inspectSite(bot, blueprint, anchor, isNaturalTerrain, clearanceLimit) {
   const minY = Math.min(...blueprint.cells.map(cell => cell.y));
   const baseCells = blueprint.cells.filter(cell => cell.y === minY);
+  const baseByPosition = new Map(baseCells.map(cell => [`${cell.x}:${cell.z}`, cell]));
+  const plannedBaseSupport = cell => [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ].some(([dx, dz]) => {
+    const support = baseByPosition.get(`${cell.x + dx}:${cell.z + dz}`);
+    return support && blockCanSupportPlacement(bot.registry, support.material);
+  });
   let supportedBaseCells = 0;
   let clearanceCount = 0;
   for (const cell of blueprint.cells) {
@@ -112,8 +123,14 @@ function inspectSite(bot, blueprint, anchor, isNaturalTerrain, clearanceLimit) {
       if (clearanceCount > clearanceLimit) return null;
     }
     if (entityOccupies(bot, x, y, z)) return null;
-    if (cell.y === minY && naturalSupport(blockAt(bot, x, y - 1, z), isNaturalTerrain)) {
-      supportedBaseCells += 1;
+    if (cell.y === minY) {
+      const naturallySupported = naturalSupport(blockAt(bot, x, y - 1, z), isNaturalTerrain);
+      if (naturallySupported) supportedBaseCells += 1;
+      // Match Builder's execution audit: a connected foundation course may
+      // bridge from neighbouring planned full blocks, but an isolated base
+      // cell must have real ground beneath it. Selecting anything looser only
+      // delays the same rejection until after the order is accepted.
+      if (!naturallySupported && !plannedBaseSupport(cell)) return null;
     }
   }
   if (supportedBaseCells === 0) return null;

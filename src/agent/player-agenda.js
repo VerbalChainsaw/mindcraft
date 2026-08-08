@@ -1,4 +1,7 @@
-import { resolvePlayerDirective } from './player-directives.js';
+import {
+  constructionRequiredFunctions,
+  resolvePlayerDirective,
+} from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import { AGENDA_KINDS } from './runtime/agenda.js';
 import { requestedQuantity } from './runtime/goal-contract.js';
@@ -84,24 +87,6 @@ const FOOD_STOCKING_CUES = Object.freeze([
   /\b(?:furnace|stove|smelter)\b/i,
   /\b(?:put|store|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i,
 ]);
-
-function constructionRequiredFunctions(segment) {
-  const text = String(segment || '').toLowerCase();
-  const required = new Set();
-  if (/\b(?:safe|shelter|house|hut|outpost|overnight|inside)\b/.test(text)) {
-    required.add('enclosure');
-    required.add('weather_cover');
-    required.add('access');
-  }
-  if (/\b(?:window|windows|daylight)\b/.test(text)) required.add('daylight');
-  if (/\b(?:light|lighting|lit|torch|torches)\b/.test(text)) required.add('interior_light');
-  if (/\b(?:door|entrance|entry)\b/.test(text)) required.add('access');
-  if (/\b(?:bed|sleep|overnight)\b/.test(text)) required.add('rest');
-  if (/\b(?:crafting table|workbench)\b/.test(text)) required.add('crafting');
-  if (/\b(?:furnace|smelter|stove)\b/.test(text)) required.add('smelting');
-  if (/\b(?:chest|storage)\b/.test(text)) required.add('storage');
-  return [...required].sort();
-}
 
 function attachTypedDependencies(steps) {
   return steps.map((step, index) => {

@@ -535,6 +535,16 @@ The suspected stewardship failure was disproved before changing collection polic
 
 Freeze phrase, quantity, food-type, furnace-content, and family-deposit permutations. The supervised-play entry gate is passed. Subsequent work starts from broad player play and descends only when Minecraft exposes a player-visible authority, stewardship, no-progress, truthfulness, or missing-domain blocker.
 
+### Broad capability-driven animal-pen checkpoint (2026-08-08)
+
+The natural request to improve the lived-in outpost with a safe fenced animal pen, working gate, and lighting completed through one durable construction Agenda entry and one generic Builder order. The accepted 50-cell blueprint contained 24 cobblestone footing/support cells, 23 matched spruce fences, one spruce fence gate, and one standing torch. The Builder derived and made its missing fence materials through the shared prerequisite engine, advanced from an empty site to an exact `50/50` audit with zero productive failures, and ended under Operator Stop. An independent Mineflayer observer matched every world cell, opened and reclosed the gate after teleport settlement, and found the existing nearby chest, furnace, and crafting table intact.
+
+The shared repairs were construction-intent preservation, semantic blueprint functions, family binding, fixture support, and site/executor parity—not an animal-pen executor. A single construction entry is no longer dropped below durable Agenda ownership. Player-requested functions are scoped to the actual build clause, persisted, and checked against the exact submitted blueprint. Generic fence and gate families bind to one feasible wood species, including restart repair of older persisted orders. Fence rings now mean `containment`; standing torches may use solid floor support; compact command docs expose the existing templates without losing safety rules; extra template metadata is rejected; and site selection now applies the same natural-or-planned base-support rule as Builder execution.
+
+Earlier failed compilation and physical probes left bot-owned pen and dirt-wall artifacts in the long-lived test world. They remain deliberate cleanup debt: identify every exact order/coordinate before removing anything. The accepted structure is `builder-0a3fa68c-6837-479a-9904-5235af1030f4` at `(8095,69,7937)`. The independent 48-block audit found no farmland, crops, or dirt path to preserve, so this checkpoint proves non-destructive site binding and fixture preservation, not a general claim that absent farm/path features were verified.
+
+Freeze lit-pen phrase and material permutations. The next broad play request must be materially different and should exercise useful player-facing gameplay, world stewardship, or a missing domain. Reopen construction only if that broad request exposes a shared design, binding, execution, cancellation, or verification defect.
+
 ### Supervised-play entry priority
 
 The near-term target is a bot Gabriel can safely play beside under supervision. The entry gate is deliberately smaller than release readiness: intended orders are accepted while ordinary nearby conversation remains conversation; Stop and terminal completion prevent stale work; Follow, water traversal, attributed defense, resumption, and settled gaze remain usable; one ordinary resource/processing/storage request reuses designated outpost infrastructure without damaging the lived-in world; and failures are prompt and truthful.
@@ -618,8 +628,8 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Freeze the completed river-companion and shared-outpost-stocking campaigns. The bot has crossed the supervised-play entry gate: natural addressed work can compose acquisition, processing, exact infrastructure reuse, and delta-only storage while nearby non-orders remain conversation and Operator Stop remains authoritative.
+Freeze the completed river-companion, shared-outpost-stocking, and lit-animal-pen campaigns. The bot has crossed the supervised-play entry gate: natural addressed work can compose acquisition, processing, exact infrastructure reuse, delta-only storage, and a function-constrained generic build while nearby non-orders remain conversation and Operator Stop remains authoritative.
 
 Begin broad supervised play rather than another preselected noun or mechanic. Preserve the player's unchanged useful outcome, observe the first material failure, repair the smallest shared primitive or capability binding, and rerun that outcome physically. Prioritize stale/unintended work, destructive world changes, repeated no-progress, dishonest completion or restart replay, then genuine missing gameplay domains.
 
-Do not reopen food quantities, furnace states, chest contents, river routes, or gaze permutations without new live evidence. Do not turn playtesting into a certification matrix, telemetry project, claimed-world framework, storage controller, or second executor.
+Do not reopen food quantities, furnace states, chest contents, river routes, gaze, fence species, or pen-light permutations without new live evidence. Do not turn playtesting into a certification matrix, telemetry project, claimed-world framework, storage controller, or second executor.

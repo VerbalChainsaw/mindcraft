@@ -140,6 +140,34 @@ function parseCoordinates(text) {
     return { x: Math.round(x), y: Math.round(y), z: Math.round(z) };
 }
 
+export function constructionRequiredFunctions(message) {
+    const normalized = String(message || '').toLowerCase();
+    const constructionVerb = /\b(?:build|construct|make|put up|erect|raise|assemble)\b/.exec(normalized);
+    const constructionClause = constructionVerb
+        ? normalized.slice(constructionVerb.index)
+        : normalized;
+    const text = constructionClause.split(
+        /,\s*(?:(?:and\s+)?(?:use|using|do not|don't|dont|without)\b)/,
+        1,
+    )[0];
+    const required = new Set();
+    const buildsShelter = /\b(?:build|construct|make|put up|erect|raise|assemble)\b.{0,96}\b(?:shelter|house|hut|outpost)\b/.test(text);
+    if (buildsShelter || /\bovernight\b/.test(text)) {
+        required.add('enclosure');
+        required.add('weather_cover');
+        required.add('access');
+    }
+    if (/\b(?:window|windows|daylight)\b/.test(text)) required.add('daylight');
+    if (/\b(?:light|lighting|lit|torch|torches)\b/.test(text)) required.add('interior_light');
+    if (/\b(?:fence|fenced|pen|paddock|corral)\b/.test(text)) required.add('containment');
+    if (/\b(?:door|gate|gates|gated|entrance|entry)\b/.test(text)) required.add('access');
+    if (/\b(?:bed|sleep|overnight)\b/.test(text)) required.add('rest');
+    if (/\b(?:crafting table|workbench)\b/.test(text)) required.add('crafting');
+    if (/\b(?:furnace|smelter|stove)\b/.test(text)) required.add('smelting');
+    if (/\b(?:chest|storage)\b/.test(text)) required.add('storage');
+    return [...required].sort();
+}
+
 export function resolvePlayerDirective(playerName, message, context = {}) {
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
@@ -550,41 +578,69 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // starting point and appends its own steps. Deliberately does not claim
     // "shelter", "hut", or "house", which the survival shelter job already owns.
 
+    const requiredFunctions = constructionRequiredFunctions(text);
     if (/\b(?:build|construct|make|put up|erect|raise)\b/.test(text)) {
         const material = structureMaterial(text);
         const tall = dimension(text, 'tall|high') ?? dimension(text, 'blocks?\\s+up');
         const wide = dimension(text, 'wide|across');
         const long = dimension(text, 'long|across|span');
-        const design = (name, spec, label) => ({
-            command: `!designStructure("${name}", "${material}", "${spec}")`,
-            response: `I will design and build ${label}, and I will check it can stand before I place anything.`,
-            releasesHold: true,
-        });
+        const design = (name, spec, label, providedFunctions = []) => {
+            const provided = new Set(providedFunctions);
+            if (requiredFunctions.some(required => !provided.has(required))) return null;
+            return {
+                command: `!designStructure("${name}", "${material}", "${spec}")`,
+                response: `I will design and build ${label}, and I will check it can stand before I place anything.`,
+                releasesHold: true,
+            };
+        };
 
         if (/\b(?:tower|watchtower|lookout)\b/.test(text)) {
-            return design('tower', `@tower ${clampInt(wide ?? 5, 3, 12, 5)} ${clampInt(tall ?? 10, 3, 24, 10)}`, 'a tower');
+            const direct = design(
+                'tower',
+                `@tower ${clampInt(wide ?? 5, 3, 12, 5)} ${clampInt(tall ?? 10, 3, 24, 10)}`,
+                'a tower',
+                ['enclosure', 'access', 'interior_light', 'weather_cover'],
+            );
+            if (direct) return direct;
         }
         if (/\b(?:bridge|walkway|catwalk)\b/.test(text)) {
-            return design('bridge', `@bridge ${clampInt(long ?? 10, 3, 32, 10)}`, 'a railed bridge');
+            const direct = design('bridge', `@bridge ${clampInt(long ?? 10, 3, 32, 10)}`, 'a railed bridge');
+            if (direct) return direct;
         }
         if (/\b(?:wall|barrier|rampart)\b/.test(text)) {
-            return design('wall', `@wall ${clampInt(long ?? 10, 2, 32, 10)} ${clampInt(tall ?? 3, 1, 12, 3)}`, 'a wall');
+            const direct = design('wall', `@wall ${clampInt(long ?? 10, 2, 32, 10)} ${clampInt(tall ?? 3, 1, 12, 3)}`, 'a wall');
+            if (direct) return direct;
         }
         if (/\b(?:pen|paddock|corral|enclosure)\b/.test(text)) {
-            return design('pen', `@pen ${clampInt(wide ?? 7, 3, 16, 7)} ${clampInt(long ?? wide ?? 7, 3, 16, 7)}`, 'a fenced pen with a gate');
+            const direct = design(
+                'pen',
+                `@pen ${clampInt(wide ?? 7, 3, 16, 7)} ${clampInt(long ?? wide ?? 7, 3, 16, 7)}`,
+                'a fenced pen with a gate',
+                ['containment', 'access'],
+            );
+            if (direct) return direct;
         }
         if (/\b(?:platform|deck|floor)\b/.test(text)) {
-            return design('platform', `@platform ${clampInt(wide ?? 5, 1, 24, 5)} ${clampInt(long ?? wide ?? 5, 1, 24, 5)}`, 'a platform');
+            const direct = design('platform', `@platform ${clampInt(wide ?? 5, 1, 24, 5)} ${clampInt(long ?? wide ?? 5, 1, 24, 5)}`, 'a platform');
+            if (direct) return direct;
         }
         if (/\b(?:pillar|column|post)\b/.test(text)) {
-            return design('pillar', `@pillar ${clampInt(tall ?? 6, 1, 24, 6)}`, 'a pillar');
+            const direct = design('pillar', `@pillar ${clampInt(tall ?? 6, 1, 24, 6)}`, 'a pillar');
+            if (direct) return direct;
         }
         if (/\b(?:stairs|staircase|steps)\b/.test(text)) {
-            return design('stairs', `@stairs ${clampInt(tall ?? 6, 1, 16, 6)}`, 'a staircase');
+            const direct = design('stairs', `@stairs ${clampInt(tall ?? 6, 1, 16, 6)}`, 'a staircase');
+            if (direct) return direct;
         }
         if (/\b(?:room|cabin|shack|lodge)\b/.test(text)) {
             const w = clampInt(wide ?? 7, 3, 16, 7);
-            return design('room', `@room ${w} ${clampInt(long ?? w, 3, 16, w)} ${clampInt(tall ?? 4, 3, 8, 4)}`, 'a room with a door and a light');
+            const direct = design(
+                'room',
+                `@room ${w} ${clampInt(long ?? w, 3, 16, w)} ${clampInt(tall ?? 4, 3, 8, 4)}`,
+                'a room with a door and a light',
+                ['enclosure', 'access', 'interior_light', 'weather_cover'],
+            );
+            if (direct) return direct;
         }
     }
 
@@ -595,15 +651,22 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // the model, whose !designStructure command persists one bounded blueprint.
     // Shelter remains on its dedicated survival-building route below.
     if (
-        /\b(?:build|construct|erect|raise|put up|lay out|assemble)\b/.test(text)
+        /\b(?:build|construct|make|erect|raise|put up|lay out|assemble)\b/.test(text)
         && !/\b(?:shelter|hut|small house|safe house)\b/.test(text)
     ) {
+        const requiredFunctionContract = requiredFunctions.length > 0
+            ? `The validator requires the completed blueprint to produce these functions: ${requiredFunctions.join(', ')}. Function names are metadata, never DSL arguments. `
+            : '';
+        const compositionHint = requiredFunctions.includes('containment')
+            && requiredFunctions.includes('interior_light')
+            ? 'For a lit open pen, use @pen 7 7; put 3 1 3 torch, changing the torch to the floor center when dimensions change. @pen already supplies its fence, gate, and center fixture support; do not add function names, another gate, walls, or a roof unless the player asked for them. '
+            : '';
         return {
             command: null,
             response: '',
             releasesHold: true,
             deferToModel: true,
-            modelInstruction: 'This is one player-authorized multi-block construction outcome. Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. Fixtures must use put, never block. Fixture facing, when supplied, must be north, south, east, or west. Put ground fixtures above solid floor and wall fixtures such as torches go in interior air adjacent to a same-height solid wall. A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace the roof or required support with a fixture. Use !designStructure material "auto" with lock_material false when the player did not name a structural material; Builder will bind one feasible safe material for the entire required quantity. Set lock_material true only if the player explicitly named the structural material. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.',
+            modelInstruction: `This is one player-authorized multi-block construction outcome. ${requiredFunctionContract}${compositionHint}Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. Start from a provided @template when it already supplies a requested function, then add only the missing functions. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. Fixtures must use put, never block. Fixture facing, when supplied, must be north, south, east, or west. Put ground fixtures above solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace the roof or required support with a fixture. Use !designStructure material "auto" with lock_material false when the player did not name a structural material; Builder will bind one feasible safe material for the entire required quantity. Set lock_material true only if the player explicitly named the structural material. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.`,
         };
     }
 

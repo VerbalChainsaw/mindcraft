@@ -37,6 +37,7 @@ const CONSTRUCTION_FUNCTIONS = new Set([
   'access',
   'crafting',
   'daylight',
+  'containment',
   'enclosure',
   'interior_light',
   'rest',

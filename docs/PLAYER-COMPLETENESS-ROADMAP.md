@@ -45,6 +45,22 @@ stalls, dishonest completion or restart replay, then missing gameplay domains.
 Known dormant P1 debt remains in the master/forward plans and should activate
 only when live play reaches it.
 
+The next broad play request also proved function-constrained general building.
+One addressed request for a fenced, gated, lit animal pen preserved its
+containment, access, and lighting outcome, compiled through the existing
+`@pen` template plus a standing torch, acquired its materials through the shared
+prerequisite engine, and completed an exact 50-cell Paper build with zero
+productive failures. The resulting spruce gate physically opened and closed;
+the nearby chest, furnace, and crafting table remained present. This extends
+the playable checkpoint to generic template composition, matched material
+families, and probe/executor site-support parity. It does not claim general
+structure ownership discovery or verify absent farm/path blocks.
+
+Prior bot-owned failed pen probes remain in the long-lived world and must be
+mapped to their exact work-order coordinates before any cleanup. The accepted
+pen is order `builder-0a3fa68c-6837-479a-9904-5235af1030f4` at
+`(8095,69,7937)`.
+
 ## Delivered in this slice
 
 ### Behavioral controls

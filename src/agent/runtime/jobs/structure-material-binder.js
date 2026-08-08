@@ -251,10 +251,15 @@ function selectStructuralMaterial(bot, order, cells, range, planItem) {
 function familyDefaultForCell(cell, rebindRest = false) {
   if (cell?.materialFamily) {
     if (rebindRest && cell.materialFamily === 'bed') return 'red_bed';
+    if (cell.materialFamily === 'wooden_fence') return 'oak_fence';
+    if (cell.materialFamily === 'wooden_fence_gate') return 'oak_fence_gate';
     return null;
   }
   if (cell?.material === 'oak_door' && cell.function === 'access') return 'oak_door';
-  if (cell?.material === 'oak_fence' && cell.function === 'containment') return 'oak_fence';
+  if (
+    cell?.material === 'oak_fence'
+    && ['containment', 'enclosure'].includes(cell.function)
+  ) return 'oak_fence';
   if (cell?.material === 'oak_fence_gate' && cell.function === 'access') return 'oak_fence_gate';
   if (cell?.material === 'red_bed' && cell.function === 'rest') return 'red_bed';
   return null;
@@ -360,6 +365,29 @@ export function bindStructureAccessoryMaterials(order, bot, {
       planItem,
       material === 'red_bed' ? forcedBedMaterial : null,
     ));
+  }
+  const fenceCells = grouped.get('oak_fence');
+  const gateCells = grouped.get('oak_fence_gate');
+  if (fenceCells?.length && gateCells?.length) {
+    const fenceCandidates = familyCandidates(bot, FAMILY_DEFAULTS.oak_fence);
+    const gateCandidates = familyCandidates(bot, FAMILY_DEFAULTS.oak_fence_gate);
+    const observedFence = observedFamilyMaterial(bot, order, fenceCells, fenceCandidates);
+    const observedGate = observedFamilyMaterial(bot, order, gateCells, gateCandidates);
+    if (observedFence && !observedGate) {
+      const pairedGate = `${observedFence.slice(0, -'_fence'.length)}_fence_gate`;
+      if (gateCandidates.includes(pairedGate)) bindings.set('oak_fence_gate', pairedGate);
+    } else if (observedGate && !observedFence) {
+      const pairedFence = `${observedGate.slice(0, -'_fence_gate'.length)}_fence`;
+      if (fenceCandidates.includes(pairedFence)) bindings.set('oak_fence', pairedFence);
+    } else if (!observedFence && !observedGate) {
+      const selectedFence = bindings.get('oak_fence');
+      const pairedGate = selectedFence?.endsWith('_fence')
+        ? `${selectedFence.slice(0, -'_fence'.length)}_fence_gate`
+        : null;
+      if (pairedGate && gateCandidates.includes(pairedGate)) {
+        bindings.set('oak_fence_gate', pairedGate);
+      }
+    }
   }
   const structuralMaterial = structuralFamilyCells.length > 0
     ? selectStructuralMaterial(bot, order, structuralFamilyCells, range, planItem)

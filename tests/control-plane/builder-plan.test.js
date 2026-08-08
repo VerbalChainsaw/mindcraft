@@ -18,9 +18,10 @@ import { getCommandDocs } from '../../src/agent/commands/index.js';
 test('general construction compiler creates bounded supported shapes with a safe room doorway', () => {
   const compactDocs = getCommandDocs({ blocked_actions: [] }, { compact: true });
   assert.match(compactDocs, /DESIGN MUST BE THIS DSL, NEVER PROSE/);
+  assert.match(compactDocs, /@pen W D/);
   assert.match(compactDocs, /block X Y Z MATERIAL/);
   assert.match(compactDocs, /Fixtures MUST use put, never block/);
-  assert.match(compactDocs, /torches go in interior air adjacent to a same-height solid wall/);
+  assert.match(compactDocs, /torch may stand above a solid floor or attach beside a same-height solid wall/);
   assert.match(compactDocs, /bed occupies its anchor plus one block in its facing direction/i);
 
   const mixed = expandStructureDesign(
@@ -40,6 +41,16 @@ test('general construction compiler creates bounded supported shapes with a safe
   assert.ok(
     unlocked.cells.every(cell => cell.material === 'oak_planks'),
     'operation-level auto placeholders must resolve to the validated outer structural material',
+  );
+  const floorLitPen = expandStructureDesign(
+    '@pen 7 7; put 3 1 3 torch',
+    'oak_planks',
+    { canSupportMaterial: name => name === 'oak_planks' },
+  );
+  assert.deepEqual(
+    new Set(floorLitPen.cells.map(cell => cell.function)),
+    new Set(['enclosure', 'containment', 'access', 'structure', 'interior_light']),
+    'a normal standing torch should compose with the pen template at its explicit interior support post',
   );
   assert.throws(() => expandStructureDesign(
     'slab 0 0 0 3 3 cobblestone; block 0 0 0 redstone_torch; block 0 1 0 powered_rail',
@@ -107,11 +118,11 @@ test('general construction compiler creates bounded supported shapes with a safe
     && /move each fixture one block up/i.test(error.message)
   ), 'one causal correction must name every floor-standing fixture that displaced the foundation');
   assert.throws(() => expandStructureDesign(
-    'room 0 0 0 5 4 5 cobblestone; put 2 1 0 door north; put 2 1 1 torch north; put 2 1 2 bed south; put 2 1 3 torch south',
+    'room 0 0 0 5 4 5 cobblestone; put 2 1 0 door north; put 2 2 1 torch north; put 2 1 2 bed south; put 2 1 3 torch south',
     'cobblestone',
     { canSupportMaterial: name => name === 'cobblestone' },
   ), error => (
-    /torch at 2,1,1: no adjacent solid wall/i.test(error.message)
+    /torch at 2,2,1: no solid support below or beside it/i.test(error.message)
     && /bed_1 has an occupied head cell at 2,1,3/i.test(error.message)
     && error.message.length <= 220
   ), 'one correction must expose independent wall-support and multiblock fixture defects together');
@@ -347,6 +358,10 @@ test('structure design parser normalizes unambiguous model notation without shif
     () => parseStructureDesign('slab 0 0 0 5 7 5 oak_planks'),
     /accepts at most 6 values but got 7/,
   );
+  assert.throws(
+    () => parseStructureDesign('@pen 7 7 containment'),
+    /accepts 2 values but got 3.*metadata are not template arguments/,
+  );
 });
 
 test('generic fixture defaults bind once to the locally feasible registry family member', () => {
@@ -474,6 +489,113 @@ test('generic fixture defaults bind once to the locally feasible registry family
       .blueprint.cells[0].material,
     'brown_bed',
   );
+});
+
+test('a generic pen binds its ring fence and gate to one feasible wood family', () => {
+  const items = {
+    1: { id: 1, name: 'stick' },
+    2: { id: 2, name: 'oak_planks' },
+    3: { id: 3, name: 'spruce_planks' },
+    4: { id: 4, name: 'oak_log' },
+    5: { id: 5, name: 'spruce_log' },
+    6: { id: 6, name: 'oak_fence' },
+    7: { id: 7, name: 'spruce_fence' },
+    8: { id: 8, name: 'oak_fence_gate' },
+    9: { id: 9, name: 'spruce_fence_gate' },
+    10: { id: 10, name: 'dirt' },
+  };
+  const blocks = {
+    14: { id: 14, name: 'oak_log' },
+    15: { id: 15, name: 'spruce_log' },
+    16: { id: 16, name: 'oak_fence' },
+    17: { id: 17, name: 'spruce_fence' },
+    18: { id: 18, name: 'oak_fence_gate' },
+    19: { id: 19, name: 'spruce_fence_gate' },
+    20: { id: 20, name: 'dirt' },
+  };
+  const bot = {
+    entity: {
+      position: {
+        x: 0,
+        y: 64,
+        z: 0,
+        distanceTo: position => Math.hypot(position.x, position.y - 64, position.z),
+      },
+    },
+    inventory: { items: () => [] },
+    registry: {
+      items,
+      itemsByName: Object.fromEntries(Object.values(items).map(item => [item.name, item])),
+      blocks,
+      blocksByName: Object.fromEntries(Object.values(blocks).map(block => [block.name, block])),
+      recipes: {
+        6: [{ inShape: [[2, 1, 2], [2, 1, 2]], result: { id: 6, count: 3 } }],
+        7: [{ inShape: [[3, 1, 3], [3, 1, 3]], result: { id: 7, count: 3 } }],
+        8: [{ inShape: [[1, 2, 1], [1, 2, 1]], result: { id: 8, count: 1 } }],
+        9: [{ inShape: [[1, 3, 1], [1, 3, 1]], result: { id: 9, count: 1 } }],
+      },
+    },
+    blockAt() { return { name: 'air' }; },
+  };
+  const blueprint = expandStructureDesign(
+    'ring 0 0 0 3 3 dirt; ring 0 1 0 3 3 oak_fence; put 0 1 1 gate',
+    'dirt',
+  );
+  assert.ok(blueprint.functions.includes('containment'));
+  const order = createWorkOrder({
+    id: 'builder-pen-family-binding',
+    role: 'builder',
+    kind: 'build',
+    source: 'player',
+    target: { name: 'construction_site', x: 10, y: 64, z: 10 },
+    quota: blueprint.cells.length,
+    blueprint,
+  });
+  const planItem = (_bot, { target }) => {
+    const ready = target.startsWith('spruce_') || target === 'oak_fence_gate';
+    return {
+      status: ready ? 'ready' : 'failed',
+      actions: ready ? [{
+        kind: 'collect',
+        capability: {
+          arguments: { source: target === 'oak_fence_gate' ? 'oak_log' : 'spruce_log' },
+          cost: 8,
+        },
+      }] : [],
+    };
+  };
+
+  const bound = bindStructureAccessoryMaterials(order, bot, { planItem });
+  const fences = bound.blueprint.cells.filter(cell => cell.material.endsWith('_fence'));
+  const gates = bound.blueprint.cells.filter(cell => cell.material.endsWith('_fence_gate'));
+  assert.ok(fences.length > 0);
+  assert.ok(fences.every(cell => (
+    cell.material === 'spruce_fence'
+    && cell.materialFamily === 'wooden_fence'
+  )));
+  assert.deepEqual(gates.map(cell => ({ material: cell.material, family: cell.materialFamily })), [{
+    material: 'spruce_fence_gate',
+    family: 'wooden_fence_gate',
+  }]);
+
+  const persistedMismatch = createWorkOrder({
+    ...bound,
+    blueprint: {
+      ...bound.blueprint,
+      cells: bound.blueprint.cells.map(cell => (
+        cell.material === 'spruce_fence_gate'
+          ? { ...cell, material: 'oak_fence_gate' }
+          : cell
+      )),
+    },
+  });
+  const rebound = bindStructureAccessoryMaterials(persistedMismatch, bot, { planItem });
+  assert.ok(rebound.blueprint.cells
+    .filter(cell => cell.materialFamily === 'wooden_fence')
+    .every(cell => cell.material === 'spruce_fence'));
+  assert.ok(rebound.blueprint.cells
+    .filter(cell => cell.materialFamily === 'wooden_fence_gate')
+    .every(cell => cell.material === 'spruce_fence_gate'));
 });
 
 test('an unlocked designed structure binds one feasible material for its full structural quantity', () => {

@@ -827,9 +827,10 @@ export class Agent {
      * without a model round trip. Returns true when it fully handled the line,
      * so the caller can stop before the single-directive / LLM path.
      *
-     * A lone task with no chain and no explicit interrupt is deliberately NOT
-     * intercepted here: it keeps flowing through the fast single-directive path
-     * below, preserving today's behavior exactly.
+     * A lone ordinary task with no chain and no explicit interrupt is
+     * deliberately NOT intercepted here: it keeps flowing through the fast
+     * single-directive path below. Model-compiled construction is the exception
+     * because its typed barrier owns the player's required-function contract.
      */
     async dispatchPlayerAgenda(source, canonicalPlayer, message) {
         const director = this.agenda_director;
@@ -850,7 +851,12 @@ export class Agent {
         const compilesConstruction = plan.steps.some(step => step.requiresModelAssignment === true);
         // Only intercept a real chain, an explicit interrupt, or an append onto
         // work already queued. Anything else stays on the single-command path.
-        if (!plan.multiStep && plan.disposition !== 'interrupt' && !agendaBusy) return false;
+        if (
+            !plan.multiStep
+            && plan.disposition !== 'interrupt'
+            && !agendaBusy
+            && !compilesConstruction
+        ) return false;
 
         await this.history.add(source, message);
 
