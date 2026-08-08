@@ -1,5 +1,5 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / UNCOMMITTED-PRESERVED (parent 4a7a371)
+Branch/commit: recovery/iron-pickaxe-20260803 / 08ae4be
 Milestone: natural lit-animal-pen request -> validated design -> generic acquisition -> exact 50-cell build
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: capability-driven construction, site safety, material-family binding, and lived-in-world stewardship
