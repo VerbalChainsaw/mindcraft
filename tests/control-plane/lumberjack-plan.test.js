@@ -83,8 +83,20 @@ test('Lumberjack bounds collection by remaining quota and inventory capacity', (
     freeSlots: 2,
     safeTrunks: true,
   });
-  assert.equal(step.command, '!collectBlocksInRange("spruce_log", 7, 64)');
+  assert.equal(step.command, '!collectBlocksInRange("spruce_log", 7, 64, false, true)');
   assert.equal(step.nextPhase, 'verify');
+
+  const familyStep = nextLumberjackStep({
+    ...base,
+    target: { name: 'logs' },
+    phase: 'execute',
+  }, {
+    inventory: { oak_log: 5 },
+    tools: { axeTier: 3 },
+    freeSlots: 2,
+    safeTrunks: true,
+  });
+  assert.equal(familyStep.command, '!collectWoodInRange(7, 64, false, true)');
 
   const full = nextLumberjackStep({ ...base, phase: 'execute' }, {
     inventory: { spruce_log: 5 },

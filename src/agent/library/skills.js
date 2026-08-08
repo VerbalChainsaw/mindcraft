@@ -6164,6 +6164,7 @@ const NATURAL_TREE_SUPPORTS = new Set([
     'crimson_nylium', 'warped_nylium', 'netherrack',
 ]);
 const MAX_TREE_LOGS = 64;
+const MAX_WHOLE_TREE_PASSES = 4;
 const TREE_HORIZONTAL_RADIUS = 6;
 const TREE_VERTICAL_RADIUS = 32;
 const TREE_NEIGHBORS = Object.freeze((() => {
@@ -6189,7 +6190,7 @@ function treeCanopyBlock(name) {
 
 function discoverNaturalTree(bot, seedBlock, exclusions=null) {
     if (!seedBlock?.position || !WOOD_BLOCK_TYPES.includes(seedBlock.name)) {
-        return { natural: false, logs: seedBlock ? [seedBlock] : [], base: null };
+        return { natural: false, logs: seedBlock ? [seedBlock] : [], base: null, truncated: false };
     }
     const seed = seedBlock.position;
     const queue = [seed.clone()];
@@ -6214,7 +6215,24 @@ function discoverNaturalTree(bot, seedBlock, exclusions=null) {
             queue.push(next);
         }
     }
-    if (logs.length === 0) return { natural: false, logs: [seedBlock], base: seedBlock.position };
+    if (logs.length === 0) {
+        return { natural: false, logs: [seedBlock], base: seedBlock.position, truncated: false };
+    }
+
+    // Reaching the cap is not itself proof of truncation because the queue also
+    // contains neighboring air and leaves. A queued same-type log proves that
+    // the connected component extends beyond the bounded discovery result.
+    const truncated = logs.length >= MAX_TREE_LOGS && queue.some(position => {
+        const block = bot.blockAt(position);
+        return Boolean(
+            block?.position
+            && block.name === seedBlock.name
+            && !collectionPositionExcluded(block.position, exclusions)
+            && Math.abs(block.position.x - seed.x) <= TREE_HORIZONTAL_RADIUS
+            && Math.abs(block.position.z - seed.z) <= TREE_HORIZONTAL_RADIUS
+            && Math.abs(block.position.y - seed.y) <= TREE_VERTICAL_RADIUS
+        );
+    });
 
     const minimumY = Math.min(...logs.map(block => block.position.y));
     const rooted = logs.filter(block => (
@@ -6235,7 +6253,7 @@ function discoverNaturalTree(bot, seedBlock, exclusions=null) {
         return false;
     });
     if (rooted.length === 0 || !hasCanopy) {
-        return { natural: false, logs: [seedBlock], base: seedBlock.position };
+        return { natural: false, logs: [seedBlock], base: seedBlock.position, truncated: false };
     }
 
     const base = [...rooted].sort((left, right) => (
@@ -6247,7 +6265,7 @@ function discoverNaturalTree(bot, seedBlock, exclusions=null) {
             - Math.hypot(right.position.x - base.x, right.position.z - base.z)
         || bot.entity.position.distanceTo(left.position) - bot.entity.position.distanceTo(right.position)
     ));
-    return { natural: true, logs, base };
+    return { natural: true, logs, base, truncated };
 }
 
 function carriedLogCount(bot, woodTypes=null) {
@@ -6375,49 +6393,60 @@ export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=n
         .selection.selected?.block || null;
 }
 
-async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.POSITIVE_INFINITY) {
+async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.POSITIVE_INFINITY, {
+    completeStartedTree = false,
+} = {}) {
     const before = carriedLogCount(bot, woodTypes);
     const ordered = [...(tree?.logs || [])]
         .sort((left, right) => left.position.y - right.position.y);
     const limit = Number.isFinite(maximumLogs)
         ? Math.max(0, Math.floor(maximumLogs))
         : ordered.length;
-    const targets = ordered
+    let targets = ordered
         .map(block => bot.blockAt(block.position))
         .filter(block => block?.position && woodTypes.has(block.name));
     if (targets.length === 0) {
-        return { count: 0, remaining: [], error: null };
+        return { count: 0, remaining: [], error: null, passes: 0 };
     }
 
     let operationError = null;
+    let passes = 0;
     bot.modes.pause('unstuck');
     bot.modes.pause('elbow_room');
     try {
-        // CollectBlock natively owns a dynamically distance-sorted target
-        // queue. Supplying the already-discovered, quantity-bounded tree once
-        // avoids rebuilding navigation and pickup state for every single log.
-        bot.collectBlock.movements = targetScopedCollectionMovements(bot, targets, {
-            // Target selection proved an ordinary no-pillar Pathfinder route.
-            // Execution must use the same policy; enabling towers here changes
-            // the chosen route and can strand a collection on a vertical plan.
-            allowPillars: false,
-        });
-        await runBoundedCollectionOperation(
-            bot,
-            () => bot.collectBlock.collect(targets, {
-                ignoreNoPath: true,
-                targetTimeoutMs: 8_000,
-                targetStallTimeoutMs: 3_000,
-                isSatisfied: () => carriedLogCount(bot, woodTypes) - before >= limit,
-                // A single high or occluded log must not discard the rest of
-                // a physically discovered tree. Let CollectBlock try exactly
-                // one different native target before returning control.
-                maxTargetFailures: Math.min(2, targets.length),
-            }),
-            () => bot.collectBlock.cancelTask(),
-        );
-    } catch (error) {
-        operationError = error;
+        while (targets.length > 0 && passes < (completeStartedTree ? MAX_WHOLE_TREE_PASSES : 1)) {
+            const targetCountBeforePass = targets.length;
+            // CollectBlock owns native locomotion, exact target breaking, drop
+            // pursuit, and settled cancellation. A complete-tree caller may
+            // submit the freshly changed remainder again only after this pass
+            // removed at least one real log; that is monotonic geometry
+            // convergence, not an identical retry.
+            bot.collectBlock.movements = targetScopedCollectionMovements(bot, targets, {
+                allowPillars: false,
+            });
+            try {
+                await runBoundedCollectionOperation(
+                    bot,
+                    () => bot.collectBlock.collect(targets, {
+                        ignoreNoPath: true,
+                        targetTimeoutMs: 8_000,
+                        targetStallTimeoutMs: 3_000,
+                        isSatisfied: () => !completeStartedTree
+                            && carriedLogCount(bot, woodTypes) - before >= limit,
+                        maxTargetFailures: Math.min(2, targets.length),
+                    }),
+                    () => bot.collectBlock.cancelTask(),
+                );
+            } catch (error) {
+                operationError = error;
+            }
+            passes += 1;
+            targets = ordered
+                .map(block => bot.blockAt(block.position))
+                .filter(block => block?.position && woodTypes.has(block.name));
+            if (!completeStartedTree || targets.length === 0 || bot.interrupt_code) break;
+            if (targets.length >= targetCountBeforePass) break;
+        }
     } finally {
         const routeMovements = safeMovements(bot);
         bot.collectBlock.movements = routeMovements;
@@ -6434,6 +6463,7 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
         count: Math.max(0, carriedLogCount(bot, woodTypes) - before),
         remaining,
         error: operationError,
+        passes,
     };
 }
 
@@ -6450,6 +6480,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
         return false;
     }
     const woodTypes = new Set(requestedWoodType ? [requestedWoodType] : WOOD_BLOCK_TYPES);
+    const completeStartedTree = searchOptions?.completeStartedTree === true;
     const target = Math.max(1, Math.min(64, Number(num) || 1));
     const searchRange = Math.max(1, Math.min(512, Math.floor(Number(range) || 64)));
     const search = createCollectionSearch(bot, searchRange, searchOptions);
@@ -6458,10 +6489,9 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     let stumpTarget = null;
     let completeTrees = 0;
 
-    // `num` is the action's physical bound. Exact work-order collection used
-    // to keep draining the discovered tree queue after satisfying that bound,
-    // turning a one-log prerequisite into a whole-tree action that could time
-    // out after already making sufficient inventory progress.
+    // `num` remains the physical bound for recipe and GoalDirector collection.
+    // A lumberjack work order may explicitly add the stronger stewardship
+    // contract: once it starts a bounded natural tree, finish that component.
     while (collected < target && !bot.interrupt_code) {
         let nearest = null;
 
@@ -6479,6 +6509,23 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             if (nearest) {
                 const tree = discoverNaturalTree(bot, nearest, failedTargets);
                 if (tree.natural) {
+                    if (completeStartedTree && tree.truncated) {
+                        const oversizedTarget = {
+                            name: nearest.name,
+                            x: tree.base.x,
+                            y: tree.base.y,
+                            z: tree.base.z,
+                        };
+                        setActionEvidence(bot, {
+                            kind: 'collect',
+                            outcome: 'tree_component_limit',
+                            target: oversizedTarget,
+                            discoveredLogs: tree.logs.length,
+                            retryable: false,
+                        });
+                        log(bot, `The connected ${nearest.name} component exceeds the ${MAX_TREE_LOGS}-log safety bound; it was left intact.`);
+                        return false;
+                    }
                     if (
                         !hasInventoryRoomFor(bot, nearest.name)
                         && !await freeCollectionWorkingSlots(bot, woodTypes)
@@ -6508,11 +6555,52 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                         bot,
                         tree,
                         woodTypes,
-                        Math.max(1, target - collected),
+                        completeStartedTree
+                            ? Number.POSITIVE_INFINITY
+                            : Math.max(1, target - collected),
+                        { completeStartedTree },
                     );
                     collected += harvested.count;
+                    if (bot.interrupt_code) {
+                        setActionEvidence(bot, {
+                            kind: 'collect',
+                            outcome: 'interrupted',
+                            target: stumpTarget,
+                            count: harvested.count,
+                            remainingCount: harvested.remaining.length,
+                            retryable: false,
+                        });
+                        log(bot, `Tree harvesting stopped after collecting ${harvested.count} log${harvested.count === 1 ? '' : 's'} from the active tree.`);
+                        return false;
+                    }
                     if (harvested.count > 0 && harvested.remaining.length === 0) {
                         completeTrees += 1;
+                    }
+                    if (completeStartedTree && harvested.remaining.length > 0) {
+                        setActionEvidence(bot, {
+                            kind: 'collect',
+                            outcome: 'tree_incomplete',
+                            target: stumpTarget,
+                            count: harvested.count,
+                            remainingCount: harvested.remaining.length,
+                            remainingTargets: harvested.remaining.slice(0, 24).map(block => ({
+                                name: block.name,
+                                x: block.position.x,
+                                y: block.position.y,
+                                z: block.position.z,
+                            })),
+                            passes: harvested.passes,
+                            ...(harvested.error ? {
+                                error: String(harvested.error?.message || harvested.error).slice(0, 240),
+                            } : {}),
+                            retryable: false,
+                        });
+                        log(
+                            bot,
+                            `Stopped after ${harvested.passes} monotonic tree pass${harvested.passes === 1 ? '' : 'es'}; `
+                                + `${harvested.remaining.length} connected ${nearest.name} remain unreachable without unauthorized building or excavation.`,
+                        );
+                        return false;
                     }
                     if (collected >= target) continue;
                     if (bot.interrupt_code) break;

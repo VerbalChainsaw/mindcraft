@@ -935,15 +935,20 @@ export const actionsList = [
             'num': { type: 'int', description: 'Maximum number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] },
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
             'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
+            'complete_started_tree': { type: 'boolean', description: 'For lumberjack work only, finish the bounded connected natural tree once harvesting starts.', optional: true, default: false },
         },
-        perform: runAsAction(async (agent, type, num, range, relocate = false) => {
+        perform: runAsAction(async (agent, type, num, range, relocate = false, complete_started_tree = false) => {
             if (skills.isWoodBlockType(type)) {
                 return await skills.collectWood(
                     agent.bot,
                     num,
                     range,
                     collectionExclusionsForAgent(agent, type),
-                    { relocate: relocate === true, woodType: type },
+                    {
+                        relocate: relocate === true,
+                        woodType: type,
+                        completeStartedTree: complete_started_tree === true,
+                    },
                 );
             }
             return await skills.collectBlock(
@@ -1046,14 +1051,18 @@ export const actionsList = [
             'num': { type: 'int', description: 'Maximum number of logs to collect.', domain: [1, 64, '[]'] },
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
             'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
+            'complete_started_tree': { type: 'boolean', description: 'For lumberjack work only, finish the bounded connected natural tree once harvesting starts.', optional: true, default: false },
         },
-        perform: runAsAction(async (agent, num, range, relocate = false) => {
+        perform: runAsAction(async (agent, num, range, relocate = false, complete_started_tree = false) => {
             return await skills.collectWood(
                 agent.bot,
                 num,
                 range,
                 collectionExclusionsForAgent(agent),
-                { relocate: relocate === true },
+                {
+                    relocate: relocate === true,
+                    completeStartedTree: complete_started_tree === true,
+                },
             );
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },

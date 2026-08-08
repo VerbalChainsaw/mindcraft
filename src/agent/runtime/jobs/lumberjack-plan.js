@@ -158,8 +158,8 @@ export function nextLumberjackStep(order, snapshot = {}) {
     const range = Math.max(16, Math.min(512, Number(constraints.maxDistance) || 64));
     return {
       command: log === 'logs'
-        ? `!collectWoodInRange(${remaining}, ${range})`
-        : `!collectBlocksInRange(${JSON.stringify(log)}, ${remaining}, ${range})`,
+        ? `!collectWoodInRange(${remaining}, ${range}, false, true)`
+        : `!collectBlocksInRange(${JSON.stringify(log)}, ${remaining}, ${range}, false, true)`,
       nextPhase: 'verify',
       target: { name: log },
     };
