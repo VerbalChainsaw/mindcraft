@@ -412,6 +412,20 @@ function inventoryCount(bot, itemName) {
     return Number.isFinite(count) ? count : 0;
 }
 
+function carriedWindowInventoryCount(window, itemName) {
+    if (
+        !window
+        || !Number.isInteger(window.inventoryStart)
+        || !Number.isInteger(window.inventoryEnd)
+    ) return 0;
+    let count = 0;
+    for (let slot = window.inventoryStart; slot < window.inventoryEnd; slot += 1) {
+        const item = window.slots?.[slot];
+        if (item?.name === itemName) count += Math.max(0, Number(item.count) || 0);
+    }
+    return count;
+}
+
 export function selectSmeltingFuelPlan(items, requiredSmelts) {
     const required = Math.max(0, Number(requiredSmelts) || 0);
     let remaining = required;
@@ -3495,6 +3509,44 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
         }
         if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
 
+        // Mineflayer's furnace takeOutput() resolves with the furnace item even
+        // when putAway() had no carried slot and tossed that item into the
+        // world. Reserve verified carried capacity before transferring any
+        // input or fuel so a successful furnace action cannot silently lose
+        // its output. Reuse the shared bounded overflow policy and preserve
+        // every material that can participate in this smelt.
+        let outputCapacity = carriedOutputCapacity(bot, outputName);
+        if (outputCapacity.capacity < amount) {
+            const requiredAdditionalSlots = Math.ceil(
+                (amount - outputCapacity.capacity) / outputCapacity.stackSize,
+            );
+            const requiredFreeSlots = bot.inventory.emptySlotCount() + requiredAdditionalSlots;
+            const protectedNames = new Set([
+                itemName,
+                outputName,
+                'furnace',
+                ...bot.inventory.items()
+                    .filter(item => mc.getFuelSmeltOutput(item.name) > 0)
+                    .map(item => item.name),
+            ]);
+            const capacityReleased = await freeCollectionWorkingSlots(bot, protectedNames, requiredFreeSlots, {
+                allowLocalCache: false,
+                resumePosition: furnaceBlock.position,
+            });
+            outputCapacity = carriedOutputCapacity(bot, outputName);
+            if (!capacityReleased || outputCapacity.capacity < amount) {
+                log(bot, `Cannot smelt ${itemName}: inventory has no safe capacity for ${amount} ${outputName}.`);
+                return finish(false, 'inventory_full', {
+                    expectedOutputCount: amount,
+                    availableOutputCapacity: outputCapacity.capacity,
+                    requiredFreeSlots,
+                    requiredAdditionalSlots,
+                    observedFreeSlots: bot.inventory.emptySlotCount(),
+                    retryable: false,
+                });
+            }
+        }
+
         bot.modes.pause('unstuck');
         await bot.lookAt(furnaceBlock.position);
         furnace = await bot.openFurnace(furnaceBlock);
@@ -3517,15 +3569,17 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
                     availableCapacity: capacity,
                 });
             }
-            const beforeReclaim = inventoryCount(bot, existingOutput.name);
+            const beforeReclaim = carriedWindowInventoryCount(furnace, existingOutput.name);
             const reclaimed = await furnace.takeOutput();
-            await waitForInventoryCount(
+            await waitForWorldCondition(
                 bot,
-                existingOutput.name,
-                beforeReclaim + outputCount,
+                () => carriedWindowInventoryCount(furnace, existingOutput.name) >= beforeReclaim + outputCount,
                 1_000,
             );
-            const received = Math.max(0, inventoryCount(bot, existingOutput.name) - beforeReclaim);
+            const received = Math.max(
+                0,
+                carriedWindowInventoryCount(furnace, existingOutput.name) - beforeReclaim,
+            );
             if (furnace.outputItem() || !reclaimed || received < outputCount) {
                 log(bot, `Could not verify reclaiming the existing ${existingOutput.name} furnace output.`);
                 return finish(false, 'furnace_output_reclaim_unverified', {
@@ -3588,11 +3642,32 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             await refuelIfEmpty();
             const output = furnace.outputItem();
             if (output) {
+                const beforeOutputCount = carriedWindowInventoryCount(furnace, output.name);
+                const expectedTransfer = Math.max(1, Number(output.count) || 1);
                 const collected = await furnace.takeOutput();
-                if (collected) {
-                    total += collected.count;
+                await waitForWorldCondition(
+                    bot,
+                    () => carriedWindowInventoryCount(furnace, output.name) >= beforeOutputCount + expectedTransfer,
+                    1_000,
+                );
+                const received = Math.max(
+                    0,
+                    carriedWindowInventoryCount(furnace, output.name) - beforeOutputCount,
+                );
+                if (collected && received > 0) {
+                    total += received;
                     observedOutput = collected.name || mc.getItemName(collected.type);
                     lastProgressAt = Date.now();
+                } else {
+                    const remainingCapacity = carriedOutputCapacity(bot, output.name).capacity;
+                    log(bot, `Furnace output was removed, but ${output.name} did not enter carried inventory.`);
+                    return finish(false, remainingCapacity < expectedTransfer
+                        ? 'inventory_full'
+                        : 'furnace_output_transfer_unverified', {
+                        expectedTransfer,
+                        received,
+                        availableOutputCapacity: remainingCapacity,
+                    });
                 }
             }
             if (Date.now() - lastProgressAt > 15_000) break;
@@ -5061,7 +5136,10 @@ export function isIgnoredPickupEntity(bot, entity) {
         && bot._mindcraftIgnoredPickupEntityIds.has(entity.id);
 }
 
-async function tossDiscardedStack(bot, item) {
+async function tossDiscardedStack(bot, item, {
+    awayFrom = null,
+    discardedEntities = null,
+} = {}) {
     const origin = bot.entity?.position?.clone?.();
     const priorIds = new Set(Object.keys(bot.entities || {}).map(Number));
     let observed = null;
@@ -5084,6 +5162,18 @@ async function tossDiscardedStack(bot, item) {
     };
     bot.on('entitySpawn', onEntitySpawn);
     try {
+        if (origin && awayFrom && [awayFrom.x, awayFrom.z].every(Number.isFinite)) {
+            const dx = origin.x - awayFrom.x;
+            const dz = origin.z - awayFrom.z;
+            const length = Math.hypot(dx, dz);
+            if (length > 0.1) {
+                await bot.lookAt(origin.offset(
+                    (dx / length) * 6,
+                    Math.max(1.4, Number(bot.entity?.height) || 1.8),
+                    (dz / length) * 6,
+                ), true);
+            }
+        }
         await bot.tossStack(item);
         // Item metadata may arrive just after entitySpawn. Keep physical action
         // ownership through one bounded settlement window, then correlate the
@@ -5092,6 +5182,12 @@ async function tossDiscardedStack(bot, item) {
         observed ||= Object.values(bot.entities || {}).find(matchesDiscard) || null;
         if (!Number.isFinite(observed?.id)) return false;
         ignoredPickupEntityIds(bot).add(observed.id);
+        if (Array.isArray(discardedEntities)) {
+            discardedEntities.push({
+                id: observed.id,
+                position: observed.position?.clone?.() || null,
+            });
+        }
         return true;
     } finally {
         bot.removeListener('entitySpawn', onEntitySpawn);
@@ -5100,6 +5196,7 @@ async function tossDiscardedStack(bot, item) {
 
 async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1, {
     allowLocalCache = true,
+    resumePosition = null,
 } = {}) {
     const inventoryStart = Number(bot.inventory?.inventoryStart);
     const inventoryEnd = Number(bot.inventory?.inventoryEnd);
@@ -5128,6 +5225,7 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
     }
     let releaseActions = 0;
     let discardedDropsQuarantined = true;
+    const discardedEntities = [];
     while (
         !bot.interrupt_code
         && bot.inventory.emptySlotCount() < desiredSlots
@@ -5183,7 +5281,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             // untracked cache pile. The same bounded classification is still
             // safe to retire directly: this is a tiny natural-fill stack, not
             // a protected job material or essential item.
-            discardedDropsQuarantined = await tossDiscardedStack(bot, candidate)
+            discardedDropsQuarantined = await tossDiscardedStack(bot, candidate, {
+                awayFrom: resumePosition,
+                discardedEntities,
+            })
                 && discardedDropsQuarantined;
             releaseActions += 1;
             log(bot, `Released one expendable ${candidate.count}-block ${candidate.name} stack without modifying the worksite.`);
@@ -5196,7 +5297,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             // Only the shared overflow policy's lowest-value, zero-reserve
             // class is eligible here. Unknown items, useful reserves, gear,
             // food, and every current job material remain fail-closed.
-            discardedDropsQuarantined = await tossDiscardedStack(bot, disposableClutter)
+            discardedDropsQuarantined = await tossDiscardedStack(bot, disposableClutter, {
+                awayFrom: resumePosition,
+                discardedEntities,
+            })
                 && discardedDropsQuarantined;
             releaseActions += 1;
             log(bot, `Released one expendable ${disposableClutter.count}-item ${disposableClutter.name} stack.`);
@@ -5226,7 +5330,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         if (duplicateTool) {
             // Drop the exact worn stack selected above. toss(type, count)
             // may transfer a healthier same-type tool from an earlier slot.
-            discardedDropsQuarantined = await tossDiscardedStack(bot, duplicateTool)
+            discardedDropsQuarantined = await tossDiscardedStack(bot, duplicateTool, {
+                awayFrom: resumePosition,
+                discardedEntities,
+            })
                 && discardedDropsQuarantined;
             releaseActions += 1;
             log(bot, `Retired one superseded ${duplicateTool.name} while preserving the healthiest carried copy.`);
@@ -5250,7 +5357,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         if (bulkDebris) {
             // Releasing the bound stack guarantees that this action actually
             // opens a slot instead of draining equivalent blocks elsewhere.
-            discardedDropsQuarantined = await tossDiscardedStack(bot, bulkDebris)
+            discardedDropsQuarantined = await tossDiscardedStack(bot, bulkDebris, {
+                awayFrom: resumePosition,
+                discardedEntities,
+            })
                 && discardedDropsQuarantined;
             releaseActions += 1;
             log(
@@ -5264,12 +5374,28 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
     }
     let released = bot.inventory.emptySlotCount() >= desiredSlots;
     if (released && releaseActions > 0 && !allowLocalCache) {
-        const leftDisposalStance = await moveAway(bot, 3, { allowLocalRecovery: false });
-        if (!leftDisposalStance && !discardedDropsQuarantined) {
+        let leftDisposalStance = false;
+        if (resumePosition && [resumePosition.x, resumePosition.y, resumePosition.z].every(Number.isFinite)) {
+            const resumeGoal = new pf.goals.GoalNear(
+                Math.floor(resumePosition.x),
+                Math.floor(resumePosition.y),
+                Math.floor(resumePosition.z),
+                1,
+            );
+            leftDisposalStance = resumeGoal.isEnd(bot.entity.position.floored())
+                || await goToGoal(bot, resumeGoal, { allowLocalRecovery: false });
+        } else {
+            leftDisposalStance = await moveAway(bot, 3, { allowLocalRecovery: false });
+        }
+        await interruptibleDelay(bot, 150);
+        const clearOfDiscardedItems = discardedEntities.every(entry => {
+            const position = bot.entities?.[entry.id]?.position || entry.position;
+            return !position || bot.entity.position.distanceTo(position) >= 2.5;
+        });
+        if (!leftDisposalStance || !discardedDropsQuarantined || !clearOfDiscardedItems) {
             log(bot, 'Working slots opened, but the bot could not leave the disposal pickup radius safely.');
             return false;
         }
-        await interruptibleDelay(bot, 150);
         released = bot.inventory.emptySlotCount() >= desiredSlots;
     }
     return released;

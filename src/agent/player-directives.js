@@ -572,6 +572,29 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
+    // A connected-registry item is a manufactured outcome, not a structure,
+    // even when the player uses the ambiguous verb "make" without a count.
+    // Give the typed capability engine first refusal before the generic
+    // construction fallback asks the model to compile a blueprint.
+    const typedGoal = parseItemGoalRequest(playerName, message, context.bot);
+    if (typedGoal) {
+        const target = typedGoal.target.family || typedGoal.target.requestedName;
+        const workstationArguments = typedGoal.workstationName
+            ? `, ${commandString(typedGoal.workstationName)}, ${commandString(typedGoal.request)}`
+            : '';
+        return {
+            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)}, ${commandString(typedGoal.completion.kind)}${workstationArguments})`,
+            response: typedGoal.kind === 'deliver'
+                ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
+                : typedGoal.indefiniteBatch
+                    ? `I will make a recipe batch of ${target.replaceAll('_', ' ')} and keep working through its prerequisites until Minecraft verifies the output.`
+                    : typedGoal.completion.kind === 'inventory'
+                        ? `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`
+                        : `I will acquire ${target.replaceAll('_', ' ')} and verify it in my ${typedGoal.completion.kind.replace('_', ' ')}.`,
+            releasesHold: true,
+        };
+    }
+
     // --- Designed structures from templates ----------------------------------
     // These fill in a design template and skip the model entirely. The model
     // still owns anything shaped unusually: it gets the same templates as a
@@ -741,25 +764,6 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         return {
             command: `!prepareFood(${foodPoints}, 64)`,
             response: 'I will secure a safe food reserve, replant mature crops, and cook what I gather.',
-            releasesHold: true,
-        };
-    }
-
-    const typedGoal = parseItemGoalRequest(playerName, message, context.bot);
-    if (typedGoal) {
-        const target = typedGoal.target.family || typedGoal.target.requestedName;
-        const workstationArguments = typedGoal.workstationName
-            ? `, ${commandString(typedGoal.workstationName)}, ${commandString(typedGoal.request)}`
-            : '';
-        return {
-            command: `!requestItemGoal(${commandString(typedGoal.kind)}, ${commandString(target)}, ${typedGoal.quantity}, ${commandString(typedGoal.requester)}, ${commandString(typedGoal.completion.kind)}${workstationArguments})`,
-            response: typedGoal.kind === 'deliver'
-                ? `I will acquire exactly ${typedGoal.quantity} ${target.replaceAll('_', ' ')} and deliver them to ${typedGoal.destinationPlayer}; I will report completion only after Minecraft confirms pickup.`
-                : typedGoal.indefiniteBatch
-                    ? `I will make a recipe batch of ${target.replaceAll('_', ' ')} and keep working through its prerequisites until Minecraft verifies the output.`
-                    : typedGoal.completion.kind === 'inventory'
-                        ? `I will acquire exactly ${typedGoal.quantity} additional ${target.replaceAll('_', ' ')} and verify the resulting inventory.`
-                        : `I will acquire ${target.replaceAll('_', ' ')} and verify it in my ${typedGoal.completion.kind.replace('_', ' ')}.`,
             releasesHold: true,
         };
     }

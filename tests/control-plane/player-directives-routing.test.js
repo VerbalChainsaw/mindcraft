@@ -116,6 +116,19 @@ test('compound construction keeps ownership instead of becoming a material quota
   assert.match(directive?.modelInstruction || '', /complete bounded blueprint/i);
 });
 
+test('known manufactured outputs outrank the generic make-as-construction fallback', () => {
+  const manufactured = resolvePlayerDirective('Gabriel', 'Make planks', {});
+  assert.equal(
+    manufactured?.command,
+    '!requestItemGoal("acquire", "planks", 1, "Gabriel", "inventory")',
+  );
+  assert.equal(manufactured?.deferToModel, undefined);
+
+  const structure = resolvePlayerDirective('Gabriel', 'Make a windmill', {});
+  assert.equal(structure?.command, null);
+  assert.equal(structure?.deferToModel, true);
+});
+
 test('typed item routing binds verb, quantity, and target inside one primary item request', () => {
   const bot = {
     registry: {

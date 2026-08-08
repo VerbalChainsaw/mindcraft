@@ -716,10 +716,15 @@ export function parseItemGoalRequest(requester, message, bot) {
   // one recipe batch. Keep raw collection/stockpile requests on their existing
   // quota-aware routes, but do not force "make some rails" through the model
   // merely because the player did not name the recipe's output count.
+  const implicitManufactureQuantity = !explicitQuantity
+    && /^(?:craft|make|prepare)$/.test(action.verb);
   const indefiniteBatch = !explicitQuantity
-    && /(?:^|\s)some(?=\s)/.test(quantityScope)
-    && ['craft', 'planned'].includes(target.acquisitionKind);
-  if (!explicitQuantity && !indefiniteBatch) return null;
+    && ['craft', 'planned'].includes(target.acquisitionKind)
+    && (
+      /(?:^|\s)some(?=\s)/.test(quantityScope)
+      || implicitManufactureQuantity
+    );
+  if (!explicitQuantity && !indefiniteBatch && !implicitManufactureQuantity) return null;
   const quantity = explicitQuantity || 1;
   const explicitWorkstation = /\buse\s+(?:(?:the|my)\s+)?furnace\s+here\b|\buse\s+this\s+furnace\b/.test(normalized)
     ? 'furnace'
