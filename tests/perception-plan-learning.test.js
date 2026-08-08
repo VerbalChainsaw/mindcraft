@@ -6,8 +6,11 @@ import test from 'node:test';
 import minecraftData from 'minecraft-data';
 
 import {
+  cardinalDirection,
   classifyEntityMotion,
+  relativeDirection,
   scoreEntityThreat,
+  viewAlignment,
 } from '../src/agent/library/full_state.js';
 import {
   createItemGoalContract,
@@ -271,6 +274,23 @@ test('Perception classifies closing motion and prioritizes visible approaching e
   });
   assert.ok(approaching > retreating);
   assert.equal(scoreEntityThreat({ name: 'cow', distance: 2, hostile: false }), 0);
+});
+
+test('Perception uses Mineflayer yaw coordinates for facing, visibility, and relative direction', () => {
+  const bot = {
+    entity: {
+      position: { x: 0, y: 64, z: 0 },
+      height: 1.8,
+      yaw: 0,
+      pitch: 0,
+    },
+  };
+
+  assert.equal(cardinalDirection(0), 'north');
+  assert.equal(relativeDirection(bot, { x: 0, y: 64, z: -4 }), 'ahead');
+  assert.equal(relativeDirection(bot, { x: 0, y: 64, z: 4 }), 'behind');
+  assert.equal(viewAlignment(bot, { x: 0, y: 65.8, z: -4 }), 1);
+  assert.equal(viewAlignment(bot, { x: 0, y: 65.8, z: 4 }), -1);
 });
 
 test('Verified outcome history persists and remains a bounded ranking hint', async () => {

@@ -43,20 +43,20 @@ function round(value, places = 1) {
     return Number(value.toFixed(places));
 }
 
-function directionVector(yaw = 0) {
+export function directionVector(yaw = 0) {
     return {
         x: -Math.sin(yaw),
-        z: Math.cos(yaw),
+        z: -Math.cos(yaw),
     };
 }
 
-function cardinalDirection(yaw = 0) {
+export function cardinalDirection(yaw = 0) {
     const { x, z } = directionVector(yaw);
     if (Math.abs(x) > Math.abs(z)) return x > 0 ? 'east' : 'west';
     return z > 0 ? 'south' : 'north';
 }
 
-function relativeDirection(bot, targetPosition) {
+export function relativeDirection(bot, targetPosition) {
     const deltaX = targetPosition.x - bot.entity.position.x;
     const deltaZ = targetPosition.z - bot.entity.position.z;
     const forward = directionVector(bot.entity.yaw);
@@ -70,7 +70,7 @@ function relativeDirection(bot, targetPosition) {
     return parts.join('-') || 'here';
 }
 
-function viewAlignment(bot, targetPosition) {
+export function viewAlignment(bot, targetPosition) {
     const origin = bot.entity?.position;
     if (!origin || !targetPosition) return 0;
     const eyeY = origin.y + (Number(bot.entity.height) || 1.62);
@@ -84,7 +84,7 @@ function viewAlignment(bot, targetPosition) {
     const forward = {
         x: -Math.sin(yaw) * Math.cos(pitch),
         y: -Math.sin(pitch),
-        z: Math.cos(yaw) * Math.cos(pitch),
+        z: -Math.cos(yaw) * Math.cos(pitch),
     };
     return round(((dx * forward.x) + (dy * forward.y) + (dz * forward.z)) / length, 3);
 }

@@ -125,7 +125,7 @@ A cycle is complete only when the bot physically succeeds or stops with a precis
 
 Once a capability boundary is physically accepted, freeze it. Reopen it only when a later broad campaign demonstrates a regression or a genuinely new cross-cutting contract violation. Broad scenarios select the work; focused tests preserve the repair. Tests do not select the product roadmap.
 
-## Current transition gate
+## Historical transition gate
 
 Iron pickaxe, shield offhand, and one bucket were physically completed and independently verified. The additional-bucket repeatability gate then passed at `b8f17d1`: the same natural request used the V2-owned Pathfinder, mined and smelted iron, crafted a second bucket, and Paper verified the inventory count increased from one to two.
 
@@ -139,7 +139,7 @@ The completed repeatability gate required:
 
 That gate is now preserved and pushed. Begin the incremental capability-catalogue migration without reopening bucket-specific planning or changing the verified physical ownership boundaries.
 
-This active gate and the immediate-next-move section control execution order. The numbered phases below remain capability milestones and may not be used to route around the repeatability gate or delay the initial catalogue tranche.
+This gate is historical and no longer controls execution order. The current checkpoint is recorded in `docs/coordination/CURRENT.md`, and the immediate-next-move section at the end of this document names the active broad campaign. The numbered phases below remain capability milestones rather than permission to reopen completed item-specific campaigns.
 
 ## Active 2026-08-05 tranche: bounded buried-resource corridor binding
 
@@ -515,6 +515,30 @@ Do not add a raw success-rate threshold or another learning subsystem. After the
 
 If only one physical strategy exists, report that capability gap truthfully. A threshold cannot invent a method the catalogue cannot execute and verify.
 
+### Broad river companion and perception checkpoint (2026-08-08)
+
+The natural request `Come with me across this river. Stay close, protect me if anything hostile attacks, and keep following me afterward.` completed as one companion session. Native Pathfinder crossed meaningful water, settled the bot on supported dry ground, followed the player inland, yielded to attributed companion protection for a real hostile kill, and resumed Follow without another order. Follow also survived a target disconnect/reconnect, and Operator Stop left the full-health bot held.
+
+The live failure was false Follow completion at the shoreline, not missing swimming mechanics. When the player was already on dry supported ground, the ordinary distance goal could still accept a nearby water cell and stop native locomotion. The project now adds only the policy constraint that a dry-player Follow endpoint must also be dry and supported; Pathfinder continues to own swimming, jumping, route execution, and settlement. Open player chat also now counts only other agent profiles actually in game, so stopped configured peers no longer force name-addressed conversation.
+
+The apparent settled-gaze failure was disproved before adding another controller. The owned Pathfinder already looks at the followed entity after dynamic-goal settlement, and live yaw showed it facing the player. Canonical `full_state` perception had interpreted Mineflayer yaw zero as positive Z instead of negative Z, reversing north/south, ahead/behind, and gaze alignment. Correcting that shared perception primitive made the nearby player visible, ahead, and in view; no V2 gaze wrapper remains.
+
+Freeze river, shoreline, combat-resumption, reconnect, and gaze permutations. The next broad outcome combines conversational authority with lived-in-world stewardship: ordinary nearby first-person conversation must not start work, while an explicitly addressed stocking request must reuse the selected outpost furnace and chest, preserve the house, farm, paths, and fixtures, produce useful nonzero food, and finish under Operator Stop. Do not prebuild food routes, a storage controller, a claimed-world framework, a conversation-classifier project, or a second executor.
+
+### Supervised-play entry priority
+
+The near-term target is a bot Gabriel can safely play beside under supervision. The entry gate is deliberately smaller than release readiness: intended orders are accepted while ordinary nearby conversation remains conversation; Stop and terminal completion prevent stale work; Follow, water traversal, attributed defense, resumption, and settled gaze remain usable; one ordinary resource/processing/storage request reuses designated outpost infrastructure without damaging the lived-in world; and failures are prompt and truthful.
+
+Prioritize gameplay defects in this order:
+
+1. player intent and stale-work authority;
+2. preservation and reuse of the designated outpost;
+3. acquisition throughput and meaningful strategy change after repeated no-progress evidence;
+4. truthful long-session continuation and restart behavior;
+5. new gameplay domains pulled by broad natural requests.
+
+Do not preempt the active stocking campaign to fix dormant debt. The crafting-window generation bypass, indefinite manufactured-delivery quantity semantics, and strategy-level learning gap remain bounded P1 defects. Correct them when a broad playtest reaches the affected path or fresh evidence shows they threaten current ownership or world safety.
+
 ## Prioritized backlog
 
 ### P0
@@ -542,7 +566,7 @@ These are product requirements, not optional polish. Implement them through the 
 - [ ] **Protect other people's buildings and existing structures.** Construction, excavation, temporary workstation placement, and cleanup must preflight the affected footprint and revalidate it after every material change. Default to preserving occupied, functional, claimed, remembered, or plausibly player-built cells; never overwrite or dismantle them without explicit player authorization for that exact structure or footprint.
 - [ ] **Reuse and share useful infrastructure.** Resource planning must prefer a reachable existing furnace, crafting table, storage area, shelter, or work site over scattering duplicates. When the player asks to share or work from their structure, bind that structure as the authorized work area and preserve its access, contents, and layout.
 - [ ] **Preserve ordinary terrain and paths during travel.** Native Pathfinder with digging disabled owns normal walking, climbing, and jumping. Destructive navigation is permitted only inside an explicit bounded mining, construction, emergency, or recovery operation; it must minimize block changes, respect destruction/debris limits, protect usable paths and supports, and verify that the resulting route/land remains safe and usable.
-- [ ] **Keep companion vision attentive to the nearby player.** When the tracked player is loaded and nearby, no higher-priority action requires a different gaze, and Operator Stop permits only non-physical observation, the bot should use the existing bounded look/attention mechanic to follow the player naturally. Combat targets, block/entity interaction, navigation safety, and active work retain gaze priority; player attention must be rate-limited and deadbanded so it does not jitter, snap constantly, or steal ActionManager ownership.
+- [x] **Keep companion vision attentive to the nearby player.** Native Pathfinder already owns settled Follow gaze without taking a second ActionManager lease. The broad river campaign verified physical player-facing after water traversal, combat preemption, deterministic resumption, and reconnect; canonical perception now uses the correct Mineflayer yaw axis so that state truth agrees with the package-owned behavior. Combat, interaction, navigation safety, and active work retain gaze priority.
 
 Acceptance is product-scale: run broad building, resource-production, nearby-companionship, and remote-return scenarios in a lived-in world. Descend into a narrow regression only when one of those scenarios exposes the first concrete shared blocker.
 
@@ -584,10 +608,8 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-The custom functional-workshop campaign is complete at `cad4bf3`. The unchanged natural request was `Build a small functional workshop with a clear entrance, lighting, a crafting table, a furnace, and a chest.` Model compilation produced one accepted bounded blueprint before Builder execution; rejected candidates never became physical jobs. The persisted order completed 72/72 verified cells with zero productive failures and health 20. Paper independently verified the entrance air, torch, crafting table, furnace, chest, and exact completed structure at the bound surface site.
+Freeze river, shoreline, combat-resumption, reconnect, and gaze permutations. Native Pathfinder owns swimming, jumping, ordinary Follow locomotion, and settled player-facing; V2 owns the policy that a dry-player Follow endpoint cannot be water. The canonical perception axis correction is part of this checkpoint because it fixes the state consumed by entities, blocks, hazards, and view-based reasoning—not merely a test observer.
 
-Minecraft exposed three shared defects and selected their repair. Site binding had contradicted Builder safety by rejecting every natural terrain cell, then ranked a buried stone volume as a cheap site; it now admits bounded safe natural clearing, accounts for unsupported base cells and blueprint-scaled excavation, and chooses the materially cheaper surface fit. Deferred model compilation had released Operator Hold before an accepted job existed; it now retains the existing hold across candidate generation and releases only after JobDirector confirms the persistent order, while Stop generation still cancels authoritatively. Finally, prerequisite ranking made 230 synchronous radius-64 world scans while planning one torch and starved the event loop; planning-only proximity probes are now cached per block/range and bounded to radius 16, while the selected physical collection action retains its full range 64. The persisted workshop resumed after restart and finished through the central planner.
+The next product-scale campaign combines conversational authority with shared-outpost stewardship. First, ordinary nearby first-person conversation such as `I'm going to gather food for tonight.` must not start bot work. Then an explicitly addressed request asks the bot to help stock the lived-in outpost: gather a useful nonzero food supply, cook anything that needs cooking in the furnace already there, place the food in the selected chest, preserve the house, farm, paths, and fixtures, and end under Operator Stop.
 
-The hard-code review is now part of the operating plan rather than an architecture detour. Canonical food contradictions are closed at `0f465fe`. Recursive `prepareTool` and `prepareMaterial` are confirmed parallel prerequisite engines, but their callers migrate only when an active broad outcome reaches them. Tool, durability, mining, item, workstation, progression, threat, useful-item, farm, and accessory-substitution seams remain activation-gated in `tech-debt-map.md`; explicit safety limits, ownership, Stop, verification, generated versioned facts, and declarative templates remain intentionally deterministic.
-
-Freeze workshop construction and its fixture details. The next product-scale campaign is one broad usable overnight outpost at a player-designated site: establish it, make it physically accessible and safe, use its requested facilities, and return to companion behavior. Run the natural outcome first. If it reaches oriented, stateful, multiblock, workstation, ownership, or an older preparation-helper seam, repair only that shared boundary and rerun the same whole outcome. Do not add per-structure scripts, prebuild a universal block-state ontology, sweep every old helper, or substitute component tests for the physical result.
+Run the natural outcome before adding anything. Repair only the first shared intake, acquisition, processing, infrastructure-binding, storage, or stewardship seam that Minecraft exposes, then rerun the unchanged broad request. Do not add food-specific routes, a storage controller, a claimed-world framework, a separate conversation-classifier project, or a second executor.

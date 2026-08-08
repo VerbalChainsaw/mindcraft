@@ -202,22 +202,63 @@ const RETRYABLE_COLLECTION_TARGET_OUTCOMES = new Set([
     'not_collected',
 ]);
 
-class ResponsiveFollowGoal extends pf.goals.GoalFollow {
-    constructor(entity, range) {
+function followTargetRequiresDrySettlement(bot, entity) {
+    const position = entity?.position?.floored?.();
+    if (!position || typeof bot?.blockAt !== 'function') return false;
+    const feet = bot.blockAt(position);
+    const support = bot.blockAt(position.offset(0, -1, 0));
+    return Boolean(
+        feet
+        && !isLiquidGameplayBlock(feet)
+        && isTraversableShoreSupport(support)
+    );
+}
+
+export function isCompatibleFollowSettlementStance(bot, entity, node) {
+    if (!followTargetRequiresDrySettlement(bot, entity)) return true;
+    if (!node || typeof bot?.blockAt !== 'function') return false;
+    const position = new Vec3(
+        Math.floor(node.x),
+        Math.floor(node.y),
+        Math.floor(node.z),
+    );
+    const feet = bot.blockAt(position);
+    const support = bot.blockAt(position.offset(0, -1, 0));
+    return Boolean(
+        feet
+        && !isLiquidGameplayBlock(feet)
+        && isTraversableShoreSupport(support)
+    );
+}
+
+export class ResponsiveFollowGoal extends pf.goals.GoalFollow {
+    constructor(bot, entity, range) {
         super(entity, range);
+        this.bot = bot;
         this.replanDistanceSq = FOLLOW_REPLAN_DISTANCE * FOLLOW_REPLAN_DISTANCE;
+        this.requiresDrySettlement = followTargetRequiresDrySettlement(bot, entity);
+    }
+
+    isEnd(node) {
+        return super.isEnd(node)
+            && isCompatibleFollowSettlementStance(this.bot, this.entity, node);
     }
 
     hasChanged() {
         const position = this.entity?.position?.floored?.();
         if (!position) return false;
+        const requiresDrySettlement = followTargetRequiresDrySettlement(this.bot, this.entity);
         const dx = this.x - position.x;
         const dy = this.y - position.y;
         const dz = this.z - position.z;
-        if ((dx * dx + dy * dy + dz * dz) <= this.replanDistanceSq) return false;
+        if (
+            (dx * dx + dy * dy + dz * dz) <= this.replanDistanceSq
+            && requiresDrySettlement === this.requiresDrySettlement
+        ) return false;
         this.x = position.x;
         this.y = position.y;
         this.z = position.z;
+        this.requiresDrySettlement = requiresDrySettlement;
         return true;
     }
 }
@@ -13658,7 +13699,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
     bot.on('path_update', onPathUpdate);
     try {
         doorCheckInterval = startDoorInterval(bot);
-        bot.pathfinder.setGoal(new ResponsiveFollowGoal(player, distance), true);
+        bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
         setActionEvidence(bot, {
             kind: 'follow',
             outcome: 'pathing',
@@ -13719,7 +13760,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
         if (targetMissingSince !== null || player.id !== followedEntityId) {
             followedEntityId = player.id;
             bot.pathfinder.setMovements(safeMovements(bot));
-            bot.pathfinder.setGoal(new ResponsiveFollowGoal(player, distance), true);
+            bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
             noProgressMs = 0;
             recoveryAttempts = 0;
             recoveryCooldownUntil = 0;
@@ -13764,25 +13805,17 @@ export async function followPlayer(bot, username, distance=4, options={}) {
         const teleport_distance = 100;
         const ignore_modes_distance = 30; 
         const nearby_distance = distance + 2;
+        const botFeetPosition = bot.entity.position.floored();
+        const botFeet = bot.blockAt(botFeetPosition);
+        const botInLiquid = Boolean(
+            bot.entity?.isInWater
+            || bot.entity?.isInLava
+            || isLiquidGameplayBlock(botFeet)
+        );
+        const playerDryAndSupported = followTargetRequiresDrySettlement(bot, player);
+        const needsShoreRecovery = botInLiquid && playerDryAndSupported;
 
-        if (distance_from_player > nearby_distance) {
-            const botFeetPosition = bot.entity.position.floored();
-            const playerFeetPosition = player.position.floored();
-            const botFeet = bot.blockAt(botFeetPosition);
-            const playerFeet = bot.blockAt(playerFeetPosition);
-            const playerSupport = bot.blockAt(playerFeetPosition.offset(0, -1, 0));
-            const botInLiquid = Boolean(
-                bot.entity?.isInWater
-                || bot.entity?.isInLava
-                || isLiquidGameplayBlock(botFeet)
-            );
-            const playerDryAndSupported = Boolean(
-                playerFeet
-                && !isLiquidGameplayBlock(playerFeet)
-                && isTraversableShoreSupport(playerSupport)
-            );
-            const needsShoreRecovery = botInLiquid && playerDryAndSupported;
-
+        if (distance_from_player > nearby_distance || needsShoreRecovery) {
             if (needsShoreRecovery) {
                 noProgressMs = 0;
                 if (distance_from_player <= bestLiquidFollowDistance - NAVIGATION_GOAL_PROGRESS_DELTA) {
@@ -13795,7 +13828,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
                     const recovery = await attemptShallowWaterExit(bot);
                     if (bot.interrupt_code) break;
                     bot.pathfinder.setMovements(safeMovements(bot));
-                    bot.pathfinder.setGoal(new ResponsiveFollowGoal(player, distance), true);
+                    bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
                     setActionEvidence(bot, {
                         kind: 'follow',
                         outcome: recovery.success ? 'shore_recovering' : 'shore_recovery_blocked',
@@ -13843,7 +13876,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
                         const recovery = await attemptLocalNavigationEscape(bot);
                         if (bot.interrupt_code) break;
                         bot.pathfinder.setMovements(safeMovements(bot));
-                        bot.pathfinder.setGoal(new ResponsiveFollowGoal(player, distance), true);
+                        bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
                         setActionEvidence(bot, {
                             kind: 'follow',
                             outcome: recovery.success ? 'recovering' : 'recovery_blocked',

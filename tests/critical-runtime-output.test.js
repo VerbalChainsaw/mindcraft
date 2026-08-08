@@ -28,6 +28,7 @@ import {
 import { OwnedLocalServices } from '../src/mindcraft/owned-local-services.js';
 import { terminateOwnedProcessTree } from '../src/mindcraft/process-tree.js';
 import { stopMindcraftRuntime } from '../src/mindcraft/stack-shutdown.js';
+import { ResponsiveFollowGoal } from '../src/agent/library/skills.js';
 
 test('critical action results preserve phase, sanitize output, and expose bounded telemetry', () => {
   const result = createActionResult({
@@ -108,6 +109,32 @@ test('a cave stance is dark supported air regardless of Minecraft air subtype', 
   assert.equal(isSafeCaveStance(bot, position), false);
   put(0, 10, 0, { name: 'air', boundingBox: 'empty', skyLight: 15 });
   assert.equal(isSafeCaveStance(bot, position), false);
+});
+
+test('Follow remains active when the player is dry but the nearby bot stance is still water', () => {
+  const blocks = new Map();
+  const put = (x, y, z, name, boundingBox) => {
+    const position = new Vec3(x, y, z);
+    blocks.set(`${x},${y},${z}`, { name, boundingBox, position });
+  };
+  put(0, 1, 0, 'air', 'empty');
+  put(0, 0, 0, 'grass_block', 'block');
+  put(2, 0, 0, 'water', 'empty');
+  put(2, -1, 0, 'sand', 'block');
+  put(2, 1, 0, 'air', 'empty');
+  put(2, 0, 1, 'grass_block', 'block');
+  put(2, 1, 1, 'air', 'empty');
+
+  const bot = {
+    blockAt(position) {
+      return blocks.get(`${position.x},${position.y},${position.z}`) || null;
+    },
+  };
+  const player = { position: new Vec3(0.5, 1, 0.5) };
+  const goal = new ResponsiveFollowGoal(bot, player, 4);
+
+  assert.equal(goal.isEnd(new Vec3(2, 0, 0)), false);
+  assert.equal(goal.isEnd(new Vec3(2, 1, 1)), true);
 });
 
 test('runtime verifier requires the exact fresh successful action result', () => {

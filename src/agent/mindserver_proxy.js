@@ -304,7 +304,11 @@ class MindServerProxy {
     }
 
     getNumOtherAgents() {
-        return this.agents.length - 1;
+        const self = String(this.agent?.name || this.name || '');
+        return this.agents.filter(agent => (
+            agent?.in_game === true
+            && String(agent?.name || '') !== self
+        )).length;
     }
 
     login() {
