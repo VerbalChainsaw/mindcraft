@@ -115,3 +115,30 @@ test('compound construction keeps ownership instead of becoming a material quota
   assert.equal(directive?.releasesHold, true);
   assert.match(directive?.modelInstruction || '', /complete bounded blueprint/i);
 });
+
+test('typed item routing binds verb, quantity, and target inside one primary item request', () => {
+  const bot = {
+    registry: {
+      itemsByName: {
+        chest: { displayName: 'Chest' },
+        crafting_table: { displayName: 'Crafting Table' },
+      },
+      blocksByName: {
+        chest: { displayName: 'Chest' },
+        light: { displayName: 'Light' },
+        crafting_table: { displayName: 'Crafting Table' },
+      },
+    },
+  };
+  const broadRequest = 'Use this outpost as your home base. Explore and light a nearby cave, collect useful exposed ore without damaging the outpost or any player-built structures, then return here and store what you found in this chest.';
+
+  assert.equal(resolvePlayerDirective('Gabriel', broadRequest, { bot }), null);
+  assert.equal(
+    resolvePlayerDirective('Gabriel', 'Please gather 16 logs and keep them in your inventory.', { bot })?.command,
+    '!requestItemGoal("acquire", "logs", 16, "Gabriel", "inventory")',
+  );
+  assert.equal(
+    resolvePlayerDirective('Gabriel', 'Please collect 3 logs using this crafting table.', { bot })?.command,
+    '!requestItemGoal("acquire", "logs", 3, "Gabriel", "inventory")',
+  );
+});

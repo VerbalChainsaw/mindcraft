@@ -938,6 +938,7 @@ export class Agent {
 
         let used_command = false;
         let deferredModelAssignment = null;
+        let authorizedModelHoldGeneration = null;
         let playerMessageAlreadyRecorded = false;
         if (max_responses === null) {
             max_responses = settings.max_commands === -1 ? Infinity : settings.max_commands;
@@ -1132,6 +1133,15 @@ export class Agent {
                     this.routeResponse(source, execute_res);
                 return true;
             }
+            // A persisted Stop holds the body, not the player's ability to
+            // issue the next unfamiliar order. Permit cognition to interpret
+            // this one action-eligible utterance against the exact current Hold
+            // generation. Physical ownership remains held until a validated
+            // action command crosses the normal release boundary below. A newer
+            // Stop changes the generation and interrupts the prompt.
+            if (playerSpeechAuthority === 'action_eligible' && this.isOperatorHeld()) {
+                authorizedModelHoldGeneration = this.operator_hold_generation;
+            }
         }
 
         if (from_other_bot)
@@ -1144,7 +1154,9 @@ export class Agent {
         const checkInterrupt = () => {
             const retainedCompilationHold = Number.isInteger(deferredModelAssignment?.holdGeneration)
                 && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
-            return (this.isOperatorHeld() && !retainedCompilationHold)
+            const retainedPlayerPromptHold = Number.isInteger(authorizedModelHoldGeneration)
+                && this.isCurrentOperatorHold(authorizedModelHoldGeneration);
+            return (this.isOperatorHeld() && !retainedCompilationHold && !retainedPlayerPromptHold)
                 || this.self_prompter.shouldInterrupt(self_prompt)
                 || this.shut_up
                 || convoManager.responseScheduledFor(source);
@@ -1212,7 +1224,7 @@ export class Agent {
                 if (checkInterrupt()) break;
                 if (!self_prompt && !from_other_bot) {
                     const assignsTypedGoal = commandAssignsPersistentGoal(command_name);
-                    if (!deferredModelAssignment) {
+                    if (!deferredModelAssignment && commandReleasesOperatorHold(command_name)) {
                         this.releaseOperatorHold('player command');
                     }
                     if (commandTakesManualAutonomy(command_name)) {

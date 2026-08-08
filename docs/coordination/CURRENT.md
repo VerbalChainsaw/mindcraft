@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / current HEAD (parent a445705)
-Milestone: broad manufactured iron set plus exact remote storage accepted locally
+Branch/commit: recovery/iron-pickaxe-20260803 / current HEAD (parent e2544c1)
+Milestone: broad cave tranche active; compound routing and held interpretation repaired
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: generic capability planning, durable Agenda ownership, native navigation, exact storage
-Live blocker: none; the unchanged ten-step broad request passed
-Last physical result: five iron tools manufactured, returned from remote work, stored once in exact chest; outpost intact
-Runtime: Paper 1.21.11 healthy; outpost-final-20260807-1220; IronSuiteProof Stop-held; peaceful fixture
-Next campaign: explore/light a nearby cave, collect useful exposed ore, return to outpost, store it
+Owned subsystem: player intent routing, durable capability composition, exploration/return/storage
+Live blocker: no durable composable cave-expedition operation; cognition exhausted two one-shot probes
+Last physical result: broad request stayed intact, interpreted through Stop, protected outpost, then found no cave in 32 blocks
+Runtime: Paper 1.21.11 healthy; outpost-final-20260807-1220; IronSuiteProof Stop-held at accepted base
+Next: add the smallest catalogue/Agenda capability that can finish the unchanged cave outcome
 Jordan review: C2J-20260808-0235-manufactured-set-accepted (asynchronous; work does not wait)

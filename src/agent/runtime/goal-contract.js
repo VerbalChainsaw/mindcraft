@@ -75,6 +75,10 @@ const FAMILY_ALIASES = Object.freeze({
   planks: new Set(['plank', 'planks', 'wood plank', 'wood planks']),
 });
 
+const ITEM_GOAL_ACTION = /\b(?:bring|deliver|fetch|collect|gather|harvest|chop|craft|make|prepare|get|mine|secure|stockpile)\b|\bgive\s+(?:me|us)\b/;
+const ITEM_GOAL_SCAFFOLD_PREFIX = /^(?:(?:can|could|would|will)\s+you|i\s+(?:want|need)\s+you\s+to|i\s+would\s+like\s+you\s+to|go(?:\s+and)?)$/;
+const TRAILING_WORKFLOW_ACTION = /\b(?:then|afterwards?|return|come\s+back|go\s+back|explore|build|construct|store|put|stash|deposit|collect|gather|harvest|chop|craft|make|prepare|get|mine|secure|stockpile)\b/;
+
 function boundedText(value, maximum, fallback = '') {
   return Array.from(String(value ?? fallback), character => {
     const code = character.charCodeAt(0);
@@ -172,8 +176,14 @@ function registryMention(bot, normalizedMessage) {
   for (const entry of entries.values()) {
     for (const alias of aliasForms(entry.name, entry.displayName)) {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (!new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`).test(normalizedMessage)) continue;
-      if (!best || alias.length > best.alias.length) best = { ...entry, alias };
+      const match = new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`).exec(normalizedMessage);
+      if (!match) continue;
+      const index = match.index + (match[0].startsWith(' ') ? 1 : 0);
+      if (
+        !best
+        || index < best.index
+        || (index === best.index && alias.length > best.alias.length)
+      ) best = { ...entry, alias, index };
     }
   }
   return best;
@@ -184,11 +194,34 @@ function familyMention(normalizedMessage) {
   for (const [family, aliases] of Object.entries(FAMILY_ALIASES)) {
     for (const alias of aliases) {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      if (!new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`).test(normalizedMessage)) continue;
-      if (!best || alias.length > best.alias.length) best = { family, alias };
+      const match = new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`).exec(normalizedMessage);
+      if (!match) continue;
+      const index = match.index + (match[0].startsWith(' ') ? 1 : 0);
+      if (
+        !best
+        || index < best.index
+        || (index === best.index && alias.length > best.alias.length)
+      ) best = { family, alias, index };
     }
   }
   return best;
+}
+
+function primaryItemActionSpan(normalized) {
+  const action = ITEM_GOAL_ACTION.exec(normalized);
+  if (!action) return null;
+  const prefix = normalized.slice(0, action.index)
+    .trim()
+    .replace(/^(?:(?:please|hey|okay|ok)\b\s*)+/, '')
+    .trim();
+  // The single typed-goal route may own polite request scaffolding, but it may
+  // not lift one verb out of an already meaningful exploration/build/workflow
+  // clause. Those broader utterances must remain intact for Agenda or cognition.
+  if (prefix && !ITEM_GOAL_SCAFFOLD_PREFIX.test(prefix)) return null;
+  return {
+    verb: action[0],
+    text: normalized.slice(action.index + action[0].length).trim(),
+  };
 }
 
 function parseNumberWordSequence(words) {
@@ -656,20 +689,27 @@ export function createItemGoalContract({
 export function parseItemGoalRequest(requester, message, bot) {
   const normalized = normalizeMessage(message);
   if (!requester || !normalized || normalized.includes('!')) return null;
-  const explicitQuantity = requestedQuantity(normalized);
+  const action = primaryItemActionSpan(normalized);
+  if (!action?.text) return null;
+  const delivery = /^(?:bring|deliver|fetch|give\s+(?:me|us))$/.test(action.verb);
 
-  const delivery = /\b(?:bring|deliver|fetch)\b/.test(normalized)
-    || /\bgive\s+(?:me|us)\b/.test(normalized)
-    || /\bbring\b.{0,120}\bto\s+(?:me|us)\b/.test(normalized);
-  const acquisition = /\b(?:collect|gather|harvest|chop|craft|make|prepare|get|mine|secure|stockpile)\b/.test(normalized);
-  if (!delivery && !acquisition) return null;
-
-  const registry = registryMention(bot, normalized);
-  const family = familyMention(normalized);
-  const selected = registry && (!family || registry.alias.length >= family.alias.length)
-    ? registry.name
-    : family?.family;
+  const registry = registryMention(bot, action.text);
+  const family = familyMention(action.text);
+  const selectedMention = registry && (
+    !family
+    || registry.index < family.index
+    || (registry.index === family.index && registry.alias.length >= family.alias.length)
+  ) ? registry : family;
+  const selected = selectedMention?.name || selectedMention?.family;
   if (!selected) return null;
+  const targetEnd = selectedMention.index + selectedMention.alias.length;
+  const quantityScope = action.text.slice(0, targetEnd);
+  const trailing = action.text.slice(targetEnd);
+  // A single typed goal must never silently accept only the first material
+  // action from a larger workflow. Agenda gets first refusal; if it cannot
+  // represent the chain yet, cognition receives the whole request unchanged.
+  if (TRAILING_WORKFLOW_ACTION.test(trailing)) return null;
+  const explicitQuantity = requestedQuantity(quantityScope);
   const target = resolveItemGoalTarget(bot, selected);
   if (!target || target.acquisitionKind === 'unsupported') return null;
   // An indefinite manufactured-item request still has a deterministic unit:
@@ -677,7 +717,7 @@ export function parseItemGoalRequest(requester, message, bot) {
   // quota-aware routes, but do not force "make some rails" through the model
   // merely because the player did not name the recipe's output count.
   const indefiniteBatch = !explicitQuantity
-    && /(?:^|\s)some(?=\s)/.test(normalized)
+    && /(?:^|\s)some(?=\s)/.test(quantityScope)
     && ['craft', 'planned'].includes(target.acquisitionKind);
   if (!explicitQuantity && !indefiniteBatch) return null;
   const quantity = explicitQuantity || 1;

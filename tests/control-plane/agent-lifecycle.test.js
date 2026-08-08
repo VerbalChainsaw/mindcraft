@@ -1078,6 +1078,82 @@ test('a held construction request keeps physical Stop until a valid work order e
   assert.equal(history.some(entry => entry.content.includes('already registered and underway')), false);
 });
 
+test('a held unfamiliar player order may be interpreted without releasing the body, and a newer Stop still wins', async () => {
+  const makeHarness = ({ supersedeHold = false } = {}) => {
+    let promptCalls = 0;
+    let released = 0;
+    const responses = [];
+    const harness = {
+      name: 'MindcraftBot',
+      runtime: { role: 'companion' },
+      bot: { modes: { flushBehaviorLog: () => '' } },
+      shut_up: false,
+      operator_hold: true,
+      operator_hold_generation: 7,
+      checkTaskDone: () => Promise.resolve(),
+      dispatchPlayerAgenda: () => Promise.resolve(false),
+      isOperatorHeld() { return this.operator_hold; },
+      isCurrentOperatorHold(generation) {
+        return this.operator_hold && this.operator_hold_generation === generation;
+      },
+      releaseOperatorHold() {
+        released += 1;
+        this.operator_hold = false;
+      },
+      routeResponse(_source, message) { responses.push(message); },
+      companion_context: { observeChat: () => null },
+      self_prompter: {
+        interruptForManualCommand: () => {},
+        shouldInterrupt: () => false,
+        isActive: () => false,
+      },
+      role_director: { deferForManualCommand: () => {} },
+      history: {
+        add: () => Promise.resolve(),
+        save: () => {},
+        getHistory: () => [],
+      },
+      prompter: {
+        promptConvo() {
+          promptCalls += 1;
+          if (supersedeHold) {
+            harness.operator_hold_generation += 1;
+            return Promise.resolve('I will check. !stats');
+          }
+          return Promise.resolve('I need to choose a safe cave route before moving.');
+        },
+      },
+    };
+    return { harness, responses, promptCalls: () => promptCalls, released: () => released };
+  };
+
+  const interpreted = makeHarness();
+  const usedCommand = await Agent.prototype.handleMessage.call(
+    interpreted.harness,
+    'ADMIN',
+    'Explore and light a nearby cave, collect useful exposed ore, then return home.',
+    1,
+  );
+  assert.equal(usedCommand, false);
+  assert.equal(interpreted.promptCalls(), 1);
+  assert.equal(interpreted.released(), 0);
+  assert.equal(interpreted.harness.operator_hold, true);
+  assert.deepEqual(interpreted.responses, ['I need to choose a safe cave route before moving.']);
+
+  const interrupted = makeHarness({ supersedeHold: true });
+  const interruptedCommand = await Agent.prototype.handleMessage.call(
+    interrupted.harness,
+    'ADMIN',
+    'Explore and light a nearby cave, collect useful exposed ore, then return home.',
+    1,
+  );
+  assert.equal(interruptedCommand, false);
+  assert.equal(interrupted.promptCalls(), 1);
+  assert.equal(interrupted.released(), 0);
+  assert.equal(interrupted.harness.operator_hold, true);
+  assert.deepEqual(interrupted.responses, []);
+});
+
 test('deferred construction accepts only a new exact correlated job submission', () => {
   const deferredAssignment = { holdGeneration: 7 };
   const activeOrder = { id: 'builder-new-outpost' };
