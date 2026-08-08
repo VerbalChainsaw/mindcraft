@@ -1461,12 +1461,17 @@ export class ManagedMinecraftServer {
         this.error = null;
       }
       const geyserEndpoint = clean.match(/\[Geyser[^\]]*\].*Started Geyser on\s+(\[[^\]]+\]|[^\s:]+):(\d{1,5})/i);
-      if (geyserEndpoint) {
-        const rawAddress = geyserEndpoint[1];
+      const geyserPortOnly = geyserEndpoint
+        ? null
+        : clean.match(/\[Geyser[^\]]*\].*Started Geyser on UDP port\s+(\d{1,5})\b/i);
+      if (geyserEndpoint || geyserPortOnly) {
+        const rawAddress = geyserEndpoint?.[1]
+          || this.readConfig().bedrockBindAddress
+          || DEFAULT_BEDROCK_BIND_ADDRESS;
         const bindAddress = rawAddress.startsWith('[') && rawAddress.endsWith(']')
           ? rawAddress.slice(1, -1)
           : rawAddress;
-        const bedrockPort = Number(geyserEndpoint[2]);
+        const bedrockPort = Number(geyserEndpoint?.[2] || geyserPortOnly[1]);
         this.crossplayRuntimeReady = true;
         this.geyserRuntimeEndpoint = {
           bindAddress,

@@ -1824,6 +1824,53 @@ test('Given Geyser reports a different runtime UDP endpoint, when cross-play sta
   }
 });
 
+test('Given current Geyser reports only its UDP port, when cross-play status is read, then the configured bind address completes the observed endpoint', async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'mindcraft-managed-geyser-port-only-'));
+  await writeFile(path.join(rootDir, 'server.jar'), 'jar', 'utf8');
+  await writeFile(path.join(rootDir, 'eula.txt'), 'eula=true\n', 'utf8');
+  await mkdir(path.join(rootDir, 'plugins', 'Geyser-Spigot'), { recursive: true });
+  await writeFile(path.join(rootDir, 'plugins', 'Geyser-Spigot.jar'), 'geyser', 'utf8');
+  await writeFile(path.join(rootDir, 'plugins', 'floodgate-spigot.jar'), 'floodgate', 'utf8');
+  await writeFile(path.join(rootDir, 'plugins', 'ViaVersion.jar'), 'via', 'utf8');
+  await writeFile(path.join(rootDir, 'plugins', 'Geyser-Spigot', 'config.yml'), [
+    'bedrock:',
+    '  address: 0.0.0.0',
+    '  port: 19132',
+    'java:',
+    '  auth-type: floodgate',
+    '',
+  ].join('\n'), 'utf8');
+  await writeFile(path.join(rootDir, 'mindcraft-server.json'), JSON.stringify({
+    version: '1.21.11',
+    distribution: 'paper',
+    crossplay: true,
+    port: 25565,
+    bedrockPort: 19132,
+    bedrockBindAddress: '0.0.0.0',
+    desiredState: 'running',
+  }), 'utf8');
+  const manager = new managedServerModule.ManagedMinecraftServer({
+    rootDir,
+    runtimeCandidates: () => [],
+  });
+  manager.phase = 'running';
+
+  try {
+    manager.appendLog('[Geyser-Spigot] Started Geyser on UDP port 19132\n');
+    const status = await manager.getStatus();
+
+    assert.deepEqual(status.crossplay.observedEndpoint, {
+      bindAddress: '0.0.0.0',
+      bedrockPort: 19132,
+    });
+    assert.equal(status.crossplay.runtimeObserved, true);
+    assert.equal(status.crossplay.listening, true);
+    assert.equal(status.crossplay.joinable, true);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('Given the configured port is occupied, when the managed server starts, then it selects and persists the next free local port', async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), 'mindcraft-managed-port-fallback-'));
   await writeFile(path.join(rootDir, 'server.jar'), 'jar', 'utf8');
