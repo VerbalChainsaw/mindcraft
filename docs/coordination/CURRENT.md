@@ -1,5 +1,5 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / UNCOMMITTED-PRESERVED (parent 03392cd)
+Branch/commit: recovery/iron-pickaxe-20260803 / 96242b0
 Milestone: supervised-play entry passed; player-led capability expansion begins
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: companion playability, lived-in-world stewardship, responsiveness, and truthful continuity
