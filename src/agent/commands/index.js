@@ -79,7 +79,7 @@ const COMMAND_CATEGORIES = Object.freeze([
     Object.freeze({ category: 'Crafting', pattern: /^!(craftRecipe|smeltItem|brewPotion|clearFurnace|enchantItem|repairItem)$/ }),
     Object.freeze({ category: 'Building', pattern: /^!(place\w*|build\w*|resumeStructureJob|repairHome|establishFarm|goToFarm|maintainFarm|rememberHome)$/ }),
     Object.freeze({ category: 'Inventory', pattern: /^!(equip|consume|discard|give\w*|putIn\w*|putFamily\w*|takeFrom\w*|viewChest|deposit\w*|useItem|useOn)$/ }),
-    Object.freeze({ category: 'Memory', pattern: /^!(rememberHere|goToRememberedPlace|savedPlaces|recoverDeathItems)$/ }),
+    Object.freeze({ category: 'Memory', pattern: /^!(rememberHere|forgetRememberedPlace|goToRememberedPlace|savedPlaces|recoverDeathItems)$/ }),
     Object.freeze({ category: 'Social', pattern: /^!(startConversation|endConversation|squadRadio|lookAt\w*|showVillagerTrades|tradeWithVillager)$/ }),
     Object.freeze({ category: 'Survival', pattern: /^!(goToBed|breedAnimals)$/ }),
     Object.freeze({ category: 'Info', pattern: /^!(inspect\w*|check\w*|get\w*|search\w*|help|stats|inventory|entities|modes|savedPlaces)$/ }),

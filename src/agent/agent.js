@@ -59,6 +59,8 @@ const HOLD_SAFE_COMMANDS = new Set([
     '!squadRadio',
     '!cancelJob',
     '!cancelGoal',
+    '!rememberHere',
+    '!forgetRememberedPlace',
 ]);
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
@@ -1067,6 +1069,7 @@ export class Agent {
                 : resolvePlayerDirective(canonicalPlayer || source, message, {
                     role: this.runtime?.role,
                     bot: this.bot,
+                    memoryBank: this.memory_bank,
                 });
             if (directive?.deferToModel === true) {
                 // Blueprint compilation is cognition, not physical ownership.

@@ -1,21 +1,40 @@
 import { PersonalMemory } from './runtime/personal-memory.js';
 
+function normalizedPlaceName(value) {
+	return String(value || '')
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9 _-]/g, '')
+		.trim();
+}
+
+function isInternalPlaceName(value) {
+	const name = normalizedPlaceName(value);
+	return name === 'last_death_position'
+		|| name === 'exploration_route_start'
+		|| name.startsWith('exploration_landmark_');
+}
+
 export class MemoryBank {
 	constructor(agentName = '', personalOptions = {}) {
 		this.personal = new PersonalMemory(agentName, personalOptions);
 		this.memory = {};
 	}
 
-	load() {
-		this.personal.load();
+	_syncPlaces() {
 		this.memory = Object.fromEntries(Object.entries(this.personal.export().places)
 			.map(([name, place]) => [name, [place.x, place.y, place.z]]));
+	}
+
+	load() {
+		this.personal.load();
+		this._syncPlaces();
 		return this.memory;
 	}
 
 	rememberPlace(name, x, y, z, dimension = '') {
 		if (!this.personal.rememberPlace(name, { x, y, z }, dimension)) return false;
-		this.memory[String(name || '').toLowerCase()] = [x, y, z];
+		this._syncPlaces();
 		return true;
 	}
 
@@ -26,6 +45,28 @@ export class MemoryBank {
 
 	recallPlaceDetails(name) {
 		return this.personal.recallPlace(name);
+	}
+
+	rememberUserPlace(name, x, y, z, dimension = '') {
+		if (isInternalPlaceName(name)) return false;
+		return this.rememberPlace(name, x, y, z, dimension);
+	}
+
+	recallUserPlaceDetails(name) {
+		if (isInternalPlaceName(name)) return null;
+		return this.recallPlaceDetails(name);
+	}
+
+	forgetUserPlace(name) {
+		if (isInternalPlaceName(name) || !this.personal.forgetPlace(name)) return false;
+		this._syncPlaces();
+		return true;
+	}
+
+	getPlaceNames() {
+		return Object.keys(this.personal.export().places)
+			.filter(name => !isInternalPlaceName(name))
+			.sort((left, right) => left.localeCompare(right));
 	}
 
 	rememberFact(name, value) {
@@ -119,6 +160,6 @@ export class MemoryBank {
 	}
 
 	getKeys() {
-		return Object.keys(this.memory).join(', ');
+		return this.getPlaceNames().join(', ');
 	}
 }

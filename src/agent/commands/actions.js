@@ -679,10 +679,32 @@ export const actionsList = [
         name: '!rememberHere',
         description: 'Save the current location with a given name.',
         params: {'name': { type: 'string', description: 'The name to remember the location as.' }},
-        perform: async function (agent, name) {
-            const pos = agent.bot.entity.position;
-            agent.memory_bank.rememberPlace(name, pos.x, pos.y, pos.z);
-            return `Location saved as "${name}".`;
+        perform: function (agent, name) {
+            const pos = agent.bot?.entity?.position;
+            const dimension = canonicalDimension(agent.bot?.game?.dimension);
+            if (!pos || ![pos.x, pos.y, pos.z].every(Number.isFinite) || !dimension) {
+                return `I could not save "${name}" because my current location is not available.`;
+            }
+            const saved = agent.memory_bank.rememberUserPlace(
+                name,
+                pos.x,
+                pos.y,
+                pos.z,
+                dimension,
+            );
+            return saved
+                ? `Location saved as "${name}" in ${dimension}.`
+                : `I could not save "${name}" as a named place.`;
+        }
+    },
+    {
+        name: '!forgetRememberedPlace',
+        description: 'Forget a player-named saved location.',
+        params: {'name': { type: 'string', description: 'The name of the saved location to forget.' }},
+        perform: function (agent, name) {
+            return agent.memory_bank.forgetUserPlace(name)
+                ? `Forgot the saved place "${name}".`
+                : `I do not have a player-named place called "${name}".`;
         }
     },
     {
@@ -690,12 +712,25 @@ export const actionsList = [
         description: 'Go to a saved location.',
         params: {'name': { type: 'string', description: 'The name of the location to go to.' }},
         perform: runAsAction(async (agent, name) => {
-            const pos = agent.memory_bank.recallPlace(name);
-            if (!pos) {
+            const place = agent.memory_bank.recallUserPlaceDetails(name);
+            if (!place) {
                 skills.log(agent.bot, `No location named "${name}" saved.`);
                 return false;
             }
-            return await skills.goToPosition(agent.bot, pos[0], pos[1], pos[2], 1);
+            const savedDimension = canonicalDimension(place.dimension);
+            const currentDimension = canonicalDimension(agent.bot?.game?.dimension);
+            if (!savedDimension || !currentDimension) {
+                skills.log(agent.bot, `I cannot safely navigate to "${name}" because its dimension is unknown.`);
+                return false;
+            }
+            if (savedDimension !== currentDimension) {
+                skills.log(
+                    agent.bot,
+                    `"${name}" is in ${savedDimension}, but I am in ${currentDimension}. I will not walk to the same coordinates in the wrong dimension.`,
+                );
+                return false;
+            }
+            return await skills.goToPosition(agent.bot, place.x, place.y, place.z, 1);
         })
     },
     {

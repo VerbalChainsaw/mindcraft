@@ -151,6 +151,14 @@ export class PersonalMemory {
     return place ? structuredClone(place) : null;
   }
 
+  forgetPlace(name) {
+    const nameKey = key(name);
+    if (!nameKey || !Object.hasOwn(this.state.places, nameKey)) return false;
+    delete this.state.places[nameKey];
+    this.save();
+    return true;
+  }
+
   rememberFact(name, value) {
     const factKey = key(name);
     const factValue = text(value, 600);

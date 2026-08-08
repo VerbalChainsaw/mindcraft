@@ -18,6 +18,24 @@ function normalizedMessage(message) {
         .replace(/[.!?]+$/g, '');
 }
 
+function namedPlaceLabel(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^(?:the|my|our)\s+/, '')
+        .replace(/\s+(?:please|now)$/g, '')
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_-]/g, '')
+        .slice(0, 31);
+}
+
+function recalledUserPlaceLabel(context, value) {
+    const label = namedPlaceLabel(value);
+    return label && context.memoryBank?.recallUserPlaceDetails?.(label)
+        ? label
+        : null;
+}
+
 function requestedCount(text, fallback) {
     const match = text.match(/\b(\d{1,4})\b/);
     if (!match) return fallback;
@@ -445,29 +463,55 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
 
     // --- Named places --------------------------------------------------------
 
+    if (/^(?:please\s+)?(?:what (?:saved )?(?:places|locations|spots) do you remember|what (?:places|locations|spots) (?:have you|do you have) saved|(?:show|list|tell me) (?:me )?(?:your|my|our|the)?\s*(?:saved|remembered)?\s*(?:places|locations|spots))$/.test(text)) {
+        return {
+            command: '!savedPlaces',
+            response: 'Checking my named-place memory.',
+            releasesHold: false,
+        };
+    }
+
     const savedAs = /\b(?:remember|save|mark|call)\b.{0,24}\b(?:spot|place|location|here)\b\s*(?:as|called|named)\s+([a-z][a-z0-9_ ]{0,30})/.exec(text)
         || /\b(?:remember|save|mark)\s+(?:this\s+)?(?:as|called|named)\s+([a-z][a-z0-9_ ]{0,30})/.exec(text);
     if (savedAs) {
-        const label = savedAs[1].trim().replace(/\s+/g, '_');
+        const label = namedPlaceLabel(savedAs[1]);
         if (label && label !== 'home') {
             return {
                 command: `!rememberHere("${label}")`,
-                response: `Saved this spot as ${label.replaceAll('_', ' ')}.`,
+                response: `Saving this spot as ${label.replaceAll('_', ' ')}.`,
                 releasesHold: false,
             };
         }
     }
 
+    const explicitForgottenPlace = /^(?:please\s+)?(?:forget|remove|delete)\s+(?:(?:the|my|our)\s+)?(?:(?:saved|remembered)\s+)?(?:spot|place|location)\s+(?:called\s+|named\s+)?([a-z][a-z0-9_ ]{0,30})$/.exec(text);
+    const bareForgottenPlace = /^(?:please\s+)?(?:forget|remove|delete)\s+([a-z][a-z0-9_ ]{0,30})$/.exec(text);
+    const forgottenLabel = explicitForgottenPlace
+        ? namedPlaceLabel(explicitForgottenPlace[1])
+        : bareForgottenPlace
+            ? recalledUserPlaceLabel(context, bareForgottenPlace[1])
+            : null;
+    if (forgottenLabel) {
+        return {
+            command: `!forgetRememberedPlace("${forgottenLabel}")`,
+            response: `Removing ${forgottenLabel.replaceAll('_', ' ')} from my named-place memory.`,
+            releasesHold: false,
+        };
+    }
+
     const savedPlace = /\bgo\s+(?:back\s+)?to\s+(?:the\s+|my\s+|our\s+)?(?:saved\s+|remembered\s+)?(?:spot|place|location)\s+(?:called\s+|named\s+)?([a-z][a-z0-9_ ]{0,30})/.exec(text);
-    if (savedPlace) {
-        const label = savedPlace[1].trim().replace(/\s+/g, '_');
-        if (label) {
-            return {
-                command: `!goToRememberedPlace("${label}")`,
-                response: `Heading to ${label.replaceAll('_', ' ')}.`,
-                releasesHold: true,
-            };
-        }
+    const directSavedPlace = /^(?:please\s+)?(?:go|walk|head|travel|run|return)(?:\s+back)?\s+to\s+([a-z][a-z0-9_ ]{0,30})$/.exec(text);
+    const savedLabel = savedPlace
+        ? namedPlaceLabel(savedPlace[1])
+        : directSavedPlace
+            ? recalledUserPlaceLabel(context, directSavedPlace[1])
+            : null;
+    if (savedLabel) {
+        return {
+            command: `!goToRememberedPlace("${savedLabel}")`,
+            response: `Checking ${savedLabel.replaceAll('_', ' ')} and heading there if it is in this dimension.`,
+            releasesHold: true,
+        };
     }
 
     // --- Plan (agenda) control ----------------------------------------------

@@ -356,8 +356,11 @@ export const queryList = [
     {
         name: '!savedPlaces',
         description: 'List all saved locations.',
-        perform: async function (agent) {
-            return "Saved place names: " + agent.memory_bank.getKeys();
+        perform: function (agent) {
+            const names = agent.memory_bank.getPlaceNames();
+            return names.length > 0
+                ? `Saved place names: ${names.join(', ')}`
+                : 'No player-named places are saved.';
         }
     }, 
     {
