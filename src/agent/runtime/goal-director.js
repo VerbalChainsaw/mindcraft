@@ -752,12 +752,13 @@ export class GoalDirector {
     this.store.save(null, failed, null);
     this.setStatus('failed', code, detail, false);
     this.supersedeSubgoalFailureSpeech(failed);
+    const agendaOwnsFailedGoal = this.agent.agenda_director?.ownsGoalExecutor?.(failed.id) === true;
     // A failed player-owned goal returns control to the player, not to the
-    // autonomous agenda. Persist the existing operator-hold gate before the
-    // next arbiter tick can select old or newly generated background work.
-    // The next explicit player command releases this hold through the normal
-    // command/directive path.
-    if (failed.source === 'player') {
+    // autonomous lanes. A matching durable Agenda is different: it owns the
+    // larger player request and must receive this correlated terminal result
+    // so it can apply its own bounded retry/dependency policy without waiting
+    // for another player message.
+    if (failed.source === 'player' && !agendaOwnsFailedGoal) {
       this.agent.holdPosition?.('Player goal failed; awaiting explicit player direction.');
     }
     this.agent.publishBehaviorEvent?.({
@@ -766,7 +767,12 @@ export class GoalDirector {
       evidence: { goalId: failed.id, code, phase: 'failed' },
       salience: 3,
     });
-    const report = Promise.resolve(this.agent.openChat?.(`Goal stopped without completion: ${detail}`));
+    // An Agenda-owned failure is an internal step result, not yet the outcome
+    // of the player's whole request. Reporting it here produces stale failure
+    // narration immediately before Agenda retries the exact typed step.
+    const report = agendaOwnsFailedGoal
+      ? Promise.resolve()
+      : Promise.resolve(this.agent.openChat?.(`Goal stopped without completion: ${detail}`));
     this.agent.behavior_arbiter?.beginTerminalHandoff?.({
       outcomeId: failed.id,
       owner: 'player_goal',

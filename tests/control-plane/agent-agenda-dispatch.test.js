@@ -636,6 +636,76 @@ test('a direct Agenda result persists while Stop is held and is not repeated aft
   assert.equal(director.entries[0].attempts, 1);
 });
 
+test('a retryable parent failure preserves its dependent and restart repairs the old contradiction', () => {
+  let persisted = [];
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      return true;
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+  };
+  let director = new AgendaDirector(agent, { store, now: () => 45_000 });
+  const parent = director.add({ kind: 'deposit', requester: 'Gabriel', target: 'iron_pickaxe', quantity: 1 });
+  const dependent = director.add({
+    kind: 'deposit',
+    requester: 'Gabriel',
+    target: 'iron_axe',
+    quantity: 1,
+    dependsOnEntryId: parent.id,
+    dependencyPolicy: 'requires_success',
+  });
+  const laterDependent = director.add({
+    kind: 'deposit',
+    requester: 'Gabriel',
+    target: 'iron_shovel',
+    quantity: 1,
+    dependsOnEntryId: dependent.id,
+    dependencyPolicy: 'requires_success',
+  });
+  director.replace(parent.id, { state: 'active', startedAt: 44_000 });
+  director.commitSettlement(
+    director.entries.find(entry => entry.id === parent.id),
+    {
+      state: 'failed',
+      code: 'skill_container_unreachable',
+      detail: 'The first bounded approach failed.',
+      retryable: true,
+    },
+  );
+
+  assert.equal(director.entries.find(entry => entry.id === parent.id).state, 'pending');
+  assert.equal(director.entries.find(entry => entry.id === dependent.id).state, 'pending');
+
+  persisted = director.entries.map(entry => entry.id === parent.id
+    ? { ...entry, state: 'complete', finishedAt: 45_100 }
+    : entry.id === dependent.id || entry.id === laterDependent.id
+      ? {
+          ...entry,
+          state: 'failed',
+          finishedAt: 45_050,
+          evidence: { code: 'agenda_dependency_failed', detail: 'Old contradictory settlement.' },
+        }
+      : entry);
+  director = new AgendaDirector(agent, { store, now: () => 46_000 });
+
+  const repaired = director.entries.find(entry => entry.id === dependent.id);
+  const repairedLater = director.entries.find(entry => entry.id === laterDependent.id);
+  assert.equal(repaired.state, 'pending');
+  assert.equal(repaired.evidence.code, 'agenda_dependency_resumed');
+  assert.equal(repairedLater.state, 'pending');
+  assert.equal(repairedLater.evidence.code, 'agenda_dependency_resumed');
+  assert.equal(persisted.find(entry => entry.id === dependent.id).state, 'pending');
+  assert.equal(persisted.find(entry => entry.id === laterDependent.id).state, 'pending');
+});
+
 test('follow-until durably binds the designated furnace before a dependent smelt dispatch', async () => {
   let persisted = [];
   let director = null;

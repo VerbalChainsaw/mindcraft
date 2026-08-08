@@ -1,12 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch: recovery/iron-pickaxe-20260803
-Functional commits: 35aeff0, 697cdae, 9cae237
-Milestone: final natural overnight outpost plus ordered sleep accepted locally
+Branch/commit: recovery/iron-pickaxe-20260803 / current HEAD (parent a445705)
+Milestone: broad manufactured iron set plus exact remote storage accepted locally
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: generic capability planning, Builder, Agenda continuation, and owned package mechanics
-Live blocker: none; the complete broad request passed
-Last physical result: 111/111 outpost complete; exact bound bed slept in; dawn verified; bot Stop-held inside
-Runtime: Paper 1.21.11 healthy; world outpost-final-20260807-1220; OutpostProof held
-Repository: tracked tree clean before this marker; protected untracked audit/debt artifacts untouched
-Next campaign: Jordan review, then select the next broad cross-domain capability outcome; no shelter permutations
-Jordan review: requested C2J-20260807-1544-final-overnight-outpost
+Owned subsystem: generic capability planning, durable Agenda ownership, native navigation, exact storage
+Live blocker: none; the unchanged ten-step broad request passed
+Last physical result: five iron tools manufactured, returned from remote work, stored once in exact chest; outpost intact
+Runtime: Paper 1.21.11 healthy; outpost-final-20260807-1220; IronSuiteProof Stop-held; peaceful fixture
+Next campaign: explore/light a nearby cave, collect useful exposed ore, return to outpost, store it
+Jordan review: C2J-20260808-0235-manufactured-set-accepted (asynchronous; work does not wait)

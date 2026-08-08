@@ -15,7 +15,11 @@ import { completionRequirementSatisfied } from './goal-contract.js';
 
 const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
-const DEFAULT_MAX_NODES = 384;
+// A full empty-inventory manufactured-tool chain with one physically observed
+// wood source and no reusable workstation explores roughly 700 registry nodes
+// after structural cycle/variant pruning. Keep a measured hard ceiling above
+// that legitimate graph while still bounding pathological registries tightly.
+const DEFAULT_MAX_NODES = 1024;
 const DEFAULT_MAX_ACTIONS = 64;
 const PLANNER_PROXIMITY_RANGE = 16;
 const TOOL_TIER = Object.freeze({
@@ -417,20 +421,15 @@ function selfDroppingSourceIsGrounded(bot, context, source, target, trail) {
   if (source.name !== target) return true;
   // A root request may deliberately search for its named world block, and an
   // item with no recipe is a genuine collection leaf. Inside a recipe chain,
-  // though, a craftable block that merely drops itself is not proof that the
-  // block exists in the world. Require a real local observation before using
-  // that placed-block shortcut; otherwise let the causal search try another
-  // recipe or acquisition method.
+  // though, a craftable block that merely drops itself is not an authorized
+  // resource source. A local observation may be the player's floor, wall,
+  // workstation, or rail line; existence does not grant demolition authority.
+  // Manufacture the prerequisite instead of scavenging a nearby structure.
   if (
     (context.allowUnobservedSelfDropRoot && trail.length <= 1)
     || connectedRecipes(bot, target).length === 0
   ) return true;
-  return Boolean(nearbyBlock(
-    bot,
-    source.name,
-    context.range,
-    context.blockProximityCache,
-  ));
+  return false;
 }
 
 function blockDistance(bot, block) {
@@ -726,10 +725,12 @@ function plankVariantDescriptor(bot, recipe) {
 }
 
 // Registry recipe alternatives often encode a tag as many concrete recipes.
-// If none of those species is carried or physically observed, choosing the
-// registry's first species turns planning into a blind search. Collect one
-// bounded batch through the existing wood-family capability, then let the
-// mandatory post-action replan bind the actual log and plank species found.
+// If none of those species is carried or already grounded by the causal plan,
+// choosing the registry's first species turns planning into a blind search. A
+// lone observed log is not proof of a natural, reachable tree (it may be part
+// of a player structure). Collect one bounded batch through the existing
+// wood-family capability, then let the mandatory post-action replan bind the
+// actual log and plank species collected.
 function planUnboundPlankFamily(bot, context, target, amount, recipes, trail) {
   const learningKey = 'collect:logs->logs';
   if (methodExcluded(context, learningKey)) return null;
@@ -753,14 +754,7 @@ function planUnboundPlankFamily(bot, context, target, amount, recipes, trail) {
   const hasConcreteBinding = family.some(entry => {
     if (ledgerCount(context, entry.plank.name) > 0) return true;
     if (immediateCarriedProduction(bot, context, entry.plank.name) > 0) return true;
-    return Number.isFinite(acquisitionSourceDistance(
-      bot,
-      entry.plank.name,
-      context.range,
-      0,
-      [],
-      context.blockProximityCache,
-    ));
+    return false;
   });
   if (hasConcreteBinding) return null;
 

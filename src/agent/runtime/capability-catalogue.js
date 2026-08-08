@@ -239,7 +239,10 @@ defineCapability({
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!collectWoodInRange',
-    command: `!collectWoodInRange(${args.count}, ${args.range}, true)`,
+    // GoalDirector owns region changes between productive planner actions.
+    // Keeping this action to one region prevents the physical skill from
+    // spending several hidden relocations before the Director can replan.
+    command: `!collectWoodInRange(${args.count}, ${args.range})`,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,
@@ -305,7 +308,9 @@ defineCapability({
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!collectBlocksInRange',
-    command: `!collectBlocksInRange(${commandString(args.source)}, ${args.count}, ${args.range}, true)`,
+    // Recovery is a Director transition, not part of a productive capability
+    // attempt. The bounded collector scans and acts in exactly one region.
+    command: `!collectBlocksInRange(${commandString(args.source)}, ${args.count}, ${args.range})`,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,

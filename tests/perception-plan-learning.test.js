@@ -342,7 +342,7 @@ test('The causal planner uses learned outcomes only to rank otherwise viable met
   assert.equal(learned.nextStep.learnedPreference, 8);
 });
 
-test('The causal planner prefers the nearest physical source behind equivalent recipe ingredients', () => {
+test('A lone observed log does not suppress generic natural-tree collection for interchangeable recipes', () => {
   const bot = nearbyRecipeBot();
   const probes = [];
   const findBlock = bot.findBlock.bind(bot);
@@ -357,7 +357,7 @@ test('The causal planner prefers the nearest physical source behind equivalent r
   });
 
   assert.equal(plan.status, 'ready');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("birch_log", 1, 64, true)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64)');
   assert.equal(probes.every(probe => probe.maxDistance <= 16), true);
   assert.equal(
     new Set(probes.map(probe => `${probe.matching}:${probe.maxDistance}`)).size,
@@ -377,7 +377,7 @@ test('Equivalent plank recipes collect generic wood before binding an unobserved
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'collect_wood');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64, true)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64)');
 });
 
 test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {
@@ -450,7 +450,7 @@ test('The causal planner derives renewable entity harvests instead of searching 
   );
 });
 
-test('Recursive recipes require evidence before treating a crafted self-drop block as a world source', () => {
+test('Nested recipes never treat an observed crafted self-drop block as demolition authority', () => {
   const absent = buildPrerequisitePlan(recursivePlacedBlockBot(), {
     target: 'white_dye',
     quantity: 1,
@@ -467,10 +467,10 @@ test('Recursive recipes require evidence before treating a crafted self-drop blo
     quantity: 1,
     range: 64,
   });
-  assert.equal(observed.status, 'ready');
+  assert.equal(observed.status, 'blocked');
   assert.equal(
-    observed.nextStep.capability.binding.command,
-    '!collectBlocksInRange("bone_block", 1, 64, true)',
+    observed.actions.some(action => action.capability.binding.command.includes('"bone_block"')),
+    false,
   );
   const excludedObserved = buildPrerequisitePlan(recursivePlacedBlockBot({ observed: true }), {
     target: 'white_dye',
@@ -492,7 +492,7 @@ test('Recursive recipes require evidence before treating a crafted self-drop blo
   assert.equal(explicitWorldSearch.status, 'ready');
   assert.equal(
     explicitWorldSearch.nextStep.capability.binding.command,
-    '!collectBlocksInRange("bone_block", 1, 64, true)',
+    '!collectBlocksInRange("bone_block", 1, 64)',
   );
 });
 
@@ -626,7 +626,7 @@ test('The causal planner acquires remote recipe ingredients before provisioning 
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'collect_block');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("test_gem_ore", 5, 64, true)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("test_gem_ore", 5, 64)');
 
   const staged = remoteTableRecipeBot();
   staged.inventory.items = () => [{ name: 'test_gem', type: 2, count: 5 }];
@@ -843,7 +843,7 @@ test('Job-planned materials manufacture craftable blocks instead of searching fo
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'collect_block');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("oak_log", 1, 64, true)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectBlocksInRange("oak_log", 1, 64)');
   assert.equal(
     plan.actions.some(action => action.learningKey === 'collect:oak_planks->oak_planks'),
     false,
@@ -896,7 +896,7 @@ test('Planner capabilities expose and enforce the typed execution contract', asy
   const outcome = await executeCapabilityAction(capability, {
     agent,
     executeCommand: (_agent, command, options) => {
-      assert.equal(command, '!collectBlocksInRange("alpha_ore", 1, 64, true)');
+      assert.equal(command, '!collectBlocksInRange("alpha_ore", 1, 64)');
       assert.equal(options.owner, 'player');
       bot.inventory.slots = [{ name: 'test_gem', count: 1 }];
       return 'collected';
@@ -1148,6 +1148,24 @@ test('Empty-inventory planning does not treat reversible compression recipes as 
   assert.ok(plan.exploredNodes < 384);
   assert.notEqual(plan.blocker, 'iron_block');
   assert.notEqual(plan.blocker, 'iron_nugget');
+
+  const cherryLogId = registry.blocksByName.cherry_log.id;
+  const observedTreePlan = buildPrerequisitePlan({
+    ...bot,
+    findBlock({ matching }) {
+      return matching === cherryLogId
+        ? { name: 'cherry_log', position: { x: 6, y: 69, z: 0 } }
+        : null;
+    },
+  }, {
+    target: 'iron_pickaxe',
+    quantity: 1,
+    range: 64,
+  });
+  assert.equal(observedTreePlan.status, 'ready');
+  assert.ok(observedTreePlan.exploredNodes < 1024);
+  assert.equal(observedTreePlan.nextStep.capability.id, 'collect_wood');
+  assert.equal(observedTreePlan.nextStep.target, 'logs');
 });
 
 test('Exact-item delivery binds one recipient and trusts only authoritative pickup evidence', async () => {

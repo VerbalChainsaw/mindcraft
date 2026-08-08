@@ -763,7 +763,7 @@ export const actionsList = [
     },
     {
         name: '!putInChestAt',
-        description: 'Deposit items into the exact assigned loaded chest or barrel and verify the inventory transfer.',
+        description: 'Navigate to the exact assigned chest or barrel, load and validate it, then verify the inventory transfer.',
         params: {
             'item_name': { type: 'ItemName', description: 'The item to deposit.' },
             'num': { type: 'int', description: 'The number of items to deposit.', domain: [1, Number.MAX_SAFE_INTEGER] },

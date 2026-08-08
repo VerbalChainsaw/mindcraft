@@ -397,6 +397,30 @@ test('recovery history does not spend the productive-step ceiling, which still f
   ]);
 });
 
+test('an Agenda-owned goal failure settles upward without activating Hold or announcing a false terminal outcome', async () => {
+  const director = createDirector();
+  const reports = [];
+  director.agent.openChat = message => reports.push(message);
+  director.activeGoal = boundaryGoal([
+    subgoal('plan', 1),
+    subgoal('plan', 2),
+    subgoal('plan', 3),
+    subgoal('plan', 4),
+  ]);
+  const goalId = director.activeGoal.id;
+  director.agent.agenda_director = {
+    ownsGoalExecutor: candidateId => candidateId === goalId,
+  };
+
+  director.fail('skill_unreachable', 'The bounded acquisition exhausted its regions.');
+  await settle();
+
+  assert.equal(director.lastGoal.id, goalId);
+  assert.equal(director.lastGoal.phase, 'failed');
+  assert.equal(director.agent.operator_hold_reason, undefined);
+  assert.deepEqual(reports, []);
+});
+
 test('delivery preserves attempts, resolves an unloaded player, and returns through owned navigation', async () => {
   const director = createDirector();
   director.agent.bot.players = {};

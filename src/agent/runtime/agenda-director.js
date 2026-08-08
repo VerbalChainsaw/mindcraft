@@ -133,6 +133,45 @@ export class AgendaDirector {
         });
       });
       if (repairedLegacyWait) this.store.save(this.entries);
+      // Older settlement code could mark a dependent failed when its parent
+      // merely entered a retry. If the durable parent later completed, that
+      // dependency failure is contradictory: the required-success predicate
+      // is now satisfied and the dependent was never attempted. Re-arm only
+      // that exact persisted contradiction.
+      let repairedSatisfiedDependency = false;
+      let repairedAnotherDependency = true;
+      while (repairedAnotherDependency) {
+        repairedAnotherDependency = false;
+        const restoredById = new Map(this.entries.map(entry => [entry.id, entry]));
+        this.entries = this.entries.map(entry => {
+          if (
+            entry.state !== 'failed'
+            || entry.evidence?.code !== 'agenda_dependency_failed'
+            || entry.dependencyPolicy !== 'requires_success'
+          ) return entry;
+          const predecessor = restoredById.get(entry.dependsOnEntryId);
+          const predecessorCanStillSucceed = predecessor?.state === 'complete'
+            || (
+              predecessor?.state === 'pending'
+              && predecessor.evidence?.code === 'agenda_dependency_resumed'
+            );
+          if (!predecessorCanStillSucceed) return entry;
+          repairedSatisfiedDependency = true;
+          repairedAnotherDependency = true;
+          return normalizeAgendaEntry({
+            ...entry,
+            state: 'pending',
+            startedAt: null,
+            finishedAt: null,
+            executorId: '',
+            evidence: {
+              code: 'agenda_dependency_resumed',
+              detail: 'The required predecessor is complete or resumable; resuming work that was never attempted.',
+            },
+          });
+        });
+      }
+      if (repairedSatisfiedDependency) this.store.save(this.entries);
       const orphanedConstructionIds = new Set(this.entries.filter(entry => (
         entry.kind === 'construction'
         && !isTerminalAgendaState(entry.state)
@@ -219,6 +258,15 @@ export class AgendaDirector {
 
   activeEntry() {
     return this.entries.find(entry => entry.state === 'active') || null;
+  }
+
+  ownsGoalExecutor(goalId) {
+    const active = this.activeEntry();
+    return Boolean(
+      goalId
+      && active?.executor === 'goal'
+      && active.executorId === goalId
+    );
   }
 
   /** Append one validated step. Returns a player-facing result. */
@@ -690,7 +738,13 @@ export class AgendaDirector {
     // Persist the terminal step and its dependent exact-workstation handoff in
     // one store write. A restart can therefore never observe arrival complete
     // while the following smelt remains free to select a different furnace.
-    const blockedDependents = settled.state !== 'complete'
+    // A retryable failure returns the parent to pending. Its dependents must
+    // remain pending too; only the committed terminal parent state can make a
+    // requires-success dependency impossible.
+    const parentTerminallyFailed = !retryable
+      && activePatch.state !== 'complete'
+      && isTerminalAgendaState(activePatch.state);
+    const blockedDependents = parentTerminallyFailed
       ? new Set(this.entries.filter(entry => (
         entry.state === 'pending'
         && entry.dependsOnEntryId === active.id

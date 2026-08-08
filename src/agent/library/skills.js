@@ -228,6 +228,7 @@ const PORTAL_EXIT_TIMEOUT_MS = 5_000;
 const EXPLORATION_STALL_TIMEOUT_MS = 20_000;
 const EXPLORATION_LEG_TIMEOUT_MS = 90_000;
 const CONTAINER_OPEN_TIMEOUT_MS = 20_000;
+const ASSIGNED_CONTAINER_LOAD_RADIUS = 16;
 const BREW_STAGE_TIMEOUT_MS = 28_000;
 const BREW_POLL_MS = 100;
 const EXPLORATION_LANDMARK_BLOCKS = Object.freeze([
@@ -1031,6 +1032,39 @@ async function approachContainerBlock(bot, selected) {
     return reached
         ? { block: observed, outcome: 'ready' }
         : { block: null, outcome: 'chest_unreachable' };
+}
+
+async function loadAssignedContainerBlock(bot, exactPosition) {
+    if (!exactPosition || ![exactPosition.x, exactPosition.y, exactPosition.z].every(Number.isFinite)) {
+        return { block: null, outcome: 'assigned_container_invalid', observed: null };
+    }
+    const position = new Vec3(
+        Math.floor(exactPosition.x),
+        Math.floor(exactPosition.y),
+        Math.floor(exactPosition.z),
+    );
+    let observed = bot.blockAt(position);
+    if (!observed) {
+        const reachedLoadRadius = await goToGoal(
+            bot,
+            new pf.goals.GoalNear(position.x, position.y, position.z, ASSIGNED_CONTAINER_LOAD_RADIUS),
+        );
+        if (bot.interrupt_code) {
+            return { block: null, outcome: 'interrupted', observed: null };
+        }
+        observed = bot.blockAt(position);
+        if (!observed) {
+            return {
+                block: null,
+                outcome: reachedLoadRadius ? 'assigned_container_unloaded' : 'assigned_container_unreachable',
+                observed: null,
+            };
+        }
+    }
+    if (!EXPLORATION_CONTAINER_BLOCKS.includes(observed.name)) {
+        return { block: null, outcome: 'assigned_container_invalid', observed: observed.name || null };
+    }
+    return { block: observed, outcome: 'ready', observed: observed.name };
 }
 
 // Blocks a route may tunnel through when the profile permits it. This is an
@@ -8921,31 +8955,39 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
         log(bot, `The assigned deposit is in ${expectedDimension}, not ${currentDimension || 'the current dimension'}.`);
         return false;
     }
-    let chest = exactPosition && [exactPosition.x, exactPosition.y, exactPosition.z].every(Number.isFinite)
-        ? bot.blockAt(new Vec3(
-            Math.floor(exactPosition.x),
-            Math.floor(exactPosition.y),
-            Math.floor(exactPosition.z),
-        ))
-        : world.getNearestBlock(bot, 'chest', 32);
-    if (exactPosition && !['chest', 'trapped_chest', 'barrel'].includes(chest?.name)) {
-        setActionEvidence(bot, {
-            kind: 'chest_transfer',
-            outcome: chest ? 'assigned_container_invalid' : 'assigned_container_unloaded',
-            target: {
-                name: 'assigned_deposit',
-                x: Math.floor(exactPosition.x),
-                y: Math.floor(exactPosition.y),
-                z: Math.floor(exactPosition.z),
-            },
-            observed: chest?.name || null,
-            retryable: true,
-        });
-        log(bot, 'The assigned deposit is not a loaded chest, trapped chest, or barrel.');
-        return false;
+    let chest = null;
+    if (exactPosition) {
+        const assigned = await loadAssignedContainerBlock(bot, exactPosition);
+        chest = assigned.block;
+        if (!chest) {
+            const retryable = !['assigned_container_invalid', 'interrupted'].includes(assigned.outcome);
+            setActionEvidence(bot, {
+                kind: 'chest_transfer',
+                outcome: assigned.outcome,
+                target: {
+                    name: 'assigned_deposit',
+                    x: Math.floor(exactPosition.x),
+                    y: Math.floor(exactPosition.y),
+                    z: Math.floor(exactPosition.z),
+                },
+                observed: assigned.observed,
+                retryable,
+            });
+            log(bot, assigned.outcome === 'assigned_container_invalid'
+                ? 'The assigned deposit is not a chest, trapped chest, or barrel.'
+                : 'Could not reach and load the assigned deposit container.');
+            return false;
+        }
+    } else {
+        chest = world.getNearestBlock(bot, 'chest', 32);
     }
     if (!chest) {
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'chest_not_found', target: { name: itemName || 'item' }, retryable: true });
+        setActionEvidence(bot, {
+            kind: 'chest_transfer',
+            outcome: 'chest_not_found',
+            target: { name: itemName || 'item' },
+            retryable: true,
+        });
         log(bot, 'Could not find a chest nearby.');
         return false;
     }
@@ -9252,28 +9294,31 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
      * await skills.takeFromChest(bot, "oak_log");
      * **/
     itemName = String(itemName || '').trim();
-    let chest = exactPosition && [exactPosition.x, exactPosition.y, exactPosition.z].every(Number.isFinite)
-        ? bot.blockAt(new Vec3(
-            Math.floor(exactPosition.x),
-            Math.floor(exactPosition.y),
-            Math.floor(exactPosition.z),
-        ))
-        : world.getNearestBlock(bot, 'chest', 32);
-    if (exactPosition && !EXPLORATION_CONTAINER_BLOCKS.includes(chest?.name)) {
-        setActionEvidence(bot, {
-            kind: 'chest_transfer',
-            outcome: chest ? 'assigned_container_invalid' : 'assigned_container_unloaded',
-            target: {
-                name: 'assigned_withdrawal',
-                x: Math.floor(exactPosition.x),
-                y: Math.floor(exactPosition.y),
-                z: Math.floor(exactPosition.z),
-            },
-            observed: chest?.name || null,
-            retryable: true,
-        });
-        log(bot, 'The assigned withdrawal is not a loaded chest, trapped chest, or barrel.');
-        return false;
+    let chest = null;
+    if (exactPosition) {
+        const assigned = await loadAssignedContainerBlock(bot, exactPosition);
+        chest = assigned.block;
+        if (!chest) {
+            const retryable = !['assigned_container_invalid', 'interrupted'].includes(assigned.outcome);
+            setActionEvidence(bot, {
+                kind: 'chest_transfer',
+                outcome: assigned.outcome,
+                target: {
+                    name: 'assigned_withdrawal',
+                    x: Math.floor(exactPosition.x),
+                    y: Math.floor(exactPosition.y),
+                    z: Math.floor(exactPosition.z),
+                },
+                observed: assigned.observed,
+                retryable,
+            });
+            log(bot, assigned.outcome === 'assigned_container_invalid'
+                ? 'The assigned withdrawal is not a chest, trapped chest, or barrel.'
+                : 'Could not reach and load the assigned withdrawal container.');
+            return false;
+        }
+    } else {
+        chest = world.getNearestBlock(bot, 'chest', 32);
     }
     if (!chest) {
         setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'chest_not_found', target: { name: itemName || 'item' }, retryable: true });
