@@ -525,6 +525,16 @@ The apparent settled-gaze failure was disproved before adding another controller
 
 Freeze river, shoreline, combat-resumption, reconnect, and gaze permutations. The next broad outcome combines conversational authority with lived-in-world stewardship: ordinary nearby first-person conversation must not start work, while an explicitly addressed stocking request must reuse the selected outpost furnace and chest, preserve the house, farm, paths, and fixtures, produce useful nonzero food, and finish under Operator Stop. Do not prebuild food routes, a storage controller, a claimed-world framework, a conversation-classifier project, or a second executor.
 
+### Broad shared-outpost stocking checkpoint (2026-08-08)
+
+The natural addressed request to gather a useful food mix, cook it in the furnace already at the outpost, and put it in the selected chest completed as two durable typed Agenda steps. The unchanged Paper run prepared at least 24 additional safe food points, deposited two cooked porkchops and two cooked mutton, preserved every baseline food item, left the selected furnace empty, retained the chest's prior tools and coal, and ended under Operator Stop.
+
+The correction stays at shared seams. Agenda stores exact furnace/container bindings and restart-stable food/inventory baselines; `prepareFood` keeps one additional-output target across retries and delegates ordinary hunting, collection, smelting, and transfer mechanics to the existing package-backed skills; `smeltItem` safely reclaims incompatible finished output before reuse; family deposit transfers per-item deltas instead of old carried stock. Bounded best-effort accepts useful partial supply only after direct attempts are exhausted and the durable baseline proves at least 12 new food points.
+
+The suspected stewardship failure was disproved before changing collection policy. A loaded-world block scan showed that the harvested spruce coordinate was the lower segment of a canopied natural trunk immediately outside the complete 5x5 spruce-plank shell and roof. No house block was removed, so no claimed-world registry, tree-classifier rewrite, storage controller, or second executor was added.
+
+Freeze phrase, quantity, food-type, furnace-content, and family-deposit permutations. The supervised-play entry gate is passed. Subsequent work starts from broad player play and descends only when Minecraft exposes a player-visible authority, stewardship, no-progress, truthfulness, or missing-domain blocker.
+
 ### Supervised-play entry priority
 
 The near-term target is a bot Gabriel can safely play beside under supervision. The entry gate is deliberately smaller than release readiness: intended orders are accepted while ordinary nearby conversation remains conversation; Stop and terminal completion prevent stale work; Follow, water traversal, attributed defense, resumption, and settled gaze remain usable; one ordinary resource/processing/storage request reuses designated outpost infrastructure without damaging the lived-in world; and failures are prompt and truthful.
@@ -537,7 +547,7 @@ Prioritize gameplay defects in this order:
 4. truthful long-session continuation and restart behavior;
 5. new gameplay domains pulled by broad natural requests.
 
-Do not preempt the active stocking campaign to fix dormant debt. The crafting-window generation bypass, indefinite manufactured-delivery quantity semantics, and strategy-level learning gap remain bounded P1 defects. Correct them when a broad playtest reaches the affected path or fresh evidence shows they threaten current ownership or world safety.
+Do not preempt supervised broad play to fix dormant debt. The crafting-window generation bypass, indefinite manufactured-delivery quantity semantics, and strategy-level learning gap remain bounded P1 defects. Correct them when a broad playtest reaches the affected path or fresh evidence shows they threaten current ownership or world safety.
 
 ## Prioritized backlog
 
@@ -608,8 +618,8 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 ## Immediate next coding move
 
-Freeze river, shoreline, combat-resumption, reconnect, and gaze permutations. Native Pathfinder owns swimming, jumping, ordinary Follow locomotion, and settled player-facing; V2 owns the policy that a dry-player Follow endpoint cannot be water. The canonical perception axis correction is part of this checkpoint because it fixes the state consumed by entities, blocks, hazards, and view-based reasoning—not merely a test observer.
+Freeze the completed river-companion and shared-outpost-stocking campaigns. The bot has crossed the supervised-play entry gate: natural addressed work can compose acquisition, processing, exact infrastructure reuse, and delta-only storage while nearby non-orders remain conversation and Operator Stop remains authoritative.
 
-The next product-scale campaign combines conversational authority with shared-outpost stewardship. First, ordinary nearby first-person conversation such as `I'm going to gather food for tonight.` must not start bot work. Then an explicitly addressed request asks the bot to help stock the lived-in outpost: gather a useful nonzero food supply, cook anything that needs cooking in the furnace already there, place the food in the selected chest, preserve the house, farm, paths, and fixtures, and end under Operator Stop.
+Begin broad supervised play rather than another preselected noun or mechanic. Preserve the player's unchanged useful outcome, observe the first material failure, repair the smallest shared primitive or capability binding, and rerun that outcome physically. Prioritize stale/unintended work, destructive world changes, repeated no-progress, dishonest completion or restart replay, then genuine missing gameplay domains.
 
-Run the natural outcome before adding anything. Repair only the first shared intake, acquisition, processing, infrastructure-binding, storage, or stewardship seam that Minecraft exposes, then rerun the unchanged broad request. Do not add food-specific routes, a storage controller, a claimed-world framework, a separate conversation-classifier project, or a second executor.
+Do not reopen food quantities, furnace states, chest contents, river routes, or gaze permutations without new live evidence. Do not turn playtesting into a certification matrix, telemetry project, claimed-world framework, storage controller, or second executor.

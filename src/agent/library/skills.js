@@ -3099,10 +3099,19 @@ export async function prepareMaterial(bot, materialName, num=1, range=64, collec
     return finish(success && materialInventoryCount(bot, material) >= desired, success ? 'prepared' : 'preparation_failed');
 }
 
-export async function prepareFood(bot, targetFoodPoints=24, range=64) {
-    const targetPoints = Math.max(6, Math.min(160, Math.floor(Number(targetFoodPoints) || 24)));
+export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorkstation=null, baselineFoodPoints=null) {
+    const requestedPoints = Math.max(6, Math.min(160, Math.floor(Number(targetFoodPoints) || 24)));
     const searchRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
     const beforePoints = safeFoodPoints(bot);
+    const hasDurableBaseline = baselineFoodPoints !== null
+        && baselineFoodPoints !== undefined
+        && Number.isFinite(Number(baselineFoodPoints));
+    const durableBaseline = hasDurableBaseline
+        ? Math.max(0, Math.min(2304, Math.floor(Number(baselineFoodPoints))))
+        : null;
+    const targetPoints = hasDurableBaseline
+        ? Math.min(2304, durableBaseline + requestedPoints)
+        : requestedPoints;
     const previousHeldItem = bot.heldItem?.name || null;
     const progress = {
         cropsHarvested: 0,
@@ -3111,7 +3120,12 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
         itemsCooked: 0,
         breadCrafted: 0,
     };
-    const target = { name: 'safe_food', foodPoints: targetPoints };
+    const target = {
+        name: 'safe_food',
+        foodPoints: targetPoints,
+        additionalFoodPoints: hasDurableBaseline ? requestedPoints : 0,
+        baselineFoodPoints: durableBaseline,
+    };
     const interrupted = () => Boolean(bot.interrupt_code);
     const nearbyHostile = () => bot.nearestEntity?.(entity => (
         mc.isHostile(entity)
@@ -3138,6 +3152,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
             beforeFoodPoints: beforePoints,
             afterFoodPoints: afterPoints,
             gainedFoodPoints: Math.max(0, afterPoints - beforePoints),
+            workstation: exactWorkstation,
             ...progress,
             retryable: !success,
             ...detail,
@@ -3162,7 +3177,10 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
         return true;
     };
     const ensureCookingStation = async () => {
-        if (!world.getNearestBlock(bot, 'furnace', 16) && inventoryCount(bot, 'furnace') < 1) {
+        if (exactWorkstation) {
+            const binding = await bindExistingWorkstation(bot, 'furnace', 64, null, exactWorkstation);
+            if (!binding.block) return false;
+        } else if (!world.getNearestBlock(bot, 'furnace', 16) && inventoryCount(bot, 'furnace') < 1) {
             if (!await prepareTool(bot, 'stone_pickaxe') || interrupted()) return false;
             if (inventoryCount(bot, 'cobblestone') < 8) {
                 if (!await collectBlock(
@@ -3189,7 +3207,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
         if (!mc.getSmeltingFuel(bot)) {
             if (!await collectWood(bot, 2, searchRange) || interrupted()) return false;
         }
-        return Boolean(world.getNearestBlock(bot, 'furnace', 16) || inventoryCount(bot, 'furnace') > 0)
+        return Boolean(exactWorkstation || world.getNearestBlock(bot, 'furnace', 16) || inventoryCount(bot, 'furnace') > 0)
             && Boolean(mc.getSmeltingFuel(bot));
     };
     const carriedCookableFood = () => bot.inventory.items()
@@ -3207,7 +3225,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
         if (carriedCookableCount() < 1 || safeFoodPoints(bot) >= targetPoints) return true;
         if (bootstrap) {
             if (!await ensureCookingStation()) return false;
-        } else if (!world.getNearestBlock(bot, 'furnace', 16) || !mc.getSmeltingFuel(bot)) {
+        } else if ((!exactWorkstation && !world.getNearestBlock(bot, 'furnace', 16)) || !mc.getSmeltingFuel(bot)) {
             return false;
         }
         for (const { input, output } of carriedCookableFood()) {
@@ -3220,7 +3238,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64) {
                 Math.max(1, Math.ceil((targetPoints - safeFoodPoints(bot)) / outputPoints)),
             );
             const before = inventoryCount(bot, output);
-            if (await smeltItem(bot, input, amount)) {
+            if (await smeltItem(bot, input, amount, exactWorkstation)) {
                 progress.itemsCooked += Math.max(0, inventoryCount(bot, output) - before);
             }
         }
@@ -3391,6 +3409,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
     let furnaceBlock = null;
     let temporaryFurnace = null;
     let worldFurnaceRouteFailed = false;
+    let reclaimedOutput = null;
     const finish = (success, outcome, detail = {}) => {
         finalEvidence = {
             kind: 'smelt',
@@ -3399,6 +3418,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             output: outputName,
             requested: amount,
             workstation: exactWorkstation,
+            ...(reclaimedOutput ? { reclaimedOutput } : {}),
             retryable: !success,
             ...detail,
         };
@@ -3487,8 +3507,35 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
         }
         const existingOutput = furnace.outputItem();
         if (existingOutput && outputName && existingOutput.name !== outputName) {
-            log(bot, `The furnace contains ${existingOutput.name}; it will not be mixed with ${outputName}.`);
-            return finish(false, 'furnace_output_occupied', { observed: existingOutput.name });
+            const outputCount = Math.max(1, Number(existingOutput.count) || 1);
+            const capacity = carriedOutputCapacity(bot, existingOutput.name).capacity;
+            if (capacity < outputCount) {
+                log(bot, `The furnace contains ${existingOutput.name}, but inventory cannot safely reclaim it before smelting ${outputName}.`);
+                return finish(false, 'furnace_output_inventory_blocked', {
+                    observed: existingOutput.name,
+                    observedCount: outputCount,
+                    availableCapacity: capacity,
+                });
+            }
+            const beforeReclaim = inventoryCount(bot, existingOutput.name);
+            const reclaimed = await furnace.takeOutput();
+            await waitForInventoryCount(
+                bot,
+                existingOutput.name,
+                beforeReclaim + outputCount,
+                1_000,
+            );
+            const received = Math.max(0, inventoryCount(bot, existingOutput.name) - beforeReclaim);
+            if (furnace.outputItem() || !reclaimed || received < outputCount) {
+                log(bot, `Could not verify reclaiming the existing ${existingOutput.name} furnace output.`);
+                return finish(false, 'furnace_output_reclaim_unverified', {
+                    observed: existingOutput.name,
+                    expected: outputCount,
+                    received,
+                });
+            }
+            reclaimedOutput = { name: existingOutput.name, count: received };
+            log(bot, `Reclaimed ${received} ${existingOutput.name} from the furnace before smelting ${outputName}.`);
         }
 
         const existingFuel = furnace.fuelItem();
@@ -9178,7 +9225,21 @@ export async function putInChestAt(bot, itemName, num, x, y, z, dimension='') {
     return await putInChest(bot, itemName, num, { x, y, z, dimension });
 }
 
-export async function putFamilyInChestAt(bot, family, num, x, y, z) {
+function familyBaselineCounts(bot, family, encoded) {
+    const value = String(encoded || '').trim();
+    if (!value) return null;
+    if (value === 'none') return new Map();
+    const counts = new Map();
+    for (const part of value.split('|')) {
+        const match = /^([a-z0-9_]{1,64}):(\d{1,4})$/.exec(part);
+        if (!match || !itemMatchesFamily(bot, { name: match[1] }, family)) return false;
+        const count = Math.max(0, Math.min(2304, Number(match[2]) || 0));
+        counts.set(match[1], Math.min(2304, (counts.get(match[1]) || 0) + count));
+    }
+    return counts;
+}
+
+export async function putFamilyInChestAt(bot, family, num, x, y, z, dimension='', baselineManifest='') {
     family = String(family || '').trim();
     const requested = Math.max(1, Math.min(2304, Math.floor(Number(num) || 1)));
     const before = familyInventoryCount(bot, family);
@@ -9187,17 +9248,39 @@ export async function putFamilyInChestAt(bot, family, num, x, y, z) {
         setActionEvidence(bot, { kind: 'family_transfer', outcome: 'unsupported_family', target, retryable: false });
         return false;
     }
-    if (before < 1) {
-        setActionEvidence(bot, { kind: 'family_transfer', outcome: 'family_missing', target, retryable: true });
-        log(bot, `There are no ${family} to deposit.`);
+    const baseline = familyBaselineCounts(bot, family, baselineManifest);
+    if (baseline === false) {
+        setActionEvidence(bot, { kind: 'family_transfer', outcome: 'invalid_baseline_manifest', target, retryable: false });
+        log(bot, `The ${family} transfer baseline is invalid.`);
         return false;
     }
-    let remaining = Math.min(requested, before);
+    const candidates = familyInventoryEntries(bot, family)
+        .map(entry => ({
+            ...entry,
+            count: baseline === null
+                ? entry.count
+                : Math.max(0, entry.count - (baseline.get(entry.name) || 0)),
+        }))
+        .filter(entry => entry.count > 0);
+    const available = candidates.reduce((total, entry) => total + entry.count, 0);
+    if (available < 1) {
+        setActionEvidence(bot, {
+            kind: 'family_transfer',
+            outcome: baseline === null ? 'family_missing' : 'family_delta_missing',
+            target,
+            retryable: true,
+        });
+        log(bot, baseline === null
+            ? `There are no ${family} to deposit.`
+            : `There are no newly prepared ${family} items to deposit.`);
+        return false;
+    }
+    let remaining = Math.min(requested, available);
     let allVerified = true;
-    for (const entry of familyInventoryEntries(bot, family)) {
+    for (const entry of candidates) {
         if (remaining < 1 || bot.interrupt_code) break;
         const amount = Math.min(remaining, entry.count);
-        if (!await putInChestAt(bot, entry.name, amount, x, y, z)) {
+        if (!await putInChestAt(bot, entry.name, amount, x, y, z, dimension)) {
             allVerified = false;
             break;
         }
@@ -9205,7 +9288,7 @@ export async function putFamilyInChestAt(bot, family, num, x, y, z) {
     }
     const after = familyInventoryCount(bot, family);
     const transferred = Math.max(0, before - after);
-    const expected = Math.min(requested, before);
+    const expected = Math.min(requested, available);
     const success = allVerified && transferred >= expected;
     setActionEvidence(bot, {
         kind: 'family_transfer',
@@ -9213,6 +9296,10 @@ export async function putFamilyInChestAt(bot, family, num, x, y, z) {
         target,
         requested: expected,
         transferred,
+        ...(baseline === null ? {} : {
+            baseline: Object.fromEntries(baseline),
+            manifest: candidates.map(entry => ({ name: entry.name, count: entry.count })),
+        }),
         retryable: !success && !bot.interrupt_code,
     });
     log(bot, success

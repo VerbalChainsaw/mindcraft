@@ -77,6 +77,11 @@ export const AGENDA_KINDS = Object.freeze({
   farm_visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   maintain_farm: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   deposit: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  // Food stocking is two ordinary bounded mechanics joined by the durable
+  // queue: prepare additional safe food at one exact furnace, then deposit
+  // only that new output in one exact container.
+  prepare_food: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: true }),
+  deposit_family: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
   sleep: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   // Coordinates are validated numbers, never text, so a patrol step cannot
   // smuggle anything executable through the store.
@@ -228,6 +233,24 @@ function normalizeContainerConstraint(raw) {
   });
 }
 
+function normalizeBaselineInventory(raw) {
+  if (!Array.isArray(raw)) {
+    throw new TypeError('An agenda family deposit needs a typed baseline inventory.');
+  }
+  const counts = new Map();
+  for (const item of raw.slice(0, 36)) {
+    const name = canonical(item?.name);
+    const count = finiteInteger(item?.count, 0, 0, MAX_QUANTITY);
+    if (!CANONICAL_NAME.test(name) || !isNameFaithful(item?.name, name)) {
+      throw new TypeError('An agenda baseline inventory item name is invalid.');
+    }
+    if (count > 0) counts.set(name, Math.min(MAX_QUANTITY, (counts.get(name) || 0) + count));
+  }
+  return Object.freeze([...counts.entries()]
+    .map(([name, count]) => Object.freeze({ name, count }))
+    .sort((left, right) => left.name.localeCompare(right.name)));
+}
+
 /**
  * Validate and canonicalize one agenda entry. Throws with a specific reason so
  * a rejected request can tell the player exactly what was wrong.
@@ -276,17 +299,28 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (kind === 'acquire' && completion !== 'inventory' && finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) !== 1) {
     throw new TypeError('An agenda hand-equipment step must request exactly one item.');
   }
-  const rawWorkstation = kind === 'smelt' ? raw.workstationConstraint : null;
+  const rawWorkstation = ['smelt', 'prepare_food'].includes(kind)
+    ? raw.workstationConstraint
+    : null;
   const normalizedWorkstation = normalizeWorkstationConstraint(rawWorkstation);
   if (rawWorkstation != null && !normalizedWorkstation) {
-    throw new TypeError('An agenda smelt workstation constraint is invalid.');
+    throw new TypeError('An agenda workstation constraint is invalid.');
   }
-  const containerConstraint = ['deposit', 'explore'].includes(kind)
+  if (kind === 'prepare_food' && !normalizedWorkstation) {
+    throw new TypeError('A food preparation step needs one exact furnace.');
+  }
+  const containerConstraint = ['deposit', 'deposit_family', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
   if (kind === 'explore' && !containerConstraint) {
     throw new TypeError('An exploration step needs one exact home container.');
   }
+  if (kind === 'deposit_family' && !containerConstraint) {
+    throw new TypeError('A family deposit step needs one exact chest or barrel.');
+  }
+  const baselineInventory = kind === 'deposit_family'
+    ? normalizeBaselineInventory(raw.baselineInventory)
+    : null;
   const sourceEntryId = boundedText(rawWorkstation?.sourceEntryId, 96);
   if (sourceEntryId && !SAFE_ENTRY_ID.test(sourceEntryId)) {
     throw new TypeError('An agenda workstation source entry id is invalid.');
@@ -335,7 +369,11 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     executor: spec.executor,
     target,
     quantity: spec.needsQuantity ? finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) : 0,
-    ...(kind === 'explore' && raw.bestEffort === true ? { bestEffort: true } : {}),
+    ...(baselineInventory ? { baselineInventory } : {}),
+    ...(kind === 'prepare_food'
+      ? { baselineFoodPoints: finiteInteger(raw.baselineFoodPoints, 0, 0, MAX_QUANTITY) }
+      : {}),
+    ...(['explore', 'prepare_food'].includes(kind) && raw.bestEffort === true ? { bestEffort: true } : {}),
     completion,
     recipient: spec.needsRecipient ? recipient : '',
     requester,
@@ -393,6 +431,8 @@ export function describeAgendaEntry(entry) {
     case 'deposit': return entry.containerConstraint
       ? `put up to ${entry.quantity} ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`
       : `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
+    case 'prepare_food': return `prepare ${entry.quantity} additional safe food points at the selected furnace`;
+    case 'deposit_family': return `put the newly prepared ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`;
     case 'shelter': return 'build a shelter';
     case 'construction': return 'build the requested structure';
     case 'sleep': return 'go inside and sleep';

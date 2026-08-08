@@ -73,6 +73,13 @@ export function familyInventoryCount(bot, family) {
   return familyInventoryEntries(bot, family).reduce((total, entry) => total + entry.count, 0);
 }
 
+export function familyFoodPoints(bot) {
+  const foods = bot?.registry?.foodsByName || {};
+  return familyInventoryEntries(bot, 'food').reduce((total, entry) => (
+    total + (entry.count * Math.max(0, Number(foods[entry.name]?.foodPoints) || 0))
+  ), 0);
+}
+
 export function familyTransferManifest(bot, family, quantity) {
   let remaining = Math.max(0, Math.min(2304, Math.floor(Number(quantity) || 0)));
   const manifest = [];

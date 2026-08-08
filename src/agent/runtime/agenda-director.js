@@ -13,6 +13,7 @@ import {
   isTerminalAgendaState,
   normalizeAgendaEntry,
 } from './agenda.js';
+import { familyFoodPoints } from './item-family.js';
 
 // The agenda deliberately does not act. It decides what comes next and hands it
 // to goal_director or job_director, which already own dispatch, verification,
@@ -602,7 +603,7 @@ export class AgendaDirector {
     };
   }
 
-  directSettlement(result) {
+  directSettlement(result, entry = null) {
     if (result?.phase !== 'succeeded' && WAITABLE_DIRECT_OUTCOMES.has(result?.code)) {
       return {
         state: 'waiting',
@@ -610,6 +611,27 @@ export class AgendaDirector {
         detail: result.detail || '',
         retryable: true,
       };
+    }
+    if (
+      result?.phase !== 'succeeded'
+      && entry?.kind === 'prepare_food'
+      && entry.bestEffort === true
+      && entry.attempts + 1 >= MAX_ENTRY_ATTEMPTS
+      && ['skill_partial_supply', 'skill_no_food_sources'].includes(result?.code)
+    ) {
+      const gainedFoodPoints = Math.max(
+        0,
+        familyFoodPoints(this.agent.bot) - entry.baselineFoodPoints,
+      );
+      const usefulMinimum = Math.min(12, entry.quantity);
+      if (gainedFoodPoints >= usefulMinimum) {
+        return {
+          state: 'complete',
+          code: 'food_stocking_useful_partial',
+          detail: `Prepared ${gainedFoodPoints} additional safe food points after bounded sustainable gathering; continuing with the verified output.`,
+          retryable: false,
+        };
+      }
     }
     return {
       state: result?.phase === 'succeeded' ? 'complete' : 'failed',
@@ -697,7 +719,7 @@ export class AgendaDirector {
         detail: 'The exact world binding required by the dependent step was unavailable, so dependent work was not started.',
         retryable: false,
       }
-      : this.directSettlement(result);
+      : this.directSettlement(result, active);
     this.commitSettlement(active, settlement, {
       dependentEntryId: bindingConstraint ? dependent.id : '',
       bindingConstraint,
@@ -927,9 +949,16 @@ export class AgendaDirector {
       follow_until: () => `!followPlayerUntilNearBlock("${entry.recipient}", "${entry.target}", ${entry.radius})`,
       farm_visit: () => '!goToFarm',
       maintain_farm: () => '!maintainFarm',
+      prepare_food: () => `!prepareFood(${entry.quantity}, 64, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)}, ${entry.baselineFoodPoints})`,
       deposit: () => entry.containerConstraint
         ? `!putInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`
         : `!putInChest("${entry.target}", ${entry.quantity})`,
+      deposit_family: () => {
+        const baselineManifest = entry.baselineInventory.length > 0
+          ? entry.baselineInventory.map(item => `${item.name}:${item.count}`).join('|')
+          : 'none';
+        return `!putFamilyInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)}, ${JSON.stringify(baselineManifest)})`;
+      },
       sleep: () => entry.bindingConstraint?.kind === 'structure_fixture'
         ? `!goToBedAt(${entry.bindingConstraint.position.x}, ${entry.bindingConstraint.position.y}, ${entry.bindingConstraint.position.z}, ${JSON.stringify(entry.bindingConstraint.dimension)})`
         : '!goToBed',

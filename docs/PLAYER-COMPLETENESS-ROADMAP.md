@@ -15,29 +15,32 @@ an implied capability claim.
 
 This file records delivered capability breadth; it does not override the live
 execution order in `docs/coordination/CURRENT.md` or the active V2 plan. The
-latest broad companion checkpoint completed a natural river-crossing session:
-native Pathfinder crossed meaningful water and settled on dry supported land,
-attributed protection defeated a hostile that attacked the player, Follow
-resumed without another order, reconnect retained the directive, settled gaze
-remained package-owned, and Operator Stop held the bot at full health.
+latest broad companion checkpoint completed an addressed shared-outpost
+stocking request. One natural request became two durable typed Agenda steps:
+prepare 24 additional safe food points at the exact selected furnace, then put
+only that newly prepared output in the exact selected chest. The unchanged
+Paper run produced and deposited two cooked porkchops plus two cooked mutton,
+left every baseline food item with the bot, emptied the furnace, preserved the
+house/workshop fixtures, and ended under Operator Stop.
 
-Two shared corrections came from that session. A dry player's Follow goal can
-no longer terminate on a nearby water cell, and canonical perception now uses
-Mineflayer's real yaw axis, so north/south, ahead/behind, visibility, and view
-alignment agree with the physical bot. Open conversation also counts only
-other agent profiles actually in game; stopped configured profiles no longer
-make ordinary chat require an agent name.
+The shared corrections are not recipe routes. Agenda now composes bounded food
+preparation and family deposit with exact world bindings and restart-stable
+baselines. Food preparation keeps one additional-output target across retries,
+reuses the selected furnace, safely reclaims incompatible finished output, and
+can truthfully continue with useful verified partial supply after its bounded
+attempts. Family deposit transfers per-item deltas, so older carried food is
+not mistaken for requested output. The command boundary also accepts its
+documented inclusive 2,304-item maximum.
 
-The next supervised-play gate combines conversational authority and world
-stewardship in the existing lived-in outpost. Ordinary nearby first-person
-conversation must not start work. A later explicitly addressed stocking order
-must gather useful nonzero food, reuse the selected furnace and chest, preserve
-the house, farm, paths, fixtures, contents, and access, and finish under Stop.
-That outcome—not another isolated mechanic proof—determines the next repair.
+An exact loaded-world scan resolved the only preservation concern: the spruce
+log harvested for fuel was the lower segment of a real canopied trunk outside
+the west wall, not part of the complete spruce-plank house or roof. No
+speculative claimed-world framework or replacement collection engine was
+added.
 
-After that gate passes, Gabriel can begin useful supervised playtesting without
-waiting for full release readiness. Prioritize any observed failures in this
-order: unintended/stale work, destructive world changes, resource no-progress
+The supervised-play entry gate is now passed. Gabriel can begin useful
+playtesting without waiting for full release readiness. Prioritize observed
+failures in this order: unintended/stale work, destructive world changes, resource no-progress
 stalls, dishonest completion or restart replay, then missing gameplay domains.
 Known dormant P1 debt remains in the master/forward plans and should activate
 only when live play reaches it.

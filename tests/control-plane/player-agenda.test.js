@@ -215,6 +215,41 @@ test('parsePlayerAgenda preserves the complete cave expedition as one durable wo
   assert.equal(exactPlan.steps[0].entry.bestEffort, undefined);
 });
 
+test('parsePlayerAgenda preserves additional food preparation and exact storage as one durable plan', () => {
+  const chest = { name: 'chest', position: { x: 8104, y: 69, z: 7940 } };
+  const furnace = { name: 'furnace', position: { x: 8102, y: 70, z: 7938 } };
+  const bot = {
+    game: { dimension: 'overworld' },
+    registry: { foodsByName: { bread: { foodPoints: 5 } } },
+    inventory: { items: () => [{ name: 'bread', count: 2 }] },
+    findBlock: ({ matching }) => [chest, furnace].find(candidate => matching(candidate)) || null,
+  };
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    "Help me stock this outpost for tonight: gather a useful mix of food, cook anything that needs cooking in the furnace already here, put the food in this chest, and don't damage the house, farm, or paths.",
+    { bot },
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => step.entry.kind), ['prepare_food', 'deposit_family']);
+  assert.equal(plan.steps[0].entry.quantity, 24);
+  assert.equal(plan.steps[0].entry.baselineFoodPoints, 10);
+  assert.equal(plan.steps[0].entry.bestEffort, true);
+  assert.deepEqual(plan.steps[0].entry.workstationConstraint, {
+    name: 'furnace',
+    position: { x: 8102, y: 70, z: 7938 },
+    dimension: 'overworld',
+    source: 'player_context_here',
+    observedAt: plan.steps[0].entry.workstationConstraint.observedAt,
+  });
+  assert.equal(plan.steps[1].entry.target, 'food');
+  assert.deepEqual(plan.steps[1].entry.baselineInventory, [{ name: 'bread', count: 2 }]);
+  assert.deepEqual(plan.steps[1].entry.containerConstraint.position, { x: 8104, y: 69, z: 7940 });
+  assert.equal(plan.steps[1].dependency.policy, 'requires_success');
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed steps', () => {
   const message = 'Go to the farm, harvest only the mature wheat, replant every crop you harvest, put the wheat in the existing chest at the farm, then come back to me.';
   const bot = { registry: { itemsByName: { wheat: { name: 'wheat' } } } };

@@ -2,6 +2,7 @@ import { resolvePlayerDirective } from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import { AGENDA_KINDS } from './runtime/agenda.js';
 import { requestedQuantity } from './runtime/goal-contract.js';
+import { familyFoodPoints, familyInventoryEntries } from './runtime/item-family.js';
 
 // Deterministic natural-language front door to the existing Agenda queue.
 //
@@ -76,6 +77,12 @@ const CAVE_EXPEDITION_CUES = Object.freeze([
   /\b(?:collect|gather|mine)\b[\s\S]*\b(?:ore|ores)\b/i,
   /\b(?:return|come back|head back)\b/i,
   /\b(?:store|put|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i,
+]);
+const FOOD_STOCKING_CUES = Object.freeze([
+  /\b(?:stock|gather|collect|prepare|secure)\b[\s\S]*\b(?:food|meals?|provisions?)\b/i,
+  /\b(?:cook|smelt)\b/i,
+  /\b(?:furnace|stove|smelter)\b/i,
+  /\b(?:put|store|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i,
 ]);
 
 function constructionRequiredFunctions(segment) {
@@ -193,6 +200,82 @@ function currentContainerConstraint(bot) {
     dimension,
     source: 'player_context_here',
     observedAt: Date.now(),
+  };
+}
+
+function currentWorkstationConstraint(bot, name) {
+  if (typeof bot?.findBlock !== 'function') return null;
+  const block = bot.findBlock({
+    matching: candidate => candidate?.name === name,
+    maxDistance: 32,
+  });
+  const dimension = String(bot?.game?.dimension || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
+  if (
+    block?.name !== name
+    || !block?.position
+    || ![block.position.x, block.position.y, block.position.z].every(Number.isFinite)
+    || !dimension
+  ) return null;
+  return {
+    name,
+    position: {
+      x: Math.floor(block.position.x),
+      y: Math.floor(block.position.y),
+      z: Math.floor(block.position.z),
+    },
+    dimension,
+    source: 'player_context_here',
+    observedAt: Date.now(),
+  };
+}
+
+function foodStockingPlan(playerName, message, context) {
+  const text = normalizeMessage(message).trim();
+  if (!FOOD_STOCKING_CUES.every(pattern => pattern.test(text))) return null;
+  const bot = context?.bot;
+  const workstationConstraint = currentWorkstationConstraint(bot, 'furnace');
+  const containerConstraint = currentContainerConstraint(bot);
+  if (!workstationConstraint || !containerConstraint) {
+    return {
+      rejection: 'I could not bind that complete food-stocking plan to both a loaded furnace and a loaded chest or barrel, so I did not start only part of it.',
+    };
+  }
+  const additionalFoodPoints = 24;
+  const baselineFoodPoints = familyFoodPoints(bot);
+  const baselineInventory = familyInventoryEntries(bot, 'food');
+  return {
+    steps: [
+      {
+        segment: text,
+        command: null,
+        response: `I will prepare an additional safe food reserve with the selected furnace while preserving the farm and nearby structures.`,
+        entry: {
+          kind: 'prepare_food',
+          requester: playerName,
+          quantity: additionalFoodPoints,
+          baselineFoodPoints,
+          bestEffort: true,
+          workstationConstraint,
+        },
+      },
+      {
+        segment: `store the newly prepared food in the selected ${containerConstraint.name.replaceAll('_', ' ')}`,
+        command: null,
+        response: `I will store only the newly prepared food in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`,
+        entry: {
+          kind: 'deposit_family',
+          requester: playerName,
+          target: 'food',
+          quantity: 2304,
+          baselineInventory,
+          containerConstraint,
+        },
+        dependency: { policy: 'requires_success' },
+      },
+    ],
   };
 }
 
@@ -531,6 +614,24 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
       // must be intercepted instead of falling back to disconnected LLM calls.
       multiStep: true,
       steps: expedition.steps,
+      unresolved: [],
+    };
+  }
+  const foodStocking = foodStockingPlan(playerName, body, context);
+  if (foodStocking?.rejection) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: [],
+      unresolved: [],
+      rejection: foodStocking.rejection,
+    };
+  }
+  if (foodStocking?.steps) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: foodStocking.steps,
       unresolved: [],
     };
   }

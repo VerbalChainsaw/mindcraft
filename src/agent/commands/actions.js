@@ -809,13 +809,24 @@ export const actionsList = [
         description: 'Deposit a verified total across every carried item type in a useful family into the exact assigned chest or barrel.',
         params: {
             'family': { type: 'string', description: 'Supported family: logs, planks, food, ores, or building_blocks.' },
-            'num': { type: 'int', description: 'Maximum total family items to deposit.', domain: [1, 2304] },
+            'num': { type: 'int', description: 'Maximum total family items to deposit.', domain: [1, 2304, '[]'] },
             'x': { type: 'float', description: 'Assigned container x coordinate.' },
             'y': { type: 'float', description: 'Assigned container y coordinate.' },
             'z': { type: 'float', description: 'Assigned container z coordinate.' },
+            'dimension': { type: 'string', description: 'Optional assigned dimension; a mismatch is rejected before opening a container.', optional: true, default: '' },
+            'baseline_manifest': { type: 'string', description: 'Optional machine-generated item:count baseline; only carried family output above it is deposited.', optional: true, default: '' },
         },
-        perform: runAsAction(async (agent, family, num, x, y, z) => {
-            return await skills.putFamilyInChestAt(agent.bot, family, num, x, y, z);
+        perform: runAsAction(async (agent, family, num, x, y, z, dimension = '', baseline_manifest = '') => {
+            return await skills.putFamilyInChestAt(
+                agent.bot,
+                family,
+                num,
+                x,
+                y,
+                z,
+                dimension,
+                baseline_manifest,
+            );
         })
     },
     {
@@ -972,9 +983,20 @@ export const actionsList = [
         params: {
             'target_food_points': { type: 'int', description: 'Safe carried food points to secure.', domain: [6, 160, '[]'] },
             'range': { type: 'int', description: 'Maximum crop, animal, and resource search radius.', domain: [16, 128, '[]'] },
+            'workstation_x': { type: 'float', description: 'Optional exact furnace X coordinate.', optional: true },
+            'workstation_y': { type: 'float', description: 'Optional exact furnace Y coordinate.', optional: true },
+            'workstation_z': { type: 'float', description: 'Optional exact furnace Z coordinate.', optional: true },
+            'workstation_dimension': { type: 'string', description: 'Optional exact furnace dimension.', optional: true },
+            'baseline_food_points': { type: 'int', description: 'Optional durable starting food points; when supplied, prepare the requested amount above this fixed baseline.', domain: [0, 2304, '[]'], optional: true },
         },
-        perform: runAsAction(async (agent, target_food_points, range) => {
-            return await skills.prepareFood(agent.bot, target_food_points, range);
+        perform: runAsAction(async (agent, target_food_points, range, x, y, z, dimension, baseline_food_points) => {
+            return await skills.prepareFood(
+                agent.bot,
+                target_food_points,
+                range,
+                exactWorkstationArguments('furnace', x, y, z, dimension),
+                baseline_food_points,
+            );
         }, false, 10)
     },
     {
