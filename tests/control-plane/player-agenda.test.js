@@ -138,6 +138,39 @@ test('parsePlayerAgenda preserves every registry-backed output in one collective
   assert.deepEqual(plan.unresolved, []);
 });
 
+test('parsePlayerAgenda preserves a manufactured set and binds every deposit to the selected chest', () => {
+  const names = ['iron_pickaxe', 'iron_axe', 'iron_shovel', 'iron_hoe', 'iron_sword'];
+  const chest = { name: 'chest', position: { x: 8103, y: 69, z: 7937 } };
+  const bot = {
+    game: { dimension: 'overworld' },
+    registry: {
+      itemsByName: Object.fromEntries(names.map(name => [name, { name, displayName: name.replaceAll('_', ' ') }])),
+    },
+    findBlock: ({ matching }) => matching(chest) ? chest : null,
+  };
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    'Use the outpost you are standing in as your base. Make a complete iron tool set—one iron pickaxe, one iron axe, one iron shovel, one iron hoe, and one iron sword—and store all five tools in the chest inside this outpost.',
+    { bot },
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => [step.entry.kind, step.entry.target, step.entry.quantity]), [
+    ...names.map(name => ['acquire', name, 1]),
+    ...names.map(name => ['deposit', name, 1]),
+  ]);
+  assert.ok(plan.steps.slice(1).every(step => step.dependency?.policy === 'requires_success'));
+  assert.deepEqual(plan.steps.slice(5).map(step => step.entry.containerConstraint), names.map(() => ({
+    name: 'chest',
+    position: { x: 8103, y: 69, z: 7937 },
+    dimension: 'overworld',
+    source: 'player_context_here',
+    observedAt: plan.steps[5].entry.containerConstraint.observedAt,
+  })));
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed steps', () => {
   const message = 'Go to the farm, harvest only the mature wheat, replant every crop you harvest, put the wheat in the existing chest at the farm, then come back to me.';
   const bot = { registry: { itemsByName: { wheat: { name: 'wheat' } } } };

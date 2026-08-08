@@ -8902,6 +8902,25 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
      * await skills.putInChest(bot, "oak_log");
      **/
     itemName = String(itemName || '').trim();
+    const expectedDimension = normalizedDimension(exactPosition?.dimension);
+    const currentDimension = normalizedDimension(bot.game?.dimension);
+    if (expectedDimension && expectedDimension !== currentDimension) {
+        setActionEvidence(bot, {
+            kind: 'chest_transfer',
+            outcome: 'assigned_container_wrong_dimension',
+            target: {
+                name: 'assigned_deposit',
+                x: Math.floor(exactPosition.x),
+                y: Math.floor(exactPosition.y),
+                z: Math.floor(exactPosition.z),
+                dimension: expectedDimension,
+            },
+            observed: currentDimension,
+            retryable: true,
+        });
+        log(bot, `The assigned deposit is in ${expectedDimension}, not ${currentDimension || 'the current dimension'}.`);
+        return false;
+    }
     let chest = exactPosition && [exactPosition.x, exactPosition.y, exactPosition.z].every(Number.isFinite)
         ? bot.blockAt(new Vec3(
             Math.floor(exactPosition.x),
@@ -9054,8 +9073,8 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
     }
 }
 
-export async function putInChestAt(bot, itemName, num, x, y, z) {
-    return await putInChest(bot, itemName, num, { x, y, z });
+export async function putInChestAt(bot, itemName, num, x, y, z, dimension='') {
+    return await putInChest(bot, itemName, num, { x, y, z, dimension });
 }
 
 export async function putFamilyInChestAt(bot, family, num, x, y, z) {

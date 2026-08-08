@@ -858,7 +858,9 @@ export class AgendaDirector {
       follow_until: () => `!followPlayerUntilNearBlock("${entry.recipient}", "${entry.target}", ${entry.radius})`,
       farm_visit: () => '!goToFarm',
       maintain_farm: () => '!maintainFarm',
-      deposit: () => `!putInChest("${entry.target}", ${entry.quantity})`,
+      deposit: () => entry.containerConstraint
+        ? `!putInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`
+        : `!putInChest("${entry.target}", ${entry.quantity})`,
       sleep: () => entry.bindingConstraint?.kind === 'structure_fixture'
         ? `!goToBedAt(${entry.bindingConstraint.position.x}, ${entry.bindingConstraint.position.y}, ${entry.bindingConstraint.position.z}, ${JSON.stringify(entry.bindingConstraint.dimension)})`
         : '!goToBed',

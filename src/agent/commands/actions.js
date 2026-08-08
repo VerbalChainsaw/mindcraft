@@ -770,9 +770,10 @@ export const actionsList = [
             'x': { type: 'float', description: 'Assigned container x coordinate.' },
             'y': { type: 'float', description: 'Assigned container y coordinate.' },
             'z': { type: 'float', description: 'Assigned container z coordinate.' },
+            'dimension': { type: 'string', description: 'Optional assigned dimension; a mismatch is rejected before opening a container.', optional: true, default: '' },
         },
-        perform: runAsAction(async (agent, item_name, num, x, y, z) => {
-            return await skills.putInChestAt(agent.bot, item_name, num, x, y, z);
+        perform: runAsAction(async (agent, item_name, num, x, y, z, dimension = '') => {
+            return await skills.putInChestAt(agent.bot, item_name, num, x, y, z, dimension);
         })
     },
     {

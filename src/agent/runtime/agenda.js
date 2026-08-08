@@ -46,6 +46,7 @@ const CONSTRUCTION_FUNCTIONS = new Set([
 ]);
 const DEPENDENCY_POLICIES = new Set(['requires_success']);
 const BINDING_KINDS = new Set(['world_block', 'structure_fixture']);
+const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 
 export const AGENDA_KINDS = Object.freeze({
@@ -200,6 +201,32 @@ function normalizeBindingConstraint(raw) {
   });
 }
 
+function normalizeContainerConstraint(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda container constraint must be an object.');
+  }
+  const name = canonical(raw.name);
+  const position = {
+    x: finiteInteger(raw.position?.x, NaN, -30e6, 30e6),
+    y: finiteInteger(raw.position?.y, NaN, -256, 512),
+    z: finiteInteger(raw.position?.z, NaN, -30e6, 30e6),
+  };
+  const dimension = canonical(raw.dimension);
+  if (
+    !CONTAINER_NAMES.has(name)
+    || Object.values(position).some(value => !Number.isFinite(value))
+    || !CANONICAL_NAME.test(dimension)
+  ) throw new TypeError('Agenda container constraint must identify one exact chest or barrel.');
+  return Object.freeze({
+    name,
+    position: Object.freeze(position),
+    dimension,
+    source: boundedText(raw.source, 48) || 'player_context_here',
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
 /**
  * Validate and canonicalize one agenda entry. Throws with a specific reason so
  * a rejected request can tell the player exactly what was wrong.
@@ -253,6 +280,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (rawWorkstation != null && !normalizedWorkstation) {
     throw new TypeError('An agenda smelt workstation constraint is invalid.');
   }
+  const containerConstraint = kind === 'deposit'
+    ? normalizeContainerConstraint(raw.containerConstraint)
+    : null;
   const sourceEntryId = boundedText(rawWorkstation?.sourceEntryId, 96);
   if (sourceEntryId && !SAFE_ENTRY_ID.test(sourceEntryId)) {
     throw new TypeError('An agenda workstation source entry id is invalid.');
@@ -311,6 +341,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     workstationConstraint: normalizedWorkstation
       ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
       : null,
+    ...(containerConstraint ? { containerConstraint } : {}),
     dependsOnEntryId,
     dependencyPolicy,
     bindingRequest,
@@ -353,7 +384,9 @@ export function describeAgendaEntry(entry) {
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';
     case 'maintain_farm': return 'harvest and replant the remembered farm';
-    case 'deposit': return `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
+    case 'deposit': return entry.containerConstraint
+      ? `put up to ${entry.quantity} ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`
+      : `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
     case 'shelter': return 'build a shelter';
     case 'construction': return 'build the requested structure';
     case 'sleep': return 'go inside and sleep';

@@ -135,13 +135,17 @@ function addAction(context, action) {
   if (context.actions.length >= context.maxActions) {
     return blocked('planner_action_budget', `The causal plan exceeded its ${context.maxActions}-action budget.`, action.target, action.trail);
   }
+  const hasExpectedName = Object.hasOwn(action, 'expectedName');
+  const expectedName = hasExpectedName ? action.expectedName : action.target;
   context.actions.push(Object.freeze({
     kind: action.kind,
     capability: action.capability,
     target: action.target,
-    expectedName: action.expectedName || action.target,
+    expectedName: expectedName || null,
     expectedFamily: action.expectedFamily || null,
-    expectedIncrease: Math.max(1, Math.floor(Number(action.expectedIncrease) || 1)),
+    expectedIncrease: expectedName
+      ? Math.max(1, Math.floor(Number(action.expectedIncrease) || 1))
+      : 0,
     reason: String(action.reason || '').slice(0, 280),
     trail: Object.freeze((action.trail || []).slice(0, 24)),
     learningKey: String(action.learningKey || '').slice(0, 160) || null,
@@ -555,6 +559,40 @@ function pruneUnboundVariantTransforms(bot, context, target, recipes) {
       )
     ));
   return renewable.length > 0 ? [renewable[0].recipe] : recipes;
+}
+
+function losslessReverseRecipeInput(bot, target, recipe) {
+  const ingredients = recipeIngredientEntries(bot, recipe);
+  if (ingredients.length !== 1) return null;
+  const input = ingredients[0];
+  const outputCount = recipeOutputCount(recipe);
+  const reversible = connectedRecipes(bot, input.name).some(reverseRecipe => {
+    const reverseIngredients = recipeIngredientEntries(bot, reverseRecipe);
+    return reverseIngredients.length === 1
+      && reverseIngredients[0].name === target
+      && (outputCount * recipeOutputCount(reverseRecipe))
+        === (input.count * reverseIngredients[0].count);
+  });
+  return reversible ? input : null;
+}
+
+function pruneUngroundedReversibleTransforms(bot, context, target, amount, recipes) {
+  return recipes.filter(recipe => {
+    const input = losslessReverseRecipeInput(bot, target, recipe);
+    if (!input) return true;
+    // Lossless compression/decompression is an inventory-normalization method,
+    // not an acquisition source. It is useful when the compressed form is
+    // already carried, but recursively crafting that input from the requested
+    // output creates a causal loop (iron block <-> ingots, ingot <-> nuggets).
+    const batches = Math.max(1, Math.ceil(amount / recipeOutputCount(recipe)));
+    return ledgerCount(context, input.name) >= input.count * batches
+      || Boolean(nearbyBlock(
+        bot,
+        input.name,
+        context.range,
+        context.blockProximityCache,
+      ));
+  });
 }
 
 // Rough per-unit cost of obtaining an item the bot does not have. Surface wood
@@ -1274,12 +1312,18 @@ function produceItem(bot, context, target, amount, trail) {
     }
   }
 
-  const connectedRecipeCandidates = pruneUnboundVariantTransforms(
+  const connectedRecipeCandidates = pruneUngroundedReversibleTransforms(
     bot,
     context,
     target,
-    connectedRecipes(bot, target)
-      .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe))),
+    amount,
+    pruneUnboundVariantTransforms(
+      bot,
+      context,
+      target,
+      connectedRecipes(bot, target)
+        .filter(recipe => !methodExcluded(context, recipeLearningKey(bot, target, recipe))),
+    ),
   );
   const plankFamilyMethod = planUnboundPlankFamily(
     bot,
@@ -1341,6 +1385,18 @@ function produceItem(bot, context, target, amount, trail) {
     recipeFailures.push(plankFamilyMethod.failure);
   }
   for (const method of acquisitionMethods) {
+    const blindPlankVariant = plankFamilyMethod?.candidate
+      && method.kind === 'recipe'
+      && planningRecipeIngredientEntries(bot, method.recipe).some(ingredient => (
+        ingredient.family === 'planks' || ingredient.name.endsWith('_planks')
+      ));
+    if (blindPlankVariant) {
+      // The family candidate exists only when no carried transform or observed
+      // species can bind these recipes. It has already planned the same recipe
+      // after one generic wood collection, so recursively exploring every
+      // ungrounded plank species cannot produce a better executable next step.
+      continue;
+    }
     const dominantAlternativeHarvest = successfulMethods.find(candidate => (
       candidate.kind === 'entity_harvest'
       && candidate.score > method.score
@@ -1540,7 +1596,7 @@ export function buildPrerequisitePlan(bot, {
       kind: 'access',
       target: 'surface',
       expectedName: null,
-      expectedIncrease: 1,
+      expectedIncrease: 0,
       reason: 'The selected physical source requires a verified supported surface stance before acquisition can continue.',
       trail: [canonicalTarget, 'surface_access'],
       learningKey: null,

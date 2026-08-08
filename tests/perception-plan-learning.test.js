@@ -1123,6 +1123,31 @@ test('The causal planner schedules a verified source-access capability before ne
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'reach_surface');
   assert.equal(plan.nextStep.capability.binding.command, '!goToSurface');
+  assert.equal(plan.nextStep.expectedName, null);
+  assert.equal(plan.nextStep.expectedIncrease, 0);
+});
+
+test('Empty-inventory planning does not treat reversible compression recipes as acquisition sources', () => {
+  const registry = minecraftData('1.21.11');
+  const bot = {
+    entity: { position: { x: 0, y: 69, z: 0 } },
+    entities: {},
+    inventory: { slots: [], items: () => [] },
+    registry,
+    findBlock() { return null; },
+  };
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'iron_pickaxe',
+    quantity: 1,
+    range: 64,
+    allowUnobservedSelfDropRoot: false,
+  });
+
+  assert.notEqual(plan.code, 'planner_node_budget');
+  assert.ok(plan.exploredNodes < 384);
+  assert.notEqual(plan.blocker, 'iron_block');
+  assert.notEqual(plan.blocker, 'iron_nugget');
 });
 
 test('Exact-item delivery binds one recipient and trusts only authoritative pickup evidence', async () => {

@@ -839,6 +839,13 @@ export class Agent {
             bot: this.bot,
         });
         if (!plan) return false;
+        if (plan.rejection) {
+            await this.history.add(source, message);
+            await this.history.add(this.name, plan.rejection);
+            this.history.save();
+            this.routeResponse(source, plan.rejection);
+            return true;
+        }
         const agendaBusy = (director.snapshot?.().remaining || 0) > 0;
         const compilesConstruction = plan.steps.some(step => step.requiresModelAssignment === true);
         // Only intercept a real chain, an explicit interrupt, or an append onto

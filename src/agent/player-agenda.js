@@ -1,6 +1,7 @@
 import { resolvePlayerDirective } from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import { AGENDA_KINDS } from './runtime/agenda.js';
+import { requestedQuantity } from './runtime/goal-contract.js';
 
 // Deterministic natural-language front door to the existing Agenda queue.
 //
@@ -65,6 +66,9 @@ const SEGMENT_DELIMITER = '\u0000';
 // instead of truncating it to whichever registry item the single-goal parser
 // happens to notice first.
 const COLLECTIVE_DELIVERY = /^(?:please\s+)?(?:make|craft|prepare)\s+(?:me\s+)?([\s\S]+?)(?:,\s*)?(?:and\s+)?then\s+(?:bring|deliver|give)\s+(?:them|those|all(?:\s+of\s+them)?)\s+(?:here|to\s+me)\s*[.!?]*$/i;
+const MANUFACTURE_VERB = /\b(?:make|craft|prepare)\b/i;
+const COLLECTIVE_STORAGE_TAIL = /(?:[,;\u2014\u2013-]\s*|\s+)\band\s+((?:store|put|stash|deposit)\b[\s\S]*)$/i;
+const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 
 function constructionRequiredFunctions(segment) {
   const text = String(segment || '').toLowerCase();
@@ -127,7 +131,127 @@ function canonicalListedItem(value, bot) {
   if (!registry) return null;
   if (registry[requested]) return requested;
   const singular = requested.replace(/s$/, '');
-  return singular && registry[singular] ? singular : null;
+  if (singular && registry[singular]) return singular;
+
+  // A player may introduce a list with a descriptive prefix, for example
+  // "a complete iron tool set - one iron pickaxe". Resolve the concrete
+  // registry-backed item named inside that fragment without maintaining a
+  // hardcoded catalogue of tools or recipes here.
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\u2014\u2013-]+/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  let best = null;
+  for (const [name, item] of Object.entries(registry)) {
+    const aliases = new Set([
+      String(name).replaceAll('_', ' ').toLowerCase(),
+      String(item?.displayName || '').toLowerCase(),
+    ]);
+    for (const alias of aliases) {
+      if (!alias) continue;
+      const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (!new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`).test(normalized)) continue;
+      if (!best || alias.length > best.alias.length) best = { name, alias };
+    }
+  }
+  return best?.name || null;
+}
+
+function currentContainerConstraint(bot) {
+  if (typeof bot?.findBlock !== 'function') return null;
+  const block = bot.findBlock({
+    matching: candidate => CONTAINER_NAMES.has(candidate?.name),
+    maxDistance: 32,
+  });
+  const dimension = String(bot?.game?.dimension || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
+  if (
+    !CONTAINER_NAMES.has(block?.name)
+    || !block?.position
+    || ![block.position.x, block.position.y, block.position.z].every(Number.isFinite)
+    || !dimension
+  ) return null;
+  return {
+    name: block.name,
+    position: {
+      x: Math.floor(block.position.x),
+      y: Math.floor(block.position.y),
+      z: Math.floor(block.position.z),
+    },
+    dimension,
+    source: 'player_context_here',
+    observedAt: Date.now(),
+  };
+}
+
+function listedManufacturedOutputs(value, bot) {
+  const fragments = String(value || '')
+    .replace(/[.!?]+$/g, '')
+    .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
+    .map(fragment => fragment.trim())
+    .filter(Boolean);
+  if (fragments.length < 2 || fragments.length * 2 > MAX_SEGMENTS) return null;
+  const outputs = fragments.map(fragment => ({
+    fragment,
+    target: canonicalListedItem(fragment, bot),
+    quantity: requestedQuantity(fragment) || 1,
+  }));
+  return outputs.some(output => !output.target) ? null : outputs;
+}
+
+function collectiveStoragePlan(playerName, message, context) {
+  const text = normalizeMessage(message).trim();
+  const manufacture = MANUFACTURE_VERB.exec(text);
+  if (!manufacture) return null;
+  const afterVerb = text.slice(manufacture.index + manufacture[0].length);
+  const storage = COLLECTIVE_STORAGE_TAIL.exec(afterVerb);
+  if (!storage) return null;
+  const storageClause = storage[1];
+  if (
+    !/\b(?:chest|barrel)\b/i.test(storageClause)
+    || !/\b(?:all|them|those|these|set|tools?|items?|everything)\b/i.test(storageClause)
+  ) return null;
+
+  const outputs = listedManufacturedOutputs(afterVerb.slice(0, storage.index), context?.bot);
+  if (!outputs) return null;
+  const containerConstraint = currentContainerConstraint(context?.bot);
+  if (!containerConstraint) {
+    return {
+      rejection: 'I could not bind that plan to a loaded chest or barrel near me, so I did not start making only part of the requested set.',
+    };
+  }
+
+  const acquisitions = outputs.map((output, index) => ({
+    segment: output.fragment,
+    command: `!requestItemGoal("acquire", ${JSON.stringify(output.target)}, ${output.quantity}, ${JSON.stringify(playerName)}, "inventory")`,
+    response: `I will make ${output.quantity} ${output.target.replaceAll('_', ' ')}.`,
+    entry: {
+      kind: 'acquire',
+      requester: playerName,
+      target: output.target,
+      quantity: output.quantity,
+      completion: 'inventory',
+    },
+    ...(index > 0 ? { dependency: { policy: 'requires_success' } } : {}),
+  }));
+  const deposits = outputs.map(output => ({
+    segment: `store ${output.quantity} ${output.target.replaceAll('_', ' ')}`,
+    command: `!putInChestAt(${JSON.stringify(output.target)}, ${output.quantity}, ${containerConstraint.position.x}, ${containerConstraint.position.y}, ${containerConstraint.position.z}, ${JSON.stringify(containerConstraint.dimension)})`,
+    response: `I will store ${output.quantity} ${output.target.replaceAll('_', ' ')} in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`,
+    entry: {
+      kind: 'deposit',
+      requester: playerName,
+      target: output.target,
+      quantity: output.quantity,
+      containerConstraint,
+    },
+    dependency: { policy: 'requires_success' },
+  }));
+  return { steps: [...acquisitions, ...deposits] };
 }
 
 function collectiveDeliverySteps(playerName, message, context) {
@@ -345,6 +469,24 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const body = disposition === 'interrupt'
     ? (text.replace(INTERRUPT_LEADING, '').trim() || text)
     : text;
+  const collectiveStorage = collectiveStoragePlan(playerName, body, context);
+  if (collectiveStorage?.rejection) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: [],
+      unresolved: [],
+      rejection: collectiveStorage.rejection,
+    };
+  }
+  if (collectiveStorage?.steps) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: collectiveStorage.steps,
+      unresolved: [],
+    };
+  }
   const collectiveSteps = collectiveDeliverySteps(playerName, body, context);
   if (collectiveSteps) {
     return {
