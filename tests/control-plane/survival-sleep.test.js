@@ -133,20 +133,23 @@ test('Given Stop while sleeping, physical ownership is retained until Mineflayer
   const { bot } = createBot();
   let polls = 0;
   let wakeCalls = 0;
+  let now = 1_000;
   bot.wake = () => { wakeCalls += 1; };
 
   const result = await goToBed(bot, {
     navigate: () => true,
+    now: () => now,
     delay: () => {
+      now += 250;
       polls += 1;
       if (polls === 1) bot.interrupt_code = true;
-      if (polls === 3) bot.isSleeping = false;
+      if (polls === 5) bot.isSleeping = false;
     },
   });
 
   assert.equal(result, false);
-  assert.equal(wakeCalls, 1);
-  assert.equal(polls, 3);
+  assert.equal(wakeCalls, 2);
+  assert.equal(polls, 5);
   assert.equal(bot.lastActionEvidence.outcome, 'interrupted');
   assert.equal(bot.lastActionEvidence.enteredSleep, true);
   assert.equal(bot.lastActionEvidence.woke, true);

@@ -869,13 +869,27 @@ export class Agent {
             this.self_prompter.interruptForManualCommand();
             this.role_director.deferForManualCommand('Player plan owns action control.');
         }
-        if (plan.disposition === 'interrupt') {
-            director.clear('Superseded by a new player plan.');
-        }
         if (takeover) {
-            // Yield whatever action currently holds the body; stop() is a no-op
-            // when nothing is executing.
-            try { await this.actions.stop(); } catch { /* best effort */ }
+            let stopOutcome;
+            try {
+                stopOutcome = await this.actions.stop();
+            } catch {
+                stopOutcome = { stopped: false };
+            }
+            if (!stopOutcome?.stopped) {
+                this.holdPosition?.('player agenda handoff failed', { preserveDurableWork: true });
+                const response = 'I could not take control from the current action, so I did not queue or start the new plan.';
+                await this.history.add(this.name, response);
+                this.history.save();
+                this.routeResponse(source, response);
+                return true;
+            }
+        }
+        if (plan.disposition === 'interrupt') {
+            // Clear only after physical handoff succeeds. A new request must
+            // never erase durable work and then discover the old action still
+            // owns the body.
+            director.clear('Superseded by a new player plan.');
         }
 
         const queued = [];

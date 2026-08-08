@@ -19,6 +19,7 @@ import {
     isLiquidGameplayBlock,
     isProtectedGameplayBlock,
     isReplaceableGameplayBlock,
+    isSafeCaveStance,
     isSafeGameplaySupport,
 } from '../runtime/gameplay-safety.js';
 import { collectorMatchesPlayerTarget, resolvePlayerTarget } from '../player-target.js';
@@ -1212,7 +1213,13 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
         positions.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
     );
     if (goal.isEnd(bot.entity.position.floored())) {
-        return { reachable: true, status: 'already_at_stance', pathLength: 0 };
+        const current = bot.entity.position.floored();
+        return {
+            reachable: true,
+            status: 'already_at_stance',
+            pathLength: 0,
+            terminalPosition: { x: current.x, y: current.y, z: current.z },
+        };
     }
     try {
         const result = bot.pathfinder.getPathTo(
@@ -1220,10 +1227,14 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
             goal,
             Math.max(100, Math.min(5_000, Math.floor(Number(timeoutMs) || 2_000))),
         );
+        const terminal = Array.isArray(result?.path) ? result.path.at(-1) : null;
         return {
             reachable: result?.status === 'success',
             status: result?.status || 'unknown',
             pathLength: Array.isArray(result?.path) ? result.path.length : 0,
+            terminalPosition: terminal && result?.status === 'success'
+                ? { x: Math.floor(terminal.x), y: Math.floor(terminal.y), z: Math.floor(terminal.z) }
+                : null,
         };
     } catch (error) {
         return {
@@ -2107,7 +2118,7 @@ export function log(bot, message) {
         : `[action output capped]\n${next.slice(-(MAX_BOT_OUTPUT_CHARS - 22))}`;
 }
 
-async function autoLight(bot) {
+export async function autoLight(bot) {
     if (world.shouldPlaceTorch(bot)) {
         try {
             const pos = world.getPosition(bot);
@@ -5244,13 +5255,20 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         blocktypes.push('grass_block');
     if (blockType === 'cobblestone')
         blocktypes.push('stone');
-    const allowNaturalRouteDigging = searchOptions?.allowNaturalRouteDigging === true
-        || blockType === 'cobblestone'
+    const inferredNaturalRouteDigging = blockType === 'cobblestone'
         || blockType === 'stone'
         || blockType === 'deepslate'
         || blockType === 'ancient_debris'
         || blockType === 'obsidian'
         || blockType.endsWith('_ore');
+    // Exact exposed-resource bindings must be able to forbid excavation.
+    // Omission retains the normal mining default; an explicit false is policy.
+    const allowNaturalRouteDigging = Object.prototype.hasOwnProperty.call(
+        searchOptions || {},
+        'allowNaturalRouteDigging',
+    )
+        ? searchOptions.allowNaturalRouteDigging === true
+        : inferredNaturalRouteDigging;
     const isLiquid = blockType === 'lava' || blockType === 'water';
     const searchRange = Math.max(1, Math.min(512, Math.floor(Number(range) || 64)));
     const search = createCollectionSearch(bot, searchRange, searchOptions);
@@ -10686,7 +10704,7 @@ function orderedMiningHeadings(bot, resourceName = '', knownTarget = null) {
     ));
 }
 
-function isMiningTargetExposed(bot, targetBlock) {
+export function isMiningTargetExposed(bot, targetBlock) {
     if (!targetBlock?.position) return false;
     return [
         [1, 0, 0], [-1, 0, 0], [0, 1, 0],
@@ -12515,6 +12533,110 @@ export async function mineSearchTunnel(
         ? 'Stopped the mining search tunnel.'
         : `No safe natural-fill tunnel could advance while searching for ${requested || 'the requested resource'}.`);
     return false;
+}
+
+/**
+ * Reach one catalogue-bound cave stance with native Pathfinder and verify that
+ * the reached area is lit. Selection policy lives above this adapter; this
+ * function owns only locomotion, the torch mechanic, and physical evidence.
+ */
+export async function lightCaveAt(bot, x, y, z) {
+    const target = {
+        name: 'cave_region',
+        x: Math.floor(Number(x)),
+        y: Math.floor(Number(y)),
+        z: Math.floor(Number(z)),
+    };
+    if (![target.x, target.y, target.z].every(Number.isFinite)) {
+        setActionEvidence(bot, { kind: 'cave_survey', outcome: 'invalid_target', target, retryable: false });
+        return false;
+    }
+    const selectedPosition = new Vec3(target.x, target.y, target.z);
+    if (!isSafeCaveStance(bot, selectedPosition)) {
+        setActionEvidence(bot, { kind: 'cave_survey', outcome: 'target_changed', target, retryable: true });
+        log(bot, 'The selected cave stance is no longer present.');
+        return false;
+    }
+    const reached = await goToPosition(bot, target.x, target.y, target.z, 1);
+    if (
+        !reached
+        || !bot.entity?.position
+        || bot.entity.position.distanceTo(new Vec3(target.x, target.y, target.z)) > 2.25
+    ) {
+        setActionEvidence(bot, {
+            kind: 'cave_survey',
+            outcome: bot.interrupt_code ? 'interrupted' : 'unreachable',
+            target,
+            retryable: !bot.interrupt_code,
+        });
+        return false;
+    }
+
+    const lightWasRequired = world.shouldPlaceTorch(bot);
+    const beforeTorches = inventoryCount(bot, 'torch');
+    const placed = lightWasRequired ? await autoLight(bot) : false;
+    const afterTorches = inventoryCount(bot, 'torch');
+    if (bot.interrupt_code) {
+        setActionEvidence(bot, { kind: 'cave_survey', outcome: 'interrupted', target, retryable: false });
+        return false;
+    }
+    const torchesPlaced = Math.max(0, beforeTorches - afterTorches);
+    const lit = !lightWasRequired || placed === true || torchesPlaced > 0;
+    setActionEvidence(bot, {
+        kind: 'cave_survey',
+        outcome: lit ? (lightWasRequired ? 'cave_lit' : 'already_lit') : 'lighting_failed',
+        target,
+        lightWasRequired,
+        torchesPlaced,
+        observedPosition: {
+            x: bot.entity.position.x,
+            y: bot.entity.position.y,
+            z: bot.entity.position.z,
+        },
+        retryable: !lit,
+    });
+    log(bot, lit
+        ? `Reached and verified lighting at the cave stance ${target.x}, ${target.y}, ${target.z}.`
+        : 'Reached the cave stance, but could not verify lighting it.');
+    return lit;
+}
+
+/** Collect one exact, still-exposed ore target without route excavation. */
+export async function collectExposedOreAt(bot, blockName, x, y, z) {
+    const target = {
+        name: String(blockName || '').trim(),
+        x: Math.floor(Number(x)),
+        y: Math.floor(Number(y)),
+        z: Math.floor(Number(z)),
+    };
+    if (
+        !/^(?:deepslate_)?[a-z0-9_]+_ore$/.test(target.name)
+        || ![target.x, target.y, target.z].every(Number.isFinite)
+    ) {
+        setActionEvidence(bot, { kind: 'collect', outcome: 'invalid_target', target, retryable: false });
+        return false;
+    }
+    const block = bot.blockAt(new Vec3(target.x, target.y, target.z));
+    if (!block || block.name !== target.name) {
+        setActionEvidence(bot, { kind: 'collect', outcome: 'target_changed', target, retryable: true });
+        return false;
+    }
+    if (isProtectedGameplayBlock(block) || !isMiningTargetExposed(bot, block)) {
+        setActionEvidence(bot, {
+            kind: 'collect',
+            outcome: isProtectedGameplayBlock(block) ? 'protected_block' : 'target_not_exposed',
+            target,
+            retryable: !isProtectedGameplayBlock(block),
+        });
+        return false;
+    }
+    return await collectBlock(bot, target.name, 1, null, 8, {
+        relocate: false,
+        preferredPosition: target,
+        allowNaturalRouteDigging: false,
+        allowAccessRecovery: false,
+        allowPillars: false,
+    });
 }
 
 export async function goToMiningDepth(bot, targetY, range=64) {
@@ -14537,12 +14659,16 @@ export async function goToBed(bot, {
         ? Number.POSITIVE_INFINITY
         : now() + boundedStandaloneTimeoutMs;
     let cancellationRequested = false;
-    let wakeRequested = false;
+    let lastWakeRequestedAt = 0;
     while (bot.isSleeping) {
         if (bot.interrupt_code || signal?.aborted || now() >= standaloneDeadline) {
             cancellationRequested = true;
-            if (!wakeRequested) {
-                wakeRequested = true;
+            const wakeRequestedAt = now();
+            // Waking is a packet request, not an acknowledgement. Reissue it
+            // until entityWake proves the body is no longer owned by the bed;
+            // a lost first packet must not strand Stop behind a long sleep.
+            if (wakeRequestedAt - lastWakeRequestedAt >= 500) {
+                lastWakeRequestedAt = wakeRequestedAt;
                 try {
                     await bot.wake?.();
                 } catch {

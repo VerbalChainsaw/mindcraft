@@ -1,6 +1,18 @@
 import { createActionResult } from './action-result.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import {
+  assessStableMiningCollectionTarget,
+  isMiningTargetExposed,
+  probeSafeNavigationStances,
+} from '../library/skills.js';
+import {
+  isHazardousGameplayBlock,
+  isLiquidGameplayBlock,
+  isProtectedGameplayBlock,
+  isSafeCaveStance,
+  isSafeGameplaySupport,
+} from './gameplay-safety.js';
+import {
   familyEntriesFromCounts,
   familyTransferManifest,
   SUPPORTED_ITEM_FAMILIES,
@@ -92,17 +104,8 @@ function inventoryCounts(bot, override = null) {
 }
 
 function familyCount(counts, family) {
-  if (family === 'logs') {
-    return [...counts.entries()].reduce((total, [name, count]) => (
-      /_(?:log|stem)$/.test(name) ? total + count : total
-    ), 0);
-  }
-  if (family === 'planks') {
-    return [...counts.entries()].reduce((total, [name, count]) => (
-      name.endsWith('_planks') ? total + count : total
-    ), 0);
-  }
-  return 0;
+  return familyEntriesFromCounts(counts, family)
+    .reduce((total, entry) => total + entry.count, 0);
 }
 
 function equipmentName(bot, destination) {
@@ -117,10 +120,15 @@ function equipmentName(bot, destination) {
 
 export function captureCapabilitySnapshot(bot, { inventory = null } = {}) {
   const counts = inventoryCounts(bot, inventory);
+  const position = bot?.entity?.position;
   return Object.freeze({
     inventory: counts,
     mainHand: equipmentName(bot, 'main_hand'),
     offHand: equipmentName(bot, 'off_hand'),
+    position: position && [position.x, position.y, position.z].every(Number.isFinite)
+      ? Object.freeze({ x: position.x, y: position.y, z: position.z })
+      : null,
+    dimension: String(bot?.game?.dimension || '').toLowerCase().replace(/^minecraft:/, ''),
     hasItem: name => Boolean(bot?.registry?.itemsByName?.[canonicalName(name)]),
     hasBlock: name => Boolean(bot?.registry?.blocksByName?.[canonicalName(name)]
       || Object.values(bot?.registry?.blocks || {}).some(block => block?.name === canonicalName(name))),
@@ -219,6 +227,254 @@ function defineCapability(definition) {
   DEFINITIONS.set(frozen.id, frozen);
 }
 
+function normalizePoint(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return immutable({
+    x: Number(source.x),
+    y: Number(source.y),
+    z: Number(source.z),
+  });
+}
+
+function normalizeExcludedTargets(value) {
+  return immutable((Array.isArray(value) ? value : [])
+    .slice(-24)
+    .map(target => ({
+      name: canonicalName(target?.name),
+      x: Number(target?.x),
+      y: Number(target?.y),
+      z: Number(target?.z),
+    }))
+    .filter(target => [target.x, target.y, target.z].every(Number.isFinite)));
+}
+
+function targetExcluded(position, exclusions) {
+  return exclusions.some(target => {
+    const radius = target.name === 'cave_region' ? 16 : 4;
+    return Math.max(
+      Math.abs(position.x - target.x),
+      Math.abs(position.y - target.y),
+      Math.abs(position.z - target.z),
+    ) <= radius;
+  });
+}
+
+function bindNearbyCave(context, args) {
+  const bot = context?.bot;
+  const origin = context?.snapshot?.position;
+  const fallbackTarget = {
+    name: 'cave_region',
+    x: Math.floor(origin?.x ?? args.home.x),
+    y: Math.floor(origin?.y ?? args.home.y),
+    z: Math.floor(origin?.z ?? args.home.z),
+  };
+  if (!bot?.findBlocks || !bot?.blockAt || !origin) {
+    return immutable({
+      ok: false,
+      code: 'source_not_found',
+      detail: 'Loaded cave observations are unavailable.',
+      target: fallbackTarget,
+    });
+  }
+  let positions = [];
+  try {
+    positions = bot.findBlocks({
+      // Natural cave entrances are not consistently labelled `cave_air`.
+      // Skylight plus support distinguishes sheltered underground air from
+      // ordinary surface air without inventing a second terrain model.
+      matching: block => (
+        ['air', 'cave_air'].includes(block?.name)
+        && Number(block?.skyLight) === 0
+      ),
+      maxDistance: args.range,
+      count: 1024,
+    }) || [];
+  } catch {
+    positions = [];
+  }
+  const candidates = positions
+    .filter(position => (
+      position
+      && Math.hypot(position.x - args.home.x, position.z - args.home.z) >= 12
+      && position.y <= args.home.y - 6
+      && !targetExcluded(position, args.excludedTargets)
+      && isSafeCaveStance(bot, position)
+    ))
+    .sort((left, right) => origin
+      ? Math.hypot(left.x - origin.x, left.y - origin.y, left.z - origin.z)
+        - Math.hypot(right.x - origin.x, right.y - origin.y, right.z - origin.z)
+      : 0);
+  const route = probeSafeNavigationStances(bot, candidates.slice(0, 128), 2_000);
+  if (route.reachable && route.terminalPosition) {
+    const position = candidates.find(candidate => (
+      candidate.x === route.terminalPosition.x
+      && candidate.y === route.terminalPosition.y
+      && candidate.z === route.terminalPosition.z
+    ));
+    if (position) {
+      const target = { name: 'cave_region', x: position.x, y: position.y, z: position.z };
+      return immutable({
+        ok: true,
+        commandName: '!lightCaveAt',
+        command: `!lightCaveAt(${position.x}, ${position.y}, ${position.z})`,
+        target,
+        routeStatus: route.status,
+        pathLength: route.pathLength,
+      });
+    }
+  }
+  return immutable({
+    ok: false,
+    code: 'source_not_found',
+    detail: candidates.length > 0
+      ? 'Observed cave stances had no non-destructive native route.'
+      : 'No safe untried cave stance was observed in the bounded region.',
+    target: fallbackTarget,
+  });
+}
+
+function bindExposedOre(context, args) {
+  const bot = context?.bot;
+  const origin = context?.snapshot?.position;
+  const regionTarget = {
+    name: 'cave_region',
+    x: Math.floor(origin?.x ?? args.home.x),
+    y: Math.floor(origin?.y ?? args.home.y),
+    z: Math.floor(origin?.z ?? args.home.z),
+  };
+  if (!bot?.findBlocks || !bot?.blockAt || !origin) {
+    return immutable({ ok: false, code: 'resource_not_found', detail: 'Loaded ore observations are unavailable.', target: regionTarget });
+  }
+  let positions = [];
+  try {
+    positions = bot.findBlocks({
+      matching: block => /^(?:deepslate_)?[a-z0-9_]+_ore$/.test(String(block?.name || '')),
+      maxDistance: args.range,
+      count: 96,
+    }) || [];
+  } catch {
+    positions = [];
+  }
+  const candidates = positions
+    .map(position => bot.blockAt(position))
+    .filter(block => (
+      block?.position
+      && !isProtectedGameplayBlock(block)
+      && isMiningTargetExposed(bot, block)
+      && Math.hypot(block.position.x - args.home.x, block.position.z - args.home.z) >= 12
+      && !targetExcluded(block.position, args.excludedTargets)
+    ))
+    .sort((left, right) => (
+      Math.hypot(
+        left.position.x - origin.x,
+        left.position.y - origin.y,
+        left.position.z - origin.z,
+      )
+      - Math.hypot(
+        right.position.x - origin.x,
+        right.position.y - origin.y,
+        right.position.z - origin.z,
+      )
+    ));
+  for (const block of candidates.slice(0, 12)) {
+    const assessment = assessStableMiningCollectionTarget(bot, block);
+    if (!assessment.safe) continue;
+    const route = probeSafeNavigationStances(bot, assessment.stances, 350);
+    if (!route.reachable) continue;
+    const target = {
+      name: block.name,
+      x: block.position.x,
+      y: block.position.y,
+      z: block.position.z,
+    };
+    return immutable({
+      ok: true,
+      commandName: '!collectExposedOreAt',
+      command: `!collectExposedOreAt(${commandString(block.name)}, ${target.x}, ${target.y}, ${target.z})`,
+      target,
+      routeStatus: route.status,
+      pathLength: route.pathLength,
+    });
+  }
+  return immutable({
+    ok: false,
+    code: 'resource_not_found',
+    detail: candidates.length > 0
+      ? 'Observed exposed ore had no stable non-destructive native approach.'
+      : 'No untried exposed ore was observed in this cave region.',
+    target: regionTarget,
+  });
+}
+
+function verifyCaveSurvey(_before, _after, binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const verified = Boolean(
+    skill?.kind === 'cave_survey'
+    && ['cave_lit', 'already_lit'].includes(skill.outcome)
+    && skill?.target?.name === 'cave_region'
+    && ['x', 'y', 'z'].every(axis => Number(skill.target?.[axis]) === Number(binding.target?.[axis]))
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'cave_survey_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? 'Minecraft confirmed the selected cave stance was reached and lit.'
+      : 'Minecraft did not confirm lighting at the selected cave stance.',
+    target: binding.target,
+    torchesPlaced: Math.max(0, Number(skill?.torchesPlaced) || 0),
+  });
+}
+
+function verifyNavigation(_before, after, binding) {
+  const position = after?.position;
+  const distance = position
+    ? Math.hypot(position.x - binding.x, position.y - binding.y, position.z - binding.z)
+    : Number.POSITIVE_INFINITY;
+  const verified = Boolean(
+    position
+    && distance <= binding.closeness + 0.75
+    && (!binding.dimension || after.dimension === binding.dimension)
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'navigation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed arrival within ${distance.toFixed(2)} blocks.`
+      : 'Minecraft did not confirm arrival at the bound destination.',
+    distance: Number.isFinite(distance) ? distance : null,
+  });
+}
+
+function verifyExactStorage(_before, _after, binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const transferred = Math.max(0, Math.min(
+    Number(skill?.inventoryTransferred) || Number(skill?.transferred) || 0,
+    Number(skill?.containerTransferred) || Number(skill?.transferred) || 0,
+  ));
+  const targetMatches = Boolean(
+    skill?.target
+    && ['x', 'y', 'z'].every(axis => Number(skill.target[axis]) === Number(binding.container[axis]))
+  );
+  const verified = Boolean(
+    skill?.kind === 'chest_transfer'
+    && skill?.outcome === 'deposited'
+    && skill?.item === binding.item
+    && targetMatches
+    && transferred === binding.quantity
+    && skill?.unrelatedPreserved === true
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'storage_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed ${transferred} ${binding.item} in the exact container.`
+      : `Minecraft confirmed ${transferred} of ${binding.quantity} ${binding.item} transferred to the exact container.`,
+    item: binding.item,
+    requestedQuantity: binding.quantity,
+    transferred,
+  });
+}
+
 defineCapability({
   id: 'collect_wood',
   parameters: {
@@ -281,6 +537,137 @@ defineCapability({
   execute: executeBoundCommand,
   verify: verifySurfaceAccess,
   cost: () => 4,
+});
+
+defineCapability({
+  id: 'survey_nearby_cave',
+  parameters: {
+    home: { type: 'point' },
+    range: { type: 'integer', minimum: 16, maximum: 128 },
+    excludedTargets: { type: 'target_list', maximum: 24 },
+  },
+  normalizeArguments: args => immutable({
+    home: normalizePoint(args?.home),
+    range: boundedInteger(args?.range, 64, 16, 128),
+    excludedTargets: normalizeExcludedTargets(args?.excludedTargets),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite home-base position', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
+    { requirement: 'connected cave observations', satisfied: Boolean(snapshot.position) },
+    { requirement: 'carried torch', satisfied: (Number(snapshot.inventory.get('torch')) || 0) > 0 },
+  ]),
+  expectedEffects: () => [immutable({ kind: 'cave_route_lit' })],
+  bind: bindNearbyCave,
+  execute: executeBoundCommand,
+  verify: verifyCaveSurvey,
+  cost: (_snapshot, args) => Math.max(4, Math.ceil(args.range / 8)),
+});
+
+defineCapability({
+  id: 'collect_exposed_ore',
+  parameters: {
+    home: { type: 'point' },
+    range: { type: 'integer', minimum: 8, maximum: 64 },
+    excludedTargets: { type: 'target_list', maximum: 24 },
+  },
+  normalizeArguments: args => immutable({
+    home: normalizePoint(args?.home),
+    range: boundedInteger(args?.range, 32, 8, 64),
+    excludedTargets: normalizeExcludedTargets(args?.excludedTargets),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite protected home-base position', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
+    { requirement: 'connected ore observations', satisfied: Boolean(snapshot.position) },
+  ]),
+  expectedEffects: () => [inventoryEffect('ores', 1, 'ores')],
+  bind: bindExposedOre,
+  execute: executeBoundCommand,
+  verify: verifyEffects,
+  cost: (_snapshot, args) => Math.max(2, Math.ceil(args.range / 8)),
+});
+
+defineCapability({
+  id: 'navigate_exact',
+  parameters: {
+    x: { type: 'number' },
+    y: { type: 'number' },
+    z: { type: 'number' },
+    closeness: { type: 'number', minimum: 0, maximum: 16 },
+    dimension: { type: 'dimension' },
+  },
+  normalizeArguments: args => immutable({
+    x: Number(args?.x),
+    y: Number(args?.y),
+    z: Number(args?.z),
+    closeness: Math.max(0, Math.min(16, Number(args?.closeness) || 2)),
+    dimension: canonicalName(args?.dimension),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite destination', satisfied: [args.x, args.y, args.z].every(Number.isFinite) },
+    { requirement: `current dimension ${args.dimension}`, satisfied: !args.dimension || snapshot.dimension === args.dimension },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'position',
+    x: args.x,
+    y: args.y,
+    z: args.z,
+    closeness: args.closeness,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!goToCoordinates',
+    command: `!goToCoordinates(${args.x}, ${args.y}, ${args.z}, ${args.closeness})`,
+    x: args.x,
+    y: args.y,
+    z: args.z,
+    closeness: args.closeness,
+    dimension: args.dimension,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyNavigation,
+  cost: () => 2,
+});
+
+defineCapability({
+  id: 'store_exact_item',
+  parameters: {
+    item: { type: 'item_name' },
+    quantity: { type: 'integer', minimum: 1, maximum: 2304 },
+    container: { type: 'exact_container' },
+  },
+  normalizeArguments: args => immutable({
+    item: canonicalName(args?.item),
+    quantity: boundedInteger(args?.quantity, 1, 1, 2304),
+    container: {
+      name: canonicalName(args?.container?.name),
+      x: Number(args?.container?.x),
+      y: Number(args?.container?.y),
+      z: Number(args?.container?.z),
+      dimension: canonicalName(args?.container?.dimension),
+    },
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: `registered carried item ${args.item}`, satisfied: snapshot.hasItem(args.item) && (Number(snapshot.inventory.get(args.item)) || 0) >= args.quantity },
+    { requirement: 'exact chest or barrel binding', satisfied: ['chest', 'trapped_chest', 'barrel'].includes(args.container.name) && [args.container.x, args.container.y, args.container.z].every(Number.isFinite) },
+    { requirement: `current dimension ${args.container.dimension}`, satisfied: snapshot.dimension === args.container.dimension },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'verified_storage',
+    item: args.item,
+    quantity: args.quantity,
+    container: args.container,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!putInChestAt',
+    command: `!putInChestAt(${commandString(args.item)}, ${args.quantity}, ${args.container.x}, ${args.container.y}, ${args.container.z}, ${commandString(args.container.dimension)})`,
+    item: args.item,
+    quantity: args.quantity,
+    container: args.container,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyExactStorage,
+  cost: (_snapshot, args) => args.quantity,
 });
 
 defineCapability({
@@ -723,6 +1110,8 @@ function bindingEvidence(binding) {
   evidence.requestedQuantity = binding.quantity ?? null;
   if (Array.isArray(binding.manifest)) evidence.manifest = binding.manifest;
   if (binding.workstation) evidence.workstation = binding.workstation;
+  if (binding.target) evidence.target = binding.target;
+  if (binding.container) evidence.container = binding.container;
   return immutable(evidence);
 }
 
@@ -747,6 +1136,7 @@ function capabilityFailure(code, detail, {
     code,
     detail: String(detail || '').slice(0, 360),
     retryable,
+    ...(binding?.target ? { target: immutable(binding.target) } : {}),
     evidence: immutable({
       capability: {
         id: capability?.id || null,
@@ -833,13 +1223,20 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
     Number(verification?.observedIncrease) > 0
     && binding?.expectedEffects?.some(effect => effect.kind === 'inventory_increase')
   );
+  const verifiedStorageProgress = Boolean(
+    Number(verification?.transferred) > 0
+    && binding?.expectedEffects?.some(effect => effect.kind === 'verified_storage')
+  );
   const verifiedPartialProgress = verifiedMiningProgress
     || verifiedSurfaceProgress
     || verifiedEntityHarvestProgress
-    || verifiedInventoryProgress;
+    || verifiedInventoryProgress
+    || verifiedStorageProgress;
 
   if (!verification.ok && verifiedPartialProgress && result.phase === 'failed') {
-    const progressDetail = verifiedInventoryProgress
+    const progressDetail = verifiedStorageProgress
+      ? `Minecraft verified a partial exact-container transfer of ${verification.transferred}`
+      : verifiedInventoryProgress
       ? `Minecraft verified a partial inventory increase of ${verification.observedIncrease}`
       : verifiedEntityHarvestProgress
       ? Number(skill?.collected) > 0
@@ -925,7 +1322,7 @@ export async function executeCapabilityAction(capability, {
   if (!binding?.ok) {
     return {
       result: capabilityFailure(
-        CAPABILITY_OUTCOME_CODES.BINDING,
+        binding?.code || CAPABILITY_OUTCOME_CODES.BINDING,
         binding?.detail || 'Capability binding failed.',
         { capability: identity, preconditions, binding },
       ),

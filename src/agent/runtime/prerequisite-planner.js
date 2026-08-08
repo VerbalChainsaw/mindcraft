@@ -111,7 +111,12 @@ function learnedPreference(context, learningKey) {
 }
 
 function methodExcluded(context, learningKey) {
-  return Boolean(learningKey && context.excludedMethods.has(learningKey));
+  if (!learningKey) return false;
+  if (context.excludedMethods.has(learningKey)) return true;
+  const acquisition = /^(collect|harvest):[^>]+->([a-z0-9_]+)$/.exec(learningKey);
+  return Boolean(acquisition && context.excludedMethods.has(
+    `${acquisition[1]}:*->${acquisition[2]}`,
+  ));
 }
 
 function isLog(name) {
@@ -417,14 +422,25 @@ function sourceBlocks(bot, target) {
   return sources;
 }
 
-function selfDroppingSourceIsGrounded(bot, context, source, target, trail) {
-  if (source.name !== target) return true;
+function placedBlockSourceIsGrounded(bot, context, source, target, trail) {
+  const targetItem = bot.registry?.itemsByName?.[target];
+  const placedAlias = String(source.name || '')
+    .replace(/^wall_/, '')
+    .replace('_wall_', '_');
+  const representsPlacedItem = source.name === target
+    || placedAlias === target
+    || (
+      canonicalName(source.displayName)
+      && canonicalName(source.displayName) === canonicalName(targetItem?.displayName)
+    );
+  if (!representsPlacedItem) return true;
   // A root request may deliberately search for its named world block, and an
-  // item with no recipe is a genuine collection leaf. Inside a recipe chain,
-  // though, a craftable block that merely drops itself is not an authorized
-  // resource source. A local observation may be the player's floor, wall,
-  // workstation, or rail line; existence does not grant demolition authority.
-  // Manufacture the prerequisite instead of scavenging a nearby structure.
+  // item with no recipe is a genuine collection leaf. Inside a manufactured
+  // plan, though, every placed representation of a craftable item is protected:
+  // not only `rail -> rail`, but aliases such as `wall_torch -> torch` and
+  // `oak_wall_sign -> oak_sign`. A local observation may be the player's floor,
+  // wall, workstation, lighting, or rail line; existence does not grant
+  // demolition authority. Manufacture the prerequisite instead.
   if (
     (context.allowUnobservedSelfDropRoot && trail.length <= 1)
     || connectedRecipes(bot, target).length === 0
@@ -1096,9 +1112,51 @@ function planFromSmelting(bot, context, target, amount, input, trail) {
   return null;
 }
 
+function planUnboundSmeltingLogFamily(bot, context, target, amount, inputs, trail) {
+  const learningKey = 'collect:logs->logs';
+  if (methodExcluded(context, learningKey)) return null;
+  const logInputs = [...new Set(inputs.filter(isLog))].sort();
+  if (logInputs.length < 2) return null;
+  if (logInputs.some(input => ledgerCount(context, input) > 0)) return null;
+
+  const representative = logInputs.find(input => !input.startsWith('stripped_')) || logInputs[0];
+  const candidate = cloneContext(context);
+  const actionFailure = addCapabilityAction(bot, candidate, 'collect_wood', {
+    count: amount,
+    range: candidate.range,
+    expectedIncrease: amount,
+  }, {
+    kind: 'collect',
+    target: 'logs',
+    expectedName: 'logs',
+    expectedFamily: 'logs',
+    expectedIncrease: amount,
+    reason: `${target} accepts interchangeable log inputs, but no concrete wood species is currently carried.`,
+    trail: [...trail, target, 'smelting_log_family'],
+    learningKey,
+  });
+  if (actionFailure) return { failure: actionFailure, logInputs };
+
+  // The representative exists only in this speculative suffix. The family
+  // action is physically executed first, then mandatory replanning binds the
+  // actual log species that Minecraft supplied.
+  setLedgerCount(candidate, representative, ledgerCount(candidate, representative) + amount);
+  const smeltingFailure = planFromSmelting(
+    bot,
+    candidate,
+    target,
+    amount,
+    representative,
+    trail,
+  );
+  return smeltingFailure
+    ? { failure: smeltingFailure, logInputs }
+    : { candidate, logInputs };
+}
+
 function planFromWorldSource(bot, context, target, amount, trail) {
   const sources = sourceBlocks(bot, target)
-    .filter(source => selfDroppingSourceIsGrounded(bot, context, source, target, trail))
+    .filter(source => placedBlockSourceIsGrounded(bot, context, source, target, trail))
     .filter(source => !methodExcluded(context, sourceLearningKey(source.name, target)))
     .sort((left, right) => (
       sourceScore(context, right, target) - sourceScore(context, left, target)
@@ -1273,8 +1331,25 @@ function produceItem(bot, context, target, amount, trail) {
   const nextTrail = [...trail, target];
 
   const smeltingFailures = [];
-  for (const smeltingInput of smeltingInputCandidates(bot, context, target)
-    .filter(input => !methodExcluded(context, `smelt:${canonicalName(input)}->${canonicalName(target)}`))) {
+  const viableSmeltingInputs = smeltingInputCandidates(bot, context, target)
+    .filter(input => !methodExcluded(context, `smelt:${canonicalName(input)}->${canonicalName(target)}`));
+  const unboundLogFamily = planUnboundSmeltingLogFamily(
+    bot,
+    context,
+    target,
+    amount,
+    viableSmeltingInputs,
+    nextTrail,
+  );
+  if (unboundLogFamily?.candidate) {
+    acceptContext(context, unboundLogFamily.candidate);
+    return null;
+  }
+  if (unboundLogFamily?.failure) smeltingFailures.push(unboundLogFamily.failure);
+  const smeltingInputs = unboundLogFamily
+    ? viableSmeltingInputs.filter(input => !unboundLogFamily.logInputs.includes(input))
+    : viableSmeltingInputs;
+  for (const smeltingInput of smeltingInputs) {
     const candidate = cloneContext(context);
     const failure = planFromSmelting(bot, candidate, target, amount, smeltingInput, nextTrail);
     if (!failure) {

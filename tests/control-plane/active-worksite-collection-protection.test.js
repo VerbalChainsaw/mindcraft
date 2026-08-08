@@ -7,6 +7,7 @@ import {
   advanceWorkOrder,
   createWorkOrder,
   workOrderCollectionExclusions,
+  workOrderProtectedRegionExclusion,
 } from '../../src/agent/runtime/work-order.js';
 
 test('active Builder footprint augments failed-target exclusions without protecting the surrounding world', () => {
@@ -59,6 +60,23 @@ test('inactive or unrelated jobs do not claim a collection region', () => {
   assert.equal(builderWorksiteCollectionExclusion(order), null);
 });
 
+test('an active expedition protects its bound home base from prerequisite collection', () => {
+  const order = createWorkOrder({
+    id: 'protected-expedition-home',
+    role: 'miner',
+    kind: 'explore',
+    source: 'player',
+    target: { name: 'ores', x: 80, y: 64, z: 90 },
+  });
+  assert.deepEqual(workOrderProtectedRegionExclusion(order), {
+    x: 80,
+    y: 64,
+    z: 90,
+    radius: 12,
+  });
+  assert.equal(workOrderProtectedRegionExclusion({ ...order, phase: 'complete' }), null);
+});
+
 test('a failed concrete acquisition target survives restart normalization and excludes only its local source region', () => {
   const order = createWorkOrder({
     id: 'builder-stone-recovery',
@@ -107,6 +125,8 @@ test('a failed concrete acquisition target survives restart normalization and ex
   const expanded = workOrderCollectionExclusions(second, 'stone');
   assert.equal(second.attempts, 0);
   assert.equal(second.recoveries, 2);
+  assert.equal(second.resumePhase, 'acquire');
+  assert.deepEqual(second.checkpoint.failedMethods, ['collect:*->cobblestone']);
   assert.equal(collectionPositionExcluded({ x: 27, y: 59, z: -7 }, expanded), true);
   assert.equal(collectionPositionExcluded({ x: 35, y: 59, z: -7 }, expanded), false);
 

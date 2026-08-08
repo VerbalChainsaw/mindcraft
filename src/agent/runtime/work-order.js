@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { isPreemption } from './action-result.js';
 
 const ROLES = new Set(['builder', 'miner', 'lumberjack']);
-const KINDS = new Set(['stockpile', 'build', 'emergency_shelter', 'mine', 'harvest']);
+const KINDS = new Set(['stockpile', 'build', 'emergency_shelter', 'mine', 'harvest', 'explore']);
 const SOURCES = new Set(['player', 'role', 'survival', 'restart']);
 const PHASES = new Set([
   'assess',
@@ -47,6 +47,11 @@ function boundedText(value, maximum) {
   // eslint-disable-next-line no-control-regex -- Persisted work-order text must be display and storage safe.
   if (/[\u0000-\u001f\u007f]/.test(text)) throw new TypeError('Text contains control characters.');
   return text.trim().slice(0, maximum);
+}
+
+function acquisitionStrategyFailureKey(method) {
+  const match = /^(collect|harvest):[^>]+->([a-z0-9_]+)$/.exec(method);
+  return match ? `${match[1]}:*->${match[2]}` : method;
 }
 
 function normalizeTarget(target) {
@@ -225,8 +230,60 @@ function normalizeAnchor(anchor) {
 function normalizeCheckpoint(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) return Object.freeze({});
   const normalized = {};
-  for (const key of ['verifiedCount', 'nextCell', 'collected', 'delivered']) {
+  for (const key of [
+    'verifiedCount',
+    'nextCell',
+    'collected',
+    'delivered',
+    'deliveryIndex',
+    'deliveryOffset',
+    'caveSearchRelocations',
+  ]) {
     if (Number.isFinite(checkpoint[key])) normalized[key] = finiteInteger(checkpoint[key], 0, 0, 4096);
+  }
+  if (checkpoint.caveLit === true) normalized.caveLit = true;
+  if (checkpoint.caveLightingComplete === true) normalized.caveLightingComplete = true;
+  if (checkpoint.bestEffort === true) normalized.bestEffort = true;
+  const homeDimension = boundedText(checkpoint.homeDimension, 64);
+  if (CANONICAL_NAME.test(homeDimension)) normalized.homeDimension = homeDimension;
+  const containerName = boundedText(checkpoint.containerName, 64);
+  const containerDimension = boundedText(checkpoint.containerDimension, 64);
+  const containerCoordinates = ['containerX', 'containerY', 'containerZ']
+    .map(key => Number(checkpoint[key]));
+  if (
+    ['chest', 'trapped_chest', 'barrel'].includes(containerName)
+    && CANONICAL_NAME.test(containerDimension)
+    && containerCoordinates.every(Number.isFinite)
+  ) {
+    normalized.containerName = containerName;
+    normalized.containerDimension = containerDimension;
+    normalized.containerX = Math.floor(containerCoordinates[0]);
+    normalized.containerY = Math.floor(containerCoordinates[1]);
+    normalized.containerZ = Math.floor(containerCoordinates[2]);
+  }
+  if (checkpoint.baselineFamilyCounts && typeof checkpoint.baselineFamilyCounts === 'object') {
+    const counts = {};
+    for (const [rawName, rawCount] of Object.entries(checkpoint.baselineFamilyCounts).slice(0, 64)) {
+      const name = boundedText(rawName, 64);
+      const count = Number(rawCount);
+      if (CANONICAL_NAME.test(name) && Number.isFinite(count) && count >= 0) {
+        counts[name] = finiteInteger(count, 0, 0, 2304);
+      }
+    }
+    normalized.baselineFamilyCounts = Object.freeze(counts);
+  }
+  if (Array.isArray(checkpoint.collectedManifest)) {
+    const manifest = [];
+    for (const rawEntry of checkpoint.collectedManifest.slice(0, 64)) {
+      const item = boundedText(rawEntry?.item, 64);
+      const quantity = Number(rawEntry?.quantity);
+      if (!CANONICAL_NAME.test(item) || !Number.isFinite(quantity) || quantity < 1) continue;
+      manifest.push(Object.freeze({
+        item,
+        quantity: finiteInteger(quantity, 1, 1, 2304),
+      }));
+    }
+    normalized.collectedManifest = Object.freeze(manifest);
   }
   if (Array.isArray(checkpoint.verifiedCells)) {
     normalized.verifiedCells = Object.freeze(checkpoint.verifiedCells
@@ -428,14 +485,36 @@ export function workOrderCollectionExclusions(order, requestedName = null) {
   });
 }
 
+export function workOrderProtectedRegionExclusion(order) {
+  const home = order?.target;
+  if (
+    order?.kind !== 'explore'
+    || ['complete', 'failed', 'cancelled'].includes(order?.phase)
+    || ![home?.x, home?.y, home?.z].every(Number.isFinite)
+  ) return null;
+  return Object.freeze({
+    x: Math.floor(home.x),
+    y: Math.floor(home.y),
+    z: Math.floor(home.z),
+    radius: 12,
+  });
+}
+
 export function advanceWorkOrder(order, result, {
   previousActionId = null,
   nextPhase = null,
   failedMethod = null,
   failedTarget = null,
+  recoveryAction = false,
   now = Date.now(),
 } = {}) {
   const current = normalizeWorkOrder(order);
+  // A failed action selected while already recovering still belongs to the
+  // original productive phase. Pointing recovery back at `recover` erases
+  // that continuation and lets reducers skip required preparation forever.
+  const recoveryResumePhase = current.phase === 'recover'
+    ? (current.resumePhase || 'assess')
+    : current.phase;
   if (!result?.actionId || result.actionId === previousActionId) return current;
   const surfaceRecovery = surfaceRecoveryObservation(result);
   if (surfaceRecovery?.reached && nextPhase && PHASES.has(nextPhase)) {
@@ -541,6 +620,29 @@ export function advanceWorkOrder(order, result, {
       updatedAt: now,
     });
   }
+  if (recoveryAction && result.retryable === true) {
+    if (current.recoveries < current.maxRecoveries) {
+      return normalizeWorkOrder({
+        ...current,
+        phase: 'recover',
+        resumePhase: recoveryResumePhase,
+        recoveries: current.recoveries + 1,
+        evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+        updatedAt: now,
+      });
+    }
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'failed',
+      resumePhase: null,
+      evidence: {
+        code: 'recovery_action_exhausted',
+        detail: result.detail || 'The bounded recovery action made no verified progress.',
+        actionId: result.actionId,
+      },
+      updatedAt: now,
+    });
+  }
   const prerequisiteCheckpoint = discoveredPrerequisiteCheckpoint(result, current.checkpoint);
   if (result.retryable === true && prerequisiteCheckpoint) {
     // A newly discovered physical prerequisite is planning information, not a
@@ -550,7 +652,7 @@ export function advanceWorkOrder(order, result, {
     return normalizeWorkOrder({
       ...current,
       phase: 'recover',
-      resumePhase: current.phase,
+      resumePhase: recoveryResumePhase,
       checkpoint: prerequisiteCheckpoint,
       evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
       updatedAt: now,
@@ -561,14 +663,29 @@ export function advanceWorkOrder(order, result, {
     : null;
   if (result.retryable === true && target) {
     if (current.recoveries < current.maxRecoveries) {
+      const method = boundedText(failedMethod, 160);
+      const priorSameSourceFailures = (current.checkpoint.failedTargets || [])
+        .filter(previous => previous.name === target.name)
+        .length;
+      // A second no-progress target from the same physical source is evidence
+      // that candidate ranking is not enough. Exclude that deterministic
+      // method for this order so the existing planner must bind a genuinely
+      // different strategy (or report that none exists).
+      const failedMethods = method && priorSameSourceFailures >= 1
+        ? [...new Set([
+            ...(current.checkpoint.failedMethods || []),
+            acquisitionStrategyFailureKey(method),
+          ])].slice(-MAX_FAILED_METHODS)
+        : current.checkpoint.failedMethods;
       return normalizeWorkOrder({
         ...current,
         phase: 'recover',
-        resumePhase: current.phase,
+        resumePhase: recoveryResumePhase,
         recoveries: current.recoveries + 1,
         checkpoint: {
           ...current.checkpoint,
           failedTargets: [...(current.checkpoint.failedTargets || []), target].slice(-MAX_FAILED_TARGETS),
+          ...(failedMethods ? { failedMethods } : {}),
         },
         evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
         updatedAt: now,
@@ -597,7 +714,7 @@ export function advanceWorkOrder(order, result, {
     return normalizeWorkOrder({
       ...current,
       phase: 'recover',
-      resumePhase: current.phase,
+      resumePhase: recoveryResumePhase,
       attempts: current.attempts + 1,
       checkpoint: {
         ...current.checkpoint,

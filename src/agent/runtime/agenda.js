@@ -55,6 +55,7 @@ export const AGENDA_KINDS = Object.freeze({
   mine: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   harvest: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   stockpile: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
+  explore: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true, needsPoint: true }),
   shelter: Object.freeze({ executor: 'job', needsTarget: false, needsQuantity: false }),
   // The model compiles custom geometry, but the persisted entry stores only a
   // typed barrier. AgendaDirector binds it to the exact accepted Builder order
@@ -280,9 +281,12 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (rawWorkstation != null && !normalizedWorkstation) {
     throw new TypeError('An agenda smelt workstation constraint is invalid.');
   }
-  const containerConstraint = kind === 'deposit'
+  const containerConstraint = ['deposit', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
+  if (kind === 'explore' && !containerConstraint) {
+    throw new TypeError('An exploration step needs one exact home container.');
+  }
   const sourceEntryId = boundedText(rawWorkstation?.sourceEntryId, 96);
   if (sourceEntryId && !SAFE_ENTRY_ID.test(sourceEntryId)) {
     throw new TypeError('An agenda workstation source entry id is invalid.');
@@ -331,6 +335,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     executor: spec.executor,
     target,
     quantity: spec.needsQuantity ? finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) : 0,
+    ...(kind === 'explore' && raw.bestEffort === true ? { bestEffort: true } : {}),
     completion,
     recipient: spec.needsRecipient ? recipient : '',
     requester,
@@ -380,6 +385,7 @@ export function describeAgendaEntry(entry) {
     case 'mine': return `mine ${entry.quantity} ${readable}`;
     case 'harvest': return `harvest ${entry.quantity} ${readable}`;
     case 'stockpile': return `stockpile ${entry.quantity} ${readable}`;
+    case 'explore': return `explore and light a cave, collect ${entry.quantity} ${readable}, return, and store the result`;
     case 'craft': return `craft ${entry.quantity} ${readable}`;
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';

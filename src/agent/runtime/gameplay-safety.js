@@ -96,6 +96,28 @@ export function isSafeGameplaySupport(block) {
     );
 }
 
+/**
+ * One physically usable underground standing cell. Minecraft may label the
+ * empty half of a natural cave as either `air` or `cave_air`, so callers must
+ * not use that storage detail as the definition of a cave.
+ */
+export function isSafeCaveStance(bot, position, { maxSkyLight = 0 } = {}) {
+    if (!bot?.blockAt || !position?.offset) return false;
+    const feet = bot.blockAt(position);
+    const head = bot.blockAt(position.offset(0, 1, 0));
+    const support = bot.blockAt(position.offset(0, -1, 0));
+    if (
+        !['air', 'cave_air'].includes(feet?.name)
+        || Number(feet?.skyLight) > maxSkyLight
+        || head?.boundingBox !== 'empty'
+        || !isSafeGameplaySupport(support)
+    ) return false;
+    return [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]].every(([x, y, z]) => {
+        const adjacent = bot.blockAt(position.offset(x, y, z));
+        return !isLiquidGameplayBlock(adjacent) && !isHazardousGameplayBlock(adjacent);
+    });
+}
+
 export function assessAnchoredGameplaySupport(bot, block, { maxFallingDepth = 8 } = {}) {
     if (isSafeGameplaySupport(block)) {
         return { ok: true, outcome: 'stable_support', blocks: [block], anchor: block };

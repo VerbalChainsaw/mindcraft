@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import process from 'node:process';
 import test from 'node:test';
+import Vec3 from 'vec3';
 
 import {
   actionResultFromError,
@@ -15,6 +16,7 @@ import {
   isHazardousGameplayBlock,
   isProtectedGameplayBlock,
   isReplaceableGameplayBlock,
+  isSafeCaveStance,
   isSafeGameplaySupport,
 } from '../src/agent/runtime/gameplay-safety.js';
 import {
@@ -86,6 +88,26 @@ test('critical gameplay safety classifies protected, replaceable, falling, hazar
   assert.equal(isHazardousGameplayBlock('soul_fire'), true);
   assert.equal(isSafeGameplaySupport({ name: 'stone', boundingBox: 'block' }), true);
   assert.equal(isSafeGameplaySupport({ name: 'magma_block', boundingBox: 'block' }), false);
+});
+
+test('a cave stance is dark supported air regardless of Minecraft air subtype', () => {
+  const position = new Vec3(0, 10, 0);
+  const blocks = new Map();
+  const put = (x, y, z, block) => blocks.set(`${x},${y},${z}`, block);
+  put(0, 10, 0, { name: 'air', boundingBox: 'empty', skyLight: 0 });
+  put(0, 11, 0, { name: 'air', boundingBox: 'empty', skyLight: 0 });
+  put(0, 9, 0, { name: 'stone', boundingBox: 'block' });
+  for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    put(x, 10, z, { name: 'stone', boundingBox: 'block' });
+  }
+  const bot = { blockAt: value => blocks.get(`${value.x},${value.y},${value.z}`) || null };
+  assert.equal(isSafeCaveStance(bot, position), true);
+  put(0, 10, 0, { name: 'cave_air', boundingBox: 'empty', skyLight: 0 });
+  assert.equal(isSafeCaveStance(bot, position), true);
+  put(0, 10, 0, { name: 'air', boundingBox: 'empty', skyLight: 4 });
+  assert.equal(isSafeCaveStance(bot, position), false);
+  put(0, 10, 0, { name: 'air', boundingBox: 'empty', skyLight: 15 });
+  assert.equal(isSafeCaveStance(bot, position), false);
 });
 
 test('runtime verifier requires the exact fresh successful action result', () => {

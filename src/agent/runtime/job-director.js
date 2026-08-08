@@ -27,6 +27,7 @@ import {
 } from './jobs/structure-material-binder.js';
 import { canonicalMiningTarget, miningKnowledge, nextMinerStep } from './jobs/miner-plan.js';
 import { canonicalLogFamily, nextLumberjackStep } from './jobs/lumberjack-plan.js';
+import { nextExplorerStep } from './jobs/explorer-plan.js';
 import {
   isProtectedGameplayBlock,
   isReplaceableGameplayBlock,
@@ -97,6 +98,7 @@ function failedAcquisitionRecovery(step, result) {
   ));
   if (target) {
     return {
+      failedMethod: method,
       failedTarget: {
         name: target.name,
         x: Math.floor(target.x),
@@ -654,12 +656,12 @@ export function summarizeJobSituation(agent, order) {
   // `resourceFound`, and only miner/lumberjack read the safety sample, so every
   // other role was paying for two full scans and discarding both results.
   const role = order?.role;
-  if (role === 'miner') {
+  if (role === 'miner' && order?.kind !== 'explore') {
     const resourceFound = selectedResourcePresence(bot, order);
     if (resourceFound !== undefined) snapshot.resourceFound = resourceFound;
     snapshot.miningKnowledge = miningKnowledge(order.target?.name);
   }
-  if (role === 'miner' || role === 'lumberjack') {
+  if ((role === 'miner' && order?.kind !== 'explore') || role === 'lumberjack') {
     const resourceSafety = selectedResourceSafety(bot, order);
     if (resourceSafety !== undefined) {
       if (role === 'miner') snapshot.safeSelectedBlocks = resourceSafety;
@@ -791,6 +793,7 @@ function defaultOrderFor(agent, completedOrderIds) {
 }
 
 function reducerFor(order) {
+  if (order.role === 'miner' && order.kind === 'explore') return nextExplorerStep;
   if (order.role === 'builder') return nextBuilderStep;
   if (order.role === 'miner') return nextMinerStep;
   if (order.role === 'lumberjack') return nextLumberjackStep;
@@ -1506,6 +1509,7 @@ export class JobDirector extends RoleDirector {
           const advanced = advanceWorkOrder(verifiedOrder, result, {
             previousActionId,
             nextPhase: step.nextPhase,
+            recoveryAction: step.recoveryAction === true,
             ...acquisitionRecovery,
             now: this.now(),
           });

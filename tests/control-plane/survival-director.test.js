@@ -102,9 +102,10 @@ test('Given operator hold, SurvivalDirector does not schedule hunger, sleep, or 
   assert.equal(director.snapshot().phase, 'waiting');
 });
 
-test('Given an active typed player goal, routine survival upkeep cannot seize its idle transition gaps', async () => {
+test('Given durable player work, routine survival upkeep cannot seize its idle transition gaps', async () => {
   const agent = createAgent();
-  agent.goal_director = { activeGoal: { id: 'goal-player-1', phase: 'verify_complete' } };
+  agent.agenda_director = { hasUnfinished: () => true };
+  agent.job_director = { activeOrder: { id: 'job-player-1', source: 'player', phase: 'recover' } };
   const commands = [];
   const director = new SurvivalDirector(agent, {
     getSituation: () => ({

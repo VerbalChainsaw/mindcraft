@@ -8,7 +8,7 @@ import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 // append / interrupt / takeover branching is verified without spinning a bot.
 // The real directive resolver runs; the messages used resolve without a bot
 // registry (mining, harvest, come-here).
-function makeFakeAgent({ remaining = 0 } = {}) {
+function makeFakeAgent({ remaining = 0, stopResult = { stopped: true } } = {}) {
   const calls = {
     added: [],
     cleared: 0,
@@ -20,6 +20,7 @@ function makeFakeAgent({ remaining = 0 } = {}) {
     roleDefer: 0,
     stop: 0,
     operatorHoldReleased: 0,
+    operatorHoldSet: 0,
     responses: [],
   };
   const agent = {
@@ -39,13 +40,14 @@ function makeFakeAgent({ remaining = 0 } = {}) {
       snapshot() { return { remaining }; },
     },
     history: { add() {}, save() {} },
-    actions: { cancelResume() { calls.cancelResume += 1; }, async stop() { calls.stop += 1; return { stopped: true }; } },
+    actions: { cancelResume() { calls.cancelResume += 1; }, async stop() { calls.stop += 1; return stopResult; } },
     goal_director: { cancel() { calls.goalCancel += 1; } },
     job_director: { cancel() { calls.jobCancel += 1; } },
     companion_context: { setDirective() { calls.directiveCleared += 1; } },
     self_prompter: { interruptForManualCommand() { calls.selfPromptInterrupt += 1; } },
     role_director: { deferForManualCommand() { calls.roleDefer += 1; } },
     releaseOperatorHold() { calls.operatorHoldReleased += 1; },
+    holdPosition() { calls.operatorHoldSet += 1; },
     routeResponse(_source, message) { calls.responses.push(message); },
   };
   return { agent, calls };
@@ -62,6 +64,23 @@ test('dispatchPlayerAgenda queues a fresh multi-step plan and takes over the bod
   assert.equal(calls.stop, 1);
   assert.equal(calls.cleared, 0, 'append must not clear the queue');
   assert.match(calls.responses[0], /Queued 2 steps/);
+});
+
+test('dispatchPlayerAgenda rejects the whole plan when the prior action does not settle', async () => {
+  const { agent, calls } = makeFakeAgent({
+    remaining: 0,
+    stopResult: { stopped: false, timedOut: true },
+  });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'Gabriel',
+    'Gabriel',
+    'mine 10 iron then come here',
+  );
+  assert.equal(handled, true);
+  assert.equal(calls.added.length, 0);
+  assert.equal(calls.operatorHoldSet, 1);
+  assert.match(calls.responses[0], /did not queue or start/i);
 });
 
 test('dispatchPlayerAgenda interrupt clears the queue and preempts', async () => {

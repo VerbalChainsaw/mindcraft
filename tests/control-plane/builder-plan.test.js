@@ -48,7 +48,7 @@ test('general construction compiler creates bounded supported shapes with a safe
   ), /no path down to the ground/i);
 
   const habitable = expandStructureDesign(
-    'room 0 0 0 5 4 5 cobblestone; put 0 1 2 door east; put 1 1 1 bed south',
+    'room 0 0 0 5 4 5 cobblestone; put 0 1 2 door east; put 2 1 1 bed south',
     'cobblestone',
     { canSupportMaterial: name => name === 'cobblestone' },
   );
@@ -115,6 +115,12 @@ test('general construction compiler creates bounded supported shapes with a safe
     && /bed_1 has an occupied head cell at 2,1,3/i.test(error.message)
     && error.message.length <= 220
   ), 'one correction must expose independent wall-support and multiblock fixture defects together');
+  assert.throws(() => expandStructureDesign(
+    'room 0 0 0 5 4 5 cobblestone; put 2 1 0 door north; put 2 1 2 bed south; put 1 1 1 crafting east; put 3 1 1 furnace west; put 1 1 3 chest east; put 3 1 3 torch west',
+    'cobblestone',
+    { canSupportMaterial: name => name === 'cobblestone' },
+  ), /wake-up cell trapped from access/i,
+  'a bed must not expose any Minecraft wake-up cell that furniture disconnects from the door');
 
   const platform = createConstructionBlueprint({
     shape: 'platform',

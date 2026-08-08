@@ -24,6 +24,20 @@ import { createWorkOrder } from '../work-order.js';
 
 const MAX_STRUCTURE_CELLS = 2048;
 const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
+const WALKABLE_FIXTURE_FUNCTIONS = new Set(['access', 'interior_light']);
+const CARDINAL_OFFSETS = Object.freeze([
+  Object.freeze({ x: 1, z: 0 }),
+  Object.freeze({ x: -1, z: 0 }),
+  Object.freeze({ x: 0, z: 1 }),
+  Object.freeze({ x: 0, z: -1 }),
+]);
+const WAKE_OFFSETS = Object.freeze([
+  ...CARDINAL_OFFSETS,
+  Object.freeze({ x: 1, z: 1 }),
+  Object.freeze({ x: 1, z: -1 }),
+  Object.freeze({ x: -1, z: 1 }),
+  Object.freeze({ x: -1, z: -1 }),
+]);
 
 function structuralMaterial(value) {
   const material = String(value || '')
@@ -54,6 +68,91 @@ function plan() {
     },
     cells: () => cells,
   };
+}
+
+function habitableTraversalProblems(blueprint, cellAt, canSupportMaterial) {
+  const fixtures = blueprint?.fixtures || [];
+  const rests = fixtures.filter(fixture => fixture.function === 'rest');
+  if (rests.length === 0) return [];
+
+  const blocked = new Set();
+  for (const cell of blueprint.cells || []) {
+    if (!WALKABLE_FIXTURE_FUNCTIONS.has(cell.function)) {
+      blocked.add(`${cell.x}:${cell.y}:${cell.z}`);
+    }
+  }
+  for (const fixture of rests) {
+    for (const offset of fixture.occupiedOffsets || []) {
+      blocked.add(`${fixture.anchor.x + offset.x}:${fixture.anchor.y + offset.y}:${fixture.anchor.z + offset.z}`);
+    }
+  }
+
+  const isWalkable = ({ x, y, z }) => {
+    const support = cellAt.get(`${x}:${y - 1}:${z}`);
+    return Boolean(
+      support
+      && canSupportMaterial(support.material)
+      && !blocked.has(`${x}:${y}:${z}`)
+      && !blocked.has(`${x}:${y + 1}:${z}`)
+    );
+  };
+  const keyOf = position => `${position.x}:${position.y}:${position.z}`;
+  const accessCells = new Map();
+  for (const access of fixtures.filter(fixture => fixture.function === 'access')) {
+    for (const offset of CARDINAL_OFFSETS) {
+      const position = {
+        x: access.anchor.x + offset.x,
+        y: access.anchor.y,
+        z: access.anchor.z + offset.z,
+      };
+      if (isWalkable(position)) accessCells.set(keyOf(position), position);
+    }
+  }
+  if (accessCells.size === 0) return ['habitable access has no clear supported interior approach cell'];
+
+  const reachable = new Set(accessCells.keys());
+  const queue = [...accessCells.values()];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const offset of CARDINAL_OFFSETS) {
+      const next = { x: current.x + offset.x, y: current.y, z: current.z + offset.z };
+      const key = keyOf(next);
+      if (reachable.has(key) || !isWalkable(next)) continue;
+      reachable.add(key);
+      queue.push(next);
+    }
+  }
+
+  const problems = [];
+  for (const rest of rests) {
+    const occupied = (rest.occupiedOffsets || []).map(offset => ({
+      x: rest.anchor.x + offset.x,
+      y: rest.anchor.y + offset.y,
+      z: rest.anchor.z + offset.z,
+    }));
+    const wakeCells = new Map();
+    for (const bedCell of occupied) {
+      for (const offset of WAKE_OFFSETS) {
+        const candidate = {
+          x: bedCell.x + offset.x,
+          y: bedCell.y,
+          z: bedCell.z + offset.z,
+        };
+        if (isWalkable(candidate)) wakeCells.set(keyOf(candidate), candidate);
+      }
+    }
+    if (wakeCells.size === 0) {
+      problems.push(`fixture ${rest.id} has no clear supported wake-up cell`);
+      continue;
+    }
+    const trapped = [...wakeCells.values()].find(position => !reachable.has(keyOf(position)));
+    if (trapped) {
+      problems.push(
+        `fixture ${rest.id} has a wake-up cell trapped from access at ${trapped.x},${trapped.y},${trapped.z}`,
+      );
+    }
+  }
+  return problems;
 }
 
 /**
@@ -166,6 +265,7 @@ export function validateStructureBlueprint(blueprint, { canSupportMaterial = () 
         access.anchor.z === maxZ,
       ].some(Boolean)
     ) problems.push('habitable access fixture is not on the enclosure perimeter');
+    problems.push(...habitableTraversalProblems(blueprint, cellAt, canSupportMaterial));
   }
   return problems;
 }

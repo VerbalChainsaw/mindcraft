@@ -850,6 +850,58 @@ test('Job-planned materials manufacture craftable blocks instead of searching fo
   );
 });
 
+test('Job-planned prerequisites do not dismantle observed placed block aliases', () => {
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { ...registry.itemsByName.stone_pickaxe, count: 1, durabilityUsed: 0 },
+    { ...registry.itemsByName.stick, count: 2 },
+  ];
+  const wallTorch = registry.blocksByName.wall_torch;
+  const bot = {
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    inventory: { slots: carried, items: () => carried },
+    findBlock({ matching }) {
+      return matching === wallTorch.id
+        ? { name: wallTorch.name, position: { x: 2, y: 65, z: 0 } }
+        : null;
+    },
+    registry,
+  };
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'torch',
+    quantity: 8,
+    range: 64,
+    allowUnobservedSelfDropRoot: false,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(
+    plan.actions.some(action => action.learningKey === 'collect:wall_torch->torch'),
+    false,
+  );
+  assert.equal(plan.actions.at(-1).capability.binding.command, '!craftRecipe("torch", 2)');
+
+  const alternateStrategy = buildPrerequisitePlan(bot, {
+    target: 'torch',
+    quantity: 8,
+    range: 64,
+    allowUnobservedSelfDropRoot: false,
+    excludedMethods: ['collect:*->coal'],
+  });
+  assert.equal(alternateStrategy.status, 'ready');
+  assert.equal(
+    alternateStrategy.actions.some(action => /coal_ore/.test(action.learningKey || '')),
+    false,
+  );
+  assert.equal(alternateStrategy.nextStep.capability.id, 'collect_wood');
+  assert.equal(alternateStrategy.nextStep.learningKey, 'collect:logs->logs');
+  assert.equal(
+    alternateStrategy.actions.some(action => /^smelt:[a-z_]+_log->charcoal$/.test(action.learningKey || '')),
+    true,
+  );
+});
+
 test('The causal planner keeps a hand-equipment completion open until Minecraft reports the item equipped', () => {
   const bot = plannerBot();
   bot.inventory.slots = Array(46).fill(null);

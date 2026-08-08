@@ -120,12 +120,28 @@ test('Given action results, a phase advances only on a new verified success and 
     failedMethod: 'collect:stone->cobblestone',
   });
   assert.equal(recovery.phase, 'recover');
+  assert.equal(recovery.resumePhase, 'assess');
   assert.equal(recovery.attempts, 1);
   assert.deepEqual(recovery.checkpoint.failedMethods, ['collect:stone->cobblestone']);
   assert.deepEqual(
     normalizeWorkOrder(JSON.parse(JSON.stringify(recovery))).checkpoint.failedMethods,
     ['collect:stone->cobblestone'],
   );
+
+  const nestedRecovery = advanceWorkOrder(normalizeWorkOrder({
+    ...recovery,
+    resumePhase: 'prepare',
+  }), {
+    actionId: 'nested-failure',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    retryable: true,
+  }, {
+    previousActionId: 'new',
+    failedTarget: { name: 'coal_ore', x: 4, y: 40, z: 8 },
+  });
+  assert.equal(nestedRecovery.phase, 'recover');
+  assert.equal(nestedRecovery.resumePhase, 'prepare');
 
   const advanced = advanceWorkOrder(order, {
     actionId: 'new',
@@ -151,6 +167,21 @@ test('Given action results, a phase advances only on a new verified success and 
   assert.equal(capacityBlocked.phase, 'failed');
   assert.equal(capacityBlocked.attempts, 0);
   assert.equal(capacityBlocked.evidence.code, 'inventory_capacity_blocked');
+
+  const boundedRecovery = advanceWorkOrder(normalizeWorkOrder({
+    ...order,
+    phase: 'recover',
+    resumePhase: 'execute',
+  }), {
+    actionId: 'blocked-relocation',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    retryable: true,
+  }, { previousActionId: 'old', recoveryAction: true });
+  assert.equal(boundedRecovery.phase, 'recover');
+  assert.equal(boundedRecovery.resumePhase, 'execute');
+  assert.equal(boundedRecovery.attempts, 0);
+  assert.equal(boundedRecovery.recoveries, 1);
 });
 
 test('A newly discovered acquisition prerequisite is persisted without spending or blacklisting a productive attempt', () => {

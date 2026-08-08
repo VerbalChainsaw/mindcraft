@@ -32,11 +32,13 @@ const JOB_ROLE_FOR_KIND = Object.freeze({
   harvest: 'lumberjack',
   stockpile: 'builder',
   shelter: 'builder',
+  explore: 'miner',
 });
 const JOB_ORDER_KIND = Object.freeze({
   mine: 'mine',
   harvest: 'harvest',
   stockpile: 'stockpile',
+  explore: 'explore',
 });
 
 function boundedText(value, maximum = 240) {
@@ -886,8 +888,21 @@ export class AgendaDirector {
             kind: JOB_ORDER_KIND[entry.kind],
             source: 'player',
             requester: entry.requester || 'player',
-            target: { name: entry.target },
+            target: entry.kind === 'explore'
+              ? { name: entry.target, x: entry.x, y: entry.y, z: entry.z }
+              : { name: entry.target },
             quota: entry.quantity,
+            ...(entry.kind === 'explore' ? {
+              checkpoint: {
+                homeDimension: entry.containerConstraint.dimension,
+                containerName: entry.containerConstraint.name,
+                containerX: entry.containerConstraint.position.x,
+                containerY: entry.containerConstraint.position.y,
+                containerZ: entry.containerConstraint.position.z,
+                containerDimension: entry.containerConstraint.dimension,
+                ...(entry.bestEffort === true ? { bestEffort: true } : {}),
+              },
+            } : {}),
           });
         }
       } catch (error) {

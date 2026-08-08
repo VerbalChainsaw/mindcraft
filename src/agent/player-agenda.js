@@ -69,6 +69,14 @@ const COLLECTIVE_DELIVERY = /^(?:please\s+)?(?:make|craft|prepare)\s+(?:me\s+)?(
 const MANUFACTURE_VERB = /\b(?:make|craft|prepare)\b/i;
 const COLLECTIVE_STORAGE_TAIL = /(?:[,;\u2014\u2013-]\s*|\s+)\band\s+((?:store|put|stash|deposit)\b[\s\S]*)$/i;
 const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
+const CAVE_EXPEDITION_CUES = Object.freeze([
+  /\bexplore\b/i,
+  /\bcave\b/i,
+  /\b(?:light|torch|illuminate)\b/i,
+  /\b(?:collect|gather|mine)\b[\s\S]*\b(?:ore|ores)\b/i,
+  /\b(?:return|come back|head back)\b/i,
+  /\b(?:store|put|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i,
+]);
 
 function constructionRequiredFunctions(segment) {
   const text = String(segment || '').toLowerCase();
@@ -185,6 +193,43 @@ function currentContainerConstraint(bot) {
     dimension,
     source: 'player_context_here',
     observedAt: Date.now(),
+  };
+}
+
+function caveExpeditionPlan(playerName, message, context) {
+  const text = normalizeMessage(message).trim();
+  if (!CAVE_EXPEDITION_CUES.every(pattern => pattern.test(text))) return null;
+  const bot = context?.bot;
+  const position = bot?.entity?.position;
+  const containerConstraint = currentContainerConstraint(bot);
+  if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+    return { rejection: 'I could not bind that expedition to my current home-base position, so I did not start only part of it.' };
+  }
+  if (!containerConstraint) {
+    return { rejection: 'I could not bind that expedition to a loaded chest or barrel near the home base, so I did not start only part of it.' };
+  }
+  const explicitQuantity = text.match(/\b(\d{1,3})\s+(?:useful\s+)?(?:exposed\s+)?ores?\b/i);
+  const bestEffort = !explicitQuantity;
+  const quantity = Math.max(1, Math.min(64, Number(explicitQuantity?.[1]) || 8));
+  return {
+    steps: [{
+      segment: text,
+      command: null,
+      response: bestEffort
+        ? `I will use this as home base, light nearby caves, collect a useful batch of exposed ore, then return and store what I found in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`
+        : `I will use this as home base, light nearby caves, collect at least ${quantity} useful exposed ore drops, then return and store what I found in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`,
+      entry: {
+        kind: 'explore',
+        requester: playerName,
+        target: 'ores',
+        quantity,
+        ...(bestEffort ? { bestEffort: true } : {}),
+        x: Math.floor(position.x),
+        y: Math.floor(position.y),
+        z: Math.floor(position.z),
+        containerConstraint,
+      },
+    }],
   };
 }
 
@@ -469,6 +514,26 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const body = disposition === 'interrupt'
     ? (text.replace(INTERRUPT_LEADING, '').trim() || text)
     : text;
+  const expedition = caveExpeditionPlan(playerName, body, context);
+  if (expedition?.rejection) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: [],
+      unresolved: [],
+      rejection: expedition.rejection,
+    };
+  }
+  if (expedition?.steps) {
+    return {
+      disposition,
+      // This is one durable work order but several typed physical phases. It
+      // must be intercepted instead of falling back to disconnected LLM calls.
+      multiStep: true,
+      steps: expedition.steps,
+      unresolved: [],
+    };
+  }
   const collectiveStorage = collectiveStoragePlan(playerName, body, context);
   if (collectiveStorage?.rejection) {
     return {

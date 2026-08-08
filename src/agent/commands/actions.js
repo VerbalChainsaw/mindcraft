@@ -7,6 +7,7 @@ import {
     createWorkOrder,
     resumeFailedWorkOrder,
     workOrderCollectionExclusions,
+    workOrderProtectedRegionExclusion,
 } from '../runtime/work-order.js';
 import {
     builderWorksiteCollectionExclusion,
@@ -53,6 +54,8 @@ export function collectionExclusionsForAgent(agent, requestedName = null) {
     exclusions.push(...workOrderCollectionExclusions(agent?.job_director?.activeOrder, requestedName));
     const worksite = builderWorksiteCollectionExclusion(agent?.job_director?.activeOrder);
     if (worksite) exclusions.push(worksite);
+    const protectedRegion = workOrderProtectedRegionExclusion(agent?.job_director?.activeOrder);
+    if (protectedRegion) exclusions.push(protectedRegion);
     return exclusions;
 }
 
@@ -626,6 +629,31 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, resource_name, length) => {
             return await skills.mineSearchTunnel(agent.bot, resource_name, length);
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+    },
+    {
+        name: '!lightCaveAt',
+        description: 'Reach one exact catalogue-selected cave stance using native Pathfinder and verify the area is lit.',
+        params: {
+            'x': { type: 'int', description: 'Bound cave stance x coordinate.' },
+            'y': { type: 'int', description: 'Bound cave stance y coordinate.' },
+            'z': { type: 'int', description: 'Bound cave stance z coordinate.' },
+        },
+        perform: runAsAction(async (agent, x, y, z) => {
+            return await skills.lightCaveAt(agent.bot, x, y, z);
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+    },
+    {
+        name: '!collectExposedOreAt',
+        description: 'Collect one exact catalogue-selected exposed ore block without authorizing route excavation.',
+        params: {
+            'block_name': { type: 'BlockName', description: 'Exact exposed ore block name.' },
+            'x': { type: 'int', description: 'Bound ore x coordinate.' },
+            'y': { type: 'int', description: 'Bound ore y coordinate.' },
+            'z': { type: 'int', description: 'Bound ore z coordinate.' },
+        },
+        perform: runAsAction(async (agent, block_name, x, y, z) => {
+            return await skills.collectExposedOreAt(agent.bot, block_name, x, y, z);
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {

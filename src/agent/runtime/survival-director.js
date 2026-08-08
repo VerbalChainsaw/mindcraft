@@ -418,13 +418,18 @@ export class SurvivalDirector extends BehaviorDirector {
       return;
     }
     if (!intent) return;
-    const typedPlayerGoalActive = Boolean(this.agent.goal_director?.activeGoal);
+    const durablePlayerWorkActive = Boolean(
+      this.agent.goal_director?.activeGoal
+      || this.agent.agenda_director?.hasUnfinished?.()
+      || this.agent.job_director?.activeOrder?.source === 'player'
+      || this.agent.job_director?.activeOrder?.source === 'restart'
+    );
     const criticalSurvivalNeed = Number(situation.health) <= 8
       || Number(situation.hunger) <= Number(policy.criticalFood ?? 6);
-    if (typedPlayerGoalActive && intent.preempt !== true && !criticalSurvivalNeed) {
+    if (durablePlayerWorkActive && intent.preempt !== true && !criticalSurvivalNeed) {
       // The arbiter evaluates survival before player goals so genuine bodily
-      // emergencies can preempt them. Routine upkeep must not exploit the
-      // brief idle gaps while a durable player goal reassesses or verifies.
+      // emergencies can preempt them. Routine upkeep must not exploit brief
+      // idle gaps while any durable player agenda, goal, or job reassesses.
       return;
     }
     const allowBusy = intent.preempt === true;

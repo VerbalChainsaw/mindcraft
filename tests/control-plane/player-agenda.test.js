@@ -171,6 +171,50 @@ test('parsePlayerAgenda preserves a manufactured set and binds every deposit to 
   assert.deepEqual(plan.unresolved, []);
 });
 
+test('parsePlayerAgenda preserves the complete cave expedition as one durable work order', () => {
+  const chest = { name: 'chest', position: { x: 8104, y: 69, z: 7940 } };
+  const bot = {
+    entity: { position: { x: 8105.5, y: 69, z: 7938.5 } },
+    game: { dimension: 'overworld' },
+    findBlock: ({ matching }) => matching(chest) ? chest : null,
+  };
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    'Use this outpost as your home base. Explore and light a nearby cave, collect useful exposed ore without damaging the outpost or any player-built structures, then return here and store what you found in this chest.',
+    { bot },
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.equal(plan.steps.length, 1);
+  assert.deepEqual(plan.steps[0].entry, {
+    kind: 'explore',
+    requester: 'Gabriel',
+    target: 'ores',
+    quantity: 8,
+    bestEffort: true,
+    x: 8105,
+    y: 69,
+    z: 7938,
+    containerConstraint: {
+      name: 'chest',
+      position: { x: 8104, y: 69, z: 7940 },
+      dimension: 'overworld',
+      source: 'player_context_here',
+      observedAt: plan.steps[0].entry.containerConstraint.observedAt,
+    },
+  });
+  assert.deepEqual(plan.unresolved, []);
+
+  const exactPlan = parsePlayerAgenda(
+    'Gabriel',
+    'Use this outpost as your home base. Explore and light a nearby cave, collect 12 useful exposed ores without damaging the outpost or any player-built structures, then return here and store what you found in this chest.',
+    { bot },
+  );
+  assert.equal(exactPlan.steps[0].entry.quantity, 12);
+  assert.equal(exactPlan.steps[0].entry.bestEffort, undefined);
+});
+
 test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed steps', () => {
   const message = 'Go to the farm, harvest only the mature wheat, replant every crop you harvest, put the wheat in the existing chest at the farm, then come back to me.';
   const bot = { registry: { itemsByName: { wheat: { name: 'wheat' } } } };
