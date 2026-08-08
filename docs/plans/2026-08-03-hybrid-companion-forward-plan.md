@@ -549,7 +549,9 @@ Freeze lit-pen phrase and material permutations. The next broad play request mus
 
 ### Supervised-play entry priority
 
-The near-term target is a bot Gabriel can safely play beside under supervision. The entry gate is deliberately smaller than release readiness: intended orders are accepted while ordinary nearby conversation remains conversation; Stop and terminal completion prevent stale work; Follow, water traversal, attributed defense, resumption, and settled gaze remain usable; one ordinary resource/processing/storage request reuses designated outpost infrastructure without damaging the lived-in world; and failures are prompt and truthful.
+The supervised-play entry gate has passed: intended orders are accepted while ordinary nearby conversation remains conversation; Stop and terminal completion prevent stale work; Follow, water traversal, attributed defense, resumption, and settled gaze remain usable; ordinary resource/processing/storage work reuses designated outpost infrastructure; and a function-constrained build completes through the shared engine.
+
+The next program is player-led capability expansion rather than another prepared acceptance noun. Run a normal mixed session in the existing lived-in world: Gabriel may converse, travel, issue one or more useful addressed outcomes, encounter ordinary danger, reuse the outpost, and Stop at any point. Do not manufacture a hostile, restart, scarcity state, broken fixture, or world obstacle just to touch a contract. The first material player-visible failure selects the repair, and that complete player outcome remains active until it works or a real external blocker remains.
 
 Prioritize gameplay defects in this order:
 
@@ -557,7 +559,8 @@ Prioritize gameplay defects in this order:
 2. preservation and reuse of the designated outpost;
 3. acquisition throughput and meaningful strategy change after repeated no-progress evidence;
 4. truthful long-session continuation and restart behavior;
-5. new gameplay domains pulled by broad natural requests.
+5. new gameplay domains pulled by broad natural requests;
+6. sustained single-companion reliability before packaging, operator polish, or multi-bot expansion.
 
 Do not preempt supervised broad play to fix dormant debt. The crafting-window generation bypass, indefinite manufactured-delivery quantity semantics, and strategy-level learning gap remain bounded P1 defects. Correct them when a broad playtest reaches the affected path or fresh evidence shows they threaten current ownership or world safety.
 
@@ -632,6 +635,6 @@ Documentation, telemetry, and test infrastructure are supporting tools. They mus
 
 Freeze the completed river-companion, shared-outpost-stocking, and lit-animal-pen campaigns. The bot has crossed the supervised-play entry gate: natural addressed work can compose acquisition, processing, exact infrastructure reuse, delta-only storage, and a function-constrained generic build while nearby non-orders remain conversation and Operator Stop remains authoritative.
 
-Begin broad supervised play rather than another preselected noun or mechanic. Preserve the player's unchanged useful outcome, observe the first material failure, repair the smallest shared primitive or capability binding, and rerun that outcome physically. Prioritize stale/unintended work, destructive world changes, repeated no-progress, dishonest completion or restart replay, then genuine missing gameplay domains.
+Begin Director-led mixed supervised play rather than another preselected noun or mechanic. Keep IronSuiteProof Stop-held until Gabriel explicitly starts the session. Preserve the player's unchanged useful outcome, observe the first material failure, repair the smallest shared primitive or capability binding, and rerun that outcome physically. Prioritize stale/unintended work, destructive world changes, repeated no-progress, dishonest completion or restart replay, then genuine missing gameplay domains.
 
 Do not reopen food quantities, furnace states, chest contents, river routes, gaze, fence species, or pen-light permutations without new live evidence. Do not turn playtesting into a certification matrix, telemetry project, claimed-world framework, storage controller, or second executor.

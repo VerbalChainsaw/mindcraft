@@ -61,6 +61,15 @@ mapped to their exact work-order coordinates before any cleanup. The accepted
 pen is order `builder-0a3fa68c-6837-479a-9904-5235af1030f4` at
 `(8095,69,7937)`.
 
+The program now moves from capability proof into player-led expansion. The
+next product evidence is a normal mixed session with Gabriel in the lived-in
+world, not another isolated recipe, quantity, fixture, or pen variation. The
+first observed player-visible failure chooses the coding tranche. Prioritize
+authority and stale work, world damage and infrastructure reuse, repeated
+resource no-progress, dishonest continuation or replay, then a genuinely
+missing gameplay domain. Keep passed mechanics frozen unless later play shows
+a materially different regression.
+
 ## Delivered in this slice
 
 ### Behavioral controls
