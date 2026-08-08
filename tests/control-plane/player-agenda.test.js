@@ -310,7 +310,8 @@ test('parsePlayerAgenda preserves requested lighting instead of taking an incomp
   ]);
   assert.match(plan.steps[0].modelInstruction, /produce these functions: access, containment, interior_light/);
   assert.match(plan.steps[0].modelInstruction, /Function names are metadata, never DSL arguments/);
-  assert.match(plan.steps[0].modelInstruction, /@pen 7 7; put 3 1 3 torch/);
+  assert.match(plan.steps[0].modelInstruction, /Start from a provided @template when it already supplies a requested function/);
+  assert.doesNotMatch(plan.steps[0].modelInstruction, /lit open pen|@pen\s+\d/);
   assert.equal(plan.steps[0].requiresModelAssignment, true);
   assert.equal(plan.unresolved.length, 1);
   assert.match(plan.unresolved[0].segment, /do not damage the house/i);

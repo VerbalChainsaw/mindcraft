@@ -76,6 +76,7 @@ export function designLanguageHelp() {
   'START FROM A TEMPLATE when one fits, then add your own steps after it to make it specific:',
   '@tower 5 12 gives a finished tower, and @tower 5 12; ring 0 12 0 7 7 adds a balcony to it.',
   `Templates, with optional arguments that have sensible defaults: ${describeTemplates()}.`,
+  '@pen W D supplies containment and access plus one solid floor-center support cell for an appended fixture.',
   'Coordinates are relative to the build site: x east, y up, z south, all starting at 0.',
   'Support rule: ground fixtures go above a solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. Never replace a roof or required support with a fixture.',
   'A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture.',

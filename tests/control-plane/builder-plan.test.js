@@ -19,6 +19,7 @@ test('general construction compiler creates bounded supported shapes with a safe
   const compactDocs = getCommandDocs({ blocked_actions: [] }, { compact: true });
   assert.match(compactDocs, /DESIGN MUST BE THIS DSL, NEVER PROSE/);
   assert.match(compactDocs, /@pen W D/);
+  assert.match(compactDocs, /@pen supplies containment\/access and a floor-center support/);
   assert.match(compactDocs, /block X Y Z MATERIAL/);
   assert.match(compactDocs, /Fixtures MUST use put, never block/);
   assert.match(compactDocs, /torch may stand above a solid floor or attach beside a same-height solid wall/);
