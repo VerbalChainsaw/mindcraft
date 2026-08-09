@@ -132,13 +132,14 @@ test('Given durable player work, routine survival upkeep cannot seize its idle t
   assert.equal(director.snapshot().phase, 'waiting');
 });
 
-test('Given command autonomy, optional drop collection stays idle while bodily survival remains available', async () => {
+test('Given command autonomy, optional drop collection and shelter building stay idle while bodily survival remains available', async () => {
   const agent = createAgent();
   agent.runtime = {
     autonomy: 'command',
-    survival: { ...POLICY, usefulDrops: 'collect' },
+    survival: { ...POLICY, usefulDrops: 'collect', shelter: 'emergency' },
   };
   const commands = [];
+  const workOrders = [];
   let situation = {
     held: false,
     idle: true,
@@ -163,18 +164,39 @@ test('Given command autonomy, optional drop collection stays idle while bodily s
         retryable: false,
       };
     },
+    requestWorkOrder: order => {
+      workOrders.push(order);
+      return { accepted: true, id: 'unexpected-shelter' };
+    },
   });
 
   director.update();
   await settle();
   assert.deepEqual(commands, []);
+  assert.deepEqual(workOrders, []);
+
+  situation = {
+    ...situation,
+    timeOfDay: 14000,
+    dimension: 'overworld',
+    weather: 'Clear',
+    sheltered: false,
+    shelters: [],
+  };
+  director.update();
+  await settle();
+  assert.deepEqual(workOrders, [], 'command-only idle must not invent a shelter at ordinary night');
 
   situation = {
     ...situation,
     hunger: 5,
     food: [{ name: 'bread', count: 2, foodPoints: 5, saturation: 6 }],
   };
-  director.update();
+  const bodilyDirector = new SurvivalDirector(agent, {
+    getSituation: () => situation,
+    executeCommand: director.executeCommand,
+  });
+  bodilyDirector.update();
   await settle();
   assert.deepEqual(commands, ['!consume("bread")']);
 });

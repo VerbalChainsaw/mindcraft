@@ -69,6 +69,8 @@ test('new branches do not shadow existing follow/come/stay/stop directives', () 
   assert.equal(commandFor('follow me'), '!followPlayer("Gabriel", 3)');
   assert.equal(commandFor('Follow me through the doorway and down the corridor.'), '!followPlayer("Gabriel", 3)');
   assert.equal(commandFor('come here'), '!goToPlayer("Gabriel", 2)');
+  assert.equal(commandFor("return to me when you're finished"), '!goToPlayer("Gabriel", 2)');
+  assert.equal(commandFor('head back to me'), '!goToPlayer("Gabriel", 2)');
   assert.equal(commandFor('stay here'), '!stay(-1)');
   assert.equal(commandFor('stop'), '!stop');
   // "go to sleep" must resolve to bed, not be swallowed by the coordinate branch.
@@ -138,6 +140,21 @@ test('vague tool preparation cannot authorize construction without a multi-block
   assert.match(tools?.modelInstruction || '', /!queueItemPlan/);
   assert.equal(gazebo?.deferToModel, true);
   assert.notEqual(gazebo?.assignmentKind, 'item_plan');
+});
+
+test('ordinary setup language compiles one functional worksite through the durable Builder boundary', () => {
+  const directive = resolvePlayerDirective(
+    'Gabriel',
+    "Set up a small shared work area with a crafting table, furnace, chest, and light. Keep the entrance clear and don't damage the surrounding terrain.",
+  );
+
+  assert.equal(directive?.command, null);
+  assert.equal(directive?.deferToModel, true);
+  assert.match(directive?.modelInstruction || '', /one player-authorized multi-block construction outcome/i);
+  assert.match(directive?.modelInstruction || '', /crafting, interior_light, smelting, storage/);
+  assert.match(directive?.modelInstruction || '', /one complete !buildStructure or !designStructure/);
+  assert.match(directive?.modelInstruction || '', /access uses put door, gate, or ladder/i);
+  assert.match(directive?.modelInstruction || '', /do not issue .*individual placement commands first/i);
 });
 
 test('typed item routing binds verb, quantity, and target inside one primary item request', () => {

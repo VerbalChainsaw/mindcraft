@@ -412,11 +412,12 @@ export class SurvivalDirector extends BehaviorDirector {
     try {
       situation = this.getSituation(this.agent);
       // Command autonomy already suppresses the idle item-collecting mode. Keep
-      // the same authority boundary here: nearby drops are optional upkeep, not
-      // a bodily survival need that may invent movement after player work ends.
-      // Explicit pickup commands and typed acquisition goals remain unaffected.
+      // the same authority boundary for world-changing night shelters: nearby
+      // drops and optional construction are upkeep, not bodily emergencies that
+      // may invent movement or blocks after player work ends. Explicit shelter
+      // orders and critical health/hunger responses remain unaffected.
       const effectivePolicy = this.agent.runtime?.autonomy === 'command'
-        ? { ...policy, usefulDrops: 'ignore' }
+        ? { ...policy, usefulDrops: 'ignore', shelter: 'off' }
         : policy;
       intent = chooseSurvivalIntent(situation, effectivePolicy);
     } catch (error) {

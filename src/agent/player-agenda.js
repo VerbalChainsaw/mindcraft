@@ -114,7 +114,10 @@ function attachTypedDependencies(steps) {
 }
 
 function normalizeMessage(message) {
-  return String(message ?? '').slice(0, MAX_MESSAGE_CHARS);
+  return String(message ?? '')
+    .slice(0, MAX_MESSAGE_CHARS)
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"');
 }
 
 function canonicalListedItem(value, bot) {
@@ -423,7 +426,7 @@ export function splitAgendaSegments(message) {
   return text
     .split(SEGMENT_DELIMITER)
     .map(segment => segment.replace(LEADING_FILLER, '').trim())
-    .filter(segment => segment.length > 0)
+    .filter(segment => /[\p{L}\p{N}]/u.test(segment))
     .slice(0, MAX_SEGMENTS);
 }
 

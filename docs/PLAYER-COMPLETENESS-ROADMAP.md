@@ -83,6 +83,19 @@ leave optional nearby debris alone rather than allowing survival upkeep to
 invent movement after player work. This proves one broad selected loadout, not
 arbitrary loadout quality or every possible output family.
 
+The follow-on shared-worksite request is also complete. Natural setup language
+now stays inside one durable construction barrier, while a requested return to
+the player remains a separate typed Agenda step. The model composed access,
+crafting, smelting, storage, and light through the existing generic structure
+language; Builder placed the 33-cell result from carried inventory with zero
+productive failures, Paper verified every cell, and the bot returned beside
+the witness at full health. A live night aftercare proof also confirmed that a
+healthy command-only companion does not invent optional shelter construction
+after terminal player work. Critical eating, health recovery, self-defense,
+and player-defense remain enabled. This proves one broad functional worksite
+composition and truthful idle handoff, not arbitrary structure quality or
+general ownership discovery.
+
 ## Delivered in this slice
 
 ### Behavioral controls

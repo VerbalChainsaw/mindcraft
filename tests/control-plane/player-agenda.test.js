@@ -397,6 +397,26 @@ test('parsePlayerAgenda does not retype a model-selected item plan as constructi
   assert.equal(plan, null);
 });
 
+test('parsePlayerAgenda preserves a model-compiled worksite and its requested return', () => {
+  const plan = parsePlayerAgenda(
+    'LandingWitness',
+    "Set up a small shared work area with a crafting table, furnace, chest, and light. Keep the entrance clear, don't damage the surrounding terrain, and return to me when you’re finished.",
+    {},
+  );
+
+  assert.ok(plan);
+  assert.deepEqual(plan.steps.map(step => step.entry.kind), ['construction', 'goto']);
+  assert.equal(plan.steps[0].requiresModelAssignment, true);
+  assert.deepEqual(plan.steps[0].entry.constructionIntent.requiredFunctions, [
+    'access',
+    'crafting',
+    'interior_light',
+    'smelting',
+    'storage',
+  ]);
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda ignores explicit !command lines and empty input', () => {
   assert.equal(parsePlayerAgenda('Gabriel', '!assignMiningJob("iron_ore", 5)', {}, { resolveDirective: stubResolver }), null);
   assert.equal(parsePlayerAgenda('Gabriel', '', {}, { resolveDirective: stubResolver }), null);

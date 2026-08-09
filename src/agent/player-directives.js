@@ -150,6 +150,10 @@ function dimension(text, words) {
     return match ? Number.parseInt(match[1], 10) : null;
 }
 
+// One shared construction-language boundary. These verbs authorize a bounded
+// blueprint, never a stream of individual model-owned placement commands.
+const CONSTRUCTION_VERB = /\b(?:build|construct|make|put up|set up|establish|erect|raise|assemble|lay out)\b/;
+
 function parseCoordinates(text) {
     const matches = text.match(/-?\d+(?:\.\d+)?/g);
     if (!matches || matches.length < 3) return null;
@@ -160,7 +164,7 @@ function parseCoordinates(text) {
 
 export function constructionRequiredFunctions(message) {
     const normalized = String(message || '').toLowerCase();
-    const constructionVerb = /\b(?:build|construct|make|put up|erect|raise|assemble)\b/.exec(normalized);
+    const constructionVerb = CONSTRUCTION_VERB.exec(normalized);
     const constructionClause = constructionVerb
         ? normalized.slice(constructionVerb.index)
         : normalized;
@@ -169,7 +173,7 @@ export function constructionRequiredFunctions(message) {
         1,
     )[0];
     const required = new Set();
-    const buildsShelter = /\b(?:build|construct|make|put up|erect|raise|assemble)\b.{0,96}\b(?:shelter|house|hut|outpost)\b/.test(text);
+    const buildsShelter = new RegExp(`${CONSTRUCTION_VERB.source}.{0,96}\\b(?:shelter|house|hut|outpost)\\b`).test(text);
     if (buildsShelter || /\bovernight\b/.test(text)) {
         required.add('enclosure');
         required.add('weather_cover');
@@ -188,14 +192,14 @@ export function constructionRequiredFunctions(message) {
 
 function describesMultiBlockConstruction(text, requiredFunctions = []) {
     if (requiredFunctions.length > 0) return true;
-    return /\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|cabin|shack|lodge|tower|watchtower|lookout|bridge|walkway|catwalk|wall|barrier|rampart|pen|paddock|corral|enclosure|platform|deck|floor|pillar|column|post|stairs|staircase|steps|roof|road|path|dock|pier|tunnel|loop|track|railway|windmill|mill|machine|contraption|statue|monument|gazebo|barn|workshop)\b/.test(text);
+    return /\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|cabin|shack|lodge|tower|watchtower|lookout|bridge|walkway|catwalk|wall|barrier|rampart|pen|paddock|corral|enclosure|platform|deck|floor|pillar|column|post|stairs|staircase|steps|roof|road|path|dock|pier|tunnel|loop|track|railway|windmill|mill|machine|contraption|statue|monument|gazebo|barn|workshop|worksite|workspace|work area)\b/.test(text);
 }
 
 function describesModelSelectedItemPlan(text) {
     const asksForInventoryWork = /\b(?:gather|collect|acquire|secure|prepare|make|craft|stock up on)\b/.test(text);
     const namesASet = /\b(?:supplies|resources|materials|provisions|gear|equipment|tools|items)\b/.test(text);
     const delegatesSelection = /\b(?:sensible|basic|essential|starter|useful|whatever|whichever|what you need|you need|needed)\b/.test(text);
-    const explicitlyBuilds = /\b(?:build|construct|erect|raise|put up)\b.{0,80}\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|tower|bridge|wall|pen|platform|roof|dock|barn|workshop)\b/.test(text);
+    const explicitlyBuilds = new RegExp(`${CONSTRUCTION_VERB.source}.{0,80}\\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|tower|bridge|wall|pen|platform|roof|dock|barn|workshop|worksite|workspace|work area)\\b`).test(text);
     return asksForInventoryWork && namesASet && delegatesSelection && !explicitlyBuilds;
 }
 
@@ -229,7 +233,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/^(?:please\s+)?(?:come|walk|move|get)(?:\s+back)?\s+(?:here|to me|over here)\b/.test(text)) {
+    if (/^(?:please\s+)?(?:come|walk|move|get|return|head)(?:\s+back)?\s+(?:here|to me|over here)\b/.test(text)) {
         return {
             command: `!goToPlayer(${commandString(playerName)}, 2)`,
             response: 'I will come to you now.',
@@ -676,7 +680,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // "shelter", "hut", or "house", which the survival shelter job already owns.
 
     const requiredFunctions = constructionRequiredFunctions(text);
-    if (/\b(?:build|construct|make|put up|erect|raise)\b/.test(text)) {
+    if (CONSTRUCTION_VERB.test(text)) {
         const material = structureMaterial(text);
         const tall = dimension(text, 'tall|high') ?? dimension(text, 'blocks?\\s+up');
         const wide = dimension(text, 'wide|across');
@@ -748,7 +752,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // the model, whose !designStructure command persists one bounded blueprint.
     // Shelter remains on its dedicated survival-building route below.
     if (
-        /\b(?:build|construct|make|erect|raise|put up|lay out|assemble)\b/.test(text)
+        CONSTRUCTION_VERB.test(text)
         && !/\b(?:shelter|hut|small house|safe house)\b/.test(text)
         && describesMultiBlockConstruction(text, requiredFunctions)
     ) {
@@ -760,7 +764,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
             response: '',
             releasesHold: true,
             deferToModel: true,
-            modelInstruction: `This is one player-authorized multi-block construction outcome. ${requiredFunctionContract}Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. Start from a provided @template when it already supplies a requested function, then add only the missing functions. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. Fixtures must use put, never block. Fixture facing, when supplied, must be north, south, east, or west. Put ground fixtures above solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace the roof or required support with a fixture. Use !designStructure material "auto" with lock_material false when the player did not name a structural material; Builder will bind one feasible safe material for the entire required quantity. Set lock_material true only if the player explicitly named the structural material. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.`,
+            modelInstruction: `This is one player-authorized multi-block construction outcome. ${requiredFunctionContract}Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. Start from a provided @template when it already supplies a requested function, then add only the missing functions. Every required function must be physically represented in the final blueprint: access uses put door, gate, or ladder; crafting uses put crafting; interior_light uses put torch; smelting uses put furnace; storage uses put chest; rest uses put bed; weather_cover uses roof; containment uses a closed fence or wall boundary with gated access; enclosure uses a closed wall boundary. Function names are validation metadata and must not be passed as DSL arguments. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. Fixtures must use put, never block. Fixture facing, when supplied, must be north, south, east, or west. Put ground fixtures above solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace the roof or required support with a fixture. Use !designStructure material "auto" with lock_material false when the player did not name a structural material; Builder will bind one feasible safe material for the entire required quantity. Set lock_material true only if the player explicitly named the structural material. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.`,
         };
     }
 

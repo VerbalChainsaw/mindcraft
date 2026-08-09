@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / broad starter-supply capability checkpoint (see Git HEAD)
-Milestone: model-selected multi-item outcomes compile once into durable minimum floors and finish only after aggregate Minecraft verification
+Branch/commit: recovery/iron-pickaxe-20260803 / broad shared-worksite checkpoint (see Git HEAD)
+Milestone: natural setup language compiles one durable function-complete Builder order and retains the requested return step
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: supervised companion play, native movement/recovery, generic collection/planning, and truthful terminal behavior
-Live blocker: none; the unchanged landing-area request is physically complete
-Last physical result: all four stone tools, 16 oak logs, 50 cobblestone, 8 coal, and 19 torches verified; native return settled 2.4 blocks from LandingWitness and remained motionless for 15 seconds at health 20/full air
-Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held beside LandingWitness; lightweight witness remains connected
-Next: resume broad two-player supervised play; let the first ordinary player-visible authority, stewardship, mobility, or missing-domain failure choose the next repair
-Jordan review: none; Director cancelled the external review gate for uninterrupted mobility work
+Owned subsystem: supervised companion play, generic construction, native movement/recovery, and truthful terminal behavior
+Live blocker: none; the unchanged shared-worksite request is physically complete
+Last physical result: all 33 work-area cells and fixtures verified; bot returned beside LandingWitness at health 20, then remained idle at night without inventing shelter work
+Runtime: Paper 1.21.11 healthy; world time restored to 7489; IronSuiteProof Operator Stop-held; LandingWitness disconnected
+Next: resume broad two-player supervised play and let the first ordinary player-visible authority, stewardship, mobility, or missing-domain failure choose the repair
+Jordan review: none; Director cancelled the external review gate for uninterrupted product work
