@@ -42,6 +42,11 @@ const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
 const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
 const MAX_ORDERED_ITEM_PLAN_STEPS = 12;
 
+function activeMiningReturnRoute(agent) {
+    const route = agent?.job_director?.activeOrder?.checkpoint?.miningReturnRoute;
+    return Array.isArray(route) ? route : [];
+}
+
 function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = false) {
     const request = agent.actions?.currentRequestContext?.() || null;
     const previousGeneration = Number(agent.last_agenda_plan_submission?.generation) || 0;
@@ -720,10 +725,26 @@ export const actionsList = [
         params: {
             'target_y': { type: 'int', description: 'Productive target Y level.', domain: [-60, 300] },
             'search_range': { type: 'int', description: 'Maximum loaded cave search radius.', domain: [16, 128] },
+            'protected_route_cells': { type: 'int', description: 'Expected persisted return-route cell count.', domain: [0, 513], optional: true },
         },
-        perform: runAsAction(async (agent, target_y, search_range) => {
-            return await skills.goToMiningDepth(agent.bot, target_y, search_range);
+        perform: runAsAction(async (agent, target_y, search_range, protected_route_cells = null) => {
+            return await skills.goToMiningDepth(agent.bot, target_y, search_range, {
+                preservedReturnRoute: activeMiningReturnRoute(agent),
+                expectedProtectedRouteCells: protected_route_cells,
+            });
         }, false, 10)
+    },
+    {
+        name: '!traverseMiningRouteCell',
+        description: 'Return through one exact previously cleared mining-route cell using native Pathfinder with digging disabled.',
+        params: {
+            'x': { type: 'int', description: 'Preserved route-cell x coordinate.' },
+            'y': { type: 'int', description: 'Preserved route-cell y coordinate.' },
+            'z': { type: 'int', description: 'Preserved route-cell z coordinate.' },
+        },
+        perform: runAsAction(async (agent, x, y, z) => {
+            return await skills.traverseMiningRouteCell(agent.bot, x, y, z);
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!digTunnel',
@@ -742,9 +763,13 @@ export const actionsList = [
         params: {
             'resource_name': { type: 'BlockName', description: 'The ore or block being searched for.' },
             'length': { type: 'int', description: 'Maximum tunnel advance for this search leg.', domain: [4, 32] },
+            'protected_route_cells': { type: 'int', description: 'Expected persisted return-route cell count.', domain: [0, 513], optional: true },
         },
-        perform: runAsAction(async (agent, resource_name, length) => {
-            return await skills.mineSearchTunnel(agent.bot, resource_name, length);
+        perform: runAsAction(async (agent, resource_name, length, protected_route_cells = null) => {
+            return await skills.mineSearchTunnel(agent.bot, resource_name, length, null, {
+                preservedReturnRoute: activeMiningReturnRoute(agent),
+                expectedProtectedRouteCells: protected_route_cells,
+            });
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {

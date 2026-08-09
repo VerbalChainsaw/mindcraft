@@ -7,6 +7,7 @@ import {
   directiveToAgendaEntry,
   parsePlayerAgenda,
 } from '../../src/agent/player-agenda.js';
+import { normalizeAgendaEntry } from '../../src/agent/runtime/agenda.js';
 
 test('classifyDisposition flags interrupt words and defaults to append', () => {
   assert.equal(classifyDisposition('stop and come here'), 'interrupt');
@@ -196,6 +197,7 @@ test('parsePlayerAgenda preserves the complete cave expedition as one durable wo
     x: 8105,
     y: 69,
     z: 7938,
+    homeDimension: 'overworld',
     containerConstraint: {
       name: 'chest',
       position: { x: 8104, y: 69, z: 7940 },
@@ -230,6 +232,21 @@ test('parsePlayerAgenda preserves the complete cave expedition as one durable wo
   assert.equal(retainedPlan.steps[0].entry.quantity, 8);
   assert.equal(retainedPlan.steps[1].dependency.policy, 'after_settlement');
   assert.deepEqual(retainedPlan.unresolved, []);
+
+  const retainedWithoutStorage = parsePlayerAgenda(
+    'LandingWitness',
+    'Find a useful nearby cave, collect some iron and coal without damaging our work area, then return to me.',
+    { bot: { ...bot, findBlock: () => null } },
+  );
+  assert.ok(retainedWithoutStorage);
+  assert.equal(retainedWithoutStorage.rejection, undefined);
+  assert.equal(retainedWithoutStorage.steps[0].entry.retainResults, true);
+  assert.equal(retainedWithoutStorage.steps[0].entry.homeDimension, 'overworld');
+  assert.equal(retainedWithoutStorage.steps[0].entry.containerConstraint, undefined);
+  const persistedRetainedStep = normalizeAgendaEntry(retainedWithoutStorage.steps[0].entry);
+  assert.equal(persistedRetainedStep.retainResults, true);
+  assert.equal(persistedRetainedStep.homeDimension, 'overworld');
+  assert.equal(persistedRetainedStep.containerConstraint, undefined);
 });
 
 test('parsePlayerAgenda preserves additional food preparation and exact storage as one durable plan', () => {

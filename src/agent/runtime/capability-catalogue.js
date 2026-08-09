@@ -249,6 +249,17 @@ function normalizeExcludedTargets(value) {
     .filter(target => [target.x, target.y, target.z].every(Number.isFinite)));
 }
 
+function normalizeMiningReturnRoute(value) {
+  return immutable((Array.isArray(value) ? value : [])
+    .slice(-512)
+    .map(cell => ({
+      x: Math.floor(Number(cell?.x)),
+      y: Math.floor(Number(cell?.y)),
+      z: Math.floor(Number(cell?.z)),
+    }))
+    .filter(cell => [cell.x, cell.y, cell.z].every(Number.isFinite)));
+}
+
 function normalizeCanonicalTargets(value) {
   return immutable([...new Set((Array.isArray(value) ? value : [])
     .slice(0, 24)
@@ -505,6 +516,38 @@ function verifyNavigation(_before, after, binding) {
   });
 }
 
+function verifySearchRegionRelocation(before, after, binding) {
+  const origin = before?.position;
+  const position = after?.position;
+  const targetDistance = position
+    ? Math.hypot(position.x - binding.x, position.y - binding.y, position.z - binding.z)
+    : Number.POSITIVE_INFINITY;
+  const horizontalDisplacement = origin && position
+    ? Math.hypot(position.x - origin.x, position.z - origin.z)
+    : 0;
+  const sameDimension = Boolean(
+    origin
+    && position
+    && (!binding.dimension || after.dimension === binding.dimension)
+  );
+  const reachedTarget = targetDistance <= binding.closeness + 0.75;
+  const changedRegion = horizontalDisplacement >= binding.minimumDisplacement;
+  const verified = sameDimension && (reachedTarget || changedRegion);
+  return immutable({
+    ok: verified,
+    code: verified ? 'search_region_relocation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? reachedTarget
+        ? `Minecraft confirmed arrival in the requested search region (${targetDistance.toFixed(2)} blocks from its center).`
+        : `Minecraft confirmed a ${horizontalDisplacement.toFixed(2)}-block move into a distinct search region.`
+      : `Minecraft did not confirm the required ${binding.minimumDisplacement}-block search-region change.`,
+    targetDistance: Number.isFinite(targetDistance) ? targetDistance : null,
+    horizontalDisplacement,
+    reachedTarget,
+    changedRegion,
+  });
+}
+
 function verifyExactStorage(_before, _after, binding, { result } = {}) {
   const skill = result?.evidence?.skill;
   const transferred = Math.max(0, Math.min(
@@ -581,6 +624,88 @@ function verifySurfaceAccess(_before, _after, _binding, { result } = {}) {
   });
 }
 
+function verifyMiningDepth(_before, after, binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const targetY = Number(binding.targetY);
+  const observedY = Number(after?.position?.y ?? skill?.observedY);
+  const reached = Boolean(
+    Number.isFinite(observedY)
+    && Math.abs(observedY - targetY) <= 8
+    && ['already_at_depth', 'productive_depth_reached', 'staircase_depth_reached'].includes(skill?.outcome)
+  );
+  const advanced = Boolean(
+    skill?.kind === 'mining_relocation'
+    && skill?.outcome === 'mining_depth_advanced'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.verticalProgress) >= 1
+    && [skill?.observedPosition?.x, skill?.observedPosition?.y, skill?.observedPosition?.z]
+      .every(Number.isFinite)
+  );
+  const verified = Boolean(skill?.kind === 'mining_relocation' && (reached || advanced));
+  return immutable({
+    ok: verified,
+    code: reached
+      ? 'mining_depth_verified'
+      : advanced
+        ? 'mining_depth_progress_verified'
+        : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: reached
+      ? `Minecraft confirmed the productive y=${targetY} mining band.`
+      : advanced
+        ? `Minecraft confirmed ${skill.verticalProgress} returnable vertical block(s) of mining-depth progress.`
+        : `Minecraft did not confirm returnable progress toward the y=${targetY} mining band.`,
+    targetReached: reached,
+    verticalProgress: advanced ? Number(skill.verticalProgress) : 0,
+  });
+}
+
+function equivalentMiningSource(left, right) {
+  const base = value => canonicalName(value).replace(/^deepslate_/, '');
+  return Boolean(base(left) && base(left) === base(right));
+}
+
+function verifyMiningCorridor(before, after, binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const sourceMatches = equivalentMiningSource(skill?.target?.name, binding.source);
+  const previous = Math.max(0, Number(before?.inventory?.get(binding.output)) || 0);
+  const current = Math.max(0, Number(after?.inventory?.get(binding.output)) || 0);
+  const observedIncrease = Math.max(0, current - previous);
+  const resourceCollected = Boolean(
+    skill?.kind === 'mining_search'
+    && skill?.outcome === 'resource_collected'
+    && sourceMatches
+    && observedIncrease >= 1
+  );
+  const corridorAdvanced = Boolean(
+    skill?.kind === 'mining_search'
+    && skill?.outcome === 'search_advanced'
+    && sourceMatches
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.routeSteps) >= 1
+    && [skill?.observedPosition?.x, skill?.observedPosition?.y, skill?.observedPosition?.z]
+      .every(Number.isFinite)
+  );
+  const verified = resourceCollected || corridorAdvanced;
+  return immutable({
+    ok: verified,
+    code: resourceCollected
+      ? 'mining_corridor_resource_verified'
+      : corridorAdvanced
+        ? 'mining_corridor_progress_verified'
+        : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: resourceCollected
+      ? `Minecraft confirmed ${observedIncrease} additional ${binding.output} from the mining corridor.`
+      : corridorAdvanced
+        ? `Minecraft confirmed a returnable ${skill.routeSteps}-step mining-corridor advance.`
+        : 'Minecraft did not confirm either requested resource output or returnable corridor progress.',
+    observedIncrease,
+    corridorAdvanced,
+    resourceCollected,
+  });
+}
+
 defineCapability({
   id: 'reach_surface',
   parameters: {},
@@ -597,6 +722,75 @@ defineCapability({
   execute: executeBoundCommand,
   verify: verifySurfaceAccess,
   cost: () => 4,
+});
+
+defineCapability({
+  id: 'reach_mining_depth',
+  parameters: {
+    targetY: { type: 'integer', minimum: -60, maximum: 300 },
+    range: { type: 'integer', minimum: 16, maximum: 128 },
+    preservedReturnRoute: { type: 'point_list', maximum: 512 },
+  },
+  normalizeArguments: args => immutable({
+    targetY: boundedInteger(args?.targetY, 16, -60, 300),
+    range: boundedInteger(args?.range, 64, 16, 128),
+    preservedReturnRoute: normalizeMiningReturnRoute(args?.preservedReturnRoute),
+  }),
+  preconditions: snapshot => preconditionReport([
+    { requirement: 'connected supported mining stance', satisfied: Boolean(snapshot.position) },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'mining_depth_progress',
+    targetY: args.targetY,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!goToMiningDepth',
+    command: `!goToMiningDepth(${args.targetY}, ${args.range}, ${args.preservedReturnRoute.length})`,
+    targetY: args.targetY,
+    preservedReturnRouteCells: args.preservedReturnRoute.length,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyMiningDepth,
+  cost: (_snapshot, args) => Math.max(2, Math.ceil(args.range / 16)),
+});
+
+defineCapability({
+  id: 'advance_mining_corridor',
+  parameters: {
+    source: { type: 'block_name' },
+    output: { type: 'item_name' },
+    length: { type: 'integer', minimum: 4, maximum: 32 },
+    preservedReturnRoute: { type: 'point_list', maximum: 512 },
+  },
+  normalizeArguments: args => immutable({
+    source: canonicalName(args?.source),
+    output: canonicalName(args?.output),
+    length: boundedInteger(args?.length, 8, 4, 32),
+    preservedReturnRoute: normalizeMiningReturnRoute(args?.preservedReturnRoute),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: `registered mining source ${args.source}`, satisfied: validName(args.source) && snapshot.hasBlock(args.source) },
+    { requirement: `registered mining output ${args.output}`, satisfied: validName(args.output) && snapshot.hasItem(args.output) },
+    { requirement: 'connected supported mining stance', satisfied: Boolean(snapshot.position) },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'mining_corridor_progress',
+    source: args.source,
+    output: args.output,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!mineSearchTunnel',
+    command: `!mineSearchTunnel(${commandString(args.source)}, ${args.length}, ${args.preservedReturnRoute.length})`,
+    source: args.source,
+    output: args.output,
+    preservedReturnRouteCells: args.preservedReturnRoute.length,
+    target: { name: args.source },
+  }),
+  execute: executeBoundCommand,
+  verify: verifyMiningCorridor,
+  cost: (_snapshot, args) => args.length,
 });
 
 defineCapability({
@@ -687,6 +881,89 @@ defineCapability({
   }),
   execute: executeBoundCommand,
   verify: verifyNavigation,
+  cost: () => 2,
+});
+
+defineCapability({
+  id: 'traverse_mining_route_cell',
+  parameters: {
+    x: { type: 'number' },
+    y: { type: 'number' },
+    z: { type: 'number' },
+    dimension: { type: 'dimension' },
+  },
+  normalizeArguments: args => immutable({
+    x: Math.floor(Number(args?.x)),
+    y: Math.floor(Number(args?.y)),
+    z: Math.floor(Number(args?.z)),
+    dimension: canonicalName(args?.dimension),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite preserved mining-route cell', satisfied: [args.x, args.y, args.z].every(Number.isFinite) },
+    { requirement: `current dimension ${args.dimension}`, satisfied: !args.dimension || snapshot.dimension === args.dimension },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'position',
+    x: args.x,
+    y: args.y,
+    z: args.z,
+    closeness: 0.75,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!traverseMiningRouteCell',
+    command: `!traverseMiningRouteCell(${args.x}, ${args.y}, ${args.z})`,
+    x: args.x,
+    y: args.y,
+    z: args.z,
+    closeness: 0.75,
+    dimension: args.dimension,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyNavigation,
+  cost: () => 1,
+});
+
+defineCapability({
+  id: 'relocate_search_region',
+  parameters: {
+    x: { type: 'number' },
+    y: { type: 'number' },
+    z: { type: 'number' },
+    closeness: { type: 'number', minimum: 0, maximum: 16 },
+    minimumDisplacement: { type: 'number', minimum: 8, maximum: 32 },
+    dimension: { type: 'dimension' },
+  },
+  normalizeArguments: args => immutable({
+    x: Number(args?.x),
+    y: Number(args?.y),
+    z: Number(args?.z),
+    closeness: Math.max(0, Math.min(16, Number(args?.closeness) || 8)),
+    minimumDisplacement: Math.max(8, Math.min(32, Number(args?.minimumDisplacement) || 16)),
+    dimension: canonicalName(args?.dimension),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite current position', satisfied: Boolean(snapshot.position) },
+    { requirement: 'finite search-region destination', satisfied: [args.x, args.y, args.z].every(Number.isFinite) },
+    { requirement: `current dimension ${args.dimension}`, satisfied: !args.dimension || snapshot.dimension === args.dimension },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'search_region_change',
+    minimumDisplacement: args.minimumDisplacement,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!goToCoordinates',
+    command: `!goToCoordinates(${args.x}, ${args.y}, ${args.z}, ${args.closeness})`,
+    x: args.x,
+    y: args.y,
+    z: args.z,
+    closeness: args.closeness,
+    minimumDisplacement: args.minimumDisplacement,
+    dimension: args.dimension,
+  }),
+  execute: executeBoundCommand,
+  verify: verifySearchRegionRelocation,
   cost: () => 2,
 });
 

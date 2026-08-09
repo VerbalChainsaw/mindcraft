@@ -1,9 +1,26 @@
 import { createCapabilityRequest } from '../capability-catalogue.js';
 import { familyEntriesFromCounts } from '../item-family.js';
+import {
+  downwardMiningDepthTarget,
+  miningKnowledge,
+  miningOutputName,
+} from './miner-plan.js';
 
 const PREPARED_TORCHES = 8;
 const PICKAXE_DURABILITY_RESERVE = 48;
 const CAVE_SEARCH_RELOCATION_DISTANCE = 48;
+const RETAINED_CAVE_SEARCH_RELOCATIONS = 2;
+const MINING_CORRIDOR_LENGTH = 8;
+const MAX_MINING_CORRIDOR_LEGS = 8;
+const PICKAXE_TIER = Object.freeze({
+  wooden_pickaxe: 1,
+  golden_pickaxe: 2,
+  stone_pickaxe: 3,
+  copper_pickaxe: 3.5,
+  iron_pickaxe: 4,
+  diamond_pickaxe: 5,
+  netherite_pickaxe: 6,
+});
 const CAVE_SEARCH_DIRECTIONS = Object.freeze([
   [0, 1],
   [1, 0],
@@ -50,12 +67,38 @@ function requiredOutputsSatisfied(snapshot, checkpoint) {
   ));
 }
 
+function bestEffortDelivery(order, snapshot, code = 'expedition_best_effort_collection_complete') {
+  const checkpoint = order.checkpoint || {};
+  const manifest = collectedManifest(snapshot, checkpoint);
+  const collected = manifest.reduce((total, entry) => total + entry.quantity, 0);
+  if (
+    checkpoint.bestEffort !== true
+    || collected < 1
+    || !requiredOutputsSatisfied(snapshot, checkpoint)
+  ) return null;
+  return {
+    phase: 'deliver',
+    code,
+    checkpoint: {
+      ...checkpoint,
+      collectedManifest: manifest,
+      deliveryIndex: 0,
+      deliveryOffset: 0,
+    },
+  };
+}
+
 function outstandingOreSources(snapshot, checkpoint) {
   return (checkpoint?.requiredOutputs || [])
     .filter(requirement => requirementProgress(snapshot, checkpoint, requirement) < requirement.quantity)
     .flatMap(requirement => requirement.source.startsWith('deepslate_')
       ? [requirement.source]
       : [requirement.source, `deepslate_${requirement.source}`]);
+}
+
+function outstandingRequirements(snapshot, checkpoint) {
+  return (checkpoint?.requiredOutputs || [])
+    .filter(requirement => requirementProgress(snapshot, checkpoint, requirement) < requirement.quantity);
 }
 
 function distanceToHome(order, snapshot) {
@@ -68,6 +111,24 @@ function distanceToHome(order, snapshot) {
   );
 }
 
+function expeditionToolRequirement(discovered) {
+  const baseline = {
+    name: 'stone_pickaxe',
+    minimumUsableDurability: PICKAXE_DURABILITY_RESERVE,
+  };
+  if (!discovered?.name || !(discovered.name in PICKAXE_TIER)) return baseline;
+  const name = PICKAXE_TIER[discovered.name] > PICKAXE_TIER[baseline.name]
+    ? discovered.name
+    : baseline.name;
+  return {
+    name,
+    minimumUsableDurability: Math.max(
+      PICKAXE_DURABILITY_RESERVE,
+      Number(discovered.minimumUsableDurability) || 0,
+    ),
+  };
+}
+
 function prerequisiteStep(order, planItem) {
   if (typeof planItem !== 'function') {
     return {
@@ -77,14 +138,15 @@ function prerequisiteStep(order, planItem) {
       retryable: false,
     };
   }
+  const requiredTool = expeditionToolRequirement(order.checkpoint?.toolRequirement);
   const toolPlan = planItem({
-    target: 'stone_pickaxe',
+    target: requiredTool.name,
     quantity: 1,
     completion: 'inventory',
     range: order.constraints?.maxDistance,
     toolRequirement: {
-      name: 'stone_pickaxe',
-      minimumUsableDurability: PICKAXE_DURABILITY_RESERVE,
+      name: requiredTool.name,
+      minimumUsableDurability: requiredTool.minimumUsableDurability,
     },
     excludedMethods: order.checkpoint?.failedMethods || [],
     allowEntityAlternatives: false,
@@ -95,7 +157,7 @@ function prerequisiteStep(order, planItem) {
       methodKey: toolPlan.nextStep.learningKey || null,
       nextPhase: 'prepare',
       code: 'expedition_tool_prerequisite',
-      target: { name: 'stone_pickaxe' },
+      target: { name: requiredTool.name },
       keepAnchor: true,
     };
   }
@@ -157,9 +219,32 @@ function caveSurveyStep(order) {
   });
 }
 
-function caveSearchRelocationStep(order) {
+function caveSearchRelocationStep(order, snapshot) {
   const completed = Math.max(0, Number(order.checkpoint?.caveSearchRelocations) || 0);
-  if (completed >= CAVE_SEARCH_DIRECTIONS.length) {
+  const retainedRequirements = order.checkpoint?.requiredOutputs || [];
+  const relocationLimit = retainedRequirements.length > 0
+    ? RETAINED_CAVE_SEARCH_RELOCATIONS
+    : CAVE_SEARCH_DIRECTIONS.length;
+  if (completed >= relocationLimit) {
+    if (retainedRequirements.length > 0) {
+      return {
+        phase: 'execute',
+        code: 'expedition_strategy_changed',
+        detail: 'Exposed-cave search settled without every named output; switching to a bounded deterministic mining corridor.',
+        checkpoint: {
+          ...order.checkpoint,
+          caveLit: false,
+          acquisitionStrategy: 'mining_corridor',
+          corridorSearchLegs: 0,
+        },
+        target: {
+          name: 'mining_corridor',
+          x: Number.isFinite(snapshot?.x) ? Math.floor(snapshot.x) : order.target.x,
+          y: Number.isFinite(snapshot?.y) ? Math.floor(snapshot.y) : order.target.y,
+          z: Number.isFinite(snapshot?.z) ? Math.floor(snapshot.z) : order.target.z,
+        },
+      };
+    }
     return {
       terminal: true,
       code: 'cave_search_exhausted',
@@ -175,11 +260,12 @@ function caveSearchRelocationStep(order) {
   const z = Math.round(order.target.z + (
     (CAVE_SEARCH_RELOCATION_DISTANCE * directionZ) / directionLength
   ));
-  return createCapabilityRequest('navigate_exact', {
+  return createCapabilityRequest('relocate_search_region', {
     x,
     y: order.target.y,
     z,
     closeness: 8,
+    minimumDisplacement: 16,
     dimension: order.checkpoint.homeDimension,
   }, {
     nextPhase: 'execute',
@@ -208,8 +294,94 @@ function collectionStep(order, snapshot) {
   });
 }
 
+function miningCorridorStep(order, snapshot) {
+  const manifest = collectedManifest(snapshot, order.checkpoint);
+  const collected = familyTotal(Object.fromEntries(
+    manifest.map(entry => [entry.item, entry.quantity]),
+  ));
+  const missingRequirements = outstandingRequirements(snapshot, order.checkpoint);
+  if (missingRequirements.length === 0 && collected >= order.quota) {
+    return {
+      phase: 'deliver',
+      code: 'expedition_required_outputs_met',
+      checkpoint: {
+        ...order.checkpoint,
+        collectedManifest: manifest,
+        deliveryIndex: 0,
+        deliveryOffset: 0,
+      },
+    };
+  }
+  const requirement = missingRequirements[0] || order.checkpoint.requiredOutputs?.[0];
+  if (!requirement) {
+    return {
+      terminal: true,
+      code: 'mining_strategy_unavailable',
+      detail: 'The corridor strategy has no typed resource requirement to pursue.',
+      retryable: false,
+    };
+  }
+  const knowledge = miningKnowledge(requirement.source);
+  if (!knowledge || knowledge.dimension !== order.checkpoint.homeDimension) {
+    return {
+      terminal: true,
+      code: 'mining_strategy_unavailable',
+      detail: `No deterministic mining-depth strategy is registered for ${requirement.source}.`,
+      retryable: false,
+    };
+  }
+  const depthTarget = downwardMiningDepthTarget(knowledge, snapshot.y, 8);
+  if (depthTarget !== null) {
+    return createCapabilityRequest('reach_mining_depth', {
+      targetY: depthTarget,
+      range: Math.min(128, order.constraints?.maxDistance || 64),
+      preservedReturnRoute: order.checkpoint?.miningReturnRoute || [],
+    }, {
+      methodKey: `navigate:mining_depth->${requirement.source}`,
+      nextPhase: 'execute',
+      code: 'expedition_mining_depth',
+      target: { name: requirement.source, y: depthTarget },
+      keepAnchor: true,
+    });
+  }
+  const completedLegs = Math.max(0, Number(order.checkpoint?.corridorSearchLegs) || 0);
+  if (completedLegs >= MAX_MINING_CORRIDOR_LEGS) {
+    const partial = bestEffortDelivery(
+      order,
+      snapshot,
+      'expedition_best_effort_corridor_complete',
+    );
+    if (partial) return partial;
+    return {
+      terminal: true,
+      code: 'mining_corridor_exhausted',
+      detail: `The bounded deterministic corridor produced no ${requirement.item} after ${completedLegs} verified legs.`,
+      retryable: false,
+    };
+  }
+  return createCapabilityRequest('advance_mining_corridor', {
+    source: requirement.source,
+    output: miningOutputName(requirement.source),
+    length: MINING_CORRIDOR_LENGTH,
+    preservedReturnRoute: order.checkpoint?.miningReturnRoute || [],
+  }, {
+    methodKey: `collect:mining_corridor->${requirement.item}`,
+    nextPhase: 'execute',
+    code: 'expedition_mining_corridor',
+    target: { name: requirement.source },
+    keepAnchor: true,
+    checkpointOnSuccess: {
+      ...order.checkpoint,
+      corridorSearchLegs: completedLegs + 1,
+    },
+  });
+}
+
 function executionStep(order, snapshot, planItem) {
   const checkpoint = order.checkpoint || {};
+  if (checkpoint.acquisitionStrategy === 'mining_corridor') {
+    return miningCorridorStep(order, snapshot);
+  }
   if (!checkpoint.caveLit) {
     // Cave-lighting can consume its last torch before a bounded failure. A
     // resumed order must prove its supplies again instead of blindly replaying
@@ -246,6 +418,46 @@ function deliveryStep(order, snapshot) {
       retryable: false,
     };
   }
+  const returnRoute = checkpoint.miningReturnRoute || [];
+  const returnIndex = Number.isFinite(checkpoint.miningReturnIndex)
+    ? Math.min(returnRoute.length - 1, Math.floor(checkpoint.miningReturnIndex))
+    : returnRoute.length - 1;
+  if (distanceToHome(order, snapshot) > 3 && returnIndex >= 0) {
+    const cell = returnRoute[returnIndex];
+    return createCapabilityRequest('traverse_mining_route_cell', {
+      x: cell.x,
+      y: cell.y,
+      z: cell.z,
+      dimension: checkpoint.homeDimension,
+    }, {
+      nextPhase: 'deliver',
+      code: 'expedition_return_mining_route',
+      target: { name: 'mining_return_cell', x: cell.x, y: cell.y, z: cell.z },
+      keepAnchor: true,
+      recoveryAction: true,
+      checkpointOnSuccess: {
+        ...checkpoint,
+        miningReturnIndex: returnIndex - 1,
+      },
+    });
+  }
+
+  // A retained expedition is followed by its own durable player-relative
+  // Agenda step. Once any destructive mining route has been retraced, that
+  // step is the sole owner of finding the live requester. Do not make the
+  // Explorer first chase a stale coordinate and then repeat the same trip to
+  // the player.
+  if (checkpoint.retainResults === true) {
+    return {
+      complete: true,
+      code: 'expedition_results_retained',
+      checkpoint: {
+        ...checkpoint,
+        collected: (checkpoint.collectedManifest || []).reduce((total, entry) => total + entry.quantity, 0),
+      },
+    };
+  }
+
   if (distanceToHome(order, snapshot) > 3) {
     return createCapabilityRequest('navigate_exact', {
       x: order.target.x,
@@ -258,18 +470,8 @@ function deliveryStep(order, snapshot) {
       code: 'expedition_return_home',
       target: { name: 'home_base', x: order.target.x, y: order.target.y, z: order.target.z },
       keepAnchor: true,
+      recoveryAction: true,
     });
-  }
-
-  if (checkpoint.retainResults === true) {
-    return {
-      complete: true,
-      code: 'expedition_results_retained',
-      checkpoint: {
-        ...checkpoint,
-        collected: (checkpoint.collectedManifest || []).reduce((total, entry) => total + entry.quantity, 0),
-      },
-    };
   }
 
   const manifest = checkpoint.collectedManifest || [];
@@ -362,6 +564,25 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
       return prerequisite || { phase: 'execute', code: 'expedition_supplies_recovered' };
     }
     if (order.resumePhase === 'execute') {
+      if (checkpoint.acquisitionStrategy === 'mining_corridor') {
+        const prerequisite = prerequisiteStep(order, planItem);
+        if (prerequisite) return prerequisite;
+        if (/(?:corridor_search_exhausted|no_safe_depth_corridor|return_route_failed|stance_unverified|inventory_full)/.test(String(order.evidence?.code || ''))) {
+          const partial = bestEffortDelivery(
+            order,
+            snapshot,
+            'expedition_best_effort_corridor_complete',
+          );
+          if (partial) return partial;
+          return {
+            terminal: true,
+            code: 'mining_strategy_exhausted',
+            detail: order.evidence?.detail || 'The deterministic mining-corridor strategy cannot make safe progress from this region.',
+            retryable: false,
+          };
+        }
+        return executionStep({ ...order, phase: 'execute' }, snapshot, planItem);
+      }
       if (checkpoint.caveLit && order.evidence?.code === 'resource_not_found') {
         // The selected cave was physically reached and lit but yielded no
         // exposed ore. Preserve that failed region, clear only the cave
@@ -377,21 +598,9 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
         };
       }
       if (!checkpoint.caveLit && order.evidence?.code === 'source_not_found') {
-        const manifest = collectedManifest(snapshot, checkpoint);
-        const collected = manifest.reduce((total, entry) => total + entry.quantity, 0);
-        if (checkpoint.bestEffort === true && collected > 0 && requiredOutputsSatisfied(snapshot, checkpoint)) {
-          return {
-            phase: 'deliver',
-            code: 'expedition_best_effort_collection_complete',
-            checkpoint: {
-              ...checkpoint,
-              collectedManifest: manifest,
-              deliveryIndex: 0,
-              deliveryOffset: 0,
-            },
-          };
-        }
-        return caveSearchRelocationStep(order);
+        const partial = bestEffortDelivery(order, snapshot);
+        if (partial) return partial;
+        return caveSearchRelocationStep(order, snapshot);
       }
       return executionStep({ ...order, phase: 'execute' }, snapshot, planItem);
     }

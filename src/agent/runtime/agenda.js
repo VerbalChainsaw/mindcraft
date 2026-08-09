@@ -382,8 +382,17 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   const containerConstraint = ['deposit', 'deposit_family', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
-  if (kind === 'explore' && !containerConstraint) {
+  if (kind === 'explore' && !containerConstraint && raw.retainResults !== true) {
     throw new TypeError('An exploration step needs one exact home container.');
+  }
+  const homeDimension = kind === 'explore'
+    ? canonical(raw.homeDimension || containerConstraint?.dimension)
+    : '';
+  if (kind === 'explore' && !CANONICAL_NAME.test(homeDimension)) {
+    throw new TypeError('An exploration step needs one exact home dimension.');
+  }
+  if (kind === 'explore' && containerConstraint && containerConstraint.dimension !== homeDimension) {
+    throw new TypeError('An exploration home dimension must match its selected container.');
   }
   if (kind === 'deposit_family' && !containerConstraint) {
     throw new TypeError('A family deposit step needs one exact chest or barrel.');
@@ -470,6 +479,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     x: point ? point.x : 0,
     y: point ? point.y : 0,
     z: point ? point.z : 0,
+    ...(kind === 'explore' ? { homeDimension } : {}),
     workstationConstraint: normalizedWorkstation
       ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
       : null,

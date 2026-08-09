@@ -1088,12 +1088,14 @@ export class AgendaDirector {
             quota: entry.quantity,
             ...(entry.kind === 'explore' ? {
               checkpoint: {
-                homeDimension: entry.containerConstraint.dimension,
-                containerName: entry.containerConstraint.name,
-                containerX: entry.containerConstraint.position.x,
-                containerY: entry.containerConstraint.position.y,
-                containerZ: entry.containerConstraint.position.z,
-                containerDimension: entry.containerConstraint.dimension,
+                homeDimension: entry.homeDimension,
+                ...(entry.containerConstraint ? {
+                  containerName: entry.containerConstraint.name,
+                  containerX: entry.containerConstraint.position.x,
+                  containerY: entry.containerConstraint.position.y,
+                  containerZ: entry.containerConstraint.position.z,
+                  containerDimension: entry.containerConstraint.dimension,
+                } : {}),
                 ...(entry.bestEffort === true ? { bestEffort: true } : {}),
                 ...(entry.retainResults === true ? { retainResults: true } : {}),
                 ...(entry.requiredOutputs?.length > 0 ? { requiredOutputs: entry.requiredOutputs } : {}),

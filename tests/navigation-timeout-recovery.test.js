@@ -41,6 +41,8 @@ test('a Pathfinder computation timeout does not trigger an identical local retry
         throw error;
       },
     },
+    on() {},
+    removeListener() {},
     clearControlStates() {},
     blockAt(blockPosition) {
       return blockAt(blockPosition.y < 64 ? 'stone' : 'air', blockPosition);

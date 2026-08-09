@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / return-safe cave-expedition checkpoint (see Git HEAD)
-Milestone: one natural cave/resource/return request preserves every named output, protects the worksite, and fails or returns truthfully
+Branch/commit: recovery/iron-pickaxe-20260803 / d3722ad plus preserved cave-expedition WIP
+Milestone: deterministic mining corridors now preserve and retrace their complete accumulated route instead of excavating through earlier stairs
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: supervised exploration, resource strategy binding, native movement/recovery, and truthful terminal behavior
-Live blocker: exposed-cave search can exhaust without raw iron because no second deterministic iron-acquisition strategy is planner-bindable
-Last physical result: coal rose from 8 to 10, no raw iron was fabricated, a formerly false y70 “surface” climbed to a usable y72 exit, and the bot returned beside LandingWitness at health 20
+Owned subsystem: supervised exploration, deterministic mining access/return, inventory capacity, and truthful Agenda settlement
+Live blocker: the latest full-inventory coal leg exposed cobblestone provenance; source now distinguishes carried excavation debris from protected world cobblestone, but one integrated replay remains pending
+Last physical result: one unchanged run gained 6 raw iron and 4 coal, retraced from y23 to y111, returned beside LandingWitness at health 20; a second returned with +1 iron but failed coal capacity truthfully
 Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held; LandingWitness disconnected
-Next: bind one existing deterministic mining-corridor strategy as a genuine alternative, then rerun the unchanged cave/iron/coal/return request
+Next: use the next ordinary collection-heavy play request as the integrated capacity/return replay; do not reopen route architecture or invent a narrow campaign
 Jordan review: none; Director cancelled the external review gate for uninterrupted product work

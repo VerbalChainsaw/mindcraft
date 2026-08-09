@@ -284,11 +284,15 @@ function caveExpeditionPlan(playerName, message, context) {
   if (!storedExpedition && !retainedExpedition) return null;
   const bot = context?.bot;
   const position = bot?.entity?.position;
+  const homeDimension = String(bot?.game?.dimension || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
   const containerConstraint = currentContainerConstraint(bot);
-  if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+  if (!position || ![position.x, position.y, position.z].every(Number.isFinite) || !homeDimension) {
     return { rejection: 'I could not bind that expedition to my current home-base position, so I did not start only part of it.' };
   }
-  if (!containerConstraint) {
+  if (!containerConstraint && !retainedExpedition) {
     return { rejection: 'I could not bind that expedition to a loaded chest or barrel near the home base, so I did not start only part of it.' };
   }
   const explicitQuantity = text.match(/\b(\d{1,3})\s+(?:useful\s+)?(?:exposed\s+)?ores?\b/i);
@@ -326,7 +330,8 @@ function caveExpeditionPlan(playerName, message, context) {
       x: Math.floor(position.x),
       y: Math.floor(position.y),
       z: Math.floor(position.z),
-      containerConstraint,
+      homeDimension,
+      ...(containerConstraint ? { containerConstraint } : {}),
     },
   };
   return {

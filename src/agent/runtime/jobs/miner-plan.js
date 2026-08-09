@@ -88,6 +88,20 @@ export function miningKnowledge(name) {
   return MINING_KNOWLEDGE[canonicalMiningTarget(name)] || null;
 }
 
+/**
+ * `goToMiningDepth` owns safe, returnable descent. An ore's target Y is its
+ * preferred search band, not permission to turn that descent primitive into
+ * an improvised upward excavation route. Once already below the preferred
+ * band, continue the bounded corridor at the current depth; a separate
+ * ascent capability must be selected if a resource ever truly requires one.
+ */
+export function downwardMiningDepthTarget(knowledge, currentY, tolerance = 10) {
+  if (!knowledge || !Number.isFinite(knowledge.targetY) || !Number.isFinite(currentY)) return null;
+  return currentY > knowledge.targetY + Math.max(0, Number(tolerance) || 0)
+    ? knowledge.targetY
+    : null;
+}
+
 function inventoryCount(snapshot, name) {
   return Math.max(0, Number(snapshot?.inventory?.[name]) || 0);
 }
@@ -158,16 +172,13 @@ export function nextMinerStep(order, snapshot = {}) {
     return deliveryStep(order, snapshot, Math.min(current, Math.max(0, order.quota - delivered)));
   }
   if (order.phase === 'recover') {
-    if (
-      knowledge
-      && Number.isFinite(snapshot.y)
-      && Math.abs(snapshot.y - knowledge.targetY) > 10
-    ) {
+    const depthTarget = downwardMiningDepthTarget(knowledge, snapshot.y, 10);
+    if (depthTarget !== null) {
       return {
-        command: `!goToMiningDepth(${knowledge.targetY}, 64)`,
+        command: `!goToMiningDepth(${depthTarget}, 64)`,
         nextPhase: 'assess',
         code: 'mining_depth_relocation',
-        target: { name: naturalTarget, y: knowledge.targetY },
+        target: { name: naturalTarget, y: depthTarget },
       };
     }
     return {
@@ -237,17 +248,13 @@ export function nextMinerStep(order, snapshot = {}) {
       : { phase: 'execute', code: 'mining_continue' };
   }
   if (['assess', 'prepare'].includes(order.phase)) {
-    if (
-      snapshot.resourceFound === false
-      && knowledge
-      && Number.isFinite(snapshot.y)
-      && Math.abs(snapshot.y - knowledge.targetY) > 10
-    ) {
+    const depthTarget = downwardMiningDepthTarget(knowledge, snapshot.y, 10);
+    if (snapshot.resourceFound === false && depthTarget !== null) {
       return {
-        command: `!goToMiningDepth(${knowledge.targetY}, 64)`,
+        command: `!goToMiningDepth(${depthTarget}, 64)`,
         nextPhase: 'assess',
         code: 'seeking_productive_depth',
-        target: { name: naturalTarget, y: knowledge.targetY },
+        target: { name: naturalTarget, y: depthTarget },
       };
     }
     if (snapshot.resourceFound === false) {

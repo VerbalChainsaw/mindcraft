@@ -6,6 +6,7 @@ import {
   isClearableWorksiteBlock,
   isNaturalFillBlock,
   placeBlock,
+  selectRedundantExcavationDebrisStack,
 } from '../../src/agent/library/skills.js';
 import Vec3 from 'vec3';
 
@@ -15,6 +16,14 @@ test('processed cobblestone structures are not classified as clearable natural t
   assert.equal(isNaturalFillBlock(bot, { name: 'stone' }), true);
   assert.equal(isClearableWorksiteBlock(bot, { name: 'cobblestone' }), false);
   assert.equal(isClearableWorksiteBlock(bot, { name: 'cobbled_deepslate' }), false);
+  assert.equal(selectRedundantExcavationDebrisStack([
+    { name: 'cobblestone', count: 64, slot: 9 },
+    { name: 'cobblestone', count: 24, slot: 10 },
+  ], new Set())?.slot, 9);
+  assert.equal(selectRedundantExcavationDebrisStack([
+    { name: 'cobblestone', count: 64, slot: 9 },
+    { name: 'cobblestone', count: 24, slot: 10 },
+  ], new Set(['cobblestone'])), null);
 });
 
 test('oriented fixtures use a reachable orientation ray down a raised worksite slope', () => {
@@ -64,6 +73,7 @@ test('strict placement uses the shared replaceable-cell contract', async () => {
   const material = { name: 'stone', count: 1, slot: 9 };
   const target = new Vec3(1, 64, 1);
   let placed = false;
+  let placementRaycasts = 0;
   const bot = {
     restrict_to_inventory: true,
     modes: { isOn: () => false },
@@ -79,10 +89,23 @@ test('strict placement uses the shared replaceable-cell contract', async () => {
         return { name: placed ? 'stone' : 'vine', boundingBox: placed ? 'block' : 'empty', position };
       }
       if (position.equals(target.offset(0, -1, 0))) {
-        return { name: 'stone', boundingBox: 'block', position };
+        return {
+          name: 'stone',
+          boundingBox: 'block',
+          position,
+          shapes: [[0, 0, 0, 1, 1, 1]],
+        };
       }
       return { name: 'air', boundingBox: 'empty', position };
     },
+    pathfinder: {
+      setGoal() {},
+      stop() {},
+    },
+    controlState: {},
+    clearControlStates() {},
+    on() {},
+    removeListener() {},
     equip(item) { this.heldItem = item; },
     async lookAt() {},
     getControlState: () => false,
@@ -90,9 +113,20 @@ test('strict placement uses the shared replaceable-cell contract', async () => {
     async waitForTicks() {},
     placeBlock() { placed = true; },
   };
+  bot.world = {
+    getBlock: position => bot.blockAt(position),
+    raycast() {
+      placementRaycasts += 1;
+      return {
+        ...bot.blockAt(target.offset(0, -1, 0)),
+        face: 1,
+      };
+    },
+  };
 
   const result = await placeBlock(bot, 'stone', 1, 64, 1, 'bottom', false, false);
 
   assert.equal(result, true);
+  assert.ok(placementRaycasts > 0, 'native GoalPlaceBlock should verify the exact support face');
   assert.equal(bot.lastActionEvidence.outcome, 'placed');
 });
