@@ -19,6 +19,7 @@
 - Update this file whenever a work slice changes status.
 - Keep detailed implementation reasoning in `.hermes/plans/`, defects in `.hermes/defects/mindcraft-runtime.md`, transient transfer notes in `.hermes/handoffs/`, and runtime proof in `.hermes/verification/`.
 - Do not delete or rewrite historical records merely because this index supersedes them.
+- For explicitly diagnostic disposable-world campaigns, follow `docs/contracts/diagnostic-continuation-policy.md`; the preserved pre-extension policy is archived at `docs/archive/2026-08-09-original-first-blocker-policy.md`.
 
 ## Product goal
 
@@ -67,6 +68,18 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 4. Add at most one focused regression test for the exposed contract. A passing test never substitutes for physical completion.
 5. Verify inventory, equipment, delivery, and world mutations independently through Paper; then commit and push one meaningful functional checkpoint.
 6. Do not create a second executor, direct LLM body control, item-specific routes, speculative world-state frameworks, dashboards, or evidence projects to avoid the active gameplay failure.
+
+### Additive diagnostic-continuation exception
+
+The first-material-blocker loop above remains the normal development and
+acceptance rule. When the Director or active campaign explicitly requests a
+disposable-world diagnostic run, a settled operational failure may be
+checkpointed and narrowly scaffolded so independent downstream capabilities can
+be exercised in the same run. Unsafe, unsettled, authority-violating, corrupt,
+or causally ambiguous failures still stop immediately. Scaffolded completion is
+diagnostic only; the unchanged unassisted request must still pass for acceptance.
+The binding procedure and evidence labels are defined in
+`docs/contracts/diagnostic-continuation-policy.md`.
 
 ## Playtest-first priority order
 

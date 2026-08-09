@@ -1,5 +1,5 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / d3722ad plus preserved cave-expedition WIP
+Branch/commit: recovery/iron-pickaxe-20260803 / 84c70fe return-safe mining baseline plus additive diagnostic-continuation contract
 Milestone: deterministic mining corridors now preserve and retrace their complete accumulated route instead of excavating through earlier stairs
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: supervised exploration, deterministic mining access/return, inventory capacity, and truthful Agenda settlement
