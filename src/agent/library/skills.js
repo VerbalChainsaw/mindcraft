@@ -127,6 +127,7 @@ const GROUND_SETTLE_TIMEOUT_MS = 800;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
 const SHALLOW_WATER_SHORE_SCAN_RADIUS = 32;
 const DROWNING_RECOVERY_OXYGEN = 20;
+const DROWNING_FINAL_ASCENT_RESERVE_MS = 2_000;
 const DELIVERY_MIN_DROP_DISTANCE = 1.6;
 const DELIVERY_MAX_DROP_DISTANCE = 3.25;
 const DELIVERY_MAX_DROP_AXIS_OFFSET = 0.65;
@@ -15983,11 +15984,9 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
     const startOxygen = Number(bot.oxygenLevel);
     const target = bot.entity?.position?.floored?.() || null;
     const deadlineAt = Date.now() + Math.max(1_000, Math.min(12_000, Number(timeoutMs) || 8_000));
-    try {
-        try { bot.pathfinder?.setGoal?.(null); } catch { /* best-effort immediate movement preemption */ }
-        try { bot.clearControlStates(); } catch { /* best-effort control reset */ }
+    const riseToBreathableSurface = async () => {
         bot.setControlState('jump', true);
-        const surfaced = await waitForWorldCondition(bot, () => {
+        return await waitForWorldCondition(bot, () => {
             const head = bot.blockAt(bot.entity.position.offset(0, 1, 0));
             const oxygen = Number(bot.oxygenLevel);
             return head
@@ -15995,6 +15994,11 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
                 && !bot.entity?.isInLava
                 && (!Number.isFinite(oxygen) || oxygen >= DROWNING_RECOVERY_OXYGEN);
         }, Math.max(1, deadlineAt - Date.now()), 100);
+    };
+    try {
+        try { bot.pathfinder?.setGoal?.(null); } catch { /* best-effort immediate movement preemption */ }
+        try { bot.clearControlStates(); } catch { /* best-effort control reset */ }
+        const surfaced = await riseToBreathableSurface();
         if (!surfaced) {
             setActionEvidence(bot, {
                 kind: 'survival',
@@ -16007,31 +16011,47 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
             return false;
         }
 
-        // Breathing for one tick is not a completed escape. Releasing jump at
-        // the waterline can drop the bot into the same cell and reacquire the
-        // reflex lane forever, starving every player action. Once air is
-        // restored, hand ordinary shoreline locomotion to native Pathfinder
-        // and require verified non-liquid support before releasing ownership.
+        // Mineflayer reports oxygen on a 0-20 scale, so reaching this point
+        // means the immediate drowning hazard is resolved with a full air
+        // reserve. Native Pathfinder may improve that result by reaching dry
+        // support, but open water is not a failed rescue merely because no
+        // loaded shoreline exists. The interrupted deterministic action owns
+        // the destination once this bounded reflex releases ActionManager.
         bot.setControlState('jump', false);
         const feetPosition = bot.entity?.position?.floored?.() || null;
         const feet = feetPosition ? bot.blockAt(feetPosition) : null;
         const support = feetPosition ? bot.blockAt(feetPosition.offset(0, -1, 0)) : null;
         const alreadyStable = !isLiquidGameplayBlock(feet)
             && isTraversableShoreSupport(support);
+        const shoreDeadlineAt = Math.max(Date.now(), deadlineAt - DROWNING_FINAL_ASCENT_RESERVE_MS);
         const shore = alreadyStable
             ? { success: true, outcome: 'stable_shore_reached', target: feetPosition }
-            : await attemptShallowWaterExit(bot, { deadlineAt });
+            : await attemptShallowWaterExit(bot, { deadlineAt: shoreDeadlineAt });
         if (!shore.success) {
+            const breathable = await riseToBreathableSurface();
+            if (!breathable) {
+                setActionEvidence(bot, {
+                    kind: 'survival',
+                    outcome: bot.interrupt_code ? 'interrupted' : 'drowning_escape_unconfirmed',
+                    target,
+                    oxygenBefore: Number.isFinite(startOxygen) ? startOxygen : null,
+                    oxygenAfter: Number.isFinite(Number(bot.oxygenLevel)) ? Number(bot.oxygenLevel) : null,
+                    shore,
+                    retryable: !bot.interrupt_code,
+                });
+                return false;
+            }
             setActionEvidence(bot, {
                 kind: 'survival',
-                outcome: bot.interrupt_code ? 'interrupted' : 'drowning_shore_unreached',
+                outcome: 'drowning_escape_breathable_surface',
                 target,
                 oxygenBefore: Number.isFinite(startOxygen) ? startOxygen : null,
                 oxygenAfter: Number.isFinite(Number(bot.oxygenLevel)) ? Number(bot.oxygenLevel) : null,
                 shore,
-                retryable: !bot.interrupt_code,
+                retryable: false,
             });
-            return false;
+            log(bot, 'Reached breathable air; no loaded dry shore was reachable.');
+            return true;
         }
         setActionEvidence(bot, {
             kind: 'survival',

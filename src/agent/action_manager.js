@@ -402,15 +402,27 @@ export class ActionManager {
             this.resume_name = actionLabel;
             this.resume_owner = normalizeActionOwner(owner || this.ownerContext.getStore());
         }
+        // A critical reflex owns the body until it settles, but an explicit
+        // resumable player action is still valid work. Register it without
+        // entering _executeAction: doing so would report a false rejection and
+        // used to overwrite the reflex label before the ownership guard ran.
+        if (new_resume && this.isOwnerBlocked(this.resume_owner)) {
+            this.agent.behavior_arbiter?.wake?.('resumable_action_registered');
+            return {
+                success: true,
+                message: null,
+                interrupted: false,
+                timedout: false,
+                deferred: true,
+            };
+        }
         if (this.resume_func != null && (this.agent.isIdle() || new_resume) && (!this.agent.self_prompter.isActive() || new_resume)) {
-            this.currentActionLabel = this.resume_name;
             let res = await this._executeAction(
                 this.resume_name,
                 this.resume_func,
                 timeout,
                 this.resume_owner || 'player',
             );
-            this.currentActionLabel = '';
             if (!res.success && res.result?.retryable === false) {
                 this.cancelResume();
             }

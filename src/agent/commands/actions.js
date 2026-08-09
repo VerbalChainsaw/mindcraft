@@ -59,7 +59,7 @@ export function collectionExclusionsForAgent(agent, requestedName = null) {
     return exclusions;
 }
 
-function runAsAction (actionFn, resume = false, timeout = -1) {
+function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = null) {
     let actionLabel = null;  // Will be set on first use
     
     const wrappedAction = async function (agent, ...args) {
@@ -69,6 +69,9 @@ function runAsAction (actionFn, resume = false, timeout = -1) {
             actionLabel = actionObj.name.substring(1); // Remove the ! prefix
         }
 
+        if (typeof prepareAction === 'function') {
+            await prepareAction(agent, ...args);
+        }
         const actionFnWithAgent = async () => actionFn(agent, ...args);
         const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout, resume });
         if (code_return.interrupted && !code_return.timedout)
@@ -503,9 +506,10 @@ export const actionsList = [
             'follow_dist': {type: 'float', description: 'The distance to follow from.', domain: [0, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, follow_dist) => {
-            setCompanionDirective(agent, 'follow', player_name);
             return await skills.followPlayer(agent.bot, player_name, follow_dist);
-        }, true)
+        }, true, -1, (agent, player_name) => {
+            setCompanionDirective(agent, 'follow', player_name);
+        })
     },
     {
         name: '!followPlayerUntilNearBlock',
@@ -534,10 +538,11 @@ export const actionsList = [
             'guard_dist': {type: 'float', description: 'distance to keep from the guarded player.', domain: [1, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, guard_dist) => {
+            return await skills.followPlayer(agent.bot, player_name, guard_dist);
+        }, true, -1, (agent, player_name) => {
             setCompanionDirective(agent, 'guard', player_name);
             agent.bot.modes.setOn('self_defense', true);
-            return await skills.followPlayer(agent.bot, player_name, guard_dist);
-        }, true)
+        })
     },
     {
         name: '!goToCoordinates',
@@ -2193,9 +2198,10 @@ export const actionsList = [
         description: 'Continuously follow the named player until stopped or replaced by another player action. Use for "follow me".',
         params: {'player_name': { type: 'string', description: 'Name of the player to follow.' }},
         perform: runAsAction(async (agent, player_name) => {
-            setCompanionDirective(agent, 'follow', player_name);
             return await skills.followPlayer(agent.bot, player_name, 3);
-        }, true)
+        }, true, -1, (agent, player_name) => {
+            setCompanionDirective(agent, 'follow', player_name);
+        })
     },
     {
         name: '!collect',
@@ -2232,10 +2238,11 @@ export const actionsList = [
         description: 'Guard the named player and retaliate only against a fresh combat-safe hostile attributed by Minecraft as hurting them.',
         params: {'player_name': { type: 'string', description: 'Name of the player to defend.' }},
         perform: runAsAction(async (agent, player_name) => {
+            return await skills.followPlayer(agent.bot, player_name, 3);
+        }, true, -1, (agent, player_name) => {
             setCompanionDirective(agent, 'guard', player_name);
             agent.bot.modes.setOn('self_defense', true);
-            return await skills.followPlayer(agent.bot, player_name, 3);
-        }, true)
+        })
     },
     {
         name: '!place',

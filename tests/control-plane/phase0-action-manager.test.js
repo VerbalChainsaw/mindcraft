@@ -57,6 +57,39 @@ test('Phase 0 follow can enter the resumable action path and a prior timeout doe
   assert.equal(agent.actions.resume_name, 'action:followPlayer');
 });
 
+test('a resumable player action queues behind a critical reflex without stealing its ownership label', async () => {
+  const agent = createHarness();
+  const wakes = [];
+  let followRuns = 0;
+  agent.behavior_arbiter = {
+    wake(reason) { wakes.push(reason); },
+  };
+  agent.actions.executing = true;
+  agent.actions.currentActionOwner = 'reflex';
+  agent.actions.currentActionLabel = 'mode:self_preservation';
+
+  const deferred = await agent.actions.runAction('action:followPlayer', async () => {
+    followRuns += 1;
+    return true;
+  }, { resume: true, owner: 'player', timeout: -1 });
+
+  assert.equal(deferred.success, true);
+  assert.equal(deferred.deferred, true);
+  assert.equal(followRuns, 0);
+  assert.equal(agent.actions.currentActionOwner, 'reflex');
+  assert.equal(agent.actions.currentActionLabel, 'mode:self_preservation');
+  assert.equal(agent.actions.resume_name, 'action:followPlayer');
+  assert.deepEqual(wakes, ['resumable_action_registered']);
+
+  agent.actions.executing = false;
+  agent.actions.currentActionOwner = '';
+  agent.actions.currentActionLabel = '';
+  const resumed = await agent.actions.resumeAction();
+
+  assert.equal(resumed.result.phase, 'succeeded');
+  assert.equal(followRuns, 1);
+});
+
 test('Phase 0 action exceptions retain the original Error and stack', async () => {
   const agent = createHarness();
   const lifecycle = captureLifecycle(agent);
