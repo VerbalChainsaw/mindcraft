@@ -129,6 +129,17 @@ test('known manufactured outputs outrank the generic make-as-construction fallba
   assert.equal(structure?.deferToModel, true);
 });
 
+test('vague tool preparation cannot authorize construction without a multi-block object', () => {
+  const tools = resolvePlayerDirective('Gabriel', 'make whatever basic tools you need');
+  const gazebo = resolvePlayerDirective('Gabriel', 'make a small gazebo here');
+
+  assert.equal(tools?.assignmentKind, 'item_plan');
+  assert.equal(tools?.deferToModel, true);
+  assert.match(tools?.modelInstruction || '', /!queueItemPlan/);
+  assert.equal(gazebo?.deferToModel, true);
+  assert.notEqual(gazebo?.assignmentKind, 'item_plan');
+});
+
 test('typed item routing binds verb, quantity, and target inside one primary item request', () => {
   const bot = {
     registry: {

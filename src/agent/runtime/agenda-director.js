@@ -23,6 +23,7 @@ import { familyFoodPoints } from './item-family.js';
 const DISPATCH_COOLDOWN_MS = 750;
 const REJECTED_COOLDOWN_MS = 5_000;
 const MAX_ENTRY_ATTEMPTS = 2;
+const MAX_INVENTORY_RECONCILIATIONS = 12;
 const WAITABLE_DIRECT_OUTCOMES = new Set(['skill_not_sleep_time']);
 const LEGACY_REARMABLE_SLEEP_OUTCOMES = new Set([
   ...WAITABLE_DIRECT_OUTCOMES,
@@ -272,36 +273,75 @@ export class AgendaDirector {
     );
   }
 
-  /** Append one validated step. Returns a player-facing result. */
-  add(raw) {
-    if (this.entries.filter(entry => !isTerminalAgendaState(entry.state)).length >= AGENDA_LIMITS.maxEntries) {
-      return { accepted: false, code: 'agenda_full', detail: `The agenda already holds ${AGENDA_LIMITS.maxEntries} unfinished steps.` };
+  /**
+   * Append several validated steps as one durable queue mutation.
+   *
+   * Model-compiled plans must not start with a valid first step and discover
+   * afterward that a later step was malformed. Stage the complete bounded
+   * list, then publish and persist it once. The Agenda still only sequences;
+   * GoalDirector, JobDirector, and ActionManager retain physical ownership.
+   */
+  addMany(rawEntries) {
+    if (!Array.isArray(rawEntries) || rawEntries.length < 1) {
+      return { accepted: false, code: 'invalid_agenda_plan', detail: 'An agenda plan needs at least one typed step.' };
     }
-    let entry;
+    const liveEntries = this.entries.filter(entry => !isTerminalAgendaState(entry.state));
+    if (liveEntries.length + rawEntries.length > AGENDA_LIMITS.maxEntries) {
+      return { accepted: false, code: 'agenda_full', detail: `The agenda can hold at most ${AGENDA_LIMITS.maxEntries} unfinished steps.` };
+    }
+
+    const staged = [];
+    let stagedSequence = this.sequence;
+    let previous = this.entries.at(-1) || null;
     try {
-      this.sequence += 1;
-      const previous = this.entries.at(-1) || null;
-      const inferred = inferredLegacyDependency(previous, raw);
-      entry = normalizeAgendaEntry(
-        { ...raw, ...inferred, id: '', createdAt: this.now() },
-        { now: this.now, sequence: this.sequence },
-      );
+      for (const raw of rawEntries) {
+        stagedSequence += 1;
+        const inferred = inferredLegacyDependency(previous, raw);
+        const entry = normalizeAgendaEntry(
+          { ...raw, ...inferred, id: '', createdAt: this.now() },
+          { now: this.now, sequence: stagedSequence },
+        );
+        if (
+          this.entries.some(existing => existing.id === entry.id)
+          || staged.some(existing => existing.id === entry.id)
+        ) {
+          return { accepted: false, code: 'duplicate_agenda_id', detail: 'That plan could not be given unique step ids.' };
+        }
+        staged.push(entry);
+        previous = entry;
+      }
     } catch (error) {
       return { accepted: false, code: 'invalid_agenda_entry', detail: boundedText(error?.message || error) };
     }
-    if (this.entries.some(existing => existing.id === entry.id)) {
-      return { accepted: false, code: 'duplicate_agenda_id', detail: 'That step could not be given a unique id.' };
-    }
+
+    this.sequence = stagedSequence;
     // Keep the queue bounded by discarding finished history, never live work.
-    this.entries = [...this.entries.filter(item => !isTerminalAgendaState(item.state)), entry];
+    this.entries = [...liveEntries, ...staged];
     this.nextEligibleAt = 0;
     this.persist();
-    this.setStatus('waiting', 'agenda_step_added', `Queued: ${describeAgendaEntry(entry)}.`);
-    // Count every unfinished step, not just the waiting ones. Reporting
-    // pending() called the second step "1" again once the first had started,
-    // which reads as if the plan were being overwritten.
-    const position = this.entries.filter(item => !isTerminalAgendaState(item.state)).length;
-    return { accepted: true, id: entry.id, description: describeAgendaEntry(entry), position };
+    this.setStatus(
+      'waiting',
+      'agenda_plan_added',
+      `Queued ${staged.length} step${staged.length === 1 ? '' : 's'} as one plan.`,
+    );
+    const firstPosition = liveEntries.length + 1;
+    return {
+      accepted: true,
+      entries: staged.map((entry, index) => ({
+        id: entry.id,
+        description: describeAgendaEntry(entry),
+        position: firstPosition + index,
+      })),
+    };
+  }
+
+  /** Append one validated step. Returns a player-facing result. */
+  add(raw) {
+    const result = this.addMany([raw]);
+    if (result.accepted !== true) return result;
+    const added = result.entries[0];
+    this.setStatus('waiting', 'agenda_step_added', `Queued: ${added.description}.`);
+    return { accepted: true, ...added };
   }
 
   clear(reason = 'Cleared by the player.') {
@@ -531,6 +571,11 @@ export class AgendaDirector {
     if (!entry || entry.executor !== 'goal' || !goal) return false;
     if (entry.executorId) return goal.id === entry.executorId;
 
+    // Inventory checklists were introduced with mandatory executor
+    // correlation. They may dispatch an acquire goal, but an uncorrelated old
+    // result must never settle the aggregate promise.
+    if (entry.kind === 'inventory_checklist') return false;
+
     // Compatibility for agenda entries written before executorId existed.
     // Match the complete typed contract, not merely the item name, so an old
     // unrelated GoalDirector result cannot settle newly queued work.
@@ -540,6 +585,7 @@ export class AgendaDirector {
     return goal.kind === entry.kind
       && target === entry.target
       && goal.quantity === entry.quantity
+      && (goal.quantityMode || 'additional') === (entry.quantityMode || 'additional')
       && goal.requester === entry.requester
       && completion === entry.completion
       && (entry.kind !== 'deliver' || destination === entry.recipient);
@@ -571,6 +617,13 @@ export class AgendaDirector {
         };
       }
       const succeeded = last?.phase === 'complete';
+      if (entry.kind === 'inventory_checklist' && succeeded) {
+        return {
+          state: 'recheck',
+          code: last?.evidence?.code || 'inventory_reconciliation_complete',
+          detail: last?.evidence?.detail || '',
+        };
+      }
       return {
         state: succeeded ? 'complete' : 'failed',
         code: last?.evidence?.code || 'goal_ended',
@@ -601,6 +654,84 @@ export class AgendaDirector {
       detail: 'The restored direct agenda step has no durable terminal result and cannot be assumed complete.',
       retryable: true,
     };
+  }
+
+  inventoryChecklistState(entry) {
+    const counts = [];
+    try {
+      for (const requirement of entry.inventoryRequirements || []) {
+        const target = this.resolveTarget(this.agent.bot, requirement.target);
+        if (!target || target.acquisitionKind === 'unsupported') {
+          return {
+            valid: false,
+            code: 'inventory_checklist_target_unsupported',
+            detail: `${requirement.target} no longer has a deterministic acquisition path.`,
+          };
+        }
+        const count = inventoryCountForGoalTarget(this.agent.bot, target);
+        counts.push({ ...requirement, targetContract: target, count });
+      }
+    } catch (error) {
+      return {
+        valid: false,
+        code: 'inventory_checklist_lookup_failed',
+        detail: boundedText(error?.message || error),
+      };
+    }
+    return {
+      valid: true,
+      counts,
+      unmet: counts.filter(requirement => requirement.count < requirement.quantity),
+    };
+  }
+
+  dispatchInventoryChecklistCorrection(entry, requirement) {
+    const requester = entry.requester || this.agent.name;
+    let goal;
+    try {
+      goal = createItemGoalContract({
+        kind: 'acquire',
+        requester,
+        target: requirement.targetContract,
+        quantity: requirement.quantity,
+        quantityMode: 'minimum',
+        request: `reconcile final item plan: at least ${requirement.quantity} ${requirement.target}`,
+        baselineInventory: requirement.count,
+        completion: 'inventory',
+      });
+    } catch (error) {
+      return { accepted: false, code: 'invalid_goal', detail: boundedText(error?.message || error) };
+    }
+    const result = this.agent.goal_director?.submit?.(goal);
+    return result?.accepted
+      ? { accepted: true, executorId: result.id || goal.id }
+      : {
+          accepted: false,
+          code: result?.code || 'goal_director_unavailable',
+          detail: result?.detail || '',
+        };
+  }
+
+  recheckInventoryChecklist(active, settled) {
+    this.replace(active.id, {
+      state: 'pending',
+      startedAt: null,
+      finishedAt: null,
+      executorId: '',
+      reconciliationTarget: '',
+      evidence: {
+        code: 'inventory_reconciliation_progress',
+        detail: settled.detail || 'A missing final inventory floor was restored; rechecking the complete plan.',
+      },
+    });
+    this.nextEligibleAt = this.now() + DISPATCH_COOLDOWN_MS;
+    this.setStatus(
+      'verifying',
+      'inventory_checklist_recheck',
+      'Rechecking every promised inventory floor from fresh Minecraft state.',
+      active.id,
+    );
+    return { settled: true, state: 'recheck', retryable: true, code: settled.code };
   }
 
   directSettlement(result, entry = null) {
@@ -842,7 +973,10 @@ export class AgendaDirector {
       || goal.lastGoal?.phase !== 'complete'
     ) return { settled: false };
 
-    const result = this.commitSettlement(active, this.settleActive(active));
+    const settled = this.settleActive(active);
+    const result = settled.state === 'recheck'
+      ? this.recheckInventoryChecklist(active, settled)
+      : this.commitSettlement(active, settled);
     const released = goal.releaseProtectedCompletion?.(
       'Consumed by the matching player agenda continuation.',
       { preserveTerminalHandoff: true },
@@ -873,6 +1007,7 @@ export class AgendaDirector {
           requester,
           target,
           quantity: entry.quantity,
+          quantityMode: entry.quantityMode || 'additional',
           destinationPlayer: entry.kind === 'deliver' ? entry.recipient : null,
           request: describeAgendaEntry(entry),
           baselineInventory,
@@ -1032,6 +1167,10 @@ export class AgendaDirector {
         return;
       }
       let settled = this.settleActive(active);
+      if (settled.state === 'recheck') {
+        this.recheckInventoryChecklist(active, settled);
+        return;
+      }
       const dependent = this.nextPendingAfter(active);
       const needsBinding = settled.state === 'complete'
         && dependent?.dependsOnEntryId === active.id
@@ -1104,6 +1243,73 @@ export class AgendaDirector {
         });
         return;
       }
+    }
+
+    if (next.kind === 'inventory_checklist') {
+      const checklist = this.inventoryChecklistState(next);
+      if (!checklist.valid) {
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: { code: checklist.code, detail: checklist.detail },
+        });
+        this.setStatus('failed', checklist.code, checklist.detail, next.id);
+        return;
+      }
+      if (checklist.unmet.length === 0) {
+        const detail = `Verified ${checklist.counts.length} final inventory floor${checklist.counts.length === 1 ? '' : 's'} from current Minecraft state.`;
+        this.replace(next.id, {
+          state: 'complete',
+          finishedAt: this.now(),
+          evidence: { code: 'inventory_checklist_verified', detail },
+        });
+        this.nextEligibleAt = this.now() + DISPATCH_COOLDOWN_MS;
+        this.setStatus('succeeded', 'inventory_checklist_verified', detail, next.id);
+        void Promise.resolve(this.agent.openChat?.(`Agenda step done: ${describeAgendaEntry(next)}.`))
+          .catch(() => { /* chat is best effort */ });
+        return;
+      }
+      if (next.reconciliations >= MAX_INVENTORY_RECONCILIATIONS) {
+        const missing = checklist.unmet.map(item => `${item.target} ${item.count}/${item.quantity}`).join(', ');
+        const detail = `The final inventory plan did not converge after ${next.reconciliations} bounded corrections. Still missing: ${missing}.`;
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: { code: 'inventory_checklist_nonconvergent', detail },
+        });
+        this.setStatus('failed', 'inventory_checklist_nonconvergent', detail, next.id);
+        return;
+      }
+      const requirement = checklist.unmet[0];
+      const outcome = this.dispatchInventoryChecklistCorrection(next, requirement);
+      if (!outcome.accepted) {
+        const detail = outcome.detail || `Could not restore the ${requirement.target} inventory floor.`;
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: { code: outcome.code, detail },
+        });
+        this.setStatus('failed', outcome.code, detail, next.id);
+        return;
+      }
+      this.replace(next.id, {
+        state: 'active',
+        startedAt: this.now(),
+        executorId: outcome.executorId,
+        reconciliationTarget: requirement.target,
+        reconciliations: next.reconciliations + 1,
+        evidence: {
+          code: 'inventory_reconciliation_started',
+          detail: `Restoring ${requirement.target} from ${requirement.count} to the promised floor of ${requirement.quantity}.`,
+        },
+      });
+      this.setStatus(
+        'acting',
+        'inventory_reconciliation_started',
+        `Restoring final inventory floor: ${requirement.target} ${requirement.count}/${requirement.quantity}.`,
+        next.id,
+      );
+      return;
     }
 
     if (

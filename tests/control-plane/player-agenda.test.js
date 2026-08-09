@@ -388,6 +388,15 @@ test('parsePlayerAgenda returns null when nothing is agenda-worthy', () => {
   assert.equal(parsePlayerAgenda('Gabriel', 'I am building a shelter then gathering wood', {}, { resolveDirective: stubResolver }), null);
 });
 
+test('parsePlayerAgenda does not retype a model-selected item plan as construction', () => {
+  const plan = parsePlayerAgenda(
+    'Gabriel',
+    "Help me establish this landing area. Don't damage what I've already built. Gather a sensible starter supply, make whatever basic tools you need, and return here when you're finished.",
+    { bot: {} },
+  );
+  assert.equal(plan, null);
+});
+
 test('parsePlayerAgenda ignores explicit !command lines and empty input', () => {
   assert.equal(parsePlayerAgenda('Gabriel', '!assignMiningJob("iron_ore", 5)', {}, { resolveDirective: stubResolver }), null);
   assert.equal(parsePlayerAgenda('Gabriel', '', {}, { resolveDirective: stubResolver }), null);

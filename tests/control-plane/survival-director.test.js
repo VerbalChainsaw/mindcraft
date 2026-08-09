@@ -132,6 +132,53 @@ test('Given durable player work, routine survival upkeep cannot seize its idle t
   assert.equal(director.snapshot().phase, 'waiting');
 });
 
+test('Given command autonomy, optional drop collection stays idle while bodily survival remains available', async () => {
+  const agent = createAgent();
+  agent.runtime = {
+    autonomy: 'command',
+    survival: { ...POLICY, usefulDrops: 'collect' },
+  };
+  const commands = [];
+  let situation = {
+    held: false,
+    idle: true,
+    health: 20,
+    hunger: 20,
+    urgentDanger: false,
+    food: [],
+    armor: [],
+    usefulDrops: [{ name: 'coal', id: 7, distance: 3 }],
+    timeOfDay: 6000,
+    weather: 'Clear',
+  };
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => situation,
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'survival-command-policy-1',
+        phase: 'succeeded',
+        code: 'skill_consumed',
+        target: { name: 'bread' },
+        retryable: false,
+      };
+    },
+  });
+
+  director.update();
+  await settle();
+  assert.deepEqual(commands, []);
+
+  situation = {
+    ...situation,
+    hunger: 5,
+    food: [{ name: 'bread', count: 2, foodPoints: 5, saturation: 6 }],
+  };
+  director.update();
+  await settle();
+  assert.deepEqual(commands, ['!consume("bread")']);
+});
+
 test('Given an unresolved critical bodily need, SurvivalDirector acquires food and blocks lower-priority jobs', () => {
   const agent = createAgent();
   const director = new SurvivalDirector(agent, {

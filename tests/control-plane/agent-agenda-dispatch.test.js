@@ -2,7 +2,143 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Agent } from '../../src/agent/agent.js';
+import { getCommand } from '../../src/agent/commands/index.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
+
+test('an ordered item plan is validated and persisted atomically before execution', () => {
+  let saved = [];
+  let wakes = 0;
+  let submittedGoal = null;
+  const store = {
+    lastError: null,
+    load: () => [],
+    save(entries) { saved = entries.map(entry => ({ ...entry })); },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot: { inventory: { slots: [{ name: 'oak_log', count: 12 }] } },
+    behavior_arbiter: { wake() { wakes += 1; } },
+    goal_director: {
+      submit(goal) {
+        submittedGoal = goal;
+        return { accepted: true, id: goal.id };
+      },
+    },
+  };
+  const director = new AgendaDirector(agent, { store, now: () => 9_000 });
+  agent.agenda_director = director;
+
+  const command = getCommand('!queueItemPlan');
+  const accepted = command.perform(agent, 'logs:8|planks:16', 'Gabriel', true);
+  assert.match(accepted, /durable 4-step item plan/i);
+  assert.deepEqual(director.entries.map(entry => [entry.kind, entry.target, entry.quantity, entry.recipient]), [
+    ['acquire', 'logs', 8, ''],
+    ['acquire', 'planks', 16, ''],
+    ['inventory_checklist', '', 0, ''],
+    ['goto', '', 0, 'Gabriel'],
+  ]);
+  assert.deepEqual(director.entries[2].inventoryRequirements, [
+    { target: 'logs', quantity: 8 },
+    { target: 'planks', quantity: 16 },
+  ]);
+  assert.deepEqual(director.entries.slice(0, 2).map(entry => entry.quantityMode), ['minimum', 'minimum']);
+  assert.equal(director.dispatch(director.entries[0]).accepted, true);
+  assert.equal(submittedGoal.quantityMode, 'minimum');
+  assert.equal(submittedGoal.checkpoint.baselineInventory, 12);
+  assert.equal(submittedGoal.checkpoint.targetInventory, 8, 'fresh inventory satisfies a compiled floor without requesting eight more');
+  assert.equal(saved.length, 4);
+  assert.equal(wakes, 1);
+  assert.deepEqual(agent.last_agenda_plan_submission, {
+    generation: 1,
+    requestId: null,
+    selectedSkill: null,
+    accepted: true,
+    code: 'item_plan_accepted',
+    entryIds: director.entries.map(entry => entry.id),
+  });
+
+  const before = JSON.stringify(director.entries);
+  const rejected = director.addMany([
+    { kind: 'acquire', requester: 'Gabriel', target: 'logs', quantity: 1 },
+    { kind: 'not_real', requester: 'Gabriel', target: 'stone', quantity: 1 },
+  ]);
+  assert.equal(rejected.accepted, false);
+  assert.equal(JSON.stringify(director.entries), before, 'a malformed later step must not publish a partial plan');
+});
+
+test('a final inventory checklist repairs a floor consumed by a later step and re-verifies the aggregate', () => {
+  let now = 20_000;
+  let saved = [];
+  let submittedGoal = null;
+  const bot = {
+    inventory: { slots: [{ name: 'coal', count: 4 }, { name: 'torch', count: 16 }] },
+  };
+  const goalDirector = {
+    activeGoal: null,
+    lastGoal: null,
+    submit(goal) {
+      submittedGoal = goal;
+      this.activeGoal = goal;
+      return { accepted: true, id: goal.id };
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot,
+    actions: { executing: false },
+    job_director: { activeOrder: null },
+    goal_director: goalDirector,
+    isOperatorHeld: () => false,
+  };
+  const director = new AgendaDirector(agent, {
+    now: () => now,
+    resolveTarget: (_bot, name) => ({
+      requestedName: name,
+      canonicalName: name,
+      inventoryName: name,
+      acquisitionName: name,
+      acquisitionKind: 'planned',
+    }),
+    store: {
+      lastError: null,
+      load: () => [],
+      save(entries) { saved = entries.map(entry => ({ ...entry })); },
+    },
+  });
+  director.add({
+    kind: 'inventory_checklist',
+    requester: 'Gabriel',
+    inventoryRequirements: [
+      { target: 'coal', quantity: 8 },
+      { target: 'torch', quantity: 16 },
+    ],
+  });
+
+  director.update();
+  assert.equal(director.activeEntry()?.kind, 'inventory_checklist');
+  assert.equal(director.activeEntry()?.reconciliationTarget, 'coal');
+  assert.equal(director.activeEntry()?.reconciliations, 1);
+  assert.equal(submittedGoal.quantityMode, 'minimum');
+  assert.equal(submittedGoal.quantity, 8);
+  assert.equal(submittedGoal.checkpoint.baselineInventory, 4);
+  assert.equal(submittedGoal.checkpoint.targetInventory, 8);
+
+  bot.inventory.slots[0].count = 8;
+  goalDirector.activeGoal = null;
+  goalDirector.lastGoal = {
+    ...submittedGoal,
+    phase: 'complete',
+    evidence: { code: 'inventory_verified', detail: 'Coal floor restored.' },
+  };
+  director.update();
+  assert.equal(director.entries[0].state, 'pending', 'a correction completion rechecks rather than declaring the aggregate done');
+
+  now += 1_000;
+  director.update();
+  assert.equal(director.entries[0].state, 'complete');
+  assert.equal(director.entries[0].evidence.code, 'inventory_checklist_verified');
+  assert.equal(saved.at(-1).state, 'complete');
+});
 
 // Drive Agent.dispatchPlayerAgenda against a minimal fake `this`, so the
 // append / interrupt / takeover branching is verified without spinning a bot.

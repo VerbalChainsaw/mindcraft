@@ -411,7 +411,14 @@ export class SurvivalDirector extends BehaviorDirector {
     let intent;
     try {
       situation = this.getSituation(this.agent);
-      intent = chooseSurvivalIntent(situation, policy);
+      // Command autonomy already suppresses the idle item-collecting mode. Keep
+      // the same authority boundary here: nearby drops are optional upkeep, not
+      // a bodily survival need that may invent movement after player work ends.
+      // Explicit pickup commands and typed acquisition goals remain unaffected.
+      const effectivePolicy = this.agent.runtime?.autonomy === 'command'
+        ? { ...policy, usefulDrops: 'ignore' }
+        : policy;
+      intent = chooseSurvivalIntent(situation, effectivePolicy);
     } catch (error) {
       this.fail('situation_unavailable', error?.message || error, true);
       this.nextEligibleAt = Date.now() + FAILURE_COOLDOWN_MS;

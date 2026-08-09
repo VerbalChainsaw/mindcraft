@@ -22,6 +22,7 @@ const GAMEPLAY_OPERATING_RULES = [
     'Treat SITUATIONAL_AWARENESS, INVENTORY, command results, and the connected Minecraft registry as authoritative.',
     'For an unfamiliar item or block, use !inspectMinecraft with its name; use !getCraftingPlan when a recipe chain is unclear.',
     'For an acquisition or delivery outcome, prefer one typed !requestItemGoal; its causal planner derives and verifies prerequisites one physical step at a time.',
+    'When one broad player outcome requires you to choose several concrete inventory outputs, compile the complete final inventory floors once with !queueItemPlan. Account for current inventory, use real registry-backed targets, and never invent an umbrella target such as starter_kit. A typed runtime barrier re-verifies the whole promised set after production.',
     'For complex work, compose available primitives: observe, preflight tools/materials/reachability/hazards, act once, verify the result, then adapt.',
     'Use canonical Minecraft names from inspection. Never invent an item, tool requirement, recipe, location, action result, or completed step.',
 ].join('\n');

@@ -186,6 +186,19 @@ export function constructionRequiredFunctions(message) {
     return [...required].sort();
 }
 
+function describesMultiBlockConstruction(text, requiredFunctions = []) {
+    if (requiredFunctions.length > 0) return true;
+    return /\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|cabin|shack|lodge|tower|watchtower|lookout|bridge|walkway|catwalk|wall|barrier|rampart|pen|paddock|corral|enclosure|platform|deck|floor|pillar|column|post|stairs|staircase|steps|roof|road|path|dock|pier|tunnel|loop|track|railway|windmill|mill|machine|contraption|statue|monument|gazebo|barn|workshop)\b/.test(text);
+}
+
+function describesModelSelectedItemPlan(text) {
+    const asksForInventoryWork = /\b(?:gather|collect|acquire|secure|prepare|make|craft|stock up on)\b/.test(text);
+    const namesASet = /\b(?:supplies|resources|materials|provisions|gear|equipment|tools|items)\b/.test(text);
+    const delegatesSelection = /\b(?:sensible|basic|essential|starter|useful|whatever|whichever|what you need|you need|needed)\b/.test(text);
+    const explicitlyBuilds = /\b(?:build|construct|erect|raise|put up)\b.{0,80}\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|tower|bridge|wall|pen|platform|roof|dock|barn|workshop)\b/.test(text);
+    return asksForInventoryWork && namesASet && delegatesSelection && !explicitlyBuilds;
+}
+
 export function resolvePlayerDirective(playerName, message, context = {}) {
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
@@ -639,6 +652,23 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
+    // A broad delegated inventory outcome needs cognition to choose concrete
+    // outputs, but it must not let cognition improvise physical actions one at
+    // a time. Compile one complete registry-backed ordered plan first; the
+    // existing Agenda and GoalDirector remain the durable planner/executor
+    // boundary after that bounded semantic choice.
+    if (describesModelSelectedItemPlan(text)) {
+        const shouldReturn = /\b(?:return|come back|head back|go back)\b/.test(text);
+        return {
+            command: null,
+            response: '',
+            releasesHold: true,
+            deferToModel: true,
+            assignmentKind: 'item_plan',
+            modelInstruction: `This player authorized one broad inventory outcome whose concrete outputs require bounded judgment. Compile the COMPLETE output list before any physical work. Return exactly one !queueItemPlan command in your first response, with 1-12 real connected-registry item or supported-family targets encoded as canonical_item:minimum_carried_quantity entries separated by |, requester ${commandString(playerName)}, and return_to_player ${shouldReturn}. Each quantity is the useful final inventory floor, so account for the authoritative current INVENTORY instead of asking for duplicate tools or redundant stock. Choose a conservative useful set that directly fits the player's request. The runtime re-verifies the entire final set, so list order is not a correctness mechanism. Do not invent umbrella targets such as starter_kit, basic_tools, supplies, or materials. Do not include recipe prerequisites merely because they are prerequisites; GoalDirector derives recipes, tools, fuel, and workstations. Do not issue search, inspection, collection, crafting, movement, Builder, or conversational questions first.`,
+        };
+    }
+
     // --- Designed structures from templates ----------------------------------
     // These fill in a design template and skip the model entirely. The model
     // still owns anything shaped unusually: it gets the same templates as a
@@ -720,6 +750,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     if (
         /\b(?:build|construct|make|erect|raise|put up|lay out|assemble)\b/.test(text)
         && !/\b(?:shelter|hut|small house|safe house)\b/.test(text)
+        && describesMultiBlockConstruction(text, requiredFunctions)
     ) {
         const requiredFunctionContract = requiredFunctions.length > 0
             ? `The validator requires the completed blueprint to produce these functions: ${requiredFunctions.join(', ')}. Function names are metadata, never DSL arguments. `

@@ -656,6 +656,13 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   for (const [segmentIndex, segment] of segments.entries()) {
     const directive = resolveDirective(playerName, segment, context);
     if (directive?.deferToModel === true) {
+      // Item-plan cognition compiles one atomic ordered checklist from the
+      // player's complete utterance. Turning that deferred assignment into a
+      // construction barrier both changes its type and drops the broader
+      // inventory contract. Leave the whole line to Agent's correlated
+      // item-plan compiler. Construction remains the only deferred assignment
+      // represented by a durable Builder barrier here.
+      if (directive.assignmentKind === 'item_plan') return null;
       steps.push({
         segment,
         command: null,

@@ -5,6 +5,7 @@ import * as mc from '../../utils/mcdata.js';
 
 const GOAL_KINDS = new Set(['acquire', 'deliver']);
 const COMPLETION_KINDS = new Set(['inventory', 'main_hand', 'off_hand', 'delivery']);
+const QUANTITY_MODES = new Set(['additional', 'minimum']);
 const GOAL_PHASES = new Set([
   'assess',
   'acquire',
@@ -592,6 +593,13 @@ export function normalizeGoalContract(raw) {
   }
   const quantity = finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY);
   const completion = normalizeCompletion(raw.completion, kind, quantity);
+  const quantityMode = canonicalName(raw.quantityMode || 'additional');
+  if (!QUANTITY_MODES.has(quantityMode)) {
+    throw new TypeError('Goal quantity mode must be additional or minimum.');
+  }
+  if (quantityMode === 'minimum' && (kind !== 'acquire' || completion.kind !== 'inventory')) {
+    throw new TypeError('Minimum quantity mode is only valid for inventory acquisition goals.');
+  }
   const attempts = finiteInteger(raw.attempts, 0, 0, 32);
   const maxAttempts = finiteInteger(raw.maxAttempts, 4, 1, 8);
   const maxSubgoals = finiteInteger(raw.maxSubgoals, 16, 4, MAX_SUBGOALS);
@@ -615,6 +623,7 @@ export function normalizeGoalContract(raw) {
     request: boundedText(raw.request, 500),
     target: normalizeTarget(raw.target),
     quantity,
+    quantityMode,
     completion,
     destination: Object.freeze(kind === 'deliver'
       ? { kind: 'player', player: destinationPlayer }
@@ -643,11 +652,19 @@ export function createItemGoalContract({
   request = '',
   source = 'player',
   baselineInventory = 0,
+  quantityMode = 'additional',
   completion = 'inventory',
   workstationConstraint = null,
 } = {}) {
   const numericQuantity = finiteInteger(quantity, 1, 1, MAX_QUANTITY);
   const completionKind = normalizeCompletion(completion, kind, numericQuantity).kind;
+  const normalizedQuantityMode = canonicalName(quantityMode || 'additional');
+  if (!QUANTITY_MODES.has(normalizedQuantityMode)) {
+    throw new TypeError('Goal quantity mode must be additional or minimum.');
+  }
+  if (normalizedQuantityMode === 'minimum' && (kind !== 'acquire' || completionKind !== 'inventory')) {
+    throw new TypeError('Minimum quantity mode is only valid for inventory acquisition goals.');
+  }
   return normalizeGoalContract({
     id: `goal-${randomUUID()}`,
     kind,
@@ -656,6 +673,7 @@ export function createItemGoalContract({
     request,
     target,
     quantity: numericQuantity,
+    quantityMode: normalizedQuantityMode,
     completion: { kind: completionKind },
     destination: kind === 'deliver'
       ? { kind: 'player', player: destinationPlayer || requester }
@@ -677,7 +695,9 @@ export function createItemGoalContract({
       targetInventory: kind === 'acquire'
         ? ['main_hand', 'off_hand'].includes(completionKind)
           ? numericQuantity
-          : baselineInventory + numericQuantity
+          : normalizedQuantityMode === 'minimum'
+            ? numericQuantity
+            : baselineInventory + numericQuantity
         : baselineInventory,
       delivered: 0,
     },
@@ -797,5 +817,7 @@ export function goalContractDescription(goal) {
   }
   if (goal.completion.kind === 'main_hand') return `acquire and equip ${target} in the main hand`;
   if (goal.completion.kind === 'off_hand') return `acquire and equip ${target} in the offhand`;
-  return `acquire ${goal.quantity} additional ${target}`;
+  return goal.quantityMode === 'minimum'
+    ? `acquire at least ${goal.quantity} ${target}`
+    : `acquire ${goal.quantity} additional ${target}`;
 }

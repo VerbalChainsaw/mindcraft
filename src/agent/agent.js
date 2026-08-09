@@ -64,7 +64,9 @@ const HOLD_SAFE_COMMANDS = new Set([
 ]);
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
+const PLAYER_ITEM_PLAN_COMMANDS = new Set(['!queueItemPlan']);
 const MAX_CONSTRUCTION_COMPILATION_TURNS = 6;
+const MAX_ITEM_PLAN_COMPILATION_TURNS = 3;
 const MAX_INGAME_CHAT_CHARS = 240;
 const MIN_INGAME_CHAT_INTERVAL_MS = 450;
 // One bounded entity read at roughly 7Hz. Cheap enough to run continuously and
@@ -105,6 +107,26 @@ export function correlatedPersistentJobSubmissionAccepted({
         && submission?.submittedOrderId
         && submission.submittedOrderId === submission.activeOrderId
         && submission.activeOrderId === activeOrder?.id
+    );
+}
+
+export function correlatedAgendaPlanSubmissionAccepted({
+    deferredAssignment,
+    commandName,
+    previousGeneration,
+    submission,
+    agendaEntries,
+} = {}) {
+    const durableIds = new Set((Array.isArray(agendaEntries) ? agendaEntries : []).map(entry => entry?.id).filter(Boolean));
+    return Boolean(
+        deferredAssignment?.kind === 'item_plan'
+        && PLAYER_ITEM_PLAN_COMMANDS.has(commandName)
+        && Number(submission?.generation) > (Number(previousGeneration) || 0)
+        && submission?.selectedSkill === commandName
+        && submission?.accepted === true
+        && Array.isArray(submission?.entryIds)
+        && submission.entryIds.length > 0
+        && submission.entryIds.every(id => durableIds.has(id))
     );
 }
 
@@ -1072,7 +1094,10 @@ export class Agent {
                     memoryBank: this.memory_bank,
                 });
             if (directive?.deferToModel === true) {
-                // Blueprint compilation is cognition, not physical ownership.
+                const assignmentKind = directive.assignmentKind === 'item_plan'
+                    ? 'item_plan'
+                    : 'construction';
+                // Blueprint/item-plan compilation is cognition, not physical ownership.
                 // Retain an existing Stop while the model works; the eventual
                 // validated construction command releases it at the same
                 // ownership boundary as every other player action. Capturing
@@ -1088,9 +1113,10 @@ export class Agent {
                     }
                 }
                 if (!this.isOperatorHeld()) {
-                    this.holdPosition('construction assignment pending');
+                    this.holdPosition(`${assignmentKind.replace('_', ' ')} assignment pending`);
                 }
                 deferredModelAssignment = {
+                    kind: assignmentKind,
                     holdGeneration: this.operator_hold_generation,
                     agendaEntryId: queuedConstruction?.entryId || null,
                     lastFailureSignature: '',
@@ -1101,13 +1127,19 @@ export class Agent {
                     Math.max(
                         1,
                         Math.min(
-                            MAX_CONSTRUCTION_COMPILATION_TURNS,
+                            assignmentKind === 'item_plan'
+                                ? MAX_ITEM_PLAN_COMPILATION_TURNS
+                                : MAX_CONSTRUCTION_COMPILATION_TURNS,
                             Number(this.runtime?.limits?.maxPromptTurns) || 3,
                         ),
                     ),
                 );
                 this.self_prompter.interruptForManualCommand();
-                this.role_director.deferForManualCommand('Player design request is being interpreted.');
+                this.role_director.deferForManualCommand(
+                    assignmentKind === 'item_plan'
+                        ? 'Player item plan is being compiled.'
+                        : 'Player design request is being interpreted.',
+                );
                 if (directive.modelInstruction) {
                     await this.history.add('system', directive.modelInstruction);
                 }
@@ -1220,10 +1252,15 @@ export class Agent {
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
 
-                if (deferredModelAssignment && !PLAYER_DESIGN_COMMANDS.has(command_name)) {
+                const allowedDeferredCommands = deferredModelAssignment?.kind === 'item_plan'
+                    ? PLAYER_ITEM_PLAN_COMMANDS
+                    : PLAYER_DESIGN_COMMANDS;
+                if (deferredModelAssignment && !allowedDeferredCommands.has(command_name)) {
                     await this.history.add(
                         'system',
-                        `No command was executed: this construction assignment requires !buildStructure or !designStructure, not ${command_name}.`,
+                        deferredModelAssignment.kind === 'item_plan'
+                            ? `No command was executed: this item-plan assignment requires one !queueItemPlan, not ${command_name}.`
+                            : `No command was executed: this construction assignment requires !buildStructure or !designStructure, not ${command_name}.`,
                     );
                     continue;
                 }
@@ -1299,6 +1336,9 @@ export class Agent {
                 const previousJobSubmissionGeneration = Number(
                     this.last_persistent_job_submission?.generation,
                 ) || 0;
+                const previousAgendaPlanSubmissionGeneration = Number(
+                    this.last_agenda_plan_submission?.generation,
+                ) || 0;
                 const commandOwner = self_prompt || source === 'system' ? 'autonomy' : 'player';
                 let execute_res = await executeCommand(this, res, {
                     owner: commandOwner,
@@ -1311,15 +1351,25 @@ export class Agent {
                 if (execute_res)
                     this.history.add('system', execute_res);
                 const submittedJob = this.last_persistent_job_submission;
-                const deferredAssignmentAccepted = correlatedPersistentJobSubmissionAccepted({
-                    deferredAssignment: deferredModelAssignment,
-                    commandName: command_name,
-                    previousGeneration: previousJobSubmissionGeneration,
-                    submission: submittedJob,
-                    activeOrder: this.job_director?.activeOrder,
-                });
+                const submittedAgendaPlan = this.last_agenda_plan_submission;
+                const deferredAssignmentAccepted = deferredModelAssignment?.kind === 'item_plan'
+                    ? correlatedAgendaPlanSubmissionAccepted({
+                        deferredAssignment: deferredModelAssignment,
+                        commandName: command_name,
+                        previousGeneration: previousAgendaPlanSubmissionGeneration,
+                        submission: submittedAgendaPlan,
+                        agendaEntries: this.agenda_director?.entries,
+                    })
+                    : correlatedPersistentJobSubmissionAccepted({
+                        deferredAssignment: deferredModelAssignment,
+                        commandName: command_name,
+                        previousGeneration: previousJobSubmissionGeneration,
+                        submission: submittedJob,
+                        activeOrder: this.job_director?.activeOrder,
+                    });
                 if (deferredAssignmentAccepted) {
-                    if (deferredModelAssignment.agendaEntryId) {
+                    const acceptedAssignmentKind = deferredModelAssignment.kind;
+                    if (acceptedAssignmentKind === 'construction' && deferredModelAssignment.agendaEntryId) {
                         const binding = this.agenda_director?.bindConstruction?.(
                             deferredModelAssignment.agendaEntryId,
                             submittedJob.activeOrderId,
@@ -1333,11 +1383,15 @@ export class Agent {
                         }
                     }
                     deferredModelAssignment = null;
-                    this.releaseOperatorHold('player design work order accepted');
+                    this.releaseOperatorHold(
+                        acceptedAssignmentKind === 'item_plan'
+                            ? 'player item plan accepted'
+                            : 'player design work order accepted',
+                    );
                     this.history.save();
                     break;
                 }
-                if (deferredModelAssignment && PLAYER_DESIGN_COMMANDS.has(command_name)) {
+                if (deferredModelAssignment && allowedDeferredCommands.has(command_name)) {
                     const failureSignature = String(execute_res || '')
                         .replace(/\s+/g, ' ')
                         .trim()
@@ -1350,7 +1404,7 @@ export class Agent {
                         if (deferredModelAssignment.repeatedFailures >= 2) {
                             await this.history.add(
                                 'system',
-                                'Construction compilation stopped because the same rejected design result repeated without progress.',
+                                `${deferredModelAssignment.kind === 'item_plan' ? 'Item-plan' : 'Construction'} compilation stopped because the same rejected result repeated without progress.`,
                             );
                             break;
                         }
@@ -1367,16 +1421,23 @@ export class Agent {
             }
             else { // conversation response
                 if (deferredModelAssignment) {
-                    const detail = 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.';
+                    const compilingItemPlan = deferredModelAssignment.kind === 'item_plan';
+                    const detail = compilingItemPlan
+                        ? 'I did not produce a valid bounded item plan, so no work was queued. I am holding position.'
+                        : 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.';
                     await this.history.add(this.name, detail);
                     await this.history.add(
                         'system',
-                        'The construction request remains unassigned. Transcript claims are not durable work; only an active JobDirector order may claim construction is registered or underway.',
+                        compilingItemPlan
+                            ? 'The item request remains unassigned. Transcript claims are not durable work; only a correlated persisted Agenda plan may claim the checklist is queued.'
+                            : 'The construction request remains unassigned. Transcript claims are not durable work; only an active JobDirector order may claim construction is registered or underway.',
                     );
                     const sameRetainedHold = deferredModelAssignment.holdGeneration !== null
                         && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
                     if (!this.isOperatorHeld() || sameRetainedHold) {
-                        this.holdPosition('player design request was not compiled');
+                        this.holdPosition(compilingItemPlan
+                            ? 'player item plan was not compiled'
+                            : 'player design request was not compiled');
                     }
                     this.history.save();
                     this.routeResponse(source, detail);
@@ -1392,14 +1453,15 @@ export class Agent {
         } finally {
             if (deferredModelAssignment) {
                 const interrupted = checkInterrupt();
+                const compilingItemPlan = deferredModelAssignment.kind === 'item_plan';
                 const assignmentState = interrupted ? 'interrupted' : 'compilation_exhausted';
                 const code = interrupted
-                    ? 'construction_compilation_interrupted'
-                    : 'construction_compilation_exhausted';
+                    ? `${compilingItemPlan ? 'item_plan' : 'construction'}_compilation_interrupted`
+                    : `${compilingItemPlan ? 'item_plan' : 'construction'}_compilation_exhausted`;
                 const detail = interrupted
-                    ? 'Construction compilation was interrupted before an exact Builder order was accepted.'
-                    : 'Construction compilation ended without an accepted and bound Builder order.';
-                if (deferredModelAssignment.agendaEntryId) {
+                    ? `${compilingItemPlan ? 'Item-plan' : 'Construction'} compilation was interrupted before a correlated durable assignment was accepted.`
+                    : `${compilingItemPlan ? 'Item-plan' : 'Construction'} compilation ended without a correlated durable assignment.`;
+                if (!compilingItemPlan && deferredModelAssignment.agendaEntryId) {
                     this.agenda_director?.failConstructionAssignment?.(
                         deferredModelAssignment.agendaEntryId,
                         assignmentState,
@@ -1407,7 +1469,11 @@ export class Agent {
                         detail,
                     );
                 }
-                if (!this.isOperatorHeld()) this.holdPosition('construction assignment did not settle');
+                if (!this.isOperatorHeld()) {
+                    this.holdPosition(compilingItemPlan
+                        ? 'item plan assignment did not settle'
+                        : 'construction assignment did not settle');
+                }
                 await this.history.add('system', detail);
                 deferredModelAssignment = null;
             }

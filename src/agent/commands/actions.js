@@ -35,10 +35,121 @@ import {
     inventoryCountForGoalTarget,
     resolveItemGoalTarget,
 } from '../runtime/goal-contract.js';
+import { buildPrerequisitePlan } from '../runtime/prerequisite-planner.js';
 
 
 const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
 const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
+const MAX_ORDERED_ITEM_PLAN_STEPS = 12;
+
+function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = false) {
+    const request = agent.actions?.currentRequestContext?.() || null;
+    const previousGeneration = Number(agent.last_agenda_plan_submission?.generation) || 0;
+    const recordSubmission = ({ accepted, code, entryIds = [] }) => {
+        agent.last_agenda_plan_submission = Object.freeze({
+            generation: previousGeneration + 1,
+            requestId: request?.requestId || null,
+            selectedSkill: request?.selectedSkill || null,
+            accepted: accepted === true,
+            code,
+            entryIds: Object.freeze(entryIds.slice(0, MAX_ORDERED_ITEM_PLAN_STEPS + 2)),
+        });
+    };
+    const reject = (code, message) => {
+        recordSubmission({ accepted: false, code });
+        return message;
+    };
+    const director = agent.agenda_director;
+    if (!director?.addMany) {
+        return reject('agenda_unavailable', 'The durable agenda is unavailable on this bot.');
+    }
+    const tokens = String(encodedPlan || '')
+        .split('|')
+        .map(value => value.trim())
+        .filter(Boolean);
+    if (tokens.length < 1 || tokens.length > MAX_ORDERED_ITEM_PLAN_STEPS) {
+        return reject(
+            'item_plan_size_invalid',
+            `The item plan must contain between 1 and ${MAX_ORDERED_ITEM_PLAN_STEPS} concrete outputs.`,
+        );
+    }
+
+    const entries = [];
+    const inventoryRequirements = [];
+    const seen = new Set();
+    for (const token of tokens) {
+        const match = /^([a-z0-9_]{1,80}):([1-9][0-9]{0,3})$/.exec(token);
+        if (!match) {
+            return reject('item_plan_entry_invalid', `The item plan was not queued: '${token.slice(0, 100)}' must use canonical_item:quantity.`);
+        }
+        const quantity = Number.parseInt(match[2], 10);
+        if (quantity < 1 || quantity > 2304) {
+            return reject('item_plan_quantity_invalid', `The item plan was not queued: ${match[1]} quantity must be between 1 and 2304.`);
+        }
+        const target = resolveItemGoalTarget(agent.bot, match[1]);
+        if (!target || target.acquisitionKind === 'unsupported') {
+            return reject('item_plan_target_unsupported', `The item plan was not queued: '${match[1]}' has no connected-registry deterministic acquisition path.`);
+        }
+        if (!target.family) {
+            const preflight = buildPrerequisitePlan(agent.bot, {
+                target: target.inventoryName,
+                quantity,
+                completion: 'inventory',
+            });
+            if (preflight.status === 'blocked') {
+                return reject(
+                    'item_plan_target_unplannable',
+                    `The item plan was not queued: '${match[1]}' has an unresolved deterministic prerequisite (${preflight.detail}${preflight.blocker ? ` Blocking prerequisite: ${preflight.blocker}.` : ''}). Choose another useful output or omit it.`,
+                );
+            }
+        }
+        const canonicalTarget = target.family || target.canonicalName;
+        if (seen.has(canonicalTarget)) {
+            return reject('item_plan_target_duplicate', `The item plan was not queued: '${canonicalTarget}' appears more than once.`);
+        }
+        seen.add(canonicalTarget);
+        inventoryRequirements.push({ target: canonicalTarget, quantity });
+        entries.push({
+            kind: 'acquire',
+            target: canonicalTarget,
+            quantity,
+            // A model-compiled loadout describes the useful inventory state
+            // the player should have when the plan finishes. Re-evaluate that
+            // floor from fresh Minecraft state at dispatch; do not blindly add
+            // the same quantity to stock already carried.
+            quantityMode: 'minimum',
+            requester: playerName,
+            note: `ordered item plan: ${canonicalTarget}`,
+        });
+    }
+    entries.push({
+        kind: 'inventory_checklist',
+        requester: playerName,
+        inventoryRequirements,
+        note: 'verify aggregate ordered item plan',
+    });
+    if (returnToPlayer === true) {
+        entries.push({
+            kind: 'goto',
+            requester: playerName,
+            recipient: playerName,
+            note: 'return after ordered item plan',
+        });
+    }
+
+    const result = director.addMany(entries);
+    if (result.accepted !== true) {
+        return reject(result.code || 'item_plan_rejected', `The item plan was not queued: ${result.detail || result.code}.`);
+    }
+    recordSubmission({
+        accepted: true,
+        code: 'item_plan_accepted',
+        entryIds: result.entries.map(entry => entry.id),
+    });
+    agent.behavior_arbiter?.wake?.('ordered_item_plan_queued');
+    return `Queued one durable ${result.entries.length}-step item plan: ${result.entries.map(entry => entry.description).join(', then ')}.`;
+}
+queueOrderedItemPlan.manualAutonomyTakeover = true;
 
 /**
  * Collection is allowed to search the world, but it may not treat the active
@@ -1786,6 +1897,17 @@ export const actionsList = [
             }
             return `Queued step ${result.position}: ${result.description}.`;
         }
+    },
+    {
+        name: '!queueItemPlan',
+        description: 'Atomically queue an ordered list of concrete minimum inventory outcomes through the existing durable Agenda and GoalDirector. Use this when a broad request requires choosing several real items. Never invent an umbrella item such as starter_kit. The encoded plan is canonical_item:minimum_quantity entries separated by |. A typed final barrier re-verifies the complete promised inventory and restores a floor if later work consumed it. The optional return flag adds a final return to the requesting player.',
+        compactDescription: 'Atomically queue a complete inventory-floor plan before any work starts. Syntax: !queueItemPlan("stone_axe:1|stone_pickaxe:1|torch:16|logs:16", "PlayerName", true). Each quantity is the minimum that should be carried, not an amount blindly added to current stock. Use only real connected-registry items or supported families. Never invent umbrella targets. GoalDirector derives recipes, tools, fuel, and workstations. A final typed check makes list order irrelevant to correctness; true queues a final return.',
+        params: {
+            'encoded_plan': { type: 'string', description: 'One to twelve canonical_item:quantity entries separated by |.' },
+            'player_name': { type: 'string', description: 'Canonical requesting player name.' },
+            'return_to_player': { type: 'boolean', description: 'Whether to return to the requesting player after every item outcome completes.' },
+        },
+        perform: queueOrderedItemPlan,
     },
     {
         name: '!setAutonomy',

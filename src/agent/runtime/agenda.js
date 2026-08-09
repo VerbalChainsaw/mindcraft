@@ -21,8 +21,11 @@ const SAFE_PLAYER = /^[A-Za-z0-9_]{1,16}$/;
 const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
 const MAX_ENTRIES = 24;
 const MAX_QUANTITY = 2304;
+const MAX_INVENTORY_REQUIREMENTS = 12;
+const MAX_INVENTORY_RECONCILIATIONS = 12;
 const MAX_NOTE = 160;
 const ACQUIRE_COMPLETIONS = new Set(['inventory', 'main_hand', 'off_hand']);
+const ACQUIRE_QUANTITY_MODES = new Set(['additional', 'minimum']);
 const SAFE_ENTRY_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const CONSTRUCTION_ASSIGNMENT_STATES = new Set([
   'queued',
@@ -52,6 +55,12 @@ const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
+  // A model-compiled inventory plan is one aggregate promise, not a bag of
+  // independently terminal item goals. This typed barrier performs no physical
+  // work itself. AgendaDirector reads fresh inventory and, when necessary,
+  // sequences one ordinary GoalDirector acquisition before checking the whole
+  // promise again.
+  inventory_checklist: Object.freeze({ executor: 'goal', needsTarget: false, needsQuantity: false }),
   deliver: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true, needsRecipient: true }),
   mine: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   harvest: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
@@ -252,6 +261,28 @@ function normalizeBaselineInventory(raw) {
     .sort((left, right) => left.name.localeCompare(right.name)));
 }
 
+function normalizeInventoryRequirements(raw) {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_INVENTORY_REQUIREMENTS) {
+    throw new TypeError(`An inventory checklist needs 1-${MAX_INVENTORY_REQUIREMENTS} typed requirements.`);
+  }
+  const seen = new Set();
+  return Object.freeze(raw.map(requirement => {
+    if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+      throw new TypeError('An inventory checklist requirement must be an object.');
+    }
+    const target = canonical(requirement.target);
+    if (!CANONICAL_NAME.test(target) || !isNameFaithful(requirement.target, target)) {
+      throw new TypeError('An inventory checklist requirement needs a canonical target name.');
+    }
+    if (seen.has(target)) throw new TypeError(`Inventory checklist target '${target}' is duplicated.`);
+    seen.add(target);
+    return Object.freeze({
+      target,
+      quantity: finiteInteger(requirement.quantity, 1, 1, MAX_QUANTITY),
+    });
+  }));
+}
+
 /**
  * Validate and canonicalize one agenda entry. Throws with a specific reason so
  * a rejected request can tell the player exactly what was wrong.
@@ -296,6 +327,15 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       : '';
   if (kind === 'acquire' && !ACQUIRE_COMPLETIONS.has(completion)) {
     throw new TypeError('Agenda acquire completion must be inventory, main_hand, or off_hand.');
+  }
+  const quantityMode = kind === 'acquire'
+    ? canonical(raw.quantityMode || 'additional')
+    : '';
+  if (kind === 'acquire' && !ACQUIRE_QUANTITY_MODES.has(quantityMode)) {
+    throw new TypeError('Agenda acquire quantity mode must be additional or minimum.');
+  }
+  if (kind === 'acquire' && quantityMode === 'minimum' && completion !== 'inventory') {
+    throw new TypeError('Minimum quantity mode is only valid for inventory acquisition.');
   }
   if (kind === 'acquire' && completion !== 'inventory' && finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) !== 1) {
     throw new TypeError('An agenda hand-equipment step must request exactly one item.');
@@ -363,6 +403,16 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       ? canonical(raw.assignmentState)
       : 'queued')
     : '';
+  const inventoryRequirements = kind === 'inventory_checklist'
+    ? normalizeInventoryRequirements(raw.inventoryRequirements)
+    : null;
+  const reconciliationTarget = kind === 'inventory_checklist'
+    ? canonical(raw.reconciliationTarget)
+    : '';
+  if (
+    reconciliationTarget
+    && !inventoryRequirements.some(requirement => requirement.target === reconciliationTarget)
+  ) throw new TypeError('An inventory checklist correction target must belong to its requirements.');
 
   return Object.freeze({
     id: identity,
@@ -370,6 +420,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     executor: spec.executor,
     target,
     quantity: spec.needsQuantity ? finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) : 0,
+    ...(kind === 'acquire' ? { quantityMode } : {}),
     ...(baselineInventory ? { baselineInventory } : {}),
     ...(kind === 'prepare_food'
       ? { baselineFoodPoints: finiteInteger(raw.baselineFoodPoints, 0, 0, MAX_QUANTITY) }
@@ -394,6 +445,16 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       ? Object.freeze({ requiredFunctions: Object.freeze(requiredFunctions) })
       : null,
     assignmentState,
+    ...(inventoryRequirements ? {
+      inventoryRequirements,
+      reconciliationTarget,
+      reconciliations: finiteInteger(
+        raw.reconciliations,
+        0,
+        0,
+        MAX_INVENTORY_RECONCILIATIONS,
+      ),
+    } : {}),
     note: boundedText(raw.note),
     state,
     // Correlates a durable agenda entry with the exact GoalDirector or
@@ -418,8 +479,11 @@ export function describeAgendaEntry(entry) {
   const readable = String(entry.target || '').replace(/_/g, ' ');
   switch (entry.kind) {
     case 'acquire': return entry.completion === 'inventory'
-      ? `get ${entry.quantity} ${readable}`
+      ? entry.quantityMode === 'minimum'
+        ? `ensure at least ${entry.quantity} ${readable}`
+        : `get ${entry.quantity} additional ${readable}`
       : `get and equip ${readable} in the ${entry.completion === 'main_hand' ? 'main hand' : 'offhand'}`;
+    case 'inventory_checklist': return `verify ${entry.inventoryRequirements.length} final inventory floor${entry.inventoryRequirements.length === 1 ? '' : 's'}`;
     case 'deliver': return `deliver ${entry.quantity} ${readable} to ${entry.recipient}`;
     case 'mine': return `mine ${entry.quantity} ${readable}`;
     case 'harvest': return `harvest ${entry.quantity} ${readable}`;

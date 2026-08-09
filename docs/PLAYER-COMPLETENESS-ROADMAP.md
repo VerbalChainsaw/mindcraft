@@ -70,6 +70,19 @@ resource no-progress, dishonest continuation or replay, then a genuinely
 missing gameplay domain. Keep passed mechanics frozen unless later play shows
 a materially different regression.
 
+The first landing-area play request has now crossed that boundary. One natural
+request delegated selection of a sensible starter supply without naming each
+item. The model made that bounded semantic choice once; a typed Agenda then
+owned minimum carried floors for four stone tools, logs, cobblestone, coal, and
+torches, while GoalDirector and ActionManager retained all physical work. The
+aggregate verifier caught coal consumed by torch crafting and a torch-floor
+change during recovery, restored both through ordinary acquire goals, and only
+then returned to the player. Paper verified the complete carried set, health
+20, full air, and a stable nearby idle position. Command-only companions also
+leave optional nearby debris alone rather than allowing survival upkeep to
+invent movement after player work. This proves one broad selected loadout, not
+arbitrary loadout quality or every possible output family.
+
 ## Delivered in this slice
 
 ### Behavioral controls
