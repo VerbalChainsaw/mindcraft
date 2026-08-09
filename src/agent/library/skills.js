@@ -4097,7 +4097,7 @@ function tacticalCombatSnapshot(bot, range, attributedEntityId=null) {
                 localGeometry: {
                     feet: String(feet?.name || 'unknown').slice(0, 64),
                     head: String(head?.name || 'unknown').slice(0, 64),
-                    onGround: entity.onGround === true,
+                    onGround: typeof entity.onGround === 'boolean' ? entity.onGround : null,
                 },
             };
         });
@@ -4105,6 +4105,7 @@ function tacticalCombatSnapshot(bot, range, attributedEntityId=null) {
         health: bot.health,
         hunger: bot.food,
         equipment: combatEquipmentSnapshot(bot),
+        targetEntityId: Number.isFinite(attributedEntityId) ? attributedEntityId : null,
         hostiles,
     };
 }

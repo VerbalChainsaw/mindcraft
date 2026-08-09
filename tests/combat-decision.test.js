@@ -137,3 +137,41 @@ test('an obscured nearest hostile does not suppress a more urgent loaded threat'
   assert.equal(decision.selected.lineOfSight, true);
   assert.deepEqual(decision.ranked[1].localGeometry, { feet: 'stone', head: 'stone', onGround: true });
 });
+
+test('scoped defense ends with its target and never sends melee after an airborne threat', () => {
+  const equipment = { melee: true, shield: true, bow: false, arrows: false };
+  const hostiles = [
+    { id: 20, name: 'husk', distance: 3, localGeometry: { onGround: true } },
+    { id: 21, name: 'phantom', distance: 7, localGeometry: { onGround: false } },
+    { id: 22, name: 'creeper', distance: 4, localGeometry: { onGround: true } },
+  ];
+
+  const attributed = chooseTacticalCombatDecision({
+    health: 20,
+    equipment,
+    targetEntityId: 20,
+    hostiles,
+  });
+  assert.equal(attributed.selected.id, 20);
+  assert.equal(attributed.response, 'melee');
+  assert.equal(attributed.considered, 1);
+
+  const settled = chooseTacticalCombatDecision({
+    health: 20,
+    equipment,
+    targetEntityId: 20,
+    hostiles: hostiles.slice(1),
+  });
+  assert.equal(settled.selected, null);
+  assert.equal(settled.reason, 'no_loaded_hostiles');
+
+  const airborne = chooseTacticalCombatDecision({
+    health: 20,
+    equipment,
+    targetEntityId: 21,
+    hostiles,
+  });
+  assert.equal(airborne.selected.id, 21);
+  assert.equal(airborne.response, 'retreat');
+  assert.equal(airborne.reason, 'airborne_without_ranged_option');
+});

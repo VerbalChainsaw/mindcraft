@@ -58,6 +58,12 @@ function responseFor(threat, state) {
     }
     return { response: 'retreat', reason: 'explosive_without_ranged_option', desiredRange: 10 };
   }
+  if (threat?.localGeometry?.onGround === false) {
+    if (rangedReady) {
+      return { response: 'ranged', reason: 'airborne_standoff', desiredRange: 8 };
+    }
+    return { response: 'retreat', reason: 'airborne_without_ranged_option', desiredRange: 24 };
+  }
   if (classification === 'ranged') {
     if (shieldReady && meleeReady) {
       return { response: 'shield_melee', reason: 'projectile_block_and_close', desiredRange: 3 };
@@ -99,8 +105,15 @@ function priorityScore(threat, state) {
  * This function owns no Minecraft state and performs no physical action.
  */
 export function chooseTacticalCombatDecision(state = {}) {
+  const targetEntityId = Number.isFinite(state?.targetEntityId)
+    ? Number(state.targetEntityId)
+    : null;
   const hostiles = Array.isArray(state.hostiles)
-    ? state.hostiles.filter(threat => threat && Number.isFinite(Number(threat.id)))
+    ? state.hostiles.filter(threat => (
+      threat
+      && Number.isFinite(Number(threat.id))
+      && (targetEntityId === null || Number(threat.id) === targetEntityId)
+    ))
     : [];
   if (hostiles.length === 0) {
     return {

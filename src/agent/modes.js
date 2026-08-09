@@ -476,7 +476,7 @@ const modes_list = [
                     return await skills.resolveTacticalCombat(
                         agent.bot,
                         SELF_DEFENSE_RANGE,
-                        protectionThreat?.id ?? null,
+                        enemy.id,
                     );
                 } finally {
                     if (protectionThreat) agent.companion_context?.clearProtection?.('engagement_finished');
