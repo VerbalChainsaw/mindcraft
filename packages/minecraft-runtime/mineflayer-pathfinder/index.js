@@ -210,6 +210,16 @@ function inject (bot) {
       if (curPoint.toBreak.length > 0 || curPoint.toPlace.length > 0) break
       const b = bot.blockAt(new Vec3(curPoint.x, curPoint.y, curPoint.z))
 
+      // A swim-up node names the body's target feet cell, including the clear
+      // air cell immediately above the top water block. Generic unsupported-
+      // air normalization would move that node down and erase the emergence
+      // edge before the executor ever sees it.
+      if (curPoint.locomotion?.type === 'swim_up') {
+        curPoint.x = Math.floor(curPoint.x) + 0.5
+        curPoint.z = Math.floor(curPoint.z) + 0.5
+        continue
+      }
+
       // openned doors have small Collision box
       // that may stop the bot from moving forward
       if(i === 0 && b?.name.includes('door')) {
@@ -1005,8 +1015,24 @@ function inject (bot) {
     let dy = nextPoint.y - p.y
     let dz = nextPoint.z - p.z
     let locomotionType = nextPoint.locomotion?.type || 'legacy'
+    const swimDestination = locomotionType === 'swim_up'
+      ? bot.blockAt(new Vec3(nextPoint.x, nextPoint.y, nextPoint.z))
+      : null
+    const swimHead = locomotionType === 'swim_up'
+      ? bot.blockAt(p.offset(0, 1, 0))
+      : null
+    const surfacedIntoAir = Boolean(
+      swimDestination
+      && swimDestination.type !== waterType
+      && swimHead
+      && swimHead.type !== waterType
+      && p.y >= nextPoint.y - 1
+    )
     const reachedNextPoint = locomotionType === 'swim_up'
-      ? Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && p.y >= nextPoint.y - 0.05 && p.y < nextPoint.y + 1
+      ? Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && (
+          surfacedIntoAir
+          || (swimDestination?.type === waterType && p.y >= nextPoint.y - 0.05)
+        ) && p.y < nextPoint.y + 1
       : Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1
     if (reachedNextPoint) {
       // arrived at next point
@@ -1059,7 +1085,12 @@ function inject (bot) {
     bot.setControlState('jump', false)
 
     let executionMode
-    if (bot.entity.isInWater) {
+    const feetBlock = bot.blockAt(p.floored())
+    // Mineflayer can clear isInWater for a tick at the surface while the
+    // physical feet cell is still water. Keep native ascent controls until
+    // the body actually crosses into the dry route node.
+    const physicallyInWater = bot.entity.isInWater || feetBlock?.type === waterType
+    if (physicallyInWater) {
       const ascendingWaterRoute = dy > 0.05 || [
         'step_up',
         'vertical_up',

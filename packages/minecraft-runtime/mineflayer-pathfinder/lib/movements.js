@@ -398,7 +398,13 @@ class Movements {
     }
 
     const block0 = this.getBlock(node, 0, -1, 0)
-    if (blockC.height - block0.height > 1.2) return // Too high to jump
+    const current = this.getBlock(node, 0, 0, 0)
+    // In water the body launches from the occupied liquid cell, not from the
+    // solid floor beneath the column. Measuring from that floor turns an
+    // ordinary one-block shore into a synthetic two-block jump and removes
+    // the native exit edge from the graph.
+    const launchHeight = current.liquid ? current.height : block0.height
+    if (blockC.height - launchHeight > 1.2) return // Too high to jump
 
     cost += this.safeOrBreak(blockA, toBreak)
     if (cost > 100) return
@@ -596,7 +602,11 @@ class Movements {
     // movement edge: ordinary travel still owns the destination and the
     // package owns how the body reaches it.
     if (!current || !destination || !head) return false
-    if (current.type !== waterType || destination.type !== waterType) return false
+    if (current.type !== waterType) return false
+    // The top water cell must connect to the clear feet cell immediately
+    // above it. Without that final native edge, A* can swim to the surface
+    // but cannot compose the following step-up onto an ordinary bank. The
+    // existing safe-cell predicate admits both water and collision-free air.
     if (!destination.safe || !head.safe) return false
     if (this.getNumEntitiesAt(node, 0, 1, 0) > 0) return false
 
@@ -612,7 +622,7 @@ class Movements {
       [],
       'swim_up'
     ))
-    return true
+    return destination.type === waterType ? 'submerged' : 'surface'
   }
 
   getMoveUp (node, neighbors) {
@@ -773,7 +783,8 @@ class Movements {
     // Do not plan a level route along the bottom of an open water column.
     // When ascent is obstructed, retain the ordinary horizontal neighbors so
     // Pathfinder can swim beneath the obstruction to the next open column.
-    if (this.getMoveSwimUp(node, neighbors)) return neighbors
+    const waterColumn = this.getMoveSwimUp(node, neighbors)
+    if (waterColumn === 'submerged') return neighbors
 
     // Simple moves in 4 cardinal points
     for (const i in cardinalDirections) {

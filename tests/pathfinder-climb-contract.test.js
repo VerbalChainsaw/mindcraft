@@ -74,10 +74,21 @@ test('Pathfinder represents open submerged ascent as a native swim edge', () => 
     [2, { type: 0, safe: true }],
   ]).get(y);
   const open = [];
-  assert.equal(movement.getMoveSwimUp(node, open), true);
+  assert.equal(movement.getMoveSwimUp(node, open), 'submerged');
   assert.equal(open.length, 1);
   assert.equal(open[0].y, 62);
   assert.equal(open[0].locomotion.type, 'swim_up');
+
+  movement.getBlock = (_node, _x, y) => new Map([
+    [0, { type: 9, safe: true }],
+    [1, { type: 0, safe: true }],
+    [2, { type: 0, safe: true }],
+  ]).get(y);
+  const surface = [];
+  assert.equal(movement.getMoveSwimUp(node, surface), 'surface');
+  assert.equal(surface.length, 1);
+  assert.equal(surface[0].y, 62);
+  assert.equal(surface[0].locomotion.type, 'swim_up');
 
   movement.getBlock = (_node, _x, y) => new Map([
     [0, { type: 9, safe: true }],
@@ -87,6 +98,49 @@ test('Pathfinder represents open submerged ascent as a native swim edge', () => 
   const obstructed = [];
   assert.equal(movement.getMoveSwimUp(node, obstructed), false);
   assert.deepEqual(obstructed, []);
+});
+
+test('Pathfinder represents a one-block waterline bank as a native step-up', () => {
+  const node = { x: 4, y: 62, z: 7, remainingBlocks: 0 };
+  const movement = Object.create(Movements.prototype);
+  movement.getNumEntitiesAt = () => 0;
+  movement.safeOrBreak = () => 0;
+  movement.openableAction = () => null;
+  movement.makeMove = (_node, x, y, z, remainingBlocks, cost, toBreak, toPlace, type) => ({
+    x,
+    y,
+    z,
+    remainingBlocks,
+    cost,
+    toBreak,
+    toPlace,
+    locomotion: { type },
+  });
+  movement.getBlock = (_node, x, y, z) => {
+    if (x === 0 && y === 0 && z === 0) {
+      return { position: new Vec3(4, 62, 7), liquid: true, physical: false, height: 62 };
+    }
+    if (x === 0 && y === -1 && z === 0) {
+      return { position: new Vec3(4, 61, 7), liquid: true, physical: false, height: 61 };
+    }
+    if (x === 1 && y === 0 && z === 0) {
+      return { position: new Vec3(5, 62, 7), liquid: false, physical: true, height: 63 };
+    }
+    return {
+      position: new Vec3(node.x + x, node.y + y, node.z + z),
+      liquid: false,
+      physical: false,
+      safe: true,
+      height: node.y + y,
+    };
+  };
+
+  const neighbors = [];
+  movement.getMoveJumpUp(node, { x: 1, z: 0 }, neighbors);
+
+  assert.equal(neighbors.length, 1);
+  assert.equal(neighbors[0].y, 63);
+  assert.equal(neighbors[0].locomotion.type, 'step_up');
 });
 
 test('Pathfinder counts drop depth between standing cells rather than destination support', () => {
