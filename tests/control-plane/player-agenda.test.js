@@ -213,6 +213,23 @@ test('parsePlayerAgenda preserves the complete cave expedition as one durable wo
   );
   assert.equal(exactPlan.steps[0].entry.quantity, 12);
   assert.equal(exactPlan.steps[0].entry.bestEffort, undefined);
+
+  const retainedPlan = parsePlayerAgenda(
+    'LandingWitness',
+    'Find a useful nearby cave, collect some iron and coal without damaging our work area, then return to me.',
+    { bot },
+  );
+  assert.ok(retainedPlan);
+  assert.equal(retainedPlan.multiStep, true);
+  assert.deepEqual(retainedPlan.steps.map(step => step.entry.kind), ['explore', 'goto']);
+  assert.equal(retainedPlan.steps[0].entry.retainResults, true);
+  assert.deepEqual(retainedPlan.steps[0].entry.requiredOutputs, [
+    { source: 'iron_ore', item: 'raw_iron', quantity: 1 },
+    { source: 'coal_ore', item: 'coal', quantity: 1 },
+  ]);
+  assert.equal(retainedPlan.steps[0].entry.quantity, 8);
+  assert.equal(retainedPlan.steps[1].dependency.policy, 'after_settlement');
+  assert.deepEqual(retainedPlan.unresolved, []);
 });
 
 test('parsePlayerAgenda preserves additional food preparation and exact storage as one durable plan', () => {

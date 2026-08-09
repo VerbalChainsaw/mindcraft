@@ -4,6 +4,7 @@ import {
   assessStableMiningCollectionTarget,
   isMiningTargetExposed,
   probeSafeNavigationStances,
+  probeSafeRoundTripNavigationStances,
 } from '../library/skills.js';
 import {
   isHazardousGameplayBlock,
@@ -248,6 +249,13 @@ function normalizeExcludedTargets(value) {
     .filter(target => [target.x, target.y, target.z].every(Number.isFinite)));
 }
 
+function normalizeCanonicalTargets(value) {
+  return immutable([...new Set((Array.isArray(value) ? value : [])
+    .slice(0, 24)
+    .map(canonicalName)
+    .filter(Boolean))]);
+}
+
 function targetExcluded(position, exclusions) {
   return exclusions.some(target => {
     const radius = target.name === 'cave_region' ? 16 : 4;
@@ -304,7 +312,12 @@ function bindNearbyCave(context, args) {
       ? Math.hypot(left.x - origin.x, left.y - origin.y, left.z - origin.z)
         - Math.hypot(right.x - origin.x, right.y - origin.y, right.z - origin.z)
       : 0);
-  const route = probeSafeNavigationStances(bot, candidates.slice(0, 128), 2_000);
+  const route = probeSafeRoundTripNavigationStances(
+    bot,
+    candidates.slice(0, 128),
+    args.home,
+    2_000,
+  );
   if (route.reachable && route.terminalPosition) {
     const position = candidates.find(candidate => (
       candidate.x === route.terminalPosition.x
@@ -320,6 +333,8 @@ function bindNearbyCave(context, args) {
         target,
         routeStatus: route.status,
         pathLength: route.pathLength,
+        returnRouteStatus: route.returnStatus,
+        returnPathLength: route.returnPathLength,
       });
     }
   }
@@ -327,7 +342,9 @@ function bindNearbyCave(context, args) {
     ok: false,
     code: 'source_not_found',
     detail: candidates.length > 0
-      ? 'Observed cave stances had no non-destructive native route.'
+      ? route.status === 'return_route_unreachable'
+        ? 'Observed cave stances had no verified non-destructive route back to home.'
+        : 'Observed cave stances had no non-destructive native route.'
       : 'No safe untried cave stance was observed in the bounded region.',
     target: fallbackTarget,
   });
@@ -359,6 +376,7 @@ function bindExposedOre(context, args) {
     .map(position => bot.blockAt(position))
     .filter(block => (
       block?.position
+      && (args.targets.length === 0 || args.targets.includes(block.name))
       && !isProtectedGameplayBlock(block)
       && isMiningTargetExposed(bot, block)
       && Math.hypot(block.position.x - args.home.x, block.position.z - args.home.z) >= 12
@@ -379,7 +397,12 @@ function bindExposedOre(context, args) {
   for (const block of candidates.slice(0, 12)) {
     const assessment = assessStableMiningCollectionTarget(bot, block);
     if (!assessment.safe) continue;
-    const route = probeSafeNavigationStances(bot, assessment.stances, 350);
+    const route = probeSafeRoundTripNavigationStances(
+      bot,
+      assessment.stances,
+      args.home,
+      700,
+    );
     if (!route.reachable) continue;
     const target = {
       name: block.name,
@@ -390,10 +413,13 @@ function bindExposedOre(context, args) {
     return immutable({
       ok: true,
       commandName: '!collectExposedOreAt',
-      command: `!collectExposedOreAt(${commandString(block.name)}, ${target.x}, ${target.y}, ${target.z})`,
+      command: `!collectExposedOreAt(${commandString(block.name)}, ${target.x}, ${target.y}, ${target.z}, ${route.terminalPosition.x}, ${route.terminalPosition.y}, ${route.terminalPosition.z})`,
       target,
+      returnStance: route.terminalPosition,
       routeStatus: route.status,
       pathLength: route.pathLength,
+      returnRouteStatus: route.returnStatus,
+      returnPathLength: route.returnPathLength,
     });
   }
   return immutable({
@@ -403,6 +429,40 @@ function bindExposedOre(context, args) {
       ? 'Observed exposed ore had no stable non-destructive native approach.'
       : 'No untried exposed ore was observed in this cave region.',
     target: regionTarget,
+  });
+}
+
+function verifyReturnableExposedOreCollection(before, after, binding, { result } = {}) {
+  const effect = binding.expectedEffects.find(candidate => candidate.kind === 'inventory_increase');
+  const increase = effect ? inventoryIncrease(before, after, effect) : 0;
+  const skill = result?.evidence?.skill;
+  const targetMatches = ['name', 'x', 'y', 'z'].every(key => (
+    key === 'name'
+      ? skill?.target?.[key] === binding.target?.[key]
+      : Number(skill?.target?.[key]) === Number(binding.target?.[key])
+  ));
+  const stanceMatches = ['x', 'y', 'z'].every(axis => (
+    Number(skill?.returnStance?.[axis]) === Number(binding.returnStance?.[axis])
+  ));
+  const returnable = Boolean(
+    skill?.kind === 'collect'
+    && skill?.outcome === 'collected_returnable'
+    && skill?.returnStanceVerified === true
+    && targetMatches
+    && stanceMatches
+  );
+  const verified = returnable && effect && increase >= effect.minimumIncrease;
+  return immutable({
+    ok: verified,
+    code: verified ? 'returnable_ore_collection_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed the exposed ore drop and settlement on its home-returnable stance.`
+      : `Minecraft did not confirm both the exposed ore drop and settlement on its home-returnable stance.`,
+    // Do not let generic partial-inventory reconciliation turn a failed
+    // returnability postcondition into capability success.
+    observedIncrease: returnable ? Math.max(0, increase) : 0,
+    inventoryIncrease: Math.max(0, increase),
+    returnStanceVerified: returnable,
   });
 }
 
@@ -569,11 +629,13 @@ defineCapability({
     home: { type: 'point' },
     range: { type: 'integer', minimum: 8, maximum: 64 },
     excludedTargets: { type: 'target_list', maximum: 24 },
+    targets: { type: 'canonical_list', maximum: 24 },
   },
   normalizeArguments: args => immutable({
     home: normalizePoint(args?.home),
     range: boundedInteger(args?.range, 32, 8, 64),
     excludedTargets: normalizeExcludedTargets(args?.excludedTargets),
+    targets: normalizeCanonicalTargets(args?.targets),
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: 'finite protected home-base position', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
@@ -582,7 +644,7 @@ defineCapability({
   expectedEffects: () => [inventoryEffect('ores', 1, 'ores')],
   bind: bindExposedOre,
   execute: executeBoundCommand,
-  verify: verifyEffects,
+  verify: verifyReturnableExposedOreCollection,
   cost: (_snapshot, args) => Math.max(2, Math.ceil(args.range / 8)),
 });
 

@@ -39,6 +39,25 @@ function collectedManifest(snapshot, checkpoint) {
     .filter(entry => entry.quantity > 0);
 }
 
+function requirementProgress(snapshot, checkpoint, requirement) {
+  const baseline = Number(checkpoint?.baselineFamilyCounts?.[requirement.item]) || 0;
+  return Math.max(0, (Number(snapshot?.inventory?.[requirement.item]) || 0) - baseline);
+}
+
+function requiredOutputsSatisfied(snapshot, checkpoint) {
+  return (checkpoint?.requiredOutputs || []).every(requirement => (
+    requirementProgress(snapshot, checkpoint, requirement) >= requirement.quantity
+  ));
+}
+
+function outstandingOreSources(snapshot, checkpoint) {
+  return (checkpoint?.requiredOutputs || [])
+    .filter(requirement => requirementProgress(snapshot, checkpoint, requirement) < requirement.quantity)
+    .flatMap(requirement => requirement.source.startsWith('deepslate_')
+      ? [requirement.source]
+      : [requirement.source, `deepslate_${requirement.source}`]);
+}
+
 function distanceToHome(order, snapshot) {
   if (![order.target?.x, order.target?.y, order.target?.z, snapshot?.x, snapshot?.y, snapshot?.z]
     .every(Number.isFinite)) return Number.POSITIVE_INFINITY;
@@ -175,11 +194,12 @@ function caveSearchRelocationStep(order) {
   });
 }
 
-function collectionStep(order) {
+function collectionStep(order, snapshot) {
   return createCapabilityRequest('collect_exposed_ore', {
     home: order.target,
     range: Math.min(48, order.constraints?.maxDistance || 48),
     excludedTargets: order.checkpoint?.failedTargets || [],
+    targets: outstandingOreSources(snapshot, order.checkpoint),
   }, {
     methodKey: 'collect:exposed_ore->ores',
     nextPhase: 'execute',
@@ -198,7 +218,10 @@ function executionStep(order, snapshot, planItem) {
     return prerequisite || caveSurveyStep(order);
   }
   const manifest = collectedManifest(snapshot, checkpoint);
-  if (familyTotal(Object.fromEntries(manifest.map(entry => [entry.item, entry.quantity]))) >= order.quota) {
+  if (
+    familyTotal(Object.fromEntries(manifest.map(entry => [entry.item, entry.quantity]))) >= order.quota
+    && requiredOutputsSatisfied(snapshot, checkpoint)
+  ) {
     return {
       phase: 'deliver',
       code: 'expedition_collection_quota_met',
@@ -210,7 +233,7 @@ function executionStep(order, snapshot, planItem) {
       },
     };
   }
-  return collectionStep(order);
+  return collectionStep(order, snapshot);
 }
 
 function deliveryStep(order, snapshot) {
@@ -236,6 +259,17 @@ function deliveryStep(order, snapshot) {
       target: { name: 'home_base', x: order.target.x, y: order.target.y, z: order.target.z },
       keepAnchor: true,
     });
+  }
+
+  if (checkpoint.retainResults === true) {
+    return {
+      complete: true,
+      code: 'expedition_results_retained',
+      checkpoint: {
+        ...checkpoint,
+        collected: (checkpoint.collectedManifest || []).reduce((total, entry) => total + entry.quantity, 0),
+      },
+    };
   }
 
   const manifest = checkpoint.collectedManifest || [];
@@ -297,7 +331,7 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
     return { terminal: true, code: 'invalid_expedition_order', retryable: false };
   }
   const checkpoint = order.checkpoint || {};
-  if (!checkpoint.homeDimension || !checkpoint.containerName) {
+  if (!checkpoint.homeDimension || (!checkpoint.containerName && checkpoint.retainResults !== true)) {
     return {
       terminal: true,
       code: 'expedition_home_binding_missing',
@@ -345,7 +379,7 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
       if (!checkpoint.caveLit && order.evidence?.code === 'source_not_found') {
         const manifest = collectedManifest(snapshot, checkpoint);
         const collected = manifest.reduce((total, entry) => total + entry.quantity, 0);
-        if (checkpoint.bestEffort === true && collected > 0) {
+        if (checkpoint.bestEffort === true && collected > 0 && requiredOutputsSatisfied(snapshot, checkpoint)) {
           return {
             phase: 'deliver',
             code: 'expedition_best_effort_collection_complete',

@@ -244,6 +244,7 @@ function normalizeCheckpoint(checkpoint) {
   if (checkpoint.caveLit === true) normalized.caveLit = true;
   if (checkpoint.caveLightingComplete === true) normalized.caveLightingComplete = true;
   if (checkpoint.bestEffort === true) normalized.bestEffort = true;
+  if (checkpoint.retainResults === true) normalized.retainResults = true;
   const homeDimension = boundedText(checkpoint.homeDimension, 64);
   if (CANONICAL_NAME.test(homeDimension)) normalized.homeDimension = homeDimension;
   const containerName = boundedText(checkpoint.containerName, 64);
@@ -284,6 +285,29 @@ function normalizeCheckpoint(checkpoint) {
       }));
     }
     normalized.collectedManifest = Object.freeze(manifest);
+  }
+  if (Array.isArray(checkpoint.requiredOutputs)) {
+    const requirements = [];
+    const seen = new Set();
+    for (const rawEntry of checkpoint.requiredOutputs.slice(0, 12)) {
+      const source = boundedText(rawEntry?.source, 64);
+      const item = boundedText(rawEntry?.item, 64);
+      const quantity = Number(rawEntry?.quantity);
+      if (
+        !CANONICAL_NAME.test(source)
+        || !CANONICAL_NAME.test(item)
+        || !Number.isFinite(quantity)
+        || quantity < 1
+        || seen.has(item)
+      ) continue;
+      seen.add(item);
+      requirements.push(Object.freeze({
+        source,
+        item,
+        quantity: finiteInteger(quantity, 1, 1, 2304),
+      }));
+    }
+    if (requirements.length > 0) normalized.requiredOutputs = Object.freeze(requirements);
   }
   if (Array.isArray(checkpoint.verifiedCells)) {
     normalized.verifiedCells = Object.freeze(checkpoint.verifiedCells

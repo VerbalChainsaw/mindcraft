@@ -703,6 +703,93 @@ test('a stale unrelated job result cannot settle a correlated active agenda job'
   assert.equal(saved.at(-1).find(entry => entry.id === added.id)?.state, 'failed');
 });
 
+test('a terminal job cannot be replayed, but its after-settlement return still runs', async () => {
+  const submitted = [];
+  const directCommands = [];
+  let acknowledged = null;
+  let now = 43_000;
+  const terminalOrder = {
+    id: 'miner-terminal-expedition',
+    phase: 'failed',
+    evidence: {
+      code: 'action_pattern_detected',
+      detail: 'The bounded work order stopped after repeated no-progress actions.',
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    last_action_result: { actionId: 'before', phase: 'succeeded', code: 'old_result' },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: {
+      activeOrder: null,
+      lastOrder: terminalOrder,
+      submit(order) {
+        submitted.push(order);
+        return { accepted: true, id: order.id };
+      },
+      acknowledgeTerminalReceipt(orderId) { acknowledged = orderId; },
+    },
+  };
+  const store = { lastError: null, load: () => [], save() {} };
+  const director = new AgendaDirector(agent, {
+    store,
+    now: () => now,
+    executeCommand(_agent, command) {
+      directCommands.push(command);
+      agent.last_action_result = {
+        actionId: 'return-after-failed-expedition',
+        phase: 'succeeded',
+        code: 'skill_arrived',
+        detail: 'Returned to Gabriel after the expedition settled.',
+        retryable: false,
+        evidence: { request: { routeOrigin: 'agenda-director' } },
+      };
+      return Promise.resolve();
+    },
+  });
+  const added = director.add({
+    kind: 'explore',
+    requester: 'Gabriel',
+    target: 'ores',
+    quantity: 8,
+    x: 12,
+    y: 70,
+    z: 12,
+    containerConstraint: {
+      name: 'chest',
+      position: { x: 14, y: 70, z: 12 },
+      dimension: 'overworld',
+    },
+  });
+  director.replace(added.id, {
+    state: 'active',
+    startedAt: 42_000,
+    executorId: terminalOrder.id,
+  });
+  const returnStep = director.add({
+    kind: 'goto',
+    requester: 'Gabriel',
+    recipient: 'Gabriel',
+    dependsOnEntryId: added.id,
+    dependencyPolicy: 'after_settlement',
+  });
+
+  director.update();
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  const settled = director.entries.find(entry => entry.id === added.id);
+  assert.equal(settled.state, 'failed');
+  assert.equal(settled.evidence.code, 'action_pattern_detected');
+  assert.equal(settled.attempts, 1);
+  assert.equal(submitted.length, 0, 'Agenda must not manufacture a second job ID or fresh attempt budget');
+  assert.equal(acknowledged, terminalOrder.id);
+  assert.deepEqual(directCommands, ['!goToPlayer("Gabriel", 3)']);
+  assert.equal(director.entries.find(entry => entry.id === returnStep.id).state, 'complete');
+});
+
 test('an unrelated later action cannot replace the direct result captured for an agenda step', async () => {
   const agent = {
     name: 'TestBot',

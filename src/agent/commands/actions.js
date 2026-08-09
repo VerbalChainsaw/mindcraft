@@ -761,15 +761,27 @@ export const actionsList = [
     },
     {
         name: '!collectExposedOreAt',
-        description: 'Collect one exact catalogue-selected exposed ore block without authorizing route excavation.',
+        description: 'Collect one exact catalogue-selected exposed ore block and settle on its bound home-returnable stance without route excavation.',
         params: {
             'block_name': { type: 'BlockName', description: 'Exact exposed ore block name.' },
             'x': { type: 'int', description: 'Bound ore x coordinate.' },
             'y': { type: 'int', description: 'Bound ore y coordinate.' },
             'z': { type: 'int', description: 'Bound ore z coordinate.' },
+            'return_x': { type: 'int', description: 'Bound home-returnable stance x coordinate.' },
+            'return_y': { type: 'int', description: 'Bound home-returnable stance y coordinate.' },
+            'return_z': { type: 'int', description: 'Bound home-returnable stance z coordinate.' },
         },
-        perform: runAsAction(async (agent, block_name, x, y, z) => {
-            return await skills.collectExposedOreAt(agent.bot, block_name, x, y, z);
+        perform: runAsAction(async (agent, block_name, x, y, z, return_x, return_y, return_z) => {
+            return await skills.collectExposedOreAt(
+                agent.bot,
+                block_name,
+                x,
+                y,
+                z,
+                return_x,
+                return_y,
+                return_z,
+            );
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {

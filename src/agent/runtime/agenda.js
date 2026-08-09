@@ -22,6 +22,7 @@ const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
 const MAX_ENTRIES = 24;
 const MAX_QUANTITY = 2304;
 const MAX_INVENTORY_REQUIREMENTS = 12;
+const MAX_EXPLORATION_OUTPUTS = 12;
 const MAX_INVENTORY_RECONCILIATIONS = 12;
 const MAX_NOTE = 160;
 const ACQUIRE_COMPLETIONS = new Set(['inventory', 'main_hand', 'off_hand']);
@@ -48,7 +49,7 @@ const CONSTRUCTION_FUNCTIONS = new Set([
   'storage',
   'weather_cover',
 ]);
-const DEPENDENCY_POLICIES = new Set(['requires_success']);
+const DEPENDENCY_POLICIES = new Set(['requires_success', 'after_settlement']);
 const BINDING_KINDS = new Set(['world_block', 'structure_fixture']);
 const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
@@ -283,6 +284,34 @@ function normalizeInventoryRequirements(raw) {
   }));
 }
 
+function normalizeExplorationOutputs(raw) {
+  if (raw == null) return Object.freeze([]);
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_EXPLORATION_OUTPUTS) {
+    throw new TypeError(`An exploration request needs 1-${MAX_EXPLORATION_OUTPUTS} typed outputs.`);
+  }
+  const seen = new Set();
+  return Object.freeze(raw.map(requirement => {
+    if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+      throw new TypeError('An exploration output must be an object.');
+    }
+    const source = canonical(requirement.source);
+    const item = canonical(requirement.item);
+    if (
+      !CANONICAL_NAME.test(source)
+      || !CANONICAL_NAME.test(item)
+      || !isNameFaithful(requirement.source, source)
+      || !isNameFaithful(requirement.item, item)
+    ) throw new TypeError('An exploration output needs canonical source and item names.');
+    if (seen.has(item)) throw new TypeError(`Exploration output '${item}' is duplicated.`);
+    seen.add(item);
+    return Object.freeze({
+      source,
+      item,
+      quantity: finiteInteger(requirement.quantity, 1, 1, MAX_QUANTITY),
+    });
+  }));
+}
+
 /**
  * Validate and canonicalize one agenda entry. Throws with a specific reason so
  * a rejected request can tell the player exactly what was wrong.
@@ -391,6 +420,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (bindingRequest && bindingConstraint && bindingRequest.kind !== bindingConstraint.kind) {
     throw new TypeError('Agenda binding request and constraint kinds do not match.');
   }
+  if ((bindingRequest || bindingConstraint) && dependencyPolicy !== 'requires_success') {
+    throw new TypeError('Agenda bindings require a successful predecessor.');
+  }
   const requiredFunctions = kind === 'construction'
     ? [...new Set((Array.isArray(raw.constructionIntent?.requiredFunctions)
       ? raw.constructionIntent.requiredFunctions
@@ -406,6 +438,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   const inventoryRequirements = kind === 'inventory_checklist'
     ? normalizeInventoryRequirements(raw.inventoryRequirements)
     : null;
+  const requiredOutputs = kind === 'explore'
+    ? normalizeExplorationOutputs(raw.requiredOutputs)
+    : Object.freeze([]);
   const reconciliationTarget = kind === 'inventory_checklist'
     ? canonical(raw.reconciliationTarget)
     : '';
@@ -426,6 +461,8 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       ? { baselineFoodPoints: finiteInteger(raw.baselineFoodPoints, 0, 0, MAX_QUANTITY) }
       : {}),
     ...(['explore', 'prepare_food'].includes(kind) && raw.bestEffort === true ? { bestEffort: true } : {}),
+    ...(kind === 'explore' && raw.retainResults === true ? { retainResults: true } : {}),
+    ...(requiredOutputs.length > 0 ? { requiredOutputs } : {}),
     completion,
     recipient: spec.needsRecipient ? recipient : '',
     requester,
@@ -488,7 +525,9 @@ export function describeAgendaEntry(entry) {
     case 'mine': return `mine ${entry.quantity} ${readable}`;
     case 'harvest': return `harvest ${entry.quantity} ${readable}`;
     case 'stockpile': return `stockpile ${entry.quantity} ${readable}`;
-    case 'explore': return `explore and light a cave, collect ${entry.quantity} ${readable}, return, and store the result`;
+    case 'explore': return entry.retainResults
+      ? `explore a cave, collect a useful ${entry.quantity}-${readable} batch containing ${entry.requiredOutputs.map(requirement => requirement.item.replace(/_/g, ' ')).join(' and ')}, and retain it`
+      : `explore and light a cave, collect ${entry.quantity} ${readable}, return, and store the result`;
     case 'craft': return `craft ${entry.quantity} ${readable}`;
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';

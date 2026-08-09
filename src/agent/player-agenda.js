@@ -1,11 +1,13 @@
 import {
   constructionRequiredFunctions,
+  miningResources,
   resolvePlayerDirective,
 } from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import { AGENDA_KINDS } from './runtime/agenda.js';
 import { requestedQuantity } from './runtime/goal-contract.js';
 import { familyFoodPoints, familyInventoryEntries } from './runtime/item-family.js';
+import { miningOutputName } from './runtime/jobs/miner-plan.js';
 
 // Deterministic natural-language front door to the existing Agenda queue.
 //
@@ -269,7 +271,17 @@ function foodStockingPlan(playerName, message, context) {
 
 function caveExpeditionPlan(playerName, message, context) {
   const text = normalizeMessage(message).trim();
-  if (!CAVE_EXPEDITION_CUES.every(pattern => pattern.test(text))) return null;
+  const storedExpedition = CAVE_EXPEDITION_CUES.every(pattern => pattern.test(text));
+  const resourceMentions = miningResources(text);
+  const retainedExpedition = Boolean(
+    /\bcave\b/i.test(text)
+    && /\b(?:find|explore|look for|search for)\b/i.test(text)
+    && /\b(?:collect|gather|mine)\b/i.test(text)
+    && /\b(?:return|come back|head back)\b/i.test(text)
+    && resourceMentions.length > 0
+    && !/\b(?:store|put|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i.test(text)
+  );
+  if (!storedExpedition && !retainedExpedition) return null;
   const bot = context?.bot;
   const position = bot?.entity?.position;
   const containerConstraint = currentContainerConstraint(bot);
@@ -280,27 +292,56 @@ function caveExpeditionPlan(playerName, message, context) {
     return { rejection: 'I could not bind that expedition to a loaded chest or barrel near the home base, so I did not start only part of it.' };
   }
   const explicitQuantity = text.match(/\b(\d{1,3})\s+(?:useful\s+)?(?:exposed\s+)?ores?\b/i);
-  const bestEffort = !explicitQuantity;
-  const quantity = Math.max(1, Math.min(64, Number(explicitQuantity?.[1]) || 8));
-  return {
-    steps: [{
-      segment: text,
-      command: null,
-      response: bestEffort
+  const requiredOutputs = retainedExpedition
+    ? resourceMentions.map((mention, index) => {
+        const previousEnd = index > 0
+          ? resourceMentions[index - 1].index + resourceMentions[index - 1].label.length
+          : Math.max(0, text.search(/\b(?:collect|gather|mine)\b/i));
+        const quantityScope = text.slice(previousEnd, mention.index + mention.label.length);
+        return {
+          source: mention.target,
+          item: miningOutputName(mention.target),
+          quantity: requestedQuantity(quantityScope) || 1,
+        };
+      })
+    : [];
+  const namedQuantity = requiredOutputs.reduce((total, requirement) => total + requirement.quantity, 0);
+  const bestEffort = !explicitQuantity && requiredOutputs.every(requirement => requirement.quantity === 1);
+  const quantity = Math.max(1, Math.min(64, Number(explicitQuantity?.[1]) || Math.max(8, namedQuantity)));
+  const exploreStep = {
+    segment: text,
+    command: null,
+    response: retainedExpedition
+      ? `I will protect this work area as home, search a nearby cave, collect a useful ore batch containing ${requiredOutputs.map(requirement => requirement.item.replaceAll('_', ' ')).join(' and ')}, retain it, and return.`
+      : bestEffort
         ? `I will use this as home base, light nearby caves, collect a useful batch of exposed ore, then return and store what I found in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`
         : `I will use this as home base, light nearby caves, collect at least ${quantity} useful exposed ore drops, then return and store what I found in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`,
-      entry: {
-        kind: 'explore',
-        requester: playerName,
-        target: 'ores',
-        quantity,
-        ...(bestEffort ? { bestEffort: true } : {}),
-        x: Math.floor(position.x),
-        y: Math.floor(position.y),
-        z: Math.floor(position.z),
-        containerConstraint,
-      },
-    }],
+    entry: {
+      kind: 'explore',
+      requester: playerName,
+      target: 'ores',
+      quantity,
+      ...(bestEffort ? { bestEffort: true } : {}),
+      ...(retainedExpedition ? { retainResults: true, requiredOutputs } : {}),
+      x: Math.floor(position.x),
+      y: Math.floor(position.y),
+      z: Math.floor(position.z),
+      containerConstraint,
+    },
+  };
+  return {
+    steps: retainedExpedition
+      ? [
+          exploreStep,
+          {
+            segment: `return to ${playerName}`,
+            command: `!goToPlayer(${JSON.stringify(playerName)}, 2)`,
+            response: `I will return to ${playerName}.`,
+            entry: { kind: 'goto', requester: playerName, recipient: playerName },
+            dependency: { policy: 'after_settlement' },
+          },
+        ]
+      : [exploreStep],
   };
 }
 

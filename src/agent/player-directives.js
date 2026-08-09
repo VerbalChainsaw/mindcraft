@@ -42,8 +42,7 @@ function requestedCount(text, fallback) {
     return Math.max(1, Math.min(2304, Number.parseInt(match[1], 10)));
 }
 
-function miningResource(text) {
-    const resources = [
+const MINING_RESOURCES = Object.freeze([
         ['ancient debris', 'ancient_debris'],
         ['cobblestone', 'cobblestone'],
         ['redstone', 'redstone_ore'],
@@ -55,8 +54,25 @@ function miningResource(text) {
         ['gold', 'gold_ore'],
         ['coal', 'coal_ore'],
         ['stone', 'stone'],
-    ];
-    return resources.find(([label]) => text.includes(label))?.[1] || null;
+]);
+
+export function miningResources(text) {
+    const normalized = String(text || '').toLowerCase();
+    const matches = MINING_RESOURCES.flatMap(([label, target]) => {
+        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = new RegExp(`\\b${escaped}\\b`).exec(normalized);
+        return match ? [{ label, target, index: match.index }] : [];
+    }).sort((left, right) => left.index - right.index || right.label.length - left.label.length);
+    const seen = new Set();
+    return matches.filter(match => {
+        if (seen.has(match.target)) return false;
+        seen.add(match.target);
+        return true;
+    });
+}
+
+function miningResource(text) {
+    return miningResources(text)[0]?.target || null;
 }
 
 function requestedTool(text) {

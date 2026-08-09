@@ -4,6 +4,8 @@
 
 `APPLICABLE_WITH_LIMITS`. The unchanged outcome crosses intent binding, multi-item planning, prerequisite acquisition, player-site stewardship, movement, survival, return, cancellation, and verification. A short scaffold-fading ladder makes the first failure attributable without turning Minecraft into a unit-test framework. The final authority remains ordinary live play.
 
+**Checkpoint status (2026-08-09): COMPLETE AND SUPERSEDED BY RANDOMIZED PLAY.** The landing-area supply and follow-on shared-worksite outcomes passed physically and are frozen. Randomized supervised play has now selected the next real blocker: one cave/iron/coal/return request preserved all named outputs, protected the worksite, collected coal, recovered from a false surface classification, and returned, but exhausted the only planner-bindable iron-acquisition strategy. The active plan is the return-safe cave-expedition checkpoint in `docs/coordination/CURRENT.md`; do not rerun this ladder or invent another starter-manifest permutation.
+
 ## Outcome and Graduation
 
 ```text

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import process from 'node:process';
 import test from 'node:test';
+import minecraftData from 'minecraft-data';
 import Vec3 from 'vec3';
 
 import {
@@ -29,7 +30,10 @@ import {
 import { OwnedLocalServices } from '../src/mindcraft/owned-local-services.js';
 import { terminateOwnedProcessTree } from '../src/mindcraft/process-tree.js';
 import { stopMindcraftRuntime } from '../src/mindcraft/stack-shutdown.js';
-import { ResponsiveFollowGoal } from '../src/agent/library/skills.js';
+import {
+  probeSafeRoundTripNavigationStances,
+  ResponsiveFollowGoal,
+} from '../src/agent/library/skills.js';
 
 test('critical action results preserve phase, sanitize output, and expose bounded telemetry', () => {
   const result = createActionResult({
@@ -116,6 +120,46 @@ test('a cave stance is dark supported air regardless of Minecraft air subtype', 
   assert.equal(isSafeCaveStance(bot, position), false);
   put(0, 10, 0, { name: 'air', boundingBox: 'empty', skyLight: 15 });
   assert.equal(isSafeCaveStance(bot, position), false);
+});
+
+test('a cave stance is bindable only when native Pathfinder proves the return route', () => {
+  const registry = minecraftData('1.21.11');
+  const cave = new Vec3(10, 60, 0);
+  const home = new Vec3(0, 70, 0);
+  const reverseStarts = [];
+  const bot = {
+    registry,
+    traversalPolicy: 'preserve',
+    entity: { position: home.clone(), isInLava: false },
+    inventory: { items: () => [] },
+    pathfinder: {
+      thinkTimeout: 500,
+      tickTimeout: 40,
+      getPathTo() {
+        return { status: 'success', path: [cave.clone()] };
+      },
+      getPathFromTo(_movements, start) {
+        reverseStarts.push(start.clone());
+        return (function * noReturnRoute() {
+          yield { result: { status: 'noPath', path: [] } };
+        }());
+      },
+    },
+  };
+
+  const rejected = probeSafeRoundTripNavigationStances(bot, [cave], home, 500);
+  assert.equal(rejected.reachable, false);
+  assert.equal(rejected.status, 'return_route_unreachable');
+  assert.deepEqual(reverseStarts.map(position => position.toArray()), [cave.toArray()]);
+
+  bot.pathfinder.getPathFromTo = function * returnRoute(_movements, start) {
+    reverseStarts.push(start.clone());
+    yield { result: { status: 'success', path: [home.clone()] } };
+  };
+  const accepted = probeSafeRoundTripNavigationStances(bot, [cave], home, 500);
+  assert.equal(accepted.reachable, true);
+  assert.deepEqual(accepted.terminalPosition, { x: cave.x, y: cave.y, z: cave.z });
+  assert.equal(accepted.returnStatus, 'success');
 });
 
 test('Follow remains active when the player is dry but the nearby bot stance is still water', () => {

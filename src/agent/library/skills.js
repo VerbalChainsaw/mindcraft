@@ -188,6 +188,9 @@ const MAX_SURFACE_CORRIDOR_RISE = 4;
 const SURFACE_CORRIDOR_ROUTE_SLACK = 12;
 const MAX_SURFACE_CORRIDOR_STANCES = 4;
 const SURFACE_STANCE_SCAN_RADIUS = 24;
+const SURFACE_EGRESS_MIN_DISTANCE = 6;
+const SURFACE_EGRESS_SCAN_RADIUS = 10;
+const SURFACE_EGRESS_PROBE_MS = 500;
 const MAX_LOCAL_WORKSTATION_CANDIDATES = 4;
 const MINING_STAGING_SCAN_RADIUS = 12;
 const MAX_MINING_STAGING_ATTEMPTS = 2;
@@ -1209,13 +1212,17 @@ function safeMovements(bot) {
     movements.dontCreateFlow = true;
     movements.placeCost = 8;
     movements.digCost = 10;
-    for (const block of ['glass', 'glass_pane']) movements.blocksCantBreak.add(mc.getBlockId(block));
+    for (const block of ['glass', 'glass_pane']) {
+        const blockId = bot?.registry?.blocksByName?.[block]?.id ?? mc.getBlockId(block);
+        if (Number.isFinite(blockId)) movements.blocksCantBreak.add(blockId);
+    }
 
     const policy = traversalPolicy(bot);
     if (policy === 'full') {
-        // Full widens executable locomotion, never what ordinary navigation
-        // may destroy.
-        movements.allow1by1towers = true;
+        // Full permits native jump/parkour geometry, but ordinary locomotion
+        // still has no authority to place blocks. Pillaring is construction,
+        // not walking, and it also explodes A*'s candidate space in forests
+        // and uneven terrain.
         movements.allowParkour = true;
     }
     // Collection restores this to authorize an explicitly selected resource,
@@ -1304,6 +1311,128 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
             error: String(error?.message || error).slice(0, 160),
         };
     }
+}
+
+function probeSafeNavigationFrom(bot, start, goal, timeoutMs) {
+    if (!bot?.pathfinder?.getPathFromTo || !start || !goal) {
+        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+    }
+    const boundedTimeoutMs = Math.max(40, Math.min(2_000, Math.floor(Number(timeoutMs) || 500)));
+    const deadlineAt = Date.now() + boundedTimeoutMs;
+    let result = null;
+    try {
+        const generator = bot.pathfinder.getPathFromTo(
+            safeMovements(bot),
+            start,
+            goal,
+            {
+                timeout: boundedTimeoutMs,
+                tickTimeout: Math.max(
+                    1,
+                    Math.min(boundedTimeoutMs, Number(bot.pathfinder.tickTimeout) || 40),
+                ),
+                searchRadius: -1,
+            },
+        );
+        while (Date.now() <= deadlineAt) {
+            const next = generator.next();
+            if (next.done) break;
+            result = next.value?.result || null;
+            if (result?.status !== 'partial') break;
+        }
+    } catch (error) {
+        return {
+            reachable: false,
+            status: 'route_probe_error',
+            pathLength: 0,
+            error: String(error?.message || error).slice(0, 160),
+        };
+    }
+    return {
+        reachable: result?.status === 'success',
+        status: result?.status || 'unknown',
+        pathLength: Array.isArray(result?.path) ? result.path.length : 0,
+    };
+}
+
+/**
+ * Prove that ordinary native locomotion can both reach a candidate stance and
+ * return from it to the supplied home position. Minecraft movement edges are
+ * directional: a safe drop into a cave does not imply a climbable route out.
+ */
+export function probeSafeRoundTripNavigationStances(
+    bot,
+    stances,
+    home,
+    timeoutMs = 2_000,
+) {
+    const candidates = (Array.isArray(stances) ? stances : [])
+        .filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
+        .map(position => new Vec3(
+            Math.floor(position.x),
+            Math.floor(position.y),
+            Math.floor(position.z),
+        ));
+    if (
+        candidates.length === 0
+        || ![home?.x, home?.y, home?.z].every(Number.isFinite)
+    ) {
+        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+    }
+
+    const boundedTimeoutMs = Math.max(100, Math.min(5_000, Math.floor(Number(timeoutMs) || 2_000)));
+    const deadlineAt = Date.now() + boundedTimeoutMs;
+    const remainingCandidates = candidates.slice(0, 128);
+    let lastInbound = null;
+    let lastReturn = null;
+    let checked = 0;
+    while (remainingCandidates.length > 0 && checked < 8 && Date.now() < deadlineAt) {
+        const remainingMs = Math.max(40, deadlineAt - Date.now());
+        lastInbound = probeSafeNavigationStances(bot, remainingCandidates, remainingMs);
+        if (!lastInbound.reachable || !lastInbound.terminalPosition) break;
+
+        const selected = new Vec3(
+            lastInbound.terminalPosition.x,
+            lastInbound.terminalPosition.y,
+            lastInbound.terminalPosition.z,
+        );
+        const returnGoal = new pf.goals.GoalNear(
+            Math.floor(home.x),
+            Math.floor(home.y),
+            Math.floor(home.z),
+            3,
+        );
+        lastReturn = probeSafeNavigationFrom(
+            bot,
+            selected,
+            returnGoal,
+            Math.min(500, Math.max(40, deadlineAt - Date.now())),
+        );
+        checked += 1;
+        if (lastReturn.reachable) {
+            return {
+                ...lastInbound,
+                returnStatus: lastReturn.status,
+                returnPathLength: lastReturn.pathLength,
+                roundTripCandidatesChecked: checked,
+            };
+        }
+        const selectedKey = `${selected.x}:${selected.y}:${selected.z}`;
+        const index = remainingCandidates.findIndex(position => (
+            `${position.x}:${position.y}:${position.z}` === selectedKey
+        ));
+        if (index < 0) break;
+        remainingCandidates.splice(index, 1);
+    }
+
+    return {
+        reachable: false,
+        status: lastInbound?.reachable ? 'return_route_unreachable' : lastInbound?.status || 'unknown',
+        pathLength: lastInbound?.pathLength || 0,
+        returnStatus: lastReturn?.status || null,
+        returnPathLength: lastReturn?.pathLength || 0,
+        roundTripCandidatesChecked: checked,
+    };
 }
 
 function miningMovements(bot) {
@@ -1627,6 +1756,7 @@ function collectionApproachMovements(bot) {
 function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
     allowPillars = false,
     allowNaturalRouteDigging = false,
+    requireReturnableRoute = false,
 } = {}) {
     const targetBlocks = Array.isArray(targetBlockOrBlocks)
         ? targetBlockOrBlocks
@@ -1654,6 +1784,17 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
     // A whole-tree harvest may need one temporary pillar to reach the crown.
     // This is never enabled for generic collection or ordinary navigation.
     movements.allow1by1towers = allowPillars === true;
+    if (requireReturnableRoute) {
+        // A collection plugin may pursue a falling drop after breaking the
+        // target. Never advertise a descent it cannot climb back from when
+        // the owning capability promises returnability.
+        movements.allowParkour = false;
+        movements.maxDropDown = Math.min(
+            Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+            1,
+        );
+        movements.infiniteLiquidDropdownDistance = false;
+    }
     return movements;
 }
 
@@ -5584,6 +5725,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 const routeMovements = targetScopedCollectionMovements(bot, preferredBlock, {
                     allowPillars: searchOptions?.allowPillars === true,
                     allowNaturalRouteDigging,
+                    requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
                 });
                 const ranked = rankCollectionCandidates(collectionCandidateObservations(
                     bot,
@@ -5971,6 +6113,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     bot.collectBlock.movements = targetScopedCollectionMovements(bot, block, {
                         allowPillars: searchOptions?.allowPillars === true,
                         allowNaturalRouteDigging,
+                        requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
                     });
                     try {
                         await runBoundedCollectionOperation(
@@ -10366,6 +10509,28 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
     let goalSignature = navigationGoalSignature(goal);
     let lastProgressAt = startedAt;
     let lastDigTarget = bot.targetDigBlock?.position?.toString?.() || null;
+    let nativeSearchStartedAt = startedAt;
+    let nativeSearchDeadlineAt = 0;
+    const nativeThinkTimeoutMs = Math.max(
+        NAVIGATION_PROGRESS_POLL_MS,
+        Math.min(30_000, Number(bot.pathfinder?.thinkTimeout) || 5_000),
+    );
+    const onPathReset = () => {
+        nativeSearchStartedAt = Date.now();
+        nativeSearchDeadlineAt = 0;
+    };
+    const onPathUpdate = result => {
+        const pathLength = Array.isArray(result?.path) ? result.path.length : 0;
+        // An empty partial result means native A* is still calculating, not
+        // that locomotion has stalled. Let its own bounded search horizon
+        // decide timeout; once it yields an executable node, the ordinary
+        // physical-progress deadline immediately applies again.
+        nativeSearchDeadlineAt = result?.status === 'partial' && pathLength === 0
+            ? nativeSearchStartedAt + nativeThinkTimeoutMs + NAVIGATION_PROGRESS_POLL_MS
+            : 0;
+    };
+    bot.on('path_reset', onPathReset);
+    bot.on('path_update', onPathUpdate);
     const visitedCells = new Set([
         `${Math.floor(startPosition.x)}:${Math.floor(startPosition.y)}:${Math.floor(startPosition.z)}`,
     ]);
@@ -10384,18 +10549,16 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
             visitedCells.add(cellKey);
             const metricProgress = !targetChanged && Number.isFinite(metric)
                 && (!Number.isFinite(bestMetric) || metric <= bestMetric - NAVIGATION_GOAL_PROGRESS_DELTA);
-            // Body displacement alone is not convergence: a stuck Pathfinder
-            // can pace between two nearby cells forever. Native routes may
-            // detour briefly, but they must improve the selected goal metric,
-            // advance a dig target, or move through a new cell while pursuing
-            // a moving goal within the bounded no-progress window. A target
-            // rebind alone is not physical progress and must not keep a
-            // stationary GoalFollow alive forever.
+            // A stuck Pathfinder can pace between two nearby cells forever,
+            // but an ordinary native route may need to detour around terrain.
+            // Count each genuinely new cell once; revisiting it cannot renew
+            // the deadline. Goal convergence and digging progress remain
+            // independent progress signals.
             if (targetChanged) {
                 goalSignature = nextSignature;
                 bestMetric = metric;
             }
-            if (metricProgress || digTarget !== lastDigTarget || (targetChanged && novelCell)) {
+            if (metricProgress || digTarget !== lastDigTarget || novelCell) {
                 if (metricProgress) {
                     bestMetric = metric;
                 }
@@ -10403,13 +10566,15 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
                 lastProgressAt = Date.now();
                 return;
             }
-            if (Date.now() - lastProgressAt >= stallTimeoutMs) {
+            const now = Date.now();
+            if (nativeSearchDeadlineAt > now) return;
+            if (now - lastProgressAt >= stallTimeoutMs) {
                 clearInterval(interval);
                 interval = null;
                 resolve({
                     state: 'stalled',
                     startedAt,
-                    stalledMs: Date.now() - lastProgressAt,
+                    stalledMs: now - lastProgressAt,
                     startPosition,
                     lastPosition,
                     startMetric,
@@ -10424,6 +10589,8 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
         stop() {
             if (interval) clearInterval(interval);
             interval = null;
+            bot.removeListener('path_reset', onPathReset);
+            bot.removeListener('path_update', onPathUpdate);
         },
     };
 }
@@ -12955,7 +13122,16 @@ export async function lightCaveAt(bot, x, y, z) {
 }
 
 /** Collect one exact, still-exposed ore target without route excavation. */
-export async function collectExposedOreAt(bot, blockName, x, y, z) {
+export async function collectExposedOreAt(
+    bot,
+    blockName,
+    x,
+    y,
+    z,
+    returnX,
+    returnY,
+    returnZ,
+) {
     const target = {
         name: String(blockName || '').trim(),
         x: Math.floor(Number(x)),
@@ -12983,13 +13159,60 @@ export async function collectExposedOreAt(bot, blockName, x, y, z) {
         });
         return false;
     }
-    return await collectBlock(bot, target.name, 1, null, 8, {
+    const returnStance = new Vec3(
+        Math.floor(Number(returnX)),
+        Math.floor(Number(returnY)),
+        Math.floor(Number(returnZ)),
+    );
+    if (![returnStance.x, returnStance.y, returnStance.z].every(Number.isFinite)) {
+        setActionEvidence(bot, {
+            kind: 'collect',
+            outcome: 'return_stance_missing',
+            target,
+            retryable: false,
+        });
+        return false;
+    }
+    const collected = await collectBlock(bot, target.name, 1, null, 8, {
         relocate: false,
         preferredPosition: target,
         allowNaturalRouteDigging: false,
         allowAccessRecovery: false,
         allowPillars: false,
+        requireReturnableRoute: true,
     });
+    const collectionEvidence = bot.lastActionEvidence?.kind === 'collect'
+        ? bot.lastActionEvidence
+        : null;
+    if (!collected) return false;
+
+    const returned = physicallyOccupiesStandingCell(bot, returnStance) || await goToGoal(
+        bot,
+        new pf.goals.GoalBlock(returnStance.x, returnStance.y, returnStance.z),
+        {
+            movements: () => clearedMiningMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        },
+    );
+    const settled = Boolean(returned && physicallyOccupiesStandingCell(bot, returnStance));
+    setActionEvidence(bot, {
+        kind: 'collect',
+        outcome: settled ? 'collected_returnable' : 'return_stance_unreachable',
+        target,
+        count: Math.max(1, Number(collectionEvidence?.count) || 1),
+        returnStance: {
+            x: returnStance.x,
+            y: returnStance.y,
+            z: returnStance.z,
+        },
+        returnStanceVerified: settled,
+        retryable: !settled,
+    });
+    log(bot, settled
+        ? `Collected ${target.name} and returned to its verified expedition stance.`
+        : `Collected ${target.name}, but could not return to its bound expedition stance.`);
+    return settled;
 }
 
 export async function goToMiningDepth(bot, targetY, range=64) {
@@ -16441,6 +16664,7 @@ function nearestLoadedSurfaceStandingCell(
     minY,
     maxY,
     radius = SURFACE_STANCE_SCAN_RADIUS,
+    minimumStandingY = null,
 ) {
     const origin = position.floored();
     const diagnostics = { columns: 0, noTerrain: 0, blockedBodies: {} };
@@ -16457,7 +16681,10 @@ function nearestLoadedSurfaceStandingCell(
                     maxY,
                     diagnostics,
                 );
-                if (target) candidates.push(target);
+                if (
+                    target
+                    && (!Number.isFinite(minimumStandingY) || target.y >= minimumStandingY)
+                ) candidates.push(target);
             }
         }
         if (candidates.length > 0) {
@@ -16473,6 +16700,41 @@ function nearestLoadedSurfaceStandingCell(
         }
     }
     return { target: null, diagnostics };
+}
+
+function surfaceEgressStances(bot, supported, minY, maxY) {
+    const candidates = [];
+    for (
+        let distance = SURFACE_EGRESS_MIN_DISTANCE;
+        distance <= SURFACE_EGRESS_SCAN_RADIUS;
+        distance += 1
+    ) {
+        for (let dx = -distance; dx <= distance; dx += 1) {
+            for (let dz = -distance; dz <= distance; dz += 1) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== distance) continue;
+                const stance = loadedSurfaceStandingCell(
+                    bot,
+                    supported.x + dx,
+                    supported.z + dz,
+                    minY,
+                    maxY,
+                );
+                if (!stance || stance.y < supported.y - 1) continue;
+                candidates.push(stance);
+            }
+        }
+        if (candidates.length >= 32) break;
+    }
+    return candidates.slice(0, 32);
+}
+
+function occupiedUsableSurfaceStandingCell(bot, minY, maxY) {
+    const supported = occupiedOpenSurfaceStandingCell(bot);
+    if (!supported) return null;
+    const egress = surfaceEgressStances(bot, supported, minY, maxY);
+    if (egress.length === 0) return null;
+    const route = probeSafeNavigationStances(bot, egress, SURFACE_EGRESS_PROBE_MS);
+    return route.reachable ? supported : null;
 }
 
 function terminalSurfaceCorridorStances(bot, origin, minY, maxY) {
@@ -16632,16 +16894,26 @@ function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY) {
 function surfaceArrivalObservation(bot, minY, maxY) {
     const observed = bot.entity?.position?.clone?.() || null;
     const supported = observedSupportedStandingCell(bot);
-    // Keep remote surface selection strict so Pathfinder never seeks a
-    // treetop. If the bot already physically occupies a safe, supported cell
-    // with an open column overhead, however, that stance is usable surface
-    // access regardless of whether its support is terrain, leaves, a path, or
-    // a player-placed block.
+    // Seeing the sky is not sufficient surface access: a ravine or open pit
+    // floor can be supported and open overhead while ordinary locomotion has
+    // no way onto the surrounding terrain. Require native Pathfinder to prove
+    // usable horizontal egress from the occupied stance. If it cannot, bind a
+    // genuinely higher surface cell so deterministic recovery keeps climbing.
     const occupiedOpenSurface = occupiedOpenSurfaceStandingCell(bot);
-    const scan = occupiedOpenSurface
+    const occupiedUsableSurface = occupiedOpenSurface
+        ? occupiedUsableSurfaceStandingCell(bot, minY, maxY)
+        : null;
+    const scan = occupiedUsableSurface
         ? { target: supported, diagnostics: null }
         : observed
-        ? nearestLoadedSurfaceStandingCell(bot, observed, minY, maxY)
+        ? nearestLoadedSurfaceStandingCell(
+            bot,
+            observed,
+            minY,
+            maxY,
+            SURFACE_STANCE_SCAN_RADIUS,
+            occupiedOpenSurface ? supported.y + MIN_SURFACE_ROUTE_PROGRESS : null,
+        )
         : { target: null, diagnostics: null };
     const target = scan.target;
     return {
@@ -16649,12 +16921,7 @@ function surfaceArrivalObservation(bot, minY, maxY) {
         supported,
         target,
         scan: scan.diagnostics,
-        arrived: Boolean(
-            observed
-            && supported
-            && target
-            && observed.distanceTo(target) <= 2
-        ),
+        arrived: Boolean(observed && supported && occupiedUsableSurface && target),
     };
 }
 

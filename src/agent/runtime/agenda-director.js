@@ -176,6 +176,37 @@ export class AgendaDirector {
         });
       }
       if (repairedSatisfiedDependency) this.store.save(this.entries);
+      // Older cave expeditions incorrectly made their explicit return home
+      // conditional on finding every requested resource. Re-arm only a return
+      // step that was never attempted because its failed Explorer predecessor
+      // settled; a cancelled expedition remains cancelled by player authority.
+      const settlementRepairById = new Map(this.entries.map(entry => [entry.id, entry]));
+      let repairedSettlementContinuation = false;
+      this.entries = this.entries.map(entry => {
+        const predecessor = settlementRepairById.get(entry.dependsOnEntryId);
+        if (
+          entry.kind !== 'goto'
+          || entry.state !== 'failed'
+          || entry.evidence?.code !== 'agenda_dependency_failed'
+          || entry.dependencyPolicy !== 'requires_success'
+          || predecessor?.kind !== 'explore'
+          || predecessor?.state !== 'failed'
+        ) return entry;
+        repairedSettlementContinuation = true;
+        return normalizeAgendaEntry({
+          ...entry,
+          dependencyPolicy: 'after_settlement',
+          state: 'pending',
+          startedAt: null,
+          finishedAt: null,
+          executorId: '',
+          evidence: {
+            code: 'agenda_settlement_continuation_repaired',
+            detail: 'The expedition settled; resuming its explicit return-to-player continuation.',
+          },
+        });
+      });
+      if (repairedSettlementContinuation) this.store.save(this.entries);
       const orphanedConstructionIds = new Set(this.entries.filter(entry => (
         entry.kind === 'construction'
         && !isTerminalAgendaState(entry.state)
@@ -645,6 +676,12 @@ export class AgendaDirector {
         state: succeeded ? 'complete' : 'failed',
         code: last?.evidence?.code || 'job_ended',
         detail: last?.evidence?.detail || '',
+        // JobDirector already owns the complete productive/recovery budget and
+        // its terminal order contains the durable checkpoint it exhausted.
+        // Re-queuing here creates a new order ID, a second fresh budget, and
+        // discards its explored regions and failed targets. A new player
+        // request may start new work; one terminal job may not clone itself.
+        retryable: false,
         ...(entry.kind === 'construction' && !succeeded ? { retryable: false } : {}),
       };
     }
@@ -1058,6 +1095,8 @@ export class AgendaDirector {
                 containerZ: entry.containerConstraint.position.z,
                 containerDimension: entry.containerConstraint.dimension,
                 ...(entry.bestEffort === true ? { bestEffort: true } : {}),
+                ...(entry.retainResults === true ? { retainResults: true } : {}),
+                ...(entry.requiredOutputs?.length > 0 ? { requiredOutputs: entry.requiredOutputs } : {}),
               },
             } : {}),
           });
@@ -1223,7 +1262,17 @@ export class AgendaDirector {
         });
         return;
       }
-      if (predecessor.state !== 'complete') {
+      if (
+        next.dependencyPolicy === 'after_settlement'
+        && !isTerminalAgendaState(predecessor.state)
+      ) {
+        this.setStatus('waiting', 'agenda_dependency_pending', `Waiting for: ${describeAgendaEntry(predecessor)}.`, next.id);
+        return;
+      }
+      if (
+        next.dependencyPolicy === 'requires_success'
+        && predecessor.state !== 'complete'
+      ) {
         if (isTerminalAgendaState(predecessor.state)) {
           this.replace(next.id, {
             state: 'failed',

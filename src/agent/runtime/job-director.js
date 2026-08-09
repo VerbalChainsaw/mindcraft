@@ -49,7 +49,7 @@ const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
 const SURVIVAL_BUILDING_MATERIALS = new Set(['cobblestone', 'stone', 'dirt']);
-const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|source_not_found|not_collected|unreachable|target_unloaded|path_(?:stalled|timeout)|no_path)/;
+const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|source_not_found|not_collected|unreachable|target_unloaded|lighting_failed|path_(?:stalled|timeout)|no_path)/;
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
