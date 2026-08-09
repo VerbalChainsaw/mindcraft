@@ -1,6 +1,6 @@
 {
-  "name": "@mindcraft/mineflayer-pathfinder",
-  "version": "2.4.5-mindcraft.1",
+  "name": "mineflayer-pathfinder",
+  "version": "2.4.5",
   "description": "Mindcraft-owned Mineflayer Pathfinder runtime",
   "main": "index.js",
   "types": "index.d.ts",
