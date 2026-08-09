@@ -1,0 +1,22 @@
+diff --git a/node_modules/prismarine-physics/index.js b/node_modules/prismarine-physics/index.js
+--- a/node_modules/prismarine-physics/index.js
++++ b/node_modules/prismarine-physics/index.js
+@@ -675,7 +675,13 @@ function Physics (mcData, world) {
+           const block = world.getBlock(cursor)
+           if (block && (waterIds.includes(block.type) || waterLike.has(block.type) || block.isWaterlogged)) {
+             const waterLevel = cursor.y + 1 - getLiquidHeightPcent(block)
+-            if (Math.ceil(bb.maxY) >= waterLevel) waterBlocks.push(block)
++            // A player floating at an ordinary water surface settles with the
++            // lower part of the body still inside the source block. Test the
++            // actual lower body against the rendered liquid height instead of
++            // discarding a fixed 0.4-block band and then comparing the top of
++            // the body. The old approximation reported this stable shoreline
++            // position as dry, so jump input could never produce swim ascent.
++            if (bb.minY < waterLevel) waterBlocks.push(block)
+           }
+         }
+       }
+@@ -710,2 +716,2 @@ function Physics (mcData, world) {
+-    const waterBB = getPlayerBB(pos).contract(0.001, 0.401, 0.001)
++    const waterBB = getPlayerBB(pos).contract(0.001, 0.001, 0.001)
+     const lavaBB = getPlayerBB(pos).contract(0.1, 0.4, 0.1)

@@ -83,7 +83,18 @@ export function isFallingGameplayBlock(blockOrName) {
 
 export function isLiquidGameplayBlock(blockOrName) {
     const name = blockName(blockOrName);
-    return name === 'water' || name === 'lava';
+    if (name === 'water' || name === 'lava') return true;
+    // Kelp and seagrass occupy water source cells even though their collision
+    // boxes are empty. Waterloggable blocks expose the same fact through their
+    // state. Treating either as dry body space let stance selectors bind
+    // underwater targets that looked clear only at the block-name layer.
+    if (['bubble_column', 'kelp', 'kelp_plant', 'seagrass', 'tall_seagrass'].includes(name)) {
+        return true;
+    }
+    const properties = typeof blockOrName?.getProperties === 'function'
+        ? blockOrName.getProperties()
+        : blockOrName?._properties;
+    return properties?.waterlogged === true || properties?.waterlogged === 'true';
 }
 
 export function isSafeGameplaySupport(block) {

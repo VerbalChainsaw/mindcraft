@@ -84,6 +84,10 @@ const MAX_PVP_ENGAGEMENT_MS = 30_000;
 const MAX_BOT_OUTPUT_CHARS = 2_048;
 const MOVE_AWAY_HISTORY_TTL_MS = 10 * 60_000;
 const MOVE_AWAY_HISTORY_LIMIT = 4;
+const MEANINGFUL_RELOCATION_VERTICAL_DROP = 8;
+const MEANINGFUL_RELOCATION_SCAN_RADIUS = 64;
+const MEANINGFUL_RELOCATION_MAX_CANDIDATES = 32;
+const MEANINGFUL_RELOCATION_PROBE_MS = 2_500;
 const MAX_MELEE_REACH = 3.2;
 const ATTACK_CONFIRM_TIMEOUT_MS = 900;
 const ATTACK_INTERRUPT_POLL_MS = 50;
@@ -10470,7 +10474,12 @@ function shouldTryNavigationRecovery(bot, outcome) {
     if (bot.interrupt_code || !outcome) return false;
     if (outcome.state === 'stalled') return true;
     if (outcome.state !== 'rejected') return false;
-    return ['unreachable', 'path_timeout'].includes(pathfinderErrorOutcome(outcome.error, false));
+    // A Pathfinder timeout means route computation exhausted its own budget;
+    // it is not evidence that the body is trapped in local collision geometry.
+    // Sidestepping and submitting the identical goal only repeats the same
+    // expensive search. Return that failure to the owning goal so it can bind
+    // a different target, region, or strategy instead.
+    return pathfinderErrorOutcome(outcome.error, false) === 'unreachable';
 }
 
 function shouldTrySurvivableDescent(bot, goal, outcome) {
@@ -14290,6 +14299,111 @@ function rememberMoveAwayOrigin(bot, position, now = Date.now()) {
     moveAwayHistory.set(bot, recent.slice(-MOVE_AWAY_HISTORY_LIMIT));
 }
 
+function meaningfulRelocationCandidates(bot, position, requestedDistance, exclusionZones) {
+    const origin = position.floored();
+    // A sky platform needs a lower usable world region. Ordinary surface play
+    // usually needs different terrain at roughly the same height. Treating
+    // every meaningful relocation as a descent made a shoreline bot ignore
+    // nearby dry land and spend its whole action routing toward distant caves.
+    const requiresLowerRegion = origin.y >= 128;
+    const minY = Number.isFinite(Number(bot.game?.minY)) ? Number(bot.game.minY) : -64;
+    const maxY = Math.floor(position.y) + 2;
+    const firstRing = Math.max(2, Math.floor(requestedDistance));
+    const maximumRing = Math.max(
+        firstRing,
+        Math.min(
+            MEANINGFUL_RELOCATION_SCAN_RADIUS,
+            Math.ceil(Math.max(requestedDistance * 4, 24)),
+        ),
+    );
+    const outsideExcludedRegion = target => exclusionZones.every(zone => (
+        Math.hypot(target.x - zone.x, target.y - zone.y, target.z - zone.z) >= zone.range
+    ));
+
+    for (let ring = firstRing; ring <= maximumRing; ring += 1) {
+        const candidates = [];
+        for (let dx = -ring; dx <= ring; dx += 1) {
+            for (let dz = -ring; dz <= ring; dz += 1) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
+                const target = loadedSurfaceStandingCell(
+                    bot,
+                    origin.x + dx,
+                    origin.z + dz,
+                    minY,
+                    maxY,
+                );
+                if (!target) continue;
+                if (
+                    requiresLowerRegion
+                    && target.y > origin.y - MEANINGFUL_RELOCATION_VERTICAL_DROP
+                ) continue;
+                if (!outsideExcludedRegion(target)) continue;
+                candidates.push(target);
+            }
+        }
+        if (candidates.length > 0) {
+            return candidates
+                .sort((left, right) => (
+                    position.distanceTo(left) - position.distanceTo(right)
+                    || (requiresLowerRegion
+                        ? right.y - left.y
+                        : Math.abs(left.y - origin.y) - Math.abs(right.y - origin.y))
+                    || left.x - right.x
+                    || left.z - right.z
+                ))
+                .slice(0, MEANINGFUL_RELOCATION_MAX_CANDIDATES);
+        }
+    }
+    return [];
+}
+
+function probeMeaningfulRelocation(bot, candidates, movements, signal) {
+    if (
+        candidates.length === 0
+        || typeof bot.pathfinder?.getPathFromTo !== 'function'
+        || !bot.entity?.position
+    ) return null;
+    const goal = new pf.goals.GoalCompositeAny(
+        candidates.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
+    );
+    const timeoutMs = Math.max(
+        100,
+        Math.min(
+            MEANINGFUL_RELOCATION_PROBE_MS,
+            remainingActionTimeMs(MEANINGFUL_RELOCATION_PROBE_MS),
+        ),
+    );
+    let result = null;
+    try {
+        const generator = bot.pathfinder.getPathFromTo(
+            movements,
+            bot.entity.position,
+            goal,
+            { timeout: timeoutMs, tickTimeout: 40, searchRadius: -1 },
+        );
+        for (const step of generator) {
+            result = step?.result || null;
+            if (signal?.aborted || result?.status !== 'partial') break;
+        }
+    } catch {
+        return null;
+    }
+    if (signal?.aborted || result?.status !== 'success') return null;
+    const terminal = result.path?.at(-1);
+    if (!terminal) return null;
+    const target = candidates.find(candidate => (
+        candidate.x === Math.floor(terminal.x)
+        && candidate.y === Math.floor(terminal.y)
+        && candidate.z === Math.floor(terminal.z)
+    ));
+    if (!target) return null;
+    return {
+        target,
+        movements,
+        pathLength: result.path.length,
+    };
+}
+
 export async function moveAway(bot, distance, options = {}) {
     /**
      * Move away from current position in any direction.
@@ -14309,21 +14423,41 @@ export async function moveAway(bot, distance, options = {}) {
         || isLiquidGameplayBlock(startingFeet)
     );
     const requestedDistance = Math.max(0, Number(distance) || 0);
-    const target = { x: pos.x, y: pos.y, z: pos.z };
     const exclusionZones = recentMoveAwayExclusionZones(bot, pos, requestedDistance);
-    const retreatGoal = new pf.goals.GoalOutsideRadius(
-        pos.x,
-        pos.y,
-        pos.z,
-        requestedDistance,
-        exclusionZones,
-    );
-    bot.pathfinder.setMovements(safeMovements(bot));
+    const meaningfulMovements = options?.meaningfulRegion === true && !startedInLiquid
+        ? safeMovements(bot)
+        : null;
+    const meaningfulRelocation = meaningfulMovements
+        ? probeMeaningfulRelocation(
+            bot,
+            meaningfulRelocationCandidates(bot, pos, requestedDistance, exclusionZones),
+            meaningfulMovements,
+            signal,
+        )
+        : null;
+    const target = meaningfulRelocation
+        ? {
+            x: meaningfulRelocation.target.x,
+            y: meaningfulRelocation.target.y,
+            z: meaningfulRelocation.target.z,
+        }
+        : { x: pos.x, y: pos.y, z: pos.z };
+    const retreatGoal = meaningfulRelocation
+        ? new pf.goals.GoalBlock(target.x, target.y, target.z)
+        : new pf.goals.GoalOutsideRadius(
+            pos.x,
+            pos.y,
+            pos.z,
+            requestedDistance,
+            exclusionZones,
+        );
+    const routeMovements = meaningfulRelocation?.movements || safeMovements(bot);
+    bot.pathfinder.setMovements(routeMovements);
 
     if (bot.modes.isOn('cheat')) {
         let path;
         try {
-            path = await bot.pathfinder.getPathTo(safeMovements(bot), retreatGoal, 10000);
+            path = await bot.pathfinder.getPathTo(routeMovements, retreatGoal, 10000);
             if (signal?.aborted) return false;
         } catch (err) {
             setActionEvidence(bot, { kind: 'movement', outcome: 'probe_error', target, error: err.message, retryable: true });
@@ -14354,7 +14488,13 @@ export async function moveAway(bot, distance, options = {}) {
             // repeats the same blocked region inside one action.
             allowLocalRecovery: options?.allowLocalRecovery ?? false,
         };
-        const movementOptions = retreatOptions.movements
+        const movementOptions = meaningfulRelocation
+            ? {
+                ...retreatOptions,
+                movements: routeMovements,
+                allowHealthBoundedDescent: false,
+            }
+            : retreatOptions.movements
             ? retreatOptions
             : {
                 ...retreatOptions,
@@ -14394,7 +14534,7 @@ export async function moveAway(bot, distance, options = {}) {
     let new_pos = bot.entity.position;
     const moved = new_pos.distanceTo(pos);
     const finalFeet = bot.blockAt(new_pos.floored());
-    if (startedInLiquid && (
+    if ((startedInLiquid || meaningfulRelocation) && (
         bot.entity?.isInWater
         || bot.entity?.isInLava
         || isLiquidGameplayBlock(finalFeet)
@@ -14424,9 +14564,13 @@ export async function moveAway(bot, distance, options = {}) {
         requestedDistance,
         distance: moved,
         excludedRegions: exclusionZones.length,
+        strategy: meaningfulRelocation ? 'verified_region_change' : 'local_relocation',
+        ...(meaningfulRelocation ? { probePathLength: meaningfulRelocation.pathLength } : {}),
         retryable: true,
     });
-    log(bot, `Moved away from ${pos.floored()} to ${new_pos.floored()}.`);
+    log(bot, meaningfulRelocation
+        ? `Relocated from ${pos.floored()} to a verified distinct dry region at ${new_pos.floored()}.`
+        : `Moved away from ${pos.floored()} to ${new_pos.floored()}.`);
     return true;
 }
 

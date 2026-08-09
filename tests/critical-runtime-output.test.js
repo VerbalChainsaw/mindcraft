@@ -14,6 +14,7 @@ import {
 import {
   isFallingGameplayBlock,
   isHazardousGameplayBlock,
+  isLiquidGameplayBlock,
   isProtectedGameplayBlock,
   isReplaceableGameplayBlock,
   isSafeCaveStance,
@@ -87,6 +88,12 @@ test('critical gameplay safety classifies protected, replaceable, falling, hazar
   assert.equal(isFallingGameplayBlock('red_concrete_powder'), true);
   assert.equal(isFallingGameplayBlock('sandstone'), false);
   assert.equal(isHazardousGameplayBlock('soul_fire'), true);
+  assert.equal(isLiquidGameplayBlock('kelp_plant'), true);
+  assert.equal(isLiquidGameplayBlock({
+    name: 'oak_stairs',
+    getProperties: () => ({ waterlogged: true }),
+  }), true);
+  assert.equal(isLiquidGameplayBlock('short_grass'), false);
   assert.equal(isSafeGameplaySupport({ name: 'stone', boundingBox: 'block' }), true);
   assert.equal(isSafeGameplaySupport({ name: 'magma_block', boundingBox: 'block' }), false);
 });

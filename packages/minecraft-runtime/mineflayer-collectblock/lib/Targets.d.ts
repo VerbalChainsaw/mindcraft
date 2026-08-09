@@ -14,6 +14,8 @@ export declare class Targets {
      * @returns The closest target, or null if there are no targets.
      */
     getClosest(): Collectable | null;
+    /** Gets the closest pending dropped-item entity, if one exists. */
+    getClosestDrop(): Entity | null;
     get empty(): boolean;
     clear(): void;
     removeTarget(target: Collectable): void;

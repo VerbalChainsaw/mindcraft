@@ -19,6 +19,8 @@ const Targets_1 = require("./Targets");
 const util_1 = require("util");
 const DEFAULT_TARGET_TIMEOUT_MS = 12000;
 const DEFAULT_TARGET_STALL_TIMEOUT_MS = 3000;
+const DEFAULT_TARGET_PATH_TIMEOUT_MS = 1500;
+const DEFAULT_TARGET_SEARCH_RADIUS = 16;
 const DROPPED_ITEM_APPROACH_RANGE = 1;
 const DROPPED_ITEM_NUDGE_TIMEOUT_MS = 1000;
 const DROPPED_ITEM_NUDGE_STALL_MS = 250;
@@ -122,15 +124,27 @@ function boundedTargetFailures(value) {
         return Infinity;
     return Math.max(1, Math.min(64, Math.floor(failures)));
 }
-function gotoWithTargetLimits(bot, goal, targetTimeoutMs, targetStallTimeoutMs) {
+function boundedTargetSearchRadius(value) {
+    const radius = Number(value);
+    if (!Number.isFinite(radius) || radius <= 0)
+        return DEFAULT_TARGET_SEARCH_RADIUS;
+    return Math.max(4, Math.min(64, Math.floor(radius)));
+}
+function gotoWithTargetLimits(bot, goal, targetTimeoutMs, targetStallTimeoutMs, targetSearchRadius) {
     return __awaiter(this, void 0, void 0, function* () {
         const timeoutMs = boundedTargetTimeout(targetTimeoutMs);
         const stallTimeoutMs = boundedTargetTimeout(targetStallTimeoutMs);
         if (timeoutMs <= 0 && stallTimeoutMs <= 0)
-            return yield bot.pathfinder.goto(goal);
+            return yield bot.pathfinder.goto(goal, {
+                timeout: DEFAULT_TARGET_PATH_TIMEOUT_MS,
+                searchRadius: boundedTargetSearchRadius(targetSearchRadius)
+            });
         let timeout;
         let stallInterval;
-        const navigation = Promise.resolve().then(() => bot.pathfinder.goto(goal));
+        const navigation = Promise.resolve().then(() => bot.pathfinder.goto(goal, {
+            timeout: Math.min(DEFAULT_TARGET_PATH_TIMEOUT_MS, timeoutMs || DEFAULT_TARGET_PATH_TIMEOUT_MS),
+            searchRadius: boundedTargetSearchRadius(targetSearchRadius)
+        }));
         const limits = [];
         if (timeoutMs > 0) {
             limits.push(new Promise((resolve, reject) => {
@@ -182,7 +196,11 @@ function collectAll(bot, options) {
                 options.targets.clear();
                 break;
             }
-            const closest = options.targets.getClosest();
+            // A freshly mined drop is the unfinished output of the current
+            // block transaction. Pick it up before routing to another block;
+            // otherwise an unreachable next block can make real progress look
+            // like a failed collection action.
+            const closest = options.targets.getClosestDrop() || options.targets.getClosest();
             if (closest == null)
                 break;
             if (!(0, Inventory_1.hasInventoryRoomForTarget)(bot, closest)) {
@@ -192,7 +210,7 @@ function collectAll(bot, options) {
                 switch (closest.constructor.name) {
                     case 'Block': {
                         const goal = new mineflayer_pathfinder_1.goals.GoalLookAtBlock(closest.position, bot.world);
-                        yield gotoWithTargetLimits(bot, goal, options.targetTimeoutMs, options.targetStallTimeoutMs);
+                        yield gotoWithTargetLimits(bot, goal, options.targetTimeoutMs, options.targetStallTimeoutMs, options.targetSearchRadius);
                         yield mineBlock(bot, closest, options);
                         break;
                     }
@@ -216,7 +234,7 @@ function collectAll(bot, options) {
                         bot.once('collectBlock_cancelled', cancelPickupWait);
                         let pickupTimeout;
                         try {
-                            const navigation = gotoWithTargetLimits(bot, createDroppedItemPickupGoal(closest), options.targetTimeoutMs, options.targetStallTimeoutMs);
+                            const navigation = gotoWithTargetLimits(bot, createDroppedItemPickupGoal(closest), options.targetTimeoutMs, options.targetStallTimeoutMs, options.targetSearchRadius);
                             const first = yield Promise.race([
                                 navigation.then(() => 'arrived'),
                                 waitForPickup.then(() => 'picked-up')
@@ -479,6 +497,7 @@ class CollectBlock {
                 targetStallTimeoutMs: boundedTargetTimeout(options.targetStallTimeoutMs === undefined
                     ? this.targetStallTimeoutMs
                     : options.targetStallTimeoutMs),
+                targetSearchRadius: boundedTargetSearchRadius(options.targetSearchRadius),
                 toolPolicy: options.toolPolicy === 'fastest' ? 'fastest' : 'preserve_durability',
                 targets: this.targets
             };

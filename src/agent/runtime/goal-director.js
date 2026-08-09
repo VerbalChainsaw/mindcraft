@@ -38,7 +38,7 @@ const FAILED_TARGET_EXCLUSION_RADIUS = 4;
 // can spend the goal budget on the same contaminated region. Move one complete
 // scan radius before rebinding; owned Pathfinder still enforces the action
 // deadline, recent-region exclusions, and non-destructive movement policy.
-const ACQUISITION_REGION_RELOCATION_DISTANCE = 64;
+const ACQUISITION_REGION_RELOCATION_DISTANCE = 32;
 const UNDERGROUND_SURFACE_RECOVERY_Y = 48;
 const SURFACE_ACCESS_TARGET_Y = 56;
 // A failed target above ordinary block-interaction reach is not another local
@@ -348,21 +348,29 @@ function recoveryCommand(goal, bot) {
   if (
     /(?:not_found|no_safe|unreachable|search|resource|no_path|path_|stuck)/.test(code)
     && !/(?:missing_material|missing_item|missing_tool|invalid_|table_unreachable|furnace_unreachable)/.test(code)
-  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE})`;
+  ) {
+    const localRelocationAlreadyTried = goal.subgoals.some(subgoal => (
+      subgoal.kind === 'recover' && subgoal.commandName === '!moveAway'
+    ));
+    return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
+  }
   return null;
 }
 
 function plannedDisengagementCommand(goal, bot) {
   const code = String(goal.evidence?.code || '');
   if (needsSurfaceRecovery(goal, bot)) return '!goToSurface';
+  const localRelocationAlreadyTried = goal.subgoals.some(subgoal => (
+    subgoal.kind === 'recover' && subgoal.commandName === '!moveAway'
+  ));
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:resource_not_found|search_exhausted)/.test(code)
-  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE})`;
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken|timeout|action_deadline)/.test(code)
-  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE})`;
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
   return null;
 }
 

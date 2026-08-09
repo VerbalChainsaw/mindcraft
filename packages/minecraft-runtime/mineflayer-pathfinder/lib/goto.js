@@ -13,7 +13,7 @@ function error (name, message) {
    * @param {Goal} goal - The goal to execute.
    * @returns {Promise} - resolves on success, rejects on error
    */
-function goto (bot, goal) {
+function goto (bot, goal, options = {}) {
   return new Promise((resolve, reject) => {
     function goalReached () {
       cleanup()
@@ -68,7 +68,7 @@ function goto (bot, goal) {
     bot.on('goal_reached', goalReached)
     bot.on('path_update', noPathListener)
     bot.on('goal_updated', goalChangedListener)
-    bot.pathfinder.setGoal(goal)
+    bot.pathfinder.setGoal(goal, false, options)
   })
 }
 

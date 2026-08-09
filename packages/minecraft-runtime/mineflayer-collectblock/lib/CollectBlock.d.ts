@@ -44,6 +44,12 @@ export interface CollectOptions {
      */
     targetStallTimeoutMs?: number;
     /**
+     * Maximum additional A* route cost allowed beyond the target heuristic.
+     * Keeps one impossible local target from searching the loaded world.
+     * Defaults to 16.
+     */
+    targetSearchRadius?: number;
+    /**
      * Selects the fastest tool by default, but avoids durability wear when an
      * empty hand or non-wearing item has identical break speed. Set to
      * `fastest` to retain mineflayer-tool's original tie behavior.

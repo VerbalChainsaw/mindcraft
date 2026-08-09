@@ -797,7 +797,7 @@ test('one no-progress concrete failure relocates before the same regional signat
   director.update();
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.deepEqual(commands, ['!moveAway(64)']);
+  assert.deepEqual(commands, ['!moveAway(32, false)']);
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 2);
   assert.equal(director.activeGoal.subgoals.at(-1).kind, 'recover');

@@ -21,7 +21,7 @@ declare module 'mineflayer-pathfinder' {
 		getPathTo(
 			movements: Movements,
 			goal: goals.Goal,
-			timeout?: number
+			options?: number | PathOptions
 		): ComputedPath;
 		getPathFromTo(
 			movements: Movements,
@@ -37,14 +37,20 @@ declare module 'mineflayer-pathfinder' {
 			}
 		): IterableIterator<{ result: ComputedPath, astarContext: AStar }>
 
-		setGoal(goal: goals.Goal | null, dynamic?: boolean): void;
+		setGoal(goal: goals.Goal | null, dynamic?: boolean, options?: PathOptions): void;
 		setMovements(movements: Movements): void;
-		goto(goal: goals.Goal, callback?: Callback): Promise<void>;
+		goto(goal: goals.Goal, options?: PathOptions): Promise<void>;
 		stop(): void;
 
 		isMoving(): boolean;
 		isMining(): boolean;
 		isBuilding(): boolean;
+	}
+
+	export interface PathOptions {
+		timeout?: number;
+		tickTimeout?: number;
+		searchRadius?: number;
 	}
 
 	export namespace goals {

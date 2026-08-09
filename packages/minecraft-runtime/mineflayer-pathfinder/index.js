@@ -14,6 +14,7 @@ const Physics = require('./lib/physics')
 const nbt = require('prismarine-nbt')
 const interactableBlocks = require('./lib/interactable.json')
 const NODE_EXECUTION_STALL_MS = 2500
+const NODE_PROGRESS_EPSILON = 0.02
 const OPENABLE_STATE_TIMEOUT_MS = 1200
 const OPENABLE_CLEAR_TIMEOUT_MS = 3000
 const OPENABLE_SAFE_CLEARANCE = 0.7
@@ -25,6 +26,7 @@ function inject (bot) {
   const vineId = bot.registry.blocksByName.vine.id
   let stateMovements = new Movements(bot)
   let stateGoal = null
+  let statePathOptions = {}
   let astarContext = null
   let astartTimedout = false
   let dynamicGoal = false
@@ -34,6 +36,7 @@ function inject (bot) {
   let placing = false
   let placingBlock = null
   let lastNodeTime = performance.now()
+  let nodeProgress = null
   let returningPos = null
   let stopPathing = false
   let lastStuckState = null
@@ -72,12 +75,13 @@ function inject (bot) {
     return bestTool
   }
 
-  bot.pathfinder.getPathTo = (movements, goal, timeout) => {
+  bot.pathfinder.getPathTo = (movements, goal, options = {}) => {
     // Update lava avoidance based on current bot state
     if (movements.updateLavaAvoidance) {
       movements.updateLavaAvoidance()
     }
-    const generator = bot.pathfinder.getPathFromTo(movements, bot.entity.position, goal, { timeout })
+    const pathOptions = Number.isFinite(options) ? { timeout: options } : options
+    const generator = bot.pathfinder.getPathFromTo(movements, bot.entity.position, goal, pathOptions)
     const { value: { result, astarContext: context } } = generator.next()
     astarContext = context
     return result
@@ -165,6 +169,7 @@ function inject (bot) {
     placing = false
     placingBlock = null
     verticalTransition = null
+    nodeProgress = null
     pathUpdated = false
     astarContext = null
     lockEquipItem.release()
@@ -175,11 +180,12 @@ function inject (bot) {
     if (stopPathing) return stop()
   }
 
-  bot.pathfinder.setGoal = (goal, dynamic = false) => {
+  bot.pathfinder.setGoal = (goal, dynamic = false, options = {}) => {
     if (goal) {
       lastStuckState = null
     }
     stateGoal = goal
+    statePathOptions = goal ? { ...options } : {}
     dynamicGoal = dynamic
     bot.emit('goal_updated', goal, dynamic)
     resetPath('goal_updated')
@@ -194,8 +200,8 @@ function inject (bot) {
   bot.pathfinder.isMining = () => digging
   bot.pathfinder.isBuilding = () => placing
 
-  bot.pathfinder.goto = (goal) => {
-    return gotoUtil(bot, goal)
+  bot.pathfinder.goto = (goal, options = {}) => {
+    return gotoUtil(bot, goal, options)
   }
 
   bot.pathfinder.stop = () => {
@@ -638,6 +644,28 @@ function inject (bot) {
     return Math.hypot(position.x - nearestX, position.z - nearestZ) > 0.85
   }
 
+  function observeNodeConvergence (nextPoint, position, now = performance.now()) {
+    const source = nextPoint.locomotion?.source
+    const key = `${nextPoint.locomotion?.type || 'legacy'}:${source?.x ?? ''},${source?.y ?? ''},${source?.z ?? ''}->${nextPoint.x},${nextPoint.y},${nextPoint.z}`
+    const metric = Math.hypot(
+      nextPoint.x - position.x,
+      nextPoint.y - position.y,
+      nextPoint.z - position.z
+    )
+    if (!nodeProgress || nodeProgress.key !== key) {
+      nodeProgress = { key, bestMetric: metric }
+      lastNodeTime = now
+      return
+    }
+    // Long drops and swim-up transitions may legitimately take longer than
+    // the fail-fast horizon. Renew it only for monotonic physical convergence,
+    // never merely because movement controls remain asserted.
+    if (metric <= nodeProgress.bestMetric - NODE_PROGRESS_EPSILON) {
+      nodeProgress.bestMetric = metric
+      lastNodeTime = now
+    }
+  }
+
   function hasSettledStandingSupport (position) {
     const velocityY = Number(bot.entity.velocity?.y) || 0
     if (Math.abs(velocityY) > 0.12) return false
@@ -658,11 +686,11 @@ function inject (bot) {
       return false
     }
 
-    // A liquid-origin step cannot be recentered as if the bot were standing
-    // on dry ground. While swimming, onGround is normally false, so the dry
-    // preflight below would clear jump and forward forever. The executor
-    // already owns water/lava ascent and step-up controls; let it perform the
-    // planned transition directly.
+    // A liquid-origin step still needs an exact launch cell. Reaching a water
+    // node within the ordinary arrival tolerance can leave the body pressed
+    // against the bank face, where the server cancels every upward impulse.
+    // It cannot use the dry onGround precondition, so it gets a bounded native
+    // swim-to-center phase before the ordinary step execution begins.
     const sourceBlock = bot.blockAt(new Vec3(
       locomotion.source.x,
       locomotion.source.y,
@@ -671,12 +699,9 @@ function inject (bot) {
     const sourceIsLiquid = sourceBlock && (
       sourceBlock.type === waterType || sourceBlock.type === lavaType
     )
-    if (locomotion.type === 'step_up' && (
+    const liquidStep = locomotion.type === 'step_up' && (
       sourceIsLiquid || bot.entity.isInWater || bot.entity.isInLava
-    )) {
-      verticalTransition = null
-      return false
-    }
+    )
 
     const key = `${locomotion.type}:${locomotion.source.x},${locomotion.source.y},${locomotion.source.z}->${nextPoint.x},${nextPoint.y},${nextPoint.z}`
     if (!verticalTransition || verticalTransition.key !== key) {
@@ -688,6 +713,38 @@ function inject (bot) {
         source: locomotion.source
       }
     }
+    if (verticalTransition.phase === 'execute') return false
+
+    if (liquidStep) {
+      const centerX = locomotion.source.x + 0.5
+      const centerZ = locomotion.source.z + 0.5
+      const centerDx = centerX - position.x
+      const centerDz = centerZ - position.z
+      if (Math.hypot(centerDx, centerDz) <= 0.12) {
+        const targetDx = nextPoint.x - position.x
+        const targetDz = nextPoint.z - position.z
+        bot.look(Math.atan2(-targetDx, -targetDz), 0, true)
+        // Preserve the upward impulse while handing the centered body to the
+        // bank step. A cleared-control tick here lets gravity pull the player
+        // back below the block lip before forward motion can begin.
+        bot.setControlState('forward', true)
+        bot.setControlState('jump', true)
+        bot.setControlState('sprint', false)
+        verticalTransition.phase = 'execute'
+        lastNodeTime = performance.now()
+        return true
+      }
+      if (performance.now() - verticalTransition.startedAt > 1200) {
+        resetPath('stuck')
+        return true
+      }
+      bot.look(Math.atan2(-centerDx, -centerDz), 0, true)
+      bot.setControlState('forward', true)
+      bot.setControlState('jump', true)
+      bot.setControlState('sprint', false)
+      return true
+    }
+
     // Paper can confirm the player is grounded while Mineflayer's local flag
     // remains false between collision ticks. A step-up cannot start in that
     // state because prismarine-physics will ignore jump input. Reconcile only
@@ -699,8 +756,6 @@ function inject (bot) {
     ) {
       bot.entity.onGround = true
     }
-    if (verticalTransition.phase === 'execute') return false
-
     const verticalProgress = locomotion.type === 'step_up'
       ? position.y > locomotion.source.y + 0.25
       : position.y < locomotion.source.y - 0.25
@@ -853,10 +908,11 @@ function inject (bot) {
           if (!dynamicGoal) {
             bot.emit('goal_reached', stateGoal)
             stateGoal = null
+            statePathOptions = {}
             fullStop()
           }
         } else if (!pathUpdated) {
-          const results = bot.pathfinder.getPathTo(stateMovements, stateGoal)
+          const results = bot.pathfinder.getPathTo(stateMovements, stateGoal, statePathOptions)
           bot.emit('path_update', results)
           path = results.path
           astartTimedout = results.status === 'partial'
@@ -1037,6 +1093,7 @@ function inject (bot) {
     if (reachedNextPoint) {
       // arrived at next point
       verticalTransition = null
+      nodeProgress = null
       lastNodeTime = performance.now()
       if (stopPathing) {
         stop()
@@ -1051,8 +1108,9 @@ function inject (bot) {
         // If the block the bot is standing on is not a full block only checking for the floored position can fail as
         // the distance to the goal can get greater then 0 when the vector is floored.
         if (!dynamicGoal && stateGoal && (stateGoal.isEnd(p.floored()) || stateGoal.isEnd(p.floored().offset(0, 1, 0)))) {
-          bot.emit('goal_reached', stateGoal)
-          stateGoal = null
+            bot.emit('goal_reached', stateGoal)
+            stateGoal = null
+            statePathOptions = {}
         }
         fullStop()
         return
@@ -1074,6 +1132,7 @@ function inject (bot) {
       return
     }
 
+    observeNodeConvergence(nextPoint, p)
     if (prepareVerticalTransition(nextPoint, p)) return
 
     bot.look(

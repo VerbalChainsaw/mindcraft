@@ -33,6 +33,27 @@ class Targets {
         }
         return closest;
     }
+    /**
+     * Gets the closest pending dropped-item entity, if one exists.
+     *
+     * A block is not fully collected when it breaks; its physical drop still
+     * has to reach inventory. Finish that transaction before starting another
+     * block route so a later path failure cannot erase verified block progress.
+     */
+    getClosestDrop() {
+        let closest = null;
+        let distance = 0;
+        for (const target of this.targets) {
+            if (target?.constructor?.name !== 'Entity')
+                continue;
+            const dist = target.position.distanceTo(this.bot.entity.position);
+            if (closest == null || dist < distance) {
+                closest = target;
+                distance = dist;
+            }
+        }
+        return closest;
+    }
     get empty() {
         return this.targets.length === 0;
     }
