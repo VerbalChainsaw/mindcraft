@@ -674,10 +674,15 @@ export const actionsList = [
     },
     {
         name: '!moveAway',
-        description: 'Move away from the current location in any direction by a given distance.',
-        params: {'distance': { type: 'float', description: 'The distance to move away.', domain: [0, Infinity] }},
-        perform: runAsAction(async (agent, distance) => {
-            return await skills.moveAway(agent.bot, distance);
+        description: 'Move away from the current location; deterministic recovery may require a verified different loaded region after local relocation fails.',
+        params: {
+            'distance': { type: 'float', description: 'The distance to move away.', domain: [0, Infinity] },
+            'meaningful_region': { type: 'boolean', description: 'Bind a physically distinct safe loaded region instead of another local displacement.', optional: true, default: false },
+        },
+        perform: runAsAction(async (agent, distance, meaningful_region = false) => {
+            return await skills.moveAway(agent.bot, distance, {
+                meaningfulRegion: meaningful_region === true,
+            });
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
     {
