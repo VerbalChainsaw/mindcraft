@@ -395,6 +395,10 @@ function setActionEvidence(bot, evidence) {
             returnRoute: previous.returnRoute,
         } : {}),
         ...evidence,
+        ...(evidence?.kind === 'collect' ? {
+            toolState: collectionToolStateEvidence(bot, evidence.target),
+            inventoryState: collectionInventoryStateEvidence(bot),
+        } : {}),
         recordedAt: Date.now(),
     };
 }
@@ -2816,6 +2820,71 @@ function toolDurability(bot, item) {
         reserve,
         usable: Math.max(0, remaining - reserve),
         healthy: remaining > reserve,
+    };
+}
+
+function collectionToolItemEvidence(bot, item) {
+    if (!item?.name) return null;
+    const durability = toolDurability(bot, item);
+    return {
+        name: item.name,
+        count: Math.max(0, Number(item.count) || 0),
+        inventorySlot: Number.isInteger(item.slot) ? item.slot : null,
+        durability: Number.isFinite(durability.max) ? {
+            maximum: durability.max,
+            used: durability.used,
+            remaining: durability.remaining,
+            reserve: durability.reserve,
+            usable: durability.usable,
+            healthy: durability.healthy,
+        } : null,
+    };
+}
+
+function collectionToolStateEvidence(bot, target) {
+    const selected = collectionToolItemEvidence(bot, bot?.heldItem);
+    const carried = (bot?.inventory?.items?.() || [])
+        .filter(item => Object.hasOwn(TOOL_PREPARATION_SPECS, item?.name))
+        .slice(0, 16)
+        .map(item => collectionToolItemEvidence(bot, item))
+        .filter(Boolean);
+    let canHarvestTarget = null;
+    if (selected && [target?.x, target?.y, target?.z].every(Number.isFinite)) {
+        try {
+            const block = bot.blockAt(new Vec3(target.x, target.y, target.z));
+            canHarvestTarget = block ? block.canHarvest(bot.heldItem?.type ?? null) : null;
+        } catch {
+            canHarvestTarget = null;
+        }
+    }
+    return {
+        observedAt: Date.now(),
+        selectedInventorySlot: selected?.inventorySlot ?? null,
+        selectedHotbarSlot: Number.isInteger(bot?.quickBarSlot) ? bot.quickBarSlot : null,
+        selected,
+        carried,
+        canHarvestTarget,
+    };
+}
+
+function collectionInventoryStateEvidence(bot) {
+    const items = (bot?.inventory?.items?.() || [])
+        .slice(0, 46)
+        .map(item => ({
+            name: String(item?.name || '').slice(0, 80),
+            count: Math.max(0, Number(item?.count) || 0),
+            inventorySlot: Number.isInteger(item?.slot) ? item.slot : null,
+        }))
+        .filter(item => item.name);
+    const counts = {};
+    for (const item of items) counts[item.name] = (counts[item.name] || 0) + item.count;
+    return {
+        observedAt: Date.now(),
+        emptySlots: Number.isFinite(bot?.inventory?.emptySlotCount?.())
+            ? bot.inventory.emptySlotCount()
+            : null,
+        counts,
+        items,
     };
 }
 
@@ -5808,8 +5877,15 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
      * @example
      * await skills.collectBlock(bot, "oak_log");
      **/
+    const failedCollectionTargets = [];
+    const setCollectionEvidence = evidence => setActionEvidence(bot, {
+        ...evidence,
+        ...(failedCollectionTargets.length > 0 ? {
+            failedTargets: failedCollectionTargets.map(target => ({ ...target })),
+        } : {}),
+    });
     if (num < 1) {
-        setActionEvidence(bot, {
+        setCollectionEvidence({
             kind: 'collect',
             outcome: 'invalid_request',
             target: { name: blockType || 'block' },
@@ -5858,11 +5934,36 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         searchOptions?.preservedReturnRoute,
     );
     const excludedPositions = normalizeCollectionExclusions(exclude);
+    const rememberCollectionTargetFailure = (outcome, target) => {
+        if (
+            !RETRYABLE_COLLECTION_TARGET_OUTCOMES.has(outcome)
+            || ![target?.x, target?.y, target?.z].every(Number.isFinite)
+        ) return false;
+        const failure = {
+            kind: 'collect',
+            name: target.name || blockType,
+            x: Math.floor(target.x),
+            y: Math.floor(target.y),
+            z: Math.floor(target.z),
+            outcome,
+            targetLocal: true,
+        };
+        const key = `${failure.name}:${failure.x}:${failure.y}:${failure.z}`;
+        const priorIndex = failedCollectionTargets.findIndex(candidate => (
+            `${candidate.name}:${candidate.x}:${candidate.y}:${candidate.z}` === key
+        ));
+        if (priorIndex >= 0) failedCollectionTargets.splice(priorIndex, 1);
+        failedCollectionTargets.push(failure);
+        if (failedCollectionTargets.length > MAX_COLLECTION_CANDIDATES) {
+            failedCollectionTargets.shift();
+        }
+        return true;
+    };
     const retryDifferentCollectionTarget = (outcome, target) => {
+        const targetFailedLocally = rememberCollectionTargetFailure(outcome, target);
         if (
             preferredPosition
-            || !RETRYABLE_COLLECTION_TARGET_OUTCOMES.has(outcome)
-            || ![target?.x, target?.y, target?.z].every(Number.isFinite)
+            || !targetFailedLocally
             || search.candidateFailures >= MAX_COLLECTION_TARGET_FAILURES
         ) return false;
         excludedPositions.push({
@@ -5916,7 +6017,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 continue;
             }
             if (collected === 0) {
-                setActionEvidence(bot, {
+                setCollectionEvidence({
                     kind: 'collect',
                     outcome: 'resource_not_found',
                     target: { name: blockType },
@@ -5990,6 +6091,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 continue;
             }
             if (bot.lastActionEvidence?.kind === 'collect' && bot.lastActionEvidence.outcome === 'missing_tool') {
+                setCollectionEvidence(bot.lastActionEvidence);
                 return false;
             }
             const miningFailure = (
@@ -6000,7 +6102,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     bot.lastActionEvidence?.target?.z,
                 ].every(Number.isFinite)
             ) ? bot.lastActionEvidence : null;
-            setActionEvidence(bot, {
+            setCollectionEvidence({
                 kind: 'collect',
                 outcome: 'unreachable',
                 target: miningFailure ? {
@@ -6060,7 +6162,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 .filter(type => Number.isInteger(type)),
         );
         if (!isLiquid && expectedDropTypes.size === 0) {
-            setActionEvidence(bot, {
+            setCollectionEvidence({
                 kind: 'collect',
                 outcome: 'no_collectible_drop',
                 target,
@@ -6109,7 +6211,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     && bot.inventory.emptySlotCount() < desiredSlots
                 )
             ) {
-                setActionEvidence(bot, {
+                setCollectionEvidence({
                     kind: 'collect',
                     outcome: 'inventory_full',
                     target,
@@ -6124,14 +6226,14 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         try {
             await equipBestToolForBlock(bot, block);
         } catch (err) {
-            setActionEvidence(bot, { kind: 'collect', outcome: 'missing_tool', target, error: err.message, retryable: true });
+            setCollectionEvidence({ kind: 'collect', outcome: 'missing_tool', target, error: err.message, retryable: true });
             log(bot, `Could not prepare a tool for ${block.name}: ${err.message}.`);
             return false;
         }
         if (isLiquid) {
             const bucket = bot.inventory.findInventoryItem('bucket');
             if (!bucket) {
-                setActionEvidence(bot, {
+                setCollectionEvidence({
                     kind: 'collect',
                     outcome: 'missing_tool',
                     target,
@@ -6145,7 +6247,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         }
         const itemId = bot.heldItem ? bot.heldItem.type : null
         if (!block.canHarvest(itemId)) {
-            setActionEvidence(bot, { kind: 'collect', outcome: 'missing_tool', target, retryable: true });
+            setCollectionEvidence({ kind: 'collect', outcome: 'missing_tool', target, retryable: true });
             log(bot, `Don't have right tools to harvest ${blockType}.`);
             return false;
         }
@@ -6162,7 +6264,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     const navigation = bot.lastActionEvidence?.kind === 'movement'
                         ? bot.lastActionEvidence
                         : null;
-                    setActionEvidence(bot, {
+                    setCollectionEvidence({
                         kind: 'collect',
                         outcome: navigation?.outcome || 'unreachable',
                         target,
@@ -6184,7 +6286,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 );
                 const remaining = bot.blockAt(block.position);
                 if (!remaining || remaining.name === block.name) {
-                    setActionEvidence(bot, { kind: 'collect', outcome: 'not_broken', target, retryable: true });
+                    setCollectionEvidence({ kind: 'collect', outcome: 'not_broken', target, retryable: true });
                     log(bot, `Could not verify that ${block.name} was collected.`);
                     return false;
                 }
@@ -6194,8 +6296,9 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     beforeTargetDropCount,
                     { targetPosition: block.position, priorEntityIds: priorDropEntityIds },
                 )) {
-                    setActionEvidence(bot, { kind: 'collect', outcome: 'not_collected', target, retryable: true });
-                    if (retryDifferentCollectionTarget('not_collected', target)) {
+                    const retryDifferentTarget = retryDifferentCollectionTarget('not_collected', target);
+                    setCollectionEvidence({ kind: 'collect', outcome: 'not_collected', target, retryable: true });
+                    if (retryDifferentTarget) {
                         i -= 1;
                         continue;
                     }
@@ -6224,7 +6327,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             : bot.canSeeBlock?.(liveTarget));
                     if (!directReach && allowNaturalRouteDigging) {
                         if (!miningAssessment?.safe) {
-                            setActionEvidence(bot, {
+                            setCollectionEvidence({
                                 kind: 'collect',
                                 outcome: miningAssessment?.code || 'no_safe_stance',
                                 target,
@@ -6266,7 +6369,8 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                                     : !miningAssessment?.safe
                                         ? miningAssessment?.code || 'no_safe_stance'
                                         : 'stance_unverified';
-                            setActionEvidence(bot, {
+                            const retryDifferentTarget = retryDifferentCollectionTarget(outcome, target);
+                            setCollectionEvidence({
                                 kind: 'collect',
                                 outcome,
                                 target,
@@ -6276,7 +6380,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             log(bot, bot.interrupt_code
                                 ? `Stopped before collecting ${block.name}.`
                                 : `No verified stable stance reached ${block.name}.`);
-                            if (retryDifferentCollectionTarget(outcome, target)) {
+                            if (retryDifferentTarget) {
                                 i -= 1;
                                 continue;
                             }
@@ -6299,7 +6403,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             const navigation = bot.lastActionEvidence?.kind === 'movement'
                                 ? bot.lastActionEvidence
                                 : null;
-                            setActionEvidence(bot, {
+                            setCollectionEvidence({
                                 kind: 'collect',
                                 outcome: navigation?.outcome || 'unreachable',
                                 target,
@@ -6347,7 +6451,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     bot.modes.unpause('elbow_room');
                 }
                 if (bot.interrupt_code) {
-                    setActionEvidence(bot, {
+                    setCollectionEvidence({
                         kind: 'collect',
                         outcome: 'interrupted',
                         target,
@@ -6357,7 +6461,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 }
                 const remaining = bot.blockAt(block.position);
                 if (!remaining) {
-                    setActionEvidence(bot, {
+                    setCollectionEvidence({
                         kind: 'collect',
                         outcome: 'target_unloaded',
                         target,
@@ -6371,7 +6475,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     const outcome = Number.isFinite(distance) && distance > 4.5
                         ? 'unreachable'
                         : 'not_broken';
-                    setActionEvidence(bot, {
+                    setCollectionEvidence({
                         kind: 'collect',
                         outcome,
                         target,
@@ -6394,7 +6498,8 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
                 }
                 if (expectedDropTypes.size > 0 && afterDropCount <= beforeTargetDropCount) {
-                    setActionEvidence(bot, {
+                    const retryDifferentTarget = retryDifferentCollectionTarget('not_collected', target);
+                    setCollectionEvidence({
                         kind: 'collect',
                         outcome: 'not_collected',
                         target,
@@ -6403,7 +6508,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         retryable: true,
                     });
                     log(bot, `${block.name} was broken, but its drop did not enter this bot's inventory.`);
-                    if (retryDifferentCollectionTarget('not_collected', target)) {
+                    if (retryDifferentTarget) {
                         i -= 1;
                         continue;
                     }
@@ -6438,7 +6543,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 if (!lowestCollectedTarget || target.y < lowestCollectedTarget.y) {
                     lowestCollectedTarget = target;
                 }
-                setActionEvidence(bot, {
+                setCollectionEvidence({
                     kind: 'collect',
                     outcome: 'collected',
                     target,
@@ -6452,13 +6557,13 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 continue;
             }
             if (err.name === 'NoChests') {
-                setActionEvidence(bot, { kind: 'collect', outcome: 'inventory_full', target, retryable: true });
+                setCollectionEvidence({ kind: 'collect', outcome: 'inventory_full', target, retryable: true });
                 log(bot, `Failed to collect ${blockType}: Inventory full, no place to deposit.`);
                 return false;
             }
             else {
                 const outcome = collectionErrorOutcome(err);
-                setActionEvidence(bot, {
+                setCollectionEvidence({
                     kind: 'collect',
                     outcome,
                     target,
@@ -6475,7 +6580,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
     }
     const cancelled = Boolean(bot.interrupt_code || cancellationSignal?.aborted);
     if (cancelled) {
-        setActionEvidence(bot, {
+        setCollectionEvidence({
             kind: 'collect',
             outcome: 'interrupted',
             target: lowestCollectedTarget || { name: blockType },
@@ -6484,7 +6589,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             retryable: false,
         });
     } else if (collected > 0) {
-        setActionEvidence(bot, {
+        setCollectionEvidence({
             kind: 'collect',
             outcome: 'collected',
             target: lowestCollectedTarget || { name: blockType },
@@ -6493,7 +6598,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             retryable: false,
         });
     } else if (bot.lastActionEvidence?.kind !== 'collect') {
-        setActionEvidence(bot, {
+        setCollectionEvidence({
             kind: 'collect',
             outcome: 'not_collected',
             target: { name: blockType },

@@ -93,6 +93,60 @@ const CENSORED_OUTCOME_CODES = new Set([
   'stop_requested',
 ]);
 
+const TARGET_LOCAL_FAILURE_CODE = /(?:action_deadline|collect_blocked|goal_not_reached|no_path|no_safe_stance|not_broken|not_collected|path_stalled|path_timeout|stance_unverified|target_unloaded|timeout|unreachable)/;
+
+function concreteFailureTarget(value, fallbackKind = 'action', fallbackOutcome = 'unknown') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!value.name || ![value.x, value.y, value.z].every(Number.isFinite)) return null;
+  return {
+    kind: text(value.kind || fallbackKind).slice(0, 32) || 'action',
+    name: text(value.name).slice(0, 80),
+    x: Math.floor(value.x),
+    y: Math.floor(value.y),
+    z: Math.floor(value.z),
+    outcome: text(value.outcome || value.code || fallbackOutcome).slice(0, 80) || 'unknown',
+    targetLocal: true,
+  };
+}
+
+/**
+ * Return only failures that independently establish a bad physical target.
+ * A prerequisite by itself must never poison a coordinate. Skills can make the
+ * distinction explicit with `failedTargets[].targetLocal`; older single-target
+ * results retain a conservative fallback only when no prerequisite coexists.
+ */
+export function actionResultTargetFailures(result) {
+  if (!result || result.phase === 'succeeded') return [];
+  const skill = result.evidence?.skill && typeof result.evidence.skill === 'object'
+    ? result.evidence.skill
+    : null;
+  const hasExplicitFailures = Array.isArray(skill?.failedTargets);
+  const explicit = hasExplicitFailures
+    ? skill.failedTargets
+      .filter(target => target?.targetLocal === true)
+      .map(target => concreteFailureTarget(target, skill?.kind, skill?.outcome))
+      .filter(Boolean)
+    : [];
+  const candidates = hasExplicitFailures
+    ? explicit
+    : (
+        skill?.toolRequirement
+        || skill?.workstationRequirement
+        || skill?.accessRequirement
+        || !TARGET_LOCAL_FAILURE_CODE.test(`${result.code || ''} ${skill?.outcome || ''}`)
+      )
+      ? []
+      : [skill?.target, result.target]
+        .map(target => concreteFailureTarget(target, skill?.kind, skill?.outcome || result.code))
+        .filter(Boolean)
+        .slice(0, 1);
+  const distinct = new Map();
+  for (const target of candidates) {
+    distinct.set(`${target.kind}:${target.name}:${target.x}:${target.y}:${target.z}`, target);
+  }
+  return [...distinct.values()].slice(-24);
+}
+
 export function isPreemption(result) {
   return result?.phase === 'interrupted' || PREEMPTION_CODE.test(text(result?.code));
 }

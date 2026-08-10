@@ -4,7 +4,11 @@ import path from 'node:path';
 import { getCommand, executeCommand as executeAgentCommand } from '../commands/index.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
-import { classifyMethodOutcome, isPreemption } from './action-result.js';
+import {
+  actionResultTargetFailures,
+  classifyMethodOutcome,
+  isPreemption,
+} from './action-result.js';
 import {
   capabilityCommand,
   capabilityCommandName,
@@ -245,6 +249,12 @@ function concreteCollectionTargetsMatch(left, right) {
     Number.isFinite(leftPosition?.[axis])
     && Number.isFinite(rightPosition?.[axis])
     && Math.floor(leftPosition[axis]) === Math.floor(rightPosition[axis])
+  ));
+}
+
+function resultRejectsCollectionTarget(result, target) {
+  return actionResultTargetFailures(result).some(failure => (
+    concreteCollectionTargetsMatch(failure, target)
   ));
 }
 
@@ -522,6 +532,49 @@ function repeatedFailedPlannerMethods(goal, threshold = 2) {
     if (failures >= threshold) excluded.add(subgoal.learningKey);
   }
   return [...excluded];
+}
+
+function terminalBlockerClassification(boundary, goal, plan = null) {
+  const evidenceCode = boundedText(goal?.evidence?.code, 80, 'unknown');
+  const blockerCode = boundedText(
+    boundary === 'causal_plan_blocked' ? plan?.code || evidenceCode : evidenceCode,
+    80,
+    'unknown',
+  );
+  const combinedCode = `${blockerCode} ${evidenceCode}`;
+  const memory = goal?.memory || {};
+  const failedTargets = memory.failedTargets || [];
+  const hasRegisteredPrerequisite = Boolean(
+    memory.toolRequirement
+    || memory.workstationRequirement
+    || memory.accessRequirement
+  );
+
+  if (/(?:ambiguous|clarification|permission|substitut|player_absent)/.test(combinedCode)) {
+    return { blockerClass: 'clarification_required', basis: 'player_contract_is_materially_ambiguous' };
+  }
+  if (boundary === 'causal_plan_blocked') {
+    if (/(?:planner_(?:action|depth|node)_budget|planner_cycle)/.test(blockerCode)) {
+      return { blockerClass: 'terminal', basis: 'deterministic_planner_budget_or_cycle_exhausted' };
+    }
+    // The current planner exposes one selected causal chain, not a complete
+    // feasible strategy frontier. A blocked chain therefore proves only that
+    // no registered capability in that chain can satisfy the prerequisite.
+    return { blockerClass: 'capability_gap', basis: 'registered_causal_plan_has_no_executable_next_step' };
+  }
+  if (hasRegisteredPrerequisite) {
+    return { blockerClass: 'known_recovery', basis: 'structured_registered_prerequisite_remains' };
+  }
+  if (
+    !goal?.evidence?.actionId
+    || (/(?:state|stance|target)_unverified/.test(combinedCode) && failedTargets.length < 1)
+  ) {
+    return { blockerClass: 'state_reconciliation', basis: 'settled_action_identity_or_target_evidence_is_incomplete' };
+  }
+  if (/(?:equip_(?:blocked|unverified)|not_broken|not_collected|runtime_error)/.test(combinedCode)) {
+    return { blockerClass: 'mechanical_defect', basis: 'settled_mechanical_contract_failed' };
+  }
+  return { blockerClass: 'terminal', basis: 'bounded_deterministic_recovery_is_exhausted' };
 }
 
 export class GoalDirector {
@@ -863,6 +916,101 @@ export class GoalDirector {
     return completed;
   }
 
+  recordTerminalBoundary(boundary, { code, detail, plan = null } = {}) {
+    const goal = this.activeGoal;
+    if (!goal) return false;
+    try {
+      const planner = plan || this.lastPlan;
+      const classification = terminalBlockerClassification(boundary, goal, plan);
+      const latestSubgoal = goal.subgoals.at(-1) || null;
+      const skill = this.agent.bot?.lastActionEvidence;
+      const selected = this.agent.bot?.heldItem;
+      return this.agent.flight_recorder?.recordRuntimeEvent?.('goal.terminal_boundary', {
+        schemaVersion: 1,
+        boundary,
+        terminalCode: boundedText(code, 80, boundary),
+        blockerClass: classification.blockerClass,
+        classificationBasis: classification.basis,
+        blocker: {
+          code: boundedText(plan?.code || goal.evidence?.code, 80, 'unknown'),
+          detail: boundedText(detail || plan?.detail || goal.evidence?.detail, 360),
+          target: boundedText(plan?.blocker, 80) || null,
+          trail: Array.isArray(plan?.trail) ? plan.trail.slice(0, 24) : [],
+          exploredNodes: Number.isFinite(plan?.exploredNodes) ? plan.exploredNodes : null,
+        },
+        goal: {
+          id: goal.id,
+          kind: goal.kind,
+          phase: goal.phase,
+          target: goal.target,
+          completion: goal.completion,
+          attempts: goal.attempts,
+          maxAttempts: goal.maxAttempts,
+          targetInventory: this.currentInventory(goal),
+          requiredInventory: this.requiredInventory(goal),
+        },
+        prerequisites: {
+          tool: goal.memory?.toolRequirement || null,
+          workstation: goal.memory?.workstationRequirement || null,
+          access: goal.memory?.accessRequirement || null,
+        },
+        failedTargets: (goal.memory?.failedTargets || []).slice(-MAX_FAILED_TARGETS),
+        methods: {
+          enumerationComplete: false,
+          enumerationScope: 'selected_causal_chain_only',
+          strategicBranchEstablished: false,
+          observed: (planner?.actions || []).slice(0, 12).map(action => ({
+            methodKey: boundedText(action?.learningKey, 160) || null,
+            capability: boundedText(action?.capability?.id, 80) || null,
+            target: boundedText(action?.target, 80) || null,
+          })),
+          selected: planner?.nextStep ? {
+            methodKey: boundedText(planner.nextStep.learningKey, 160) || null,
+            capability: boundedText(planner.nextStep.capability?.id, 80) || null,
+            target: boundedText(planner.nextStep.target, 80) || null,
+          } : null,
+          excluded: repeatedFailedPlannerMethods(goal),
+          planRevision: this.planRevision,
+        },
+        lastAction: latestSubgoal ? {
+          actionId: latestSubgoal.actionId,
+          kind: latestSubgoal.kind,
+          commandName: latestSubgoal.commandName,
+          state: latestSubgoal.state,
+          code: latestSubgoal.code,
+          targetName: latestSubgoal.targetName,
+          learningKey: latestSubgoal.learningKey,
+        } : null,
+        freshState: {
+          observedAt: this.now(),
+          selectedItem: selected?.name ? {
+            name: selected.name,
+            count: Math.max(0, Number(selected.count) || 0),
+            inventorySlot: Number.isInteger(selected.slot) ? selected.slot : null,
+            hotbarSlot: Number.isInteger(this.agent.bot?.quickBarSlot)
+              ? this.agent.bot.quickBarSlot
+              : null,
+          } : null,
+          skillEvidence: skill && typeof skill === 'object' ? {
+            kind: skill.kind || null,
+            outcome: skill.outcome || null,
+            target: skill.target || null,
+            failedTargets: skill.failedTargets || [],
+            toolRequirement: skill.toolRequirement || null,
+            workstationRequirement: skill.workstationRequirement || null,
+            accessRequirement: skill.accessRequirement || null,
+            toolState: skill.toolState || null,
+            inventoryState: skill.inventoryState || null,
+            recordedAt: skill.recordedAt || null,
+          } : null,
+        },
+      }) === true;
+    } catch (error) {
+      console.warn(`[goal-telemetry] Could not record terminal boundary: ${boundedText(error?.message || error)}`);
+      return false;
+    }
+  }
+
   fail(code, detail, { retryable = null, completionBlocked = false } = {}) {
     const failed = normalizeGoalContract({
       ...this.activeGoal,
@@ -1031,69 +1179,42 @@ export class GoalDirector {
 
   rememberFailedTarget(result) {
     if (!this.activeGoal || result?.phase === 'succeeded') return this.activeGoal;
-    const code = String(result?.code || '');
-    if (!/(?:path_stalled|path_timeout|unreachable|no_path|timeout|action_deadline)/.test(code)) return this.activeGoal;
     const skill = actionResultEvidence(result);
-    // A worn tool is a capability prerequisite, not evidence that the selected
-    // world target is bad. Preserve the target and let the causal planner
-    // replace the tool before retrying the same physical source.
-    if (skill?.toolRequirement || skill?.workstationRequirement || skill?.accessRequirement) return this.activeGoal;
-    const resultTarget = result?.target;
-    const skillTarget = skill?.target;
-    // Capability results often carry only the requested inventory identity at
-    // the outer layer. Prefer whichever target preserves the executor's exact
-    // world coordinate so a failed vein cannot be rebound immediately as if
-    // it were new evidence.
-    const target = [resultTarget, skillTarget].find(candidate => (
-      candidate?.name
-      && [candidate.x, candidate.y, candidate.z].every(Number.isFinite)
-    )) || resultTarget || skillTarget;
-    if (
-      !target?.name
-      || ![target.x, target.y, target.z].every(Number.isFinite)
-    ) return this.activeGoal;
+    const targets = actionResultTargetFailures(result);
+    if (targets.length < 1) return this.activeGoal;
 
     const now = this.now();
-    const position = {
-      x: Math.floor(target.x),
-      y: Math.floor(target.y),
-      z: Math.floor(target.z),
-    };
-    const kind = boundedText(skill?.kind || 'action', 32, 'action');
-    const name = boundedText(target.name, 80);
-    const retained = (this.activeGoal.memory?.failedTargets || []).filter(entry => (
-      now - entry.lastFailedAt <= FAILED_TARGET_RETENTION_MS
-      && !(
+    const previous = this.activeGoal.memory?.failedTargets || [];
+    let retained = previous.filter(entry => now - entry.lastFailedAt <= FAILED_TARGET_RETENTION_MS);
+    for (const target of targets) {
+      const position = { x: target.x, y: target.y, z: target.z };
+      const kind = boundedText(target.kind || skill?.kind || 'action', 32, 'action');
+      const name = boundedText(target.name, 80);
+      const sameTarget = entry => (
         entry.kind === kind
         && entry.name === name
         && entry.position.x === position.x
         && entry.position.y === position.y
         && entry.position.z === position.z
-      )
-    ));
-    const prior = (this.activeGoal.memory?.failedTargets || []).find(entry => (
-      entry.kind === kind
-      && entry.name === name
-      && entry.position.x === position.x
-      && entry.position.y === position.y
-      && entry.position.z === position.z
-    ));
-    const failures = Math.min(8, (prior?.failures || 0) + 1);
-    const failedTarget = {
-      kind,
-      name,
-      position,
-      code: boundedText(code, 80),
-      failures,
-      firstFailedAt: prior?.firstFailedAt || now,
-      lastFailedAt: now,
-      avoidUntil: now + FAILED_TARGET_COOLDOWN_MS,
-    };
+      );
+      const prior = previous.find(sameTarget);
+      retained = retained.filter(entry => !sameTarget(entry));
+      retained.push({
+        kind,
+        name,
+        position,
+        code: boundedText(target.outcome || result?.code, 80),
+        failures: Math.min(8, (prior?.failures || 0) + 1),
+        firstFailedAt: prior?.firstFailedAt || now,
+        lastFailedAt: now,
+        avoidUntil: now + FAILED_TARGET_COOLDOWN_MS,
+      });
+    }
     return this.persist({
       ...this.activeGoal,
       memory: {
         ...this.activeGoal.memory,
-        failedTargets: [...retained, failedTarget].slice(-MAX_FAILED_TARGETS),
+        failedTargets: retained.slice(-MAX_FAILED_TARGETS),
       },
       updatedAt: now,
     });
@@ -1121,6 +1242,8 @@ export class GoalDirector {
           },
         }
       : null;
+    const targetFailedLocally = exactTarget && resultRejectsCollectionTarget(result, exactTarget);
+    const requirementTarget = targetFailedLocally ? null : exactTarget;
     return this.persist({
       ...this.activeGoal,
       memory: {
@@ -1129,9 +1252,11 @@ export class GoalDirector {
           name,
           minimumUsableDurability,
           observedAt: this.now(),
-          target: exactTarget,
+          target: requirementTarget,
         },
-        ...(exactTarget ? {
+        ...(targetFailedLocally ? {
+          activeCollectionTarget: null,
+        } : exactTarget ? {
           activeCollectionTarget: {
             ...exactTarget,
             remainingRouteLowerBound: Math.max(
@@ -1204,8 +1329,19 @@ export class GoalDirector {
       : null;
     let nextActiveTarget = activeTarget;
     let nextToolRequirement = memory.toolRequirement || null;
+    const activeTargetFailedLocally = activeTarget
+      && resultRejectsCollectionTarget(result, activeTarget);
 
-    if (miningRouteProgress && exactTarget) {
+    if (activeTargetFailedLocally) {
+      // A prerequisite can coexist with independent geometry evidence. Keep the
+      // prerequisite, but release the rejected coordinate so the replacement
+      // tool or workstation does not force the next plan back to a bad stance.
+      nextActiveTarget = null;
+      if (
+        nextToolRequirement?.target
+        && concreteCollectionTargetsMatch(activeTarget, nextToolRequirement.target)
+      ) nextToolRequirement = { ...nextToolRequirement, target: null };
+    } else if (miningRouteProgress && exactTarget) {
       const advancesActiveTarget = !activeTarget
         || concreteCollectionTargetsMatch(exactTarget, activeTarget);
       if (advancesActiveTarget) {
@@ -2102,9 +2238,14 @@ export class GoalDirector {
           this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
           return;
         }
+        const terminalDetail = `No safe deterministic recovery exists for ${goal.evidence?.code || 'the last failure'}: ${goal.evidence?.detail || 'no detail'}`;
+        this.recordTerminalBoundary('no_deterministic_recovery', {
+          code: 'no_deterministic_recovery',
+          detail: terminalDetail,
+        });
         this.fail(
           'no_deterministic_recovery',
-          `No safe deterministic recovery exists for ${goal.evidence?.code || 'the last failure'}: ${goal.evidence?.detail || 'no detail'}`,
+          terminalDetail,
         );
         return;
       }
@@ -2155,9 +2296,16 @@ export class GoalDirector {
             continue;
           }
           if (plan.status === 'blocked' || !plan.nextStep) {
+            const terminalCode = plan.code || 'causal_plan_blocked';
+            const terminalDetail = `${plan.detail || `No causal plan exists for ${goal.target.inventoryName}.`}${plan.blocker ? ` Blocking prerequisite: ${plan.blocker}.` : ''}`;
+            this.recordTerminalBoundary('causal_plan_blocked', {
+              code: terminalCode,
+              detail: terminalDetail,
+              plan,
+            });
             this.fail(
-              plan.code || 'causal_plan_blocked',
-              `${plan.detail || `No causal plan exists for ${goal.target.inventoryName}.`}${plan.blocker ? ` Blocking prerequisite: ${plan.blocker}.` : ''}`,
+              terminalCode,
+              terminalDetail,
             );
             return;
           }

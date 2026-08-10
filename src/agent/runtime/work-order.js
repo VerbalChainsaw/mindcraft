@@ -415,7 +415,14 @@ function normalizeCheckpoint(checkpoint) {
     for (const rawTarget of checkpoint.failedTargets.slice(-MAX_FAILED_TARGETS)) {
       const target = normalizeTarget(rawTarget);
       if (![target?.x, target?.y, target?.z].every(Number.isFinite)) continue;
-      targets.set(`${target.name || ''}:${target.x}:${target.y}:${target.z}`, target);
+      const failureCode = boundedText(
+        rawTarget?.failureCode || rawTarget?.outcome || rawTarget?.code,
+        80,
+      );
+      targets.set(
+        `${target.name || ''}:${target.x}:${target.y}:${target.z}`,
+        failureCode ? Object.freeze({ ...target, failureCode }) : target,
+      );
     }
     if (targets.size > 0) normalized.failedTargets = Object.freeze([...targets.values()]);
   }
@@ -618,6 +625,7 @@ export function advanceWorkOrder(order, result, {
   nextPhase = null,
   failedMethod = null,
   failedTarget = null,
+  failedTargets = null,
   recoveryAction = false,
   now = Date.now(),
 } = {}) {
@@ -761,35 +769,33 @@ export function advanceWorkOrder(order, result, {
       updatedAt: now,
     });
   }
+  const incomingFailedTargets = normalizeCheckpoint({
+    failedTargets: Array.isArray(failedTargets)
+      ? failedTargets
+      : failedTarget && typeof failedTarget === 'object'
+        ? [failedTarget]
+        : [],
+  }).failedTargets || [];
   const prerequisiteCheckpoint = discoveredPrerequisiteCheckpoint(result, current.checkpoint);
-  if (result.retryable === true && prerequisiteCheckpoint) {
-    // A newly discovered physical prerequisite is planning information, not a
-    // failed attempt at the selected acquisition method. Persist it before the
-    // next reducer pass so restart cannot lose the replacement requirement,
-    // and preserve both the productive-attempt budget and the viable source.
-    return normalizeWorkOrder({
-      ...current,
-      phase: 'recover',
-      resumePhase: recoveryResumePhase,
-      checkpoint: prerequisiteCheckpoint,
-      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
-      updatedAt: now,
-    });
-  }
-  const target = failedTarget && typeof failedTarget === 'object'
-    ? normalizeCheckpoint({ failedTargets: [failedTarget] }).failedTargets?.[0] || null
-    : null;
-  if (result.retryable === true && target) {
+  const recoveryCheckpoint = prerequisiteCheckpoint || current.checkpoint;
+  if (result.retryable === true && incomingFailedTargets.length > 0) {
     if (current.recoveries < current.maxRecoveries) {
       const method = boundedText(failedMethod, 160);
-      const priorSameSourceFailures = (current.checkpoint.failedTargets || [])
-        .filter(previous => previous.name === target.name)
-        .length;
+      const sourceFailureCounts = new Map();
+      for (const previous of current.checkpoint.failedTargets || []) {
+        sourceFailureCounts.set(previous.name, (sourceFailureCounts.get(previous.name) || 0) + 1);
+      }
+      let repeatedSourceFailure = false;
+      for (const target of incomingFailedTargets) {
+        const priorCount = sourceFailureCounts.get(target.name) || 0;
+        if (priorCount >= 1) repeatedSourceFailure = true;
+        sourceFailureCounts.set(target.name, priorCount + 1);
+      }
       // A second no-progress target from the same physical source is evidence
       // that candidate ranking is not enough. Exclude that deterministic
       // method for this order so the existing planner must bind a genuinely
       // different strategy (or report that none exists).
-      const failedMethods = method && priorSameSourceFailures >= 1
+      const failedMethods = method && repeatedSourceFailure
         ? [...new Set([
             ...(current.checkpoint.failedMethods || []),
             acquisitionStrategyFailureKey(method),
@@ -801,8 +807,11 @@ export function advanceWorkOrder(order, result, {
         resumePhase: recoveryResumePhase,
         recoveries: current.recoveries + 1,
         checkpoint: {
-          ...current.checkpoint,
-          failedTargets: [...(current.checkpoint.failedTargets || []), target].slice(-MAX_FAILED_TARGETS),
+          ...recoveryCheckpoint,
+          failedTargets: [
+            ...(current.checkpoint.failedTargets || []),
+            ...incomingFailedTargets,
+          ].slice(-MAX_FAILED_TARGETS),
           lastFailedTargetActionId: result.actionId,
           ...(failedMethods ? { failedMethods } : {}),
         },
@@ -822,6 +831,21 @@ export function advanceWorkOrder(order, result, {
         detail: result.detail || 'Concrete acquisition targets remained unsafe after bounded recovery.',
         actionId: result.actionId,
       },
+      updatedAt: now,
+    });
+  }
+  if (result.retryable === true && prerequisiteCheckpoint) {
+    // A newly discovered physical prerequisite is planning information, not a
+    // failed attempt at the selected acquisition method. Persist it before the
+    // next reducer pass so restart cannot lose the replacement requirement,
+    // and preserve both productive and target-recovery budgets when no
+    // independently verified target-local failure accompanied it.
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'recover',
+      resumePhase: recoveryResumePhase,
+      checkpoint: prerequisiteCheckpoint,
+      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
       updatedAt: now,
     });
   }

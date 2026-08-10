@@ -109,9 +109,19 @@ function inventoryCount(snapshot, name) {
 function deliveryStep(order, snapshot, amount) {
   const item = miningOutputName(order.target.name);
   const delivered = Math.max(0, Number(order.checkpoint?.delivered) || 0);
+  const retained = inventoryCount(snapshot, item);
+  if (snapshot.deposit?.mode === 'inventory') {
+    // `deliver` can survive a restart or a transient inventory observation.
+    // Keeping the output is complete only while fresh Minecraft inventory
+    // still proves the quota; otherwise return to assessment instead of
+    // turning a stale phase into a false terminal success.
+    return retained + delivered >= order.quota
+      ? { complete: true, code: 'mining_quota_retained' }
+      : { phase: 'assess', code: 'mining_quota_revalidation_required' };
+  }
   const deliverable = Math.min(
     Math.max(0, Number(amount) || 0),
-    inventoryCount(snapshot, item),
+    retained,
     Math.max(0, order.quota - delivered),
   );
   if (deliverable < 1 && delivered >= order.quota) {
@@ -214,7 +224,14 @@ export function nextMinerStep(order, snapshot = {}) {
       target: { name: 'torch' },
     };
   }
-  if (Number(snapshot.freeSlots) <= Number(constraints.reserveSlots ?? 1)) {
+  // A retained-inventory order has no external delivery destination. Let the
+  // collection capability run its bounded shared working-slot policy once;
+  // it can retire redundant debris/duplicate tools and will fail truthfully
+  // if protected inventory leaves no safe capacity.
+  if (
+    Number(snapshot.freeSlots) <= Number(constraints.reserveSlots ?? 1)
+    && snapshot.deposit?.mode !== 'inventory'
+  ) {
     if (current > 0) return { phase: 'deliver', code: 'inventory_reserve_reached' };
     if (snapshot.deposit?.mode === 'assigned') {
       const target = snapshot.deposit?.target;

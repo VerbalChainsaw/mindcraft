@@ -98,6 +98,57 @@ test('Miner bounds quota collection, verifies inventory, then returns or deposit
   assert.equal(deliver.nextPhase, 'complete');
 });
 
+test('Miner revalidates a retained quota instead of completing from a stale deliver phase', () => {
+  const base = createWorkOrder({
+    id: 'mine-retained',
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'coal_ore' },
+    quota: 96,
+  });
+
+  assert.deepEqual(nextMinerStep({ ...base, phase: 'deliver' }, {
+    inventory: { coal: 64 },
+    deposit: { mode: 'inventory' },
+  }), {
+    phase: 'assess',
+    code: 'mining_quota_revalidation_required',
+  });
+  assert.deepEqual(nextMinerStep({ ...base, phase: 'deliver' }, {
+    inventory: { coal: 96 },
+    deposit: { mode: 'inventory' },
+  }), {
+    complete: true,
+    code: 'mining_quota_retained',
+  });
+});
+
+test('Miner delegates full retained inventory to bounded collection capacity recovery', () => {
+  const base = createWorkOrder({
+    id: 'mine-full-retained',
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'coal_ore' },
+    quota: 96,
+  });
+  const step = nextMinerStep({ ...base, phase: 'execute' }, {
+    inventory: { coal: 64 },
+    tools: { pickaxeTier: 3 },
+    foodPoints: 20,
+    hunger: 20,
+    lightCount: 40,
+    freeSlots: 0,
+    escapeRoute: true,
+    safeSelectedBlocks: true,
+    deposit: { mode: 'inventory' },
+  });
+
+  assert.equal(step.capability.id, 'collect_block');
+  assert.equal(step.capability.arguments.source, 'coal_ore');
+  assert.equal(step.capability.arguments.count, 32);
+  assert.equal(step.nextPhase, 'verify');
+});
+
 test('Miner manufactures light supplies before an ore job instead of waiting indefinitely', () => {
   const order = createWorkOrder({
     id: 'mine-lit',

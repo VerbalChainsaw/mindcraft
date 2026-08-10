@@ -754,19 +754,54 @@ test('Given a terminal player work order, JobDirector retains the shared player 
   }]);
 });
 
-test('Given retryable failure, JobDirector persists bounded recovery instead of falsely advancing', async () => {
+test('settled collection evidence preserves its tool prerequisite and every rejected target', async () => {
   const agent = createAgent();
+  agent.bot.registry = {
+    blocksByName: { coal_ore: { id: 1, name: 'coal_ore' } },
+    itemsByName: { coal: { id: 2, name: 'coal' } },
+  };
   const store = memoryStore();
   const director = new JobDirector(agent, {
     store,
-    getSnapshot: () => safeMiningSnapshot({}),
+    getSnapshot: () => safeMiningSnapshot({ coal: 0 }),
     now: () => 10_000,
     executeCommand: () => {
       agent.last_action_result = {
         actionId: 'mine-fail-1',
         phase: 'failed',
-        code: 'skill_unreachable',
+        code: 'skill_stance_unverified',
         retryable: true,
+        evidence: {
+          skill: {
+            kind: 'collect',
+            outcome: 'stance_unverified',
+            target: { name: 'coal_ore', x: 13, y: -22, z: 8 },
+            failedTargets: [
+              {
+                kind: 'collect',
+                name: 'coal_ore',
+                x: 12,
+                y: -22,
+                z: 8,
+                outcome: 'no_safe_stance',
+                targetLocal: true,
+              },
+              {
+                kind: 'collect',
+                name: 'coal_ore',
+                x: 13,
+                y: -22,
+                z: 8,
+                outcome: 'stance_unverified',
+                targetLocal: true,
+              },
+            ],
+            toolRequirement: {
+              name: 'stone_pickaxe',
+              minimumUsableDurability: 24,
+            },
+          },
+        },
       };
     },
   });
@@ -774,7 +809,7 @@ test('Given retryable failure, JobDirector persists bounded recovery instead of 
     id: 'mine-fail',
     role: 'miner',
     kind: 'mine',
-    target: { name: 'cobblestone' },
+    target: { name: 'coal_ore' },
     quota: 6,
   }));
 
@@ -783,7 +818,17 @@ test('Given retryable failure, JobDirector persists bounded recovery instead of 
   await settle();
 
   assert.equal(director.activeOrder.phase, 'recover');
-  assert.equal(director.activeOrder.attempts, 1);
+  assert.equal(director.activeOrder.attempts, 0);
+  assert.equal(director.activeOrder.recoveries, 1);
+  assert.deepEqual(director.activeOrder.checkpoint.toolRequirement, {
+    name: 'stone_pickaxe',
+    minimumUsableDurability: 24,
+  });
+  assert.deepEqual(director.activeOrder.checkpoint.failedTargets, [
+    { name: 'coal_ore', x: 12, y: -22, z: 8, failureCode: 'no_safe_stance' },
+    { name: 'coal_ore', x: 13, y: -22, z: 8, failureCode: 'stance_unverified' },
+  ]);
+  assert.deepEqual(director.activeOrder.checkpoint.failedMethods, ['collect:*->coal']);
   assert.equal(store.saved.at(-1).phase, 'recover');
 });
 

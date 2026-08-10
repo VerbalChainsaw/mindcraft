@@ -3,7 +3,11 @@ import Vec3 from 'vec3';
 import { isCookableFood } from '../../utils/food-semantics.js';
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
-import { createActionResult, isPreemption } from './action-result.js';
+import {
+  actionResultTargetFailures,
+  createActionResult,
+  isPreemption,
+} from './action-result.js';
 import {
   capabilityCommand,
   executeCapabilityAction,
@@ -49,7 +53,7 @@ const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
 const SURVIVAL_BUILDING_MATERIALS = new Set(['cobblestone', 'stone', 'dirt']);
-const ACQUISITION_METHOD_FAILURE = /(?:resource_not_found|source_not_found|not_collected|unreachable|target_unloaded|lighting_failed|path_(?:stalled|timeout)|no_path)/;
+const ACQUISITION_METHOD_FAILURE = /(?:collect_blocked|lighting_failed|no_path|no_safe_stance|not_broken|not_collected|path_(?:stalled|timeout)|resource_not_found|source_not_found|stance_unverified|target_unloaded|unreachable)/;
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
@@ -88,8 +92,15 @@ function dimensionName(value) {
 }
 
 function failedAcquisitionRecovery(step, result) {
-  const method = String(step?.methodKey || '');
+  const capability = step?.capability;
+  const method = String(
+    step?.methodKey
+    || (capability?.id === 'collect_block'
+      ? `collect:${capability.arguments?.source || 'unknown'}->${capability.arguments?.output || 'unknown'}`
+      : ''),
+  );
   if (!/^(?:collect|harvest):/.test(method)) return {};
+  const failedTargets = actionResultTargetFailures(result);
   const skillTarget = result?.evidence?.skill?.target;
   const target = [result?.target, skillTarget].find(candidate => (
     candidate?.name
@@ -106,19 +117,24 @@ function failedAcquisitionRecovery(step, result) {
     || (
       !ACQUISITION_METHOD_FAILURE.test(String(result?.code || ''))
       && !exactMiningTargetFailure
+      && failedTargets.length < 1
     )
   ) return {};
-  if (target) {
+  if (failedTargets.length > 0) {
     return {
       failedMethod: method,
-      failedTarget: {
-        name: target.name,
-        x: Math.floor(target.x),
-        y: Math.floor(target.y),
-        z: Math.floor(target.z),
-      },
+      failedTargets,
     };
   }
+  if (target) return {
+    failedMethod: method,
+    failedTarget: {
+      name: target.name,
+      x: Math.floor(target.x),
+      y: Math.floor(target.y),
+      z: Math.floor(target.z),
+    },
+  };
   return { failedMethod: method };
 }
 
