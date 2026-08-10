@@ -38,13 +38,24 @@ export class OpenAICompatible {
         }
         delete requestParams.api_key_env;
 
+        // A request `timeout` is a client option, not an API body field. Spread
+        // into the completion body it is silently ignored, so a stalled stream
+        // parked the whole turn loop for the SDK's 10 minute default and the
+        // failure-backoff path never fired -- the bot just went quiet. Lift it
+        // onto the client exactly as gpt.js does.
+        const { timeout, timeout_seconds, ...bodyParams } = requestParams;
+        const timeoutSeconds = Number(timeout ?? timeout_seconds);
+
         this.model_name = model_name;
-        this.params = requestParams;
+        this.params = bodyParams;
         this.apiKeyEnv = apiKeyEnv;
-        this.openai = createClient({
+        const config = {
             baseURL: url.trim(),
             apiKey: readKey(apiKeyEnv),
-        });
+        };
+        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0)
+            config.timeout = Math.round(timeoutSeconds * 1000);
+        this.openai = createClient(config);
     }
 
     async sendRequest(turns, systemMessage, stop_seq = '***') {

@@ -721,13 +721,28 @@ export class ActionManager {
     }
 
     _startTimeout(TIMEOUT_MINS = 10, actionId = null, controller = null) {
-        return setTimeout(async () => {
-            if (!this.executing || (actionId && this.currentActionId !== actionId)) return;
-            console.warn(`Code execution timed out after ${TIMEOUT_MINS} minutes. Attempting force stop.`);
-            this.timedout = true;
-            this.agent.history.add('system', `Code execution timed out after ${TIMEOUT_MINS} minutes. Attempting force stop.`);
-            try { controller?.abort(); } catch { /* already aborted */ }
-            await this.stop(); // last attempt to stop
+        // Nothing observes a timer callback's promise. This callback is the
+        // recovery path for a stuck action, so a rejection escaping it would
+        // surface as an unhandled rejection -- crashing the agent at exactly
+        // the moment it is supposed to recover the bot. Sink errors here.
+        return setTimeout(() => {
+            void (async () => {
+                if (!this.executing || (actionId && this.currentActionId !== actionId)) return;
+                const message = `Code execution timed out after ${TIMEOUT_MINS} minutes. Attempting force stop.`;
+                console.warn(message);
+                this.timedout = true;
+                // Deliberately not awaited: history.add can reach a model
+                // summarization call, and the force stop must not queue behind
+                // it. It still needs its own sink or it rejects into the void.
+                void Promise.resolve(this.agent.history.add('system', message))
+                    .catch((error) => {
+                        console.error('[action-manager] Timeout history record failed:', error?.message || error);
+                    });
+                try { controller?.abort(); } catch { /* already aborted */ }
+                await this.stop(); // last attempt to stop
+            })().catch((error) => {
+                console.error('[action-manager] Timeout recovery failed:', error?.message || error);
+            });
         }, TIMEOUT_MINS * 60 * 1000);
     }
 

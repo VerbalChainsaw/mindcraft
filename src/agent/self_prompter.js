@@ -177,9 +177,24 @@ export class SelfPrompter {
         }
         if (!this.loop_active) {
             this.interrupt = false;
-            this.startLoop();
+            this._startLoopGuarded();
         }
         return { started: true, reason: null };
+    }
+
+    /**
+     * startLoop() is launched fire-and-forget by callers that cannot await it.
+     * Its `finally` clears loop_active, but a throw between `loop_active = true`
+     * and the `try` still escapes as a process-level unhandled rejection --
+     * fatal under --unhandled-rejections=throw, and invisible to the arbiter,
+     * which would keep selecting self_prompt_active for a loop that is no
+     * longer running. Sink the error and leave the flag honest.
+     */
+    _startLoopGuarded() {
+        void Promise.resolve(this.startLoop()).catch((error) => {
+            this.loop_active = false;
+            console.error(`[self-prompter] Self-prompt loop failed: ${error?.message || error}`);
+        });
     }
 
     isActive() {
@@ -447,7 +462,7 @@ export class SelfPrompter {
 
             if (this.idle_time >= this.cooldown) {
                 console.log('Restarting self-prompting...');
-                this.startLoop();
+                this._startLoopGuarded();
                 this.idle_time = 0;
             }
         }

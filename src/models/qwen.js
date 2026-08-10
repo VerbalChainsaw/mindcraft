@@ -6,11 +6,21 @@ export class Qwen {
     static prefix = 'qwen';
     constructor(model_name, url, params) {
         this.model_name = model_name;
-        this.params = params;
+
+        // Same client-vs-body split as gpt.js and openai_compatible.js: a
+        // `timeout` left in the request body is dropped, so a stalled DashScope
+        // stream held the turn for the SDK's 10 minute default.
+        const { timeout, timeout_seconds, ...bodyParams } = params || {};
+        this.params = bodyParams;
+        const timeoutSeconds = Number(timeout ?? timeout_seconds);
+
         let config = {};
 
         config.baseURL = url || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
         config.apiKey = getKey('QWEN_API_KEY');
+
+        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0)
+            config.timeout = Math.round(timeoutSeconds * 1000);
 
         this.openai = new OpenAIApi(config);
     }

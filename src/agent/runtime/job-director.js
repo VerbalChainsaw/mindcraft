@@ -49,6 +49,10 @@ import {
 const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack', 'scout']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
+// Non-builder roles mint a fresh unique order id on every quota-fill cycle, so
+// the completed-order de-dupe set grew linearly for the life of the process.
+// Recent ids are what suppress repeat work; very old ones are dead weight.
+const MAX_COMPLETED_ORDER_IDS = 256;
 const JOB_RETRY_MS = 1_000;
 const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
@@ -923,6 +927,19 @@ export class JobDirector extends RoleDirector {
     }
   }
 
+  // Insertion-ordered retention: a Set iterates in insertion order, so the
+  // first value is always the oldest id. Re-completing a remembered id refreshes
+  // its position rather than leaving it near eviction.
+  rememberCompletedOrder(orderId) {
+    if (!orderId) return;
+    if (this.completedOrderIds.has(orderId)) this.completedOrderIds.delete(orderId);
+    this.completedOrderIds.add(orderId);
+    while (this.completedOrderIds.size > MAX_COMPLETED_ORDER_IDS) {
+      const oldest = this.completedOrderIds.values().next().value;
+      this.completedOrderIds.delete(oldest);
+    }
+  }
+
   snapshot() {
     const order = this.activeOrder || this.lastOrder;
     return {
@@ -1305,7 +1322,7 @@ export class JobDirector extends RoleDirector {
     this.rememberPlayerStructure(terminal);
     this.lastOrder = terminal;
     this.lastReceipt = terminalReceiptFor(this.agent, terminal, code, this.now());
-    if (phase === 'complete') this.completedOrderIds.add(terminal.id);
+    if (phase === 'complete') this.rememberCompletedOrder(terminal.id);
     this.activeOrder = null;
     this.invalidateDispatch();
     this.store.save(null, this.lastReceipt);
