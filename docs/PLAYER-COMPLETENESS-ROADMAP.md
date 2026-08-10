@@ -122,12 +122,22 @@ proves the cave-and-animal campaign once; it does not imply arbitrary scouting
 categories, world mapping, cross-dimension guidance, or automatic player
 movement.
 
-The next tranche must use this knowledge in a broad ordinary outcome or move to
-another player-valued gameplay family. A remembered-animal/home interaction is
-preferred if the lived-in world still provides a viable animal and authorized
-pen, because it composes memory, guidance, entity interaction, infrastructure,
-and return without retesting scouting itself. Otherwise ordinary mixed play
-selects the first material shared blocker.
+The remembered-animal follow-on is preserved but intentionally not certified.
+It produced reusable renewable-crop semantics, mature-crop harvest/replant,
+moving-region entity reacquisition, safe surface/perimeter stance binding, and
+no-progress method exclusion. Live play reached one physical sheep gate
+crossing but did not complete containment and breeding. That niche edge case is
+deferred until normal play makes it important; it must not be described as a
+finished player capability.
+
+The active tranche polishes the companion behavior a player experiences all
+the time. One broad mixed session must keep the bot near the player without
+collision or oscillation, move across ordinary terrain without unnecessary
+damage, gather useful common resources completely with suitable tools, yield
+cleanly to changed instructions and Stop, report only current truthful state,
+return to the requester, and settle calmly. The first shared defect exposed by
+that loop selects the repair. Do not manufacture narrow noun, quantity, animal,
+or fixture variants.
 
 ## Delivered in this slice
 
