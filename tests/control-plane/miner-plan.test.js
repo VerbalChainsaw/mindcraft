@@ -76,7 +76,12 @@ test('Miner bounds quota collection, verifies inventory, then returns or deposit
     escapeRoute: true,
     safeSelectedBlocks: true,
   });
-  assert.equal(execute.command, '!collectBlocksInRange("cobblestone", 4, 64)');
+  assert.equal(execute.capability.id, 'collect_block');
+  assert.equal(execute.capability.arguments.source, 'cobblestone');
+  assert.equal(execute.capability.arguments.count, 4);
+  assert.equal(execute.capability.arguments.range, 64);
+  assert.equal(execute.capability.arguments.output, 'cobblestone');
+  assert.equal(execute.capability.arguments.expectedIncrease, 4);
   assert.equal(execute.nextPhase, 'verify');
 
   const verify = nextMinerStep({ ...base, phase: 'verify' }, {

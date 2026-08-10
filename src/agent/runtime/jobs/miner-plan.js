@@ -270,11 +270,16 @@ export function nextMinerStep(order, snapshot = {}) {
   if (order.phase === 'execute') {
     const remaining = Math.max(1, Math.min(32, order.quota - progress));
     const range = Math.max(16, Math.min(512, Number(constraints.maxDistance) || 64));
-    return {
-      command: `!collectBlocksInRange(${JSON.stringify(requested)}, ${remaining}, ${range})`,
+    return createCapabilityRequest('collect_block', {
+      source: requested,
+      output,
+      count: remaining,
+      range,
+      expectedIncrease: remaining,
+    }, {
       nextPhase: 'verify',
       target: { name: naturalTarget, output },
-    };
+    });
   }
   return { terminal: true, code: 'unsupported_miner_phase', retryable: false };
 }
