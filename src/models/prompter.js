@@ -20,6 +20,7 @@ const ACTION_REQUEST_PATTERN = /\b(?:attack|break|brew|build|chop|collect|come|c
 const GAMEPLAY_OPERATING_RULES = [
     'GAMEPLAY OPERATING RULES:',
     'Treat SITUATIONAL_AWARENESS, INVENTORY, command results, and the connected Minecraft registry as authoritative.',
+    'Never claim that a carried item is absent or "did not register" when INVENTORY lists it. A current snapshot cannot prove whether an item is newly received; report only the exact carried and nearby-drop evidence.',
     'For an unfamiliar item or block, use !inspectMinecraft with its name; use !getCraftingPlan when a recipe chain is unclear.',
     'For an acquisition or delivery outcome, prefer one typed !requestItemGoal; its causal planner derives and verifies prerequisites one physical step at a time.',
     'When one broad player outcome requires you to choose several concrete inventory outputs, compile the complete final inventory floors once with !queueItemPlan. Account for current inventory, use real registry-backed targets, and never invent an umbrella target such as starter_kit. A typed runtime barrier re-verifies the whole promised set after production.',

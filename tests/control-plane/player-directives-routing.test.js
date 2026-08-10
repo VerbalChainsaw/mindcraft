@@ -47,8 +47,15 @@ test('digTunnel is reachable deterministically (the reported gap)', () => {
 test('digDown and digTunnel do not collide', () => {
   assert.equal(commandFor('dig down 5'), '!digDown(5)');
   assert.equal(commandFor('dig straight down 30'), '!digDown(30)');
+  assert.equal(commandFor('mine straight down until you cannot mine anymore'), '!digDown(384)');
   // "dig forward" is a tunnel, not a down-dig.
   assert.equal(commandFor('dig forward 6'), '!digTunnel("forward", 6)');
+});
+
+test('player item handoffs inspect authoritative carried and dropped state', () => {
+  assert.equal(commandFor('I threw you a new one'), '!awareness');
+  assert.equal(commandFor('I just gavae you my pickaxe'), '!awareness');
+  assert.equal(commandFor('I handed you another tool'), '!awareness');
 });
 
 test('surface, coordinates, move-away, bed, fish, and death recovery route directly', () => {

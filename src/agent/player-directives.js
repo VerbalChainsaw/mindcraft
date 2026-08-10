@@ -245,6 +245,18 @@ function describesModelSelectedStoragePlan(text) {
 export function resolvePlayerDirective(playerName, message, context = {}) {
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
+
+    // Item handoffs are observations, not assignments of new physical work.
+    // Route them through the live body/world query before the conversation-only
+    // authority guard so the model cannot infer pickup history from one current
+    // snapshot or deny a tool that its own inventory already lists.
+    if (/\b(?:i|we)\s+(?:just\s+)?(?:gave|gavae|handed|passed|threw|tossed|dropped)\s+you\b/.test(text)) {
+        return {
+            command: '!awareness',
+            response: 'Checking my carried items and nearby drops now.',
+            releasesHold: false,
+        };
+    }
     if (classifyPlayerSpeechAuthority(message) === 'conversation_only') return null;
 
     if (/^(?:please\s+)?(?:do not|don't|dont)\s+follow\s+me\b/.test(text)) {
@@ -339,10 +351,15 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     }
 
     if (/\b(?:dig|tunnel|mine)\s+(?:straight\s+)?down\b/.test(text)) {
-        const distance = clampInt(firstNumber(text, 10), 1, 384, 10);
+        const untilBlocked = /\b(?:until|till)\b.{0,48}\b(?:cannot|can't|unable|blocked|anymore|any more|further)\b/.test(text);
+        const distance = untilBlocked
+            ? 384
+            : clampInt(firstNumber(text, 10), 1, 384, 10);
         return {
             command: `!digDown(${distance})`,
-            response: `Digging straight down ${distance} block${distance === 1 ? '' : 's'}, stopping if I hit lava, water, or a drop.`,
+            response: untilBlocked
+                ? 'Digging straight down until physically blocked, with the normal hazard checks on every block.'
+                : `Digging straight down ${distance} block${distance === 1 ? '' : 's'}, stopping if I hit lava, water, or a drop.`,
             releasesHold: true,
         };
     }

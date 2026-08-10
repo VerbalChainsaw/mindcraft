@@ -19015,14 +19015,14 @@ export async function digDown(bot, distance = 10) {
      **/
 
     const requested = Math.floor(Number(distance));
-    if (!Number.isFinite(requested) || requested < 1 || requested > 32) {
+    if (!Number.isFinite(requested) || requested < 1 || requested > 384) {
         setActionEvidence(bot, {
             kind: 'descent',
             outcome: 'invalid_distance',
             target: { distance },
             retryable: false,
         });
-        log(bot, 'Safe downward digging requires a distance from 1 to 32 blocks.');
+        log(bot, 'Safe downward digging requires a distance from 1 to 384 blocks.');
         return false;
     }
 
