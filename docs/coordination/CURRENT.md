@@ -1,5 +1,5 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / Home Stewardship checkpoint on 69ec401
+Branch/commit: recovery/iron-pickaxe-20260803 / b9dc18e (Home Stewardship)
 Milestone: generic retained-inventory cleanup is live; full cleanup is capacity-blocked
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: Home Stewardship through Agenda, ActionManager, and native Mineflayer containers
