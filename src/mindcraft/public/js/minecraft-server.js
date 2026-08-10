@@ -768,7 +768,12 @@ export class MinecraftServerWorkspace {
     }
     panel.append(steps);
 
-    const javaTarget = `${status.host}:${status.port}`;
+    const javaAddress = status.javaEndpoint?.access === 'local-network'
+      ? (Array.isArray(status.javaEndpoint.lanAddresses) && status.javaEndpoint.lanAddresses[0]
+        ? status.javaEndpoint.lanAddresses[0]
+        : status.host)
+      : status.host;
+    const javaTarget = `${javaAddress}:${status.port}`;
     const javaLine = node('div', 'java-join-line');
     javaLine.append(node('span', '', 'Java Edition & bots'), node('code', '', javaTarget));
     const copyJava = button('Copy', () => this.copyText(javaTarget, 'Java address', copyJava));

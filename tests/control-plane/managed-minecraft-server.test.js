@@ -670,6 +670,7 @@ test('Given legacy and newer bundled Java runtimes, when Java is detected, then 
   assert.equal(managedServerModule.parseJavaMajor('openjdk version "21.0.3" 2024-04-16 LTS'), 21);
 
   const manager = new managedServerModule.ManagedMinecraftServer({
+    platform: 'win32',
     runtimeCandidates: () => [
       { path: 'java', source: 'PATH' },
       { path: 'C:\\Minecraft\\runtime\\bin\\java.exe', source: 'Minecraft Launcher' },
@@ -693,6 +694,29 @@ test('Given legacy and newer bundled Java runtimes, when Java is detected, then 
   assert.equal(status.java.major, 21);
   assert.equal(status.java.source, 'Minecraft Launcher');
   assert.equal(status.java.path, 'C:\\Minecraft\\runtime\\bin\\java.exe');
+});
+
+test('Given WSL can execute both Linux and Windows Java, when Java is detected, then only the native runtime is eligible', async () => {
+  const manager = new managedServerModule.ManagedMinecraftServer({
+    platform: 'linux',
+    runtimeCandidates: () => [
+      { path: '/usr/bin/java', source: 'PATH' },
+      { path: '/mnt/c/Minecraft/runtime/bin/java.exe', source: 'Minecraft Launcher' },
+    ],
+    inspectJava: (candidate) => ({
+      ...candidate,
+      available: true,
+      supported: true,
+      version: candidate.path.endsWith('.exe') ? '21.0.7' : '25.0.3',
+      major: candidate.path.endsWith('.exe') ? 21 : 25,
+    }),
+  });
+
+  const status = await manager.getStatus();
+
+  assert.equal(status.java.path, '/usr/bin/java');
+  assert.equal(status.java.source, 'PATH');
+  assert.equal(status.java.major, 25);
 });
 
 test('Given no explicit EULA acceptance, when managed server installation is requested, then nothing is installed', async () => {
@@ -779,6 +803,7 @@ test('Given EULA acceptance and the official release metadata, when installed, t
     assert.deepEqual(config, {
       version: '1.21.11',
       port: 25565,
+      javaBindAddress: '127.0.0.1',
       memoryMb: 2048,
       desiredState: 'stopped',
       serverSha1: sha1,
@@ -858,6 +883,7 @@ test('Given a stopped managed server, when play settings are changed, then valid
       pauseWhenEmptySeconds: 300,
       entityBroadcastRangePercentage: 75,
       bedrockPort: 19133,
+      bedrockBindAddress: '0.0.0.0',
     });
 
     assert.equal(status.port, 25570);
@@ -886,8 +912,10 @@ test('Given a stopped managed server, when play settings are changed, then valid
       entityBroadcastRangePercentage: 75,
     });
     assert.equal(status.crossplay.bedrockPort, 19133);
+    assert.equal(status.javaEndpoint.bindAddress, '0.0.0.0');
     const properties = await readFile(path.join(rootDir, 'server.properties'), 'utf8');
     assert.match(properties, /^custom-user-setting=keep-me$/m);
+    assert.match(properties, /^server-ip=0\.0\.0\.0$/m);
     assert.match(properties, /^server-port=25570$/m);
     assert.match(properties, /^motd=Bots and builders$/m);
     assert.match(properties, /^online-mode=true$/m);
@@ -1607,6 +1635,7 @@ test('Given an installed local server and current Java, when lifecycle controls 
     memoryMb: 2048,
     desiredState: 'stopped',
     serverSha1: sha1Of('jar'),
+    bedrockBindAddress: '0.0.0.0',
   }), 'utf8');
 
   const child = new EventEmitter();
@@ -1654,6 +1683,10 @@ test('Given an installed local server and current Java, when lifecycle controls 
     ]);
     assert.equal(spawnCall[2].cwd, rootDir);
     assert.equal(spawnCall[2].windowsHide, true);
+    assert.match(
+      await readFile(path.join(rootDir, 'server.properties'), 'utf8'),
+      /^server-ip=0\.0\.0\.0$/m,
+    );
 
     child.stdout.write('[Server thread/INFO]: Done (1.234s)! For help, type "help"\n');
     await waitFor(async () => (await manager.getStatus()).phase === 'running', 'server readiness');
@@ -1731,6 +1764,7 @@ test('Given a managed cross-play server, when it starts, then Geyser receives an
   let spawnArgs;
   const manager = new managedServerModule.ManagedMinecraftServer({
     rootDir,
+    platform: 'win32',
     runtimeCandidates: () => [{ path: 'C:\\java.exe', source: 'test' }],
     inspectJava: () => ({
       available: true,

@@ -408,6 +408,8 @@ test('Given an installed Bedrock client, when the server workspace renders conne
   assert.match(serverWorkspace, /Enable same-PC Bedrock/);
   assert.match(serverWorkspace, /Install Bedrock sign-in support/);
   assert.match(serverWorkspace, /Play → Servers → Add Server/);
+  assert.match(serverWorkspace, /status\.javaEndpoint\?\.access === 'local-network'/);
+  assert.match(serverWorkspace, /status\.javaEndpoint\.lanAddresses/);
   assert.match(serverWorkspace, /127\.0\.0\.1/);
   assert.match(serverWorkspace, /19132/);
   assert.match(`${shell}\n${main}\n${taskRunners}`, /Task Runners/);

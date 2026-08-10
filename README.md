@@ -67,6 +67,25 @@ Do not connect this bot to public servers with coding enabled. This project allo
 
 If you need CLI-free setup and startup, `start-mindcraft.bat` + `setup.html` is the full path for Windows users.
 
+### Managed local server from WSL
+
+The managed server owns Java selection, Paper/Geyser startup, bind policy, and the client addresses shown in the dashboard. On WSL it must use a native Linux Java runtime; a Windows `java.exe` cannot open the server JAR through a WSL path.
+
+Do not assume that Windows can join a WSL server through `127.0.0.1`. Open the dashboard's **Join this world** panel and use the displayed address. The same values are available without the UI:
+
+```bash
+curl -sS http://127.0.0.1:8080/api/minecraft-server \
+  | jq '.server | {phase, javaRuntime: .java, javaEndpoint, bedrock: .crossplay}'
+```
+
+For local-network access, `javaEndpoint.lanAddresses[0]:port` is the Java Edition address and `crossplay.lanAddresses[0]:crossplay.bedrockPort` is the Bedrock address. The managed runtime persists the bind policy and reapplies `server-ip` on every start, so a stale `server.properties` value cannot silently restore WSL-only loopback.
+
+Before live play, require `phase: "running"`, a non-`.exe` Java runtime on WSL, `crossplay.ready: true` when Bedrock is needed, and a clean health response:
+
+```bash
+curl -sS http://127.0.0.1:8080/api/health | jq .
+```
+
 If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](minecollab.md#installation)
 
 

@@ -26,6 +26,7 @@ const MAX_SERVER_JAR_BYTES = 150 * 1024 * 1024;
 const MAX_PLUGIN_JAR_BYTES = 50 * 1024 * 1024;
 const DEFAULT_BEDROCK_PORT = 19132;
 const DEFAULT_BEDROCK_BIND_ADDRESS = '127.0.0.1';
+const ALLOWED_LOCAL_BIND_ADDRESSES = new Set(['127.0.0.1', '0.0.0.0']);
 const MAX_LOG_LINES = 200;
 const STOP_TIMEOUT_MS = 20_000;
 const DEFAULT_SERVER_SETTINGS = Object.freeze({
@@ -419,6 +420,18 @@ function defaultRuntimeCandidates() {
   });
 }
 
+function runtimeCandidateMatchesPlatform(candidate, platform = process.platform) {
+  const candidatePath = String(candidate?.path || '');
+  return platform === 'win32' || !candidatePath.toLowerCase().endsWith('.exe');
+}
+
+function configuredJavaBindAddress(config = {}) {
+  const requested = config.javaBindAddress || config.bedrockBindAddress || DEFAULT_BEDROCK_BIND_ADDRESS;
+  return ALLOWED_LOCAL_BIND_ADDRESSES.has(requested)
+    ? requested
+    : DEFAULT_BEDROCK_BIND_ADDRESS;
+}
+
 function defaultInspectJava(candidate) {
   // `java -version` succeeds even when a bundled runtime has been partially
   // removed (for example, with no java.security or tzdb.dat). Paper fails
@@ -536,6 +549,7 @@ export class ManagedMinecraftServer {
     checkPortAvailable = defaultCheckPortAvailable,
     networkInterfaces = listNetworkInterfaces,
     terminateProcessTree = terminateOwnedProcessTree,
+    platform = process.platform,
   } = {}) {
     this.rootDir = rootDir;
     this.phase = 'stopped';
@@ -552,6 +566,7 @@ export class ManagedMinecraftServer {
     this.checkPortAvailable = checkPortAvailable;
     this.networkInterfaces = networkInterfaces;
     this.terminateProcessTree = terminateProcessTree;
+    this.platform = platform;
     this.javaCache = null;
     this.error = null;
     this.child = null;
@@ -688,6 +703,7 @@ export class ManagedMinecraftServer {
     const crossplayConfigured = crossplayInstalled && geyserConfiguration.inSync;
     const configuredBedrockPort = Number(config.bedrockPort) || DEFAULT_BEDROCK_PORT;
     const configuredBindAddress = config.bedrockBindAddress || DEFAULT_BEDROCK_BIND_ADDRESS;
+    const javaBindAddress = configuredJavaBindAddress(config);
     const observedEndpoint = this.phase === 'running' && this.geyserRuntimeEndpoint
       ? { ...this.geyserRuntimeEndpoint }
       : null;
@@ -725,6 +741,13 @@ export class ManagedMinecraftServer {
       installed,
       host: '127.0.0.1',
       port: Number(config.port) || DEFAULT_PORT,
+      javaEndpoint: {
+        host: '127.0.0.1',
+        port: Number(config.port) || DEFAULT_PORT,
+        bindAddress: javaBindAddress,
+        access: javaBindAddress === '0.0.0.0' ? 'local-network' : 'this-computer',
+        lanAddresses: javaBindAddress === '0.0.0.0' ? this.localIpv4Addresses() : [],
+      },
       memoryMb: Number(config.memoryMb) || DEFAULT_MEMORY_MB,
       distribution: config.distribution || 'vanilla',
       version: installedVersion,
@@ -1157,6 +1180,7 @@ export class ManagedMinecraftServer {
       await this.fileOps.writeFile(staged.config, `${JSON.stringify({
         version: download.version,
         port: normalizedPort,
+        javaBindAddress: DEFAULT_BEDROCK_BIND_ADDRESS,
         memoryMb: normalizedMemory,
         desiredState: 'stopped',
         ...(crossplay
@@ -1267,6 +1291,10 @@ export class ManagedMinecraftServer {
         ?? current.bedrockBindAddress
         ?? DEFAULT_BEDROCK_BIND_ADDRESS,
     };
+    next.javaBindAddress = input.javaBindAddress
+      ?? (input.bedrockBindAddress === undefined
+        ? configuredJavaBindAddress(current)
+        : next.bedrockBindAddress);
     if (!Number.isInteger(next.port) || next.port < 1024 || next.port > 65535) {
       throw new ManagedMinecraftServerError('Minecraft server port must be between 1024 and 65535.');
     }
@@ -1325,8 +1353,11 @@ export class ManagedMinecraftServer {
     if (!Number.isInteger(next.bedrockPort) || next.bedrockPort < 1024 || next.bedrockPort > 65535) {
       throw new ManagedMinecraftServerError('Bedrock port must be between 1024 and 65535.');
     }
-    if (!['127.0.0.1', '0.0.0.0'].includes(next.bedrockBindAddress)) {
+    if (!ALLOWED_LOCAL_BIND_ADDRESSES.has(next.bedrockBindAddress)) {
       throw new ManagedMinecraftServerError('Bedrock access must be limited to this computer or the local network.');
+    }
+    if (!ALLOWED_LOCAL_BIND_ADDRESSES.has(next.javaBindAddress)) {
+      throw new ManagedMinecraftServerError('Java access must be limited to this computer or the local network.');
     }
     return next;
   }
@@ -1340,6 +1371,7 @@ export class ManagedMinecraftServer {
     }
     const next = this.validateConfiguration(input);
     await this.writeConfiguration({
+      'server-ip': next.javaBindAddress,
       'server-port': next.port,
       motd: next.motd,
       'online-mode': next.onlineMode,
@@ -1570,9 +1602,12 @@ export class ManagedMinecraftServer {
       const selectedPort = await this.selectAvailablePort(preferredPort);
       if (startGeneration !== this.startGeneration) return this.getStatus();
       if (selectedPort !== preferredPort) await this.writeServerPort(selectedPort);
+      const javaBindAddress = configuredJavaBindAddress(configBeforeStart);
+      await this.writeProperties({ 'server-ip': javaBindAddress });
       const config = await this.writeConfig({
         desiredState: 'running',
         port: selectedPort,
+        javaBindAddress,
       });
       if (startGeneration !== this.startGeneration) {
         await this.writeConfig({ desiredState: 'stopped' });
@@ -1952,7 +1987,8 @@ export class ManagedMinecraftServer {
       : null;
     if (!inspected) {
       inspected = [];
-      for (const candidate of await this.runtimeCandidates()) {
+      for (const candidate of (await this.runtimeCandidates())
+        .filter((value) => runtimeCandidateMatchesPlatform(value, this.platform))) {
         inspected.push(await this.inspectJava(candidate));
       }
       this.javaCache = { at: Date.now(), candidates: inspected };
