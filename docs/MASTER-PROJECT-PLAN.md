@@ -58,6 +58,7 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] The follow-on cave campaign now binds the existing deterministic mining-corridor strategy after exposed-cave exhaustion, protects every accumulated feet/head/support cell from later excavation, propagates that route contract through capability binding, and retraces exact cleared cells with native Pathfinder and digging disabled. Its delegated all-in-one replay completed inside the broader Resource-to-Project request: the bot retained nine fresh raw iron and nine fresh coal from the expedition, returned over its saved route, manufactured the requested iron pickaxe and bucket, stored both in the exact chest, and returned to the player at health 20. Carried excavation debris can now fund bounded capacity recovery while world cobblestone remains protected.
 - [x] Resource-to-Project composition is physically accepted. One natural request became a durable generic Explorer order, two GoalDirector acquisitions, two exact deposits, and one player return; it added no item recipe, ore route, controller, or executor. The last blocker was not crafting logic: owned Pathfinder abstracted away which side of a partial fence collision cell the body occupied and advertised a first edge through the fence onto a furnace. The package now preserves the exact initial body pose, rejects collision-crossing first edges, retains real open-side and low-enclosure exits, and routes around the obstruction. Paper verified a second iron pickaxe and one bucket in the selected chest, the bot beside LandingWitness, health 20, and durable Operator Stop.
 - [~] Home Stewardship now has one generic retained-inventory cleanup path. Cognition selects only authorized carried surplus once; Agenda persists canonical item/retain floors plus one exact chest; Mineflayer owns the real window and transfers; V2 preserves the best durable copies, verifies both inventories, and preflights the complete container capacity before moving anything. The first live run safely deposited 67 raw iron, 34 coal, 64 granite, 33 diorite, 256 cobblestone, 51 andesite, 84 dirt, 10 sand, and one wooden pickaxe before exposing the missing preflight. On the corrected unchanged rerun, the exact chest had three free slots while ten extra stone pickaxes required ten, so the bot moved nothing, spent one attempt instead of two, returned to the player, and Paper verified every item and health 20 unchanged. Full all-groups cleanup remains externally blocked by the selected chest's physical capacity; the exact-slot durable-tool success path is installed but not yet physically accepted.
+- [x] Checkpoint `7a2cdd4` completes the first Explore-Remember-Guide campaign without a second exploration engine. One natural request became one durable scout Agenda/work order anchored to the requesting player's exact loaded position. Existing typed capabilities observed a useful adult animal and a safe returnable cave stance, persisted both verified coordinates through the existing MemoryBank, performed bounded radial region changes when one snapshot lacked a cave, returned to the requester, and then led toward the exact remembered cave. The unchanged 64-block request completed twice; the final run found sheep at `(8121,70,7903)` and a cave stance at `(8116,63,7894)`, returned within 3.6 blocks, completed the guide route in 48.9 seconds with one productive attempt, and ended under Operator Stop. No noun-specific route, custom navigator, second director, or arbitrary command replay was added.
 - [ ] P1 package debt: table crafting still opens its window outside the `openBlock`/`openEntity` gate. Route that raw opener through the package generation boundary before a broad outcome requires crafting immediately after aborted container work; do not claim global UI serialization meanwhile.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
@@ -140,7 +141,7 @@ unchanged request passed physically on 2026-08-09 after the owned Pathfinder
 partial-collision start primitive was corrected. Freeze this campaign; do not
 turn its workstation arrangement or item quantities into new acceptance slices.
 
-### Active lane: Home Stewardship
+### Capacity-blocked lane: Home Stewardship
 
 The first ordinary shared-base cleanup request now compiles and executes through
 one durable generic storage plan. Its corrected rerun reached a truthful world
@@ -149,6 +150,25 @@ authorized tool cleanup required ten. Resume Home Stewardship with adequate
 player-authorized existing storage or another ordinary maintenance/restocking
 outcome. Do not enlarge the chest, move unrelated contents, place storage, or
 invent a capacity permutation merely to certify the installed path.
+
+### Completed lane: Explore-Remember-Guide
+
+The accepted broad request is:
+
+> IronSuiteProof, scout a useful area around this outpost. Remember one nearby
+> cave and one useful animal location, come back, then guide me to the cave
+> without damaging buildings or paths.
+
+The request is one durable scout outcome, not a sequence of model-owned chat
+commands. It binds the requesting player's exact origin, observes only verified
+Minecraft entities and safe returnable cave stances, persists exact findings,
+changes bounded search regions instead of repeating an empty snapshot, returns
+to the requester, and guides through native no-dig locomotion. The final
+unchanged Paper run completed in 48.9 seconds with one productive attempt and
+durably remembered the sheep and cave. Freeze the cave/animal wording and
+coordinates; the next campaign must use the remembered result in ordinary play
+or enter a different player-valued domain rather than manufacture scouting
+permutations.
 
 ## Next-stage product program
 
@@ -161,7 +181,7 @@ The project is now in player-led capability expansion. These goals are ordered b
 5. **Broader player capability.** Add missing exploration, transport, farming, combat, building, and advanced-progression behavior only when a useful natural request reaches that domain. Grow the existing capability catalogue and owned packages at the demonstrated seam; never teach recipes one by one or introduce another executor.
 6. **Release readiness after playability.** Only after sustained single-companion sessions are dependable should the project spend a tranche on cross-session repeatability, packaging, operator UX, or additional bots. Release evidence must come from the exact shipped runtime rather than a parallel harness.
 
-The current working session ends with IronSuiteProof Operator Stop-held after the first Home Stewardship request reached a precise external capacity blocker. Freeze the generic cleanup compilation, exact-container binding, capacity preflight, single-attempt failure, and player return. Continue broad lived-in-base play from adequate player-authorized storage or another useful maintenance outcome; do not turn this into a chest-size test series. Preserve the package-first movement mandate, generic capability catalogue, one ActionManager executor, and broad-run acceptance rule.
+The current working session ends with IronSuiteProof Operator Stop-held after the first Explore-Remember-Guide outcome completed twice. Freeze the scout language contract, exact requester-origin binding, bounded radial search, verified MemoryBank checkpoints, return, and guidance route. Rotate to a broad outcome that uses remembered world knowledge in ordinary companion play—preferably useful animal/home interaction if the live world still supports it—or let another normal player request select the domain. Do not turn caves, animal types, radii, or guide distances into a permutation series. Home Stewardship remains available when adequate player-authorized storage exists. Preserve the package-first movement mandate, generic capability catalogue, one ActionManager executor, and broad-run acceptance rule.
 
 ## Remaining product tranches
 
@@ -203,6 +223,7 @@ The current working session ends with IronSuiteProof Operator Stop-held after th
 - [x] Complete the follow-on shared-worksite request through one function-constrained Builder order plus durable return, then prove that command-only idle survival does not invent optional construction after completion.
 - [x] Use randomized two-player play to select the next blocker: the cave/iron/coal/return request proved durable multi-resource intent, protected-site departure, return-safe cave/ore stance binding, truthful terminal failure, real surface egress, and player return.
 - [x] Complete that unchanged request by binding a second deterministic acquisition strategy after cave/exposed-ore no-progress. The follow-on Resource-to-Project run used the same corridor strategy to acquire nine fresh raw iron and nine fresh coal, manufactured and stored an iron pickaxe and bucket, preserved the work area, and returned at health 20 without item-specific planning.
+- [x] Complete one Explore-Remember-Guide outcome through a typed scout work order: bind the requester's exact origin, observe a useful animal and safe returnable cave, change bounded search regions on no-progress, persist exact verified places, return to the requester, and guide to the remembered cave without destructive navigation.
 - Move strategy and retry policy out of `skills.js` incrementally; retain its hard-won safety mechanics in bounded execution adapters.
 - Prove second-run repeatability and interruption/resumption across resource, crafting, home, farming, exploration, and combat campaigns.
 

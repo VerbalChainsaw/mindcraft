@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / b9dc18e (Home Stewardship)
-Milestone: generic retained-inventory cleanup is live; full cleanup is capacity-blocked
+Branch/commit: recovery/iron-pickaxe-20260803 / 7a2cdd4 (Explore-Remember-Guide)
+Milestone: durable bounded scouting, verified place memory, requester return, and exact guidance are live
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: Home Stewardship through Agenda, ActionManager, and native Mineflayer containers
-Live blocker: selected chest has 3 free slots; storing 10 surplus stone pickaxes requires 10
-Last physical result: corrected unchanged request moved nothing, failed once with exact capacity, returned to player, health 20; all items unchanged
+Owned subsystem: typed scout Agenda/work order through the existing capability catalogue and native Pathfinder
+Live blocker: none; Home Stewardship cleanup remains externally capacity-blocked, not the active lane
+Last physical result: unchanged 64-block request found and remembered sheep + cave, returned within 3.6 blocks, guided to the cave, completed once in 48.9s
 Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held; LandingWitness disconnected
-Next: continue broad base play with adequate authorized storage or another useful maintenance outcome; no chest-size permutations
+Next: rotate to a broad remembered-animal/home-use outcome; let ordinary play expose the first shared blocker
 Jordan review: none; Director cancelled the external review gate for uninterrupted product work

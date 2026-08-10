@@ -11,7 +11,7 @@ repair a home structure, and execute bounded general construction projects.
 The advanced mechanics table below remains an explicit backlog rather than
 an implied capability claim.
 
-## Active V2 playable checkpoint — 2026-08-08
+## Active V2 playable checkpoint — 2026-08-09
 
 This file records delivered capability breadth; it does not override the live
 execution order in `docs/coordination/CURRENT.md` or the active V2 plan. The
@@ -108,6 +108,26 @@ after terminal player work. Critical eating, health recovery, self-defense,
 and player-defense remain enabled. This proves one broad functional worksite
 composition and truthful idle handoff, not arbitrary structure quality or
 general ownership discovery.
+
+The first Explore-Remember-Guide outcome is now physically complete. One
+natural 64-block request became a durable typed scout work order anchored to
+the requesting player's exact position. The existing capability catalogue and
+native Pathfinder observed a useful adult animal and a safe returnable cave,
+changed bounded search regions when the initial snapshot had no valid cave,
+persisted the verified coordinates through MemoryBank, returned to the
+requester, and led to the exact remembered cave. The final unchanged run found
+sheep at `(8121,70,7903)` and a cave stance at `(8116,63,7894)`, completed in
+48.9 seconds with one productive attempt, and ended under Operator Stop. This
+proves the cave-and-animal campaign once; it does not imply arbitrary scouting
+categories, world mapping, cross-dimension guidance, or automatic player
+movement.
+
+The next tranche must use this knowledge in a broad ordinary outcome or move to
+another player-valued gameplay family. A remembered-animal/home interaction is
+preferred if the lived-in world still provides a viable animal and authorized
+pen, because it composes memory, guidance, entity interaction, infrastructure,
+and return without retesting scouting itself. Otherwise ordinary mixed play
+selects the first material shared blocker.
 
 ## Delivered in this slice
 
