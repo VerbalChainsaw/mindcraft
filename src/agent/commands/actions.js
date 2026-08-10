@@ -36,6 +36,7 @@ import {
     resolveItemGoalTarget,
 } from '../runtime/goal-contract.js';
 import { buildPrerequisitePlan } from '../runtime/prerequisite-planner.js';
+import { mayBindExactWorkstation } from './workstation-command-policy.js';
 
 
 const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
@@ -552,6 +553,15 @@ function exactWorkstationArguments(name, x, y, z, dimension) {
         source: 'player_explicit_here',
         observedAt: Date.now(),
     };
+}
+
+function workstationArgumentsForAction(agent, name, x, y, z, dimension) {
+    const request = agent?.actions?.currentRequestContext?.() || null;
+    // A model may choose the mechanic, but it does not own exact world-state
+    // binding. Deterministic directors and explicit commands can pass a
+    // verified workstation; model-selected calls must use the live resolver.
+    if (!mayBindExactWorkstation(request)) return null;
+    return exactWorkstationArguments(name, x, y, z, dimension);
 }
 
 function resolveExplicitWorkstation(agent, resolution, workstationName) {
@@ -1373,7 +1383,7 @@ export const actionsList = [
                 agent.bot,
                 target_food_points,
                 range,
-                exactWorkstationArguments('furnace', x, y, z, dimension),
+                workstationArgumentsForAction(agent, 'furnace', x, y, z, dimension),
                 baseline_food_points,
             );
         }, false, 10)
@@ -1444,21 +1454,21 @@ export const actionsList = [
     },
     {
         name: '!craftRecipe',
-        description: 'Craft the given recipe a given number of times.',
+        description: 'Craft the given recipe a given number of times, automatically resolving a usable nearby crafting table. Model-selected actions must omit exact workstation coordinates.',
         params: {
             'recipe_name': { type: 'ItemName', description: 'The name of the output item to craft.' },
             'num': { type: 'int', description: 'The number of times to craft the recipe. This is NOT the number of output items, as it may craft many more items depending on the recipe.', domain: [1, Number.MAX_SAFE_INTEGER] },
-            'workstation_x': { type: 'float', description: 'Optional exact crafting table X coordinate.', optional: true },
-            'workstation_y': { type: 'float', description: 'Optional exact crafting table Y coordinate.', optional: true },
-            'workstation_z': { type: 'float', description: 'Optional exact crafting table Z coordinate.', optional: true },
-            'workstation_dimension': { type: 'string', description: 'Optional exact crafting table dimension.', optional: true },
+            'workstation_x': { type: 'float', description: 'Optional deterministically verified exact crafting table X coordinate; never guess.', optional: true },
+            'workstation_y': { type: 'float', description: 'Optional deterministically verified exact crafting table Y coordinate; never guess.', optional: true },
+            'workstation_z': { type: 'float', description: 'Optional deterministically verified exact crafting table Z coordinate; never guess.', optional: true },
+            'workstation_dimension': { type: 'string', description: 'Optional deterministically verified exact crafting table dimension; never guess.', optional: true },
         },
         perform: runAsAction(async (agent, recipe_name, num, x, y, z, dimension) => {
             return await skills.craftRecipe(
                 agent.bot,
                 recipe_name,
                 num,
-                exactWorkstationArguments('crafting_table', x, y, z, dimension),
+                workstationArgumentsForAction(agent, 'crafting_table', x, y, z, dimension),
             );
         })
     },
@@ -1992,7 +2002,7 @@ export const actionsList = [
                 agent.bot,
                 item_name,
                 num,
-                exactWorkstationArguments('furnace', x, y, z, dimension),
+                workstationArgumentsForAction(agent, 'furnace', x, y, z, dimension),
             );
             return success;
         })
