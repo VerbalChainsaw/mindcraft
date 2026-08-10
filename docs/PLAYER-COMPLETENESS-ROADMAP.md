@@ -130,14 +130,23 @@ crossing but did not complete containment and breeding. That niche edge case is
 deferred until normal play makes it important; it must not be described as a
 finished player capability.
 
-The active tranche polishes the companion behavior a player experiences all
-the time. One broad mixed session must keep the bot near the player without
-collision or oscillation, move across ordinary terrain without unnecessary
-damage, gather useful common resources completely with suitable tools, yield
-cleanly to changed instructions and Stop, report only current truthful state,
-return to the requester, and settle calmly. The first shared defect exposed by
-that loop selects the repair. Do not manufacture narrow noun, quantity, animal,
-or fixture variants.
+The common-resource portion of the broad companion-polish tranche is now
+accepted at `a67f35f`. One unchanged natural request gathered a complete
+bounded spruce tree, retained an already-satisfied cobblestone floor, verified
+both final inventory promises, returned beside the requester at health 20, and
+settled under durable Operator Stop. Target-scoped Pathfinder movement no
+longer prices explicitly authorized canopy cells as unreachable, and a failed
+physical cleanup obligation now survives GoalDirector and Agenda persistence
+so a later inventory checklist cannot conceal a half-finished tree or scaffold.
+
+Return-safe mining routes, non-constructive ordinary movement, owned
+CollectBlock cancellation/target ordering, whole-tree settlement, aggregate
+inventory truth, requester return, and calm idle are frozen unless normal play
+produces contradictory evidence. Resume unscripted two-player supervised play;
+the next material player-visible failure chooses the repair. Prioritize stale
+authority, world stewardship and existing-infrastructure reuse, mobility,
+truthful continuation, then genuinely missing gameplay domains. Do not create
+wood-species, tree-height, quantity, animal, or fixture certification grids.
 
 ## Delivered in this slice
 

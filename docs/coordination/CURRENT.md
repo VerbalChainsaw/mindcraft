@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/functional checkpoint: recovery/iron-pickaxe-20260803 / e569758
-Milestone: shift from niche certification to high-frequency companion playability polish
+Branch/functional checkpoint: recovery/iron-pickaxe-20260803 / a67f35f
+Milestone: return-safe common-resource gathering and truthful physical settlement accepted
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: existing GoalDirector/Agenda capability engine and ordinary companion loop
-Live blocker: none active; remembered-livestock completion is explicitly deferred, not accepted
-Last physical result: reacquired moving sheep, bound safe surface/perimeter stances, and crossed one gate; full containment/breeding was not proved
-Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held; Agenda cleared
-Next: broad mixed-play polish of Follow/presence, movement, useful gathering, interruption, truthful chat, and settled idle
+Owned subsystem: GoalDirector/Agenda capability engine, owned Pathfinder/CollectBlock mechanics, and ordinary companion loop
+Live blocker: none; the first material failure from normal two-player play selects the next tranche
+Last physical result: unchanged spruce/cobblestone request completed, verified 185/152 carried, returned beside FieldWitness at health 20
+Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held; Agenda complete
+Next: resume unscripted supervised play; prioritize authority, stewardship/infrastructure reuse, movement, truthfulness, then missing domains
 Jordan review: none; Director requested uninterrupted product work
