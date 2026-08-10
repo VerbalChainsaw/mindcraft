@@ -1260,6 +1260,19 @@ export const actionsList = [
         })
     },
     {
+        name: '!harvestMatureCrop',
+        description: 'Harvest only mature crops of one canonical type, collect the requested net output, and replant every exact farmland cell before completion.',
+        params: {
+            'crop': { type: 'BlockName', description: 'Exact mature crop block: wheat, carrots, potatoes, or beetroots.' },
+            'output': { type: 'ItemName', description: 'Expected crop output item.' },
+            'num': { type: 'int', description: 'Required net inventory increase after replanting.', domain: [1, 64] },
+            'range': { type: 'int', description: 'Maximum source radius.', domain: [16, 512] },
+        },
+        perform: runAsAction(async (agent, crop, output, num, range) => {
+            return await skills.harvestMatureCrop(agent.bot, crop, output, num, range);
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES),
+    },
+    {
         name: '!collectBlocksInRange',
         description: 'Collect a bounded number of exact target blocks using an explicit scan radius and optional bounded relocation.',
         params: {
@@ -1834,6 +1847,72 @@ export const actionsList = [
             if (!maintained) return false;
             return persistFarmState(agent, agent.bot?.lastActionEvidence?.farm, 'maintained');
         }),
+    },
+    {
+        name: '!settleLivestockAtPen',
+        description: 'Lure verified adult livestock from a remembered source into one exact fence enclosure, breed the requested pairs, exit, close the gate, and verify the final animal count.',
+        params: {
+            'animal': { type: 'string', description: 'Animal: cow, sheep, pig, chicken, or rabbit.' },
+            'adult_count': { type: 'int', description: 'Adults to relocate, 2-8.', domain: [2, 8, '[]'] },
+            'breeding_pairs': { type: 'int', description: 'Pairs to breed, 1-4.', domain: [1, 4, '[]'] },
+            'source_x': { type: 'int', description: 'Verified remembered source X.' },
+            'source_y': { type: 'int', description: 'Verified remembered source Y.' },
+            'source_z': { type: 'int', description: 'Verified remembered source Z.' },
+            'gate_x': { type: 'int', description: 'Exact pen gate X.' },
+            'gate_y': { type: 'int', description: 'Exact pen gate Y.' },
+            'gate_z': { type: 'int', description: 'Exact pen gate Z.' },
+            'inside_x': { type: 'int', description: 'Exact safe interior X.' },
+            'inside_y': { type: 'int', description: 'Exact safe interior Y.' },
+            'inside_z': { type: 'int', description: 'Exact safe interior Z.' },
+            'outside_x': { type: 'int', description: 'Exact safe exterior X.' },
+            'outside_y': { type: 'int', description: 'Exact safe exterior Y.' },
+            'outside_z': { type: 'int', description: 'Exact safe exterior Z.' },
+            'min_x': { type: 'int', description: 'Pen minimum X boundary.' },
+            'max_x': { type: 'int', description: 'Pen maximum X boundary.' },
+            'min_z': { type: 'int', description: 'Pen minimum Z boundary.' },
+            'max_z': { type: 'int', description: 'Pen maximum Z boundary.' },
+            'pen_y': { type: 'int', description: 'Pen boundary Y.' },
+            'dimension': { type: 'string', description: 'Canonical pen dimension.' },
+            'baseline_animals': { type: 'int', description: 'Same-species animals already inside before the request.' },
+        },
+        perform: runAsAction(async function (
+            agent,
+            animal,
+            adult_count,
+            breeding_pairs,
+            source_x,
+            source_y,
+            source_z,
+            gate_x,
+            gate_y,
+            gate_z,
+            inside_x,
+            inside_y,
+            inside_z,
+            outside_x,
+            outside_y,
+            outside_z,
+            min_x,
+            max_x,
+            min_z,
+            max_z,
+            pen_y,
+            dimension,
+            baseline_animals,
+        ) {
+            return await skills.settleLivestockAtPen(agent.bot, {
+                animal,
+                adultCount: adult_count,
+                breedingPairs: breeding_pairs,
+                source: { x: source_x, y: source_y, z: source_z },
+                gate: { x: gate_x, y: gate_y, z: gate_z },
+                inside: { x: inside_x, y: inside_y, z: inside_z },
+                outside: { x: outside_x, y: outside_y, z: outside_z },
+                bounds: { minX: min_x, maxX: max_x, minZ: min_z, maxZ: max_z, y: pen_y },
+                dimension,
+                baselineAnimals: baseline_animals,
+            });
+        }, false, 3),
     },
     {
         name: '!breedAnimals',

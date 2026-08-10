@@ -374,12 +374,6 @@ const TOOL_TIER = Object.freeze({
     diamond: 5,
     netherite: 6,
 });
-const CROP_FOOD_SPECS = Object.freeze({
-    carrots: Object.freeze({ harvest: 'carrot', seed: 'carrot', maxAge: 7 }),
-    potatoes: Object.freeze({ harvest: 'potato', seed: 'potato', maxAge: 7 }),
-    beetroots: Object.freeze({ harvest: 'beetroot', seed: 'beetroot_seeds', maxAge: 3 }),
-    wheat: Object.freeze({ harvest: 'wheat', seed: 'wheat_seeds', maxAge: 7 }),
-});
 const HUNTABLE_FOOD_ANIMALS = new Set(['chicken', 'cow', 'pig', 'rabbit', 'sheep']);
 
 function setActionEvidence(bot, evidence) {
@@ -507,7 +501,7 @@ function cropAge(block) {
 }
 
 function matureFoodCrop(block) {
-    const spec = CROP_FOOD_SPECS[block?.name];
+    const spec = mc.matureCropHarvestForBlock(block?.name);
     return Boolean(spec && cropAge(block) >= spec.maxAge);
 }
 
@@ -3538,7 +3532,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
             if (interrupted() || safeFoodPoints(bot) >= targetPoints || nearbyHostile()) break;
             const current = bot.blockAt(crop.position);
             if (!matureFoodCrop(current)) continue;
-            const spec = CROP_FOOD_SPECS[current.name];
+            const spec = mc.matureCropHarvestForBlock(current.name);
             const cropPosition = current.position.clone();
             if (!await breakBlockAt(
                 bot,
@@ -7233,6 +7227,144 @@ export async function pickupNearbyItems(bot) {
         requireAll: true,
         successMessage: count => `Picked up ${count} nearby item${count === 1 ? '' : 's'}.`,
     });
+}
+
+export async function harvestMatureCrop(bot, cropName, outputName, count=1, range=64) {
+    const crop = String(cropName || '').trim().toLowerCase();
+    const output = String(outputName || '').trim().toLowerCase();
+    const requested = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
+    const searchRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
+    const spec = mc.matureCropHarvestForOutput(output);
+    const fail = (outcome, detail, extra = {}) => {
+        setActionEvidence(bot, {
+            kind: 'mature_crop_harvest',
+            outcome,
+            target: { name: crop },
+            output,
+            requested,
+            ...extra,
+            retryable: !['invalid_crop_contract', 'replant_failed'].includes(outcome),
+        });
+        log(bot, detail);
+        return false;
+    };
+    if (!spec || spec.crop !== crop) {
+        return fail('invalid_crop_contract', `${crop || 'That crop'} is not a mature renewable source of ${output || 'that item'}.`);
+    }
+
+    const beforeOutput = inventoryCount(bot, output);
+    const origin = bot.entity?.position?.clone?.();
+    if (!origin) return fail('position_unavailable', 'Cannot bind a crop harvest region without a current position.');
+    let candidates = [];
+    try {
+        candidates = world.getNearestBlocksWhere(
+            bot,
+            block => block?.name === crop && cropAge(block) >= spec.maxAge,
+            searchRange,
+            Math.min(64, Math.max(8, requested * 4)),
+        )
+            .filter(block => block?.position && block.position.distanceTo(origin) <= searchRange)
+            .sort((left, right) => (
+                bot.entity.position.distanceTo(left.position)
+                - bot.entity.position.distanceTo(right.position)
+            ));
+    } catch {
+        return fail('crop_scan_failed', `Could not inspect the loaded area for mature ${crop}.`);
+    }
+    if (candidates.length === 0) {
+        return fail('source_not_found', `No mature ${crop} is loaded within ${searchRange} blocks.`);
+    }
+
+    const pendingReplants = [];
+    let harvested = 0;
+    let replanted = 0;
+    const replantPending = async () => {
+        while (
+            pendingReplants.length > 0
+            && inventoryCount(bot, spec.seed) > 0
+            && !bot.interrupt_code
+            && !actionCancellationSignal()?.aborted
+        ) {
+            const soil = pendingReplants[0];
+            if (!await tillAndSow(bot, soil.x, soil.y, soil.z, spec.seed)) return false;
+            pendingReplants.shift();
+            replanted += 1;
+        }
+        return true;
+    };
+
+    for (const candidate of candidates) {
+        if (bot.interrupt_code || actionCancellationSignal()?.aborted) break;
+        if (inventoryCount(bot, output) - beforeOutput >= requested && pendingReplants.length === 0) break;
+        const current = bot.blockAt(candidate.position);
+        if (current?.name !== crop || cropAge(current) < spec.maxAge) continue;
+        const soil = bot.blockAt(current.position.offset(0, -1, 0));
+        if (soil?.name !== 'farmland') continue;
+        const cropPosition = current.position.clone();
+        if (!await breakBlockAt(bot, cropPosition.x, cropPosition.y, cropPosition.z)) continue;
+        harvested += 1;
+        pendingReplants.push({ x: soil.position.x, y: soil.position.y, z: soil.position.z });
+
+        await waitForWorldCondition(bot, () => (
+            droppedItemCandidates(bot, 8, item => item.name === output || item.name === spec.seed).length > 0
+            || inventoryCount(bot, output) > beforeOutput
+        ), 1_000, 50);
+        const drops = droppedItemCandidates(
+            bot,
+            8,
+            item => item.name === output || item.name === spec.seed,
+        );
+        if (drops.length > 0) {
+            await collectDroppedItemQueue(bot, drops, {
+                kind: 'crop_pickup',
+                requireAll: false,
+                successMessage: picked => `Collected ${picked} crop drop${picked === 1 ? '' : 's'}.`,
+            });
+        }
+        if (!await replantPending()) {
+            return fail('replant_failed', `Harvested ${crop}, but Minecraft did not confirm the replacement crop.`, {
+                harvested,
+                replanted,
+                pendingReplants: pendingReplants.length,
+            });
+        }
+    }
+
+    if (bot.interrupt_code || actionCancellationSignal()?.aborted) {
+        return fail('interrupted', `Stopped after harvesting ${harvested} ${crop}.`, {
+            harvested,
+            replanted,
+            pendingReplants: pendingReplants.length,
+        });
+    }
+    if (!await replantPending() || pendingReplants.length > 0) {
+        return fail('replant_failed', `Could not restore ${pendingReplants.length} harvested ${crop} cell(s).`, {
+            harvested,
+            replanted,
+            pendingReplants: pendingReplants.length,
+        });
+    }
+    const gained = Math.max(0, inventoryCount(bot, output) - beforeOutput);
+    if (gained < requested) {
+        return fail('insufficient_mature_yield', `Mature ${crop} yielded ${gained} of ${requested} required ${output}.`, {
+            harvested,
+            replanted,
+            gained,
+        });
+    }
+    setActionEvidence(bot, {
+        kind: 'mature_crop_harvest',
+        outcome: 'harvested_and_replanted',
+        target: { name: crop },
+        output,
+        requested,
+        gained,
+        harvested,
+        replanted,
+        retryable: false,
+    });
+    log(bot, `Harvested ${gained} ${output} from ${harvested} mature ${crop} and replanted every harvested cell.`);
+    return true;
 }
 
 function usefulDroppedItem(bot, item) {
@@ -16780,7 +16912,7 @@ function normalizeFarmState(raw) {
 function farmCellStatus(bot, farm, cell) {
     const soil = bot.blockAt(new Vec3(cell.x, cell.y, cell.z));
     const crop = bot.blockAt(new Vec3(cell.x, cell.y + 1, cell.z));
-    const cropSpec = CROP_FOOD_SPECS[farm.crop];
+    const cropSpec = mc.matureCropHarvestForBlock(farm.crop);
     return {
         soil,
         crop,
@@ -17108,14 +17240,6 @@ export async function maintainFarm(bot, rawFarm) {
     return true;
 }
 
-const BREEDING_FOOD = Object.freeze({
-    cow: 'wheat',
-    sheep: 'wheat',
-    pig: 'carrot',
-    chicken: 'wheat_seeds',
-    rabbit: 'carrot',
-});
-
 function isAdultBreedingAnimal(entity, animal) {
     if (entity?.name !== animal || !entity.position) return false;
     const babyFlag = entity.metadata?.[16];
@@ -17128,9 +17252,525 @@ function isBabyBreedingAnimal(entity, animal) {
         && (entity.metadata?.[16] === true || entity.metadata?.[16] === 1);
 }
 
-export async function breedAnimals(bot, animalName, pairs=1, range=24) {
+function livestockInPen(bot, animal, bounds) {
+    return Object.values(bot.entities || {}).filter(entity => (
+        entity?.name === animal
+        && entity.position
+        && entity.position.x > bounds.minX
+        && entity.position.x < bounds.maxX + 1
+        && entity.position.z > bounds.minZ
+        && entity.position.z < bounds.maxZ + 1
+        && entity.position.y >= bounds.y - 1
+        && entity.position.y <= bounds.y + 2
+    ));
+}
+
+function entityInsideLivestockBounds(entity, bounds) {
+    return Boolean(
+        !bounds
+        || (
+            entity?.position
+            && entity.position.x > bounds.minX
+            && entity.position.x < bounds.maxX + 1
+            && entity.position.z > bounds.minZ
+            && entity.position.z < bounds.maxZ + 1
+            && entity.position.y >= bounds.y - 1
+            && entity.position.y <= bounds.y + 2
+        )
+    );
+}
+
+async function releaseLivestockAttraction(bot, food) {
+    if (bot.heldItem?.name !== food) return true;
+    return await equip(bot, 'hand');
+}
+
+function noSprintLivestockMovements(bot) {
+    const movements = safeMovements(bot);
+    movements.allowSprinting = false;
+    movements.canDig = false;
+    movements.allow1by1towers = false;
+    return movements;
+}
+
+function currentFenceGate(bot, point) {
+    const block = bot.blockAt(new Vec3(point.x, point.y, point.z));
+    return String(block?.name || '').endsWith('_fence_gate') ? block : null;
+}
+
+function fenceGateIsOpen(block) {
+    try {
+        return block?.getProperties?.()?.open === true;
+    } catch {
+        return false;
+    }
+}
+
+async function setFenceGateOpen(bot, point, open) {
+    let block = currentFenceGate(bot, point);
+    if (!block) return false;
+    if (fenceGateIsOpen(block) === open) return true;
+    if (bot.entity.position.distanceTo(block.position) > 4.5) {
+        const reached = await goToGoal(bot, new pf.goals.GoalNear(point.x, point.y, point.z, 3), {
+            movements: () => noSprintLivestockMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        if (!reached || bot.interrupt_code) return false;
+        block = currentFenceGate(bot, point);
+        if (!block) return false;
+    }
+    try {
+        await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
+        await bot.activateBlock(block);
+    } catch {
+        return false;
+    }
+    return await waitForWorldCondition(bot, () => (
+        fenceGateIsOpen(currentFenceGate(bot, point)) === open
+    ), 2_000, 50);
+}
+
+function selectedLivestock(bot, ids) {
+    return ids.map(id => bot.entities?.[id]).filter(entity => entity?.position);
+}
+
+function farthestLivestockFromBot(bot, ids) {
+    return selectedLivestock(bot, ids)
+        .sort((left, right) => (
+            bot.entity.position.distanceTo(right.position)
+            - bot.entity.position.distanceTo(left.position)
+        ))[0] || null;
+}
+
+async function gatherSelectedLivestock(bot, ids, maximumDistance=7.5) {
+    const allNear = () => {
+        const selected = selectedLivestock(bot, ids);
+        return selected.length === ids.length
+            && selected.every(entity => bot.entity.position.distanceTo(entity.position) <= maximumDistance);
+    };
+    if (allNear()) return true;
+    const farthest = farthestLivestockFromBot(bot, ids);
+    if (!farthest) return false;
+    const reached = await goToGoal(bot, new pf.goals.GoalFollow(farthest, 3), {
+        movements: () => noSprintLivestockMovements(bot),
+        allowHealthBoundedDescent: false,
+        allowLocalRecovery: false,
+    });
+    if (!reached || bot.interrupt_code) return false;
+    return await waitForWorldCondition(bot, allNear, 3_000, 100);
+}
+
+async function lureLivestockTo(bot, ids, destination, {
+    distance=3,
+    animalDistance=5,
+} = {}) {
+    let strides = 0;
+    while (!bot.interrupt_code && remainingActionTimeMs() > 5_000) {
+        const horizontal = Math.hypot(
+            bot.entity.position.x - destination.x,
+            bot.entity.position.z - destination.z,
+        );
+        if (horizontal <= distance) {
+            return await waitForWorldCondition(bot, () => {
+                const selected = selectedLivestock(bot, ids);
+                return selected.length === ids.length
+                    && selected.every(entity => (
+                        Math.hypot(
+                            entity.position.x - destination.x,
+                            entity.position.z - destination.z,
+                        ) <= animalDistance
+                    ));
+            }, 5_000, 100);
+        }
+        if (strides >= 40) return false;
+        if (!await gatherSelectedLivestock(bot, ids)) return false;
+        const step = Math.min(4, horizontal);
+        const x = bot.entity.position.x + (((destination.x - bot.entity.position.x) / horizontal) * step);
+        const z = bot.entity.position.z + (((destination.z - bot.entity.position.z) / horizontal) * step);
+        // Bind the next horizontal stride to the highest loaded, supported
+        // surface near that X/Z. Reusing the pen's final Y rejects ordinary
+        // lower terrain, while GoalXZ alone may legally converge in a cave
+        // directly underneath the requested surface route.
+        const currentY = Math.floor(bot.entity.position.y);
+        const surface = nearestLoadedSurfaceStandingCell(
+            bot,
+            new Vec3(Math.round(x), currentY, Math.round(z)),
+            currentY - 4,
+            currentY + 7,
+            2,
+            currentY - 1,
+        ).target;
+        if (!surface) return false;
+        const reached = await goToGoal(bot, new pf.goals.GoalBlock(
+            surface.x,
+            surface.y,
+            surface.z,
+        ), {
+            movements: () => noSprintLivestockMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        if (!reached) return false;
+        strides += 1;
+        if (!await waitForWorldCondition(bot, () => {
+            const selected = selectedLivestock(bot, ids);
+            return selected.length === ids.length
+                && selected.every(entity => bot.entity.position.distanceTo(entity.position) <= 8);
+        }, 3_000, 100)) {
+            if (!await gatherSelectedLivestock(bot, ids)) return false;
+        }
+    }
+    return false;
+}
+
+function livestockExteriorRoute(entity, outside, bounds) {
+    const horizontalDistance = (left, right) => Math.hypot(left.x - right.x, left.z - right.z);
+    if (horizontalDistance(entity.position, outside) <= 5) return [outside];
+    const y = outside.y;
+    const corners = [
+        { x: bounds.minX - 2, y, z: bounds.minZ - 2 },
+        { x: bounds.maxX + 3, y, z: bounds.minZ - 2 },
+        { x: bounds.maxX + 3, y, z: bounds.maxZ + 3 },
+        { x: bounds.minX - 2, y, z: bounds.maxZ + 3 },
+    ];
+    const nearestCorner = corners
+        .map((point, index) => ({ index, distance: horizontalDistance(entity.position, point) }))
+        .sort((left, right) => left.distance - right.distance || left.index - right.index)[0].index;
+    const gateCorners = outside.x < bounds.minX
+        ? [0, 3]
+        : outside.x > bounds.maxX + 1
+            ? [1, 2]
+            : outside.z < bounds.minZ
+                ? [0, 1]
+                : [3, 2];
+    const routes = [];
+    for (const gateCorner of gateCorners) {
+        for (const direction of [-1, 1]) {
+            const route = [corners[nearestCorner]];
+            let index = nearestCorner;
+            while (index !== gateCorner && route.length <= corners.length) {
+                index = (index + direction + corners.length) % corners.length;
+                route.push(corners[index]);
+            }
+            route.push(outside);
+            const length = route.reduce((total, point, routeIndex) => (
+                total + horizontalDistance(routeIndex === 0 ? entity.position : route[routeIndex - 1], point)
+            ), 0);
+            routes.push({ route, length });
+        }
+    }
+    return routes.sort((left, right) => left.length - right.length)[0].route;
+}
+
+async function lureLivestockAroundPen(bot, entity, outside, bounds) {
+    for (const point of livestockExteriorRoute(entity, outside, bounds)) {
+        if (!await lureLivestockTo(bot, [entity.id], point, {
+            distance: 1.5,
+            animalDistance: 4,
+        })) return false;
+    }
+    return true;
+}
+
+function livestockHoldingPoint(outside, inside, bounds) {
+    if (outside.x < bounds.minX) return { x: bounds.maxX - 1, y: inside.y, z: inside.z };
+    if (outside.x > bounds.maxX + 1) return { x: bounds.minX + 1, y: inside.y, z: inside.z };
+    if (outside.z < bounds.minZ) return { x: inside.x, y: inside.y, z: bounds.maxZ - 1 };
+    if (outside.z > bounds.maxZ + 1) return { x: inside.x, y: inside.y, z: bounds.minZ + 1 };
+    return { x: inside.x, y: inside.y, z: inside.z };
+}
+
+const REMEMBERED_LIVESTOCK_REGION_RADIUS = 96;
+const LIVESTOCK_REGION_SEARCH_STEP = 40;
+const LIVESTOCK_ACTION_FINISH_RESERVE_MS = 45_000;
+
+function rememberedLivestockSearchWaypoints(source) {
+    const offsets = [
+        [0, 0],
+        [1, 0], [1, 1], [0, 1], [-1, 1],
+        [-1, 0], [-1, -1], [0, -1], [1, -1],
+        [2, 0], [0, 2], [-2, 0], [0, -2],
+    ];
+    return offsets.map(([dx, dz]) => ({
+        x: source.x + (dx * LIVESTOCK_REGION_SEARCH_STEP),
+        z: source.z + (dz * LIVESTOCK_REGION_SEARCH_STEP),
+    }));
+}
+
+function observedLivestockInRememberedRegion(bot, animal, source, bounds) {
+    const sourcePoint = new Vec3(source.x, source.y, source.z);
+    const penIds = new Set(livestockInPen(bot, animal, bounds).map(entity => entity.id));
+    return Object.values(bot.entities || {})
+        .filter(entity => (
+            isAdultBreedingAnimal(entity, animal)
+            && !penIds.has(entity.id)
+            && entity.position.distanceTo(sourcePoint) <= REMEMBERED_LIVESTOCK_REGION_RADIUS
+        ))
+        .sort((left, right) => (
+            bot.entity.position.distanceTo(left.position)
+            - bot.entity.position.distanceTo(right.position)
+            || left.id - right.id
+        ));
+}
+
+async function reacquireLivestockInRememberedRegion(bot, animal, source, bounds, search) {
+    let candidates = observedLivestockInRememberedRegion(bot, animal, source, bounds);
+    if (candidates.length > 0) return candidates[0];
+
+    while (
+        !bot.interrupt_code
+        && remainingActionTimeMs() > LIVESTOCK_ACTION_FINISH_RESERVE_MS
+        && search.cursor < search.waypoints.length
+    ) {
+        const waypoint = search.waypoints[search.cursor++];
+        const reached = await goToGoal(bot, new pf.goals.GoalXZ(
+            Math.round(waypoint.x),
+            Math.round(waypoint.z),
+        ), {
+            movements: () => noSprintLivestockMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        search.attempts += 1;
+        if (bot.interrupt_code) return null;
+        if (!reached) continue;
+        await interruptibleDelay(bot, 250);
+        candidates = observedLivestockInRememberedRegion(bot, animal, source, bounds);
+        if (candidates.length > 0) return candidates[0];
+    }
+    return null;
+}
+
+export async function settleLivestockAtPen(bot, {
+    animal: rawAnimal,
+    adultCount: rawAdultCount,
+    breedingPairs: rawBreedingPairs,
+    source,
+    gate,
+    inside,
+    outside,
+    bounds,
+    dimension,
+    baselineAnimals: rawBaselineAnimals,
+} = {}) {
+    const animal = String(rawAnimal || '').trim().toLowerCase();
+    const food = mc.breedingFoodForAnimal(animal);
+    const adultCount = Math.max(2, Math.min(8, Math.floor(Number(rawAdultCount) || 2)));
+    const breedingPairs = Math.max(1, Math.min(4, Math.floor(Number(rawBreedingPairs) || 1)));
+    const baselineAnimals = Math.max(0, Math.floor(Number(rawBaselineAnimals) || 0));
+    const target = { name: animal, source, gate, inside, outside, bounds, dimension };
+    const fail = (outcome, detail, extra = {}) => {
+        setActionEvidence(bot, {
+            kind: 'livestock_settlement',
+            outcome,
+            target,
+            requestedAdults: adultCount,
+            breedingPairs,
+            baselineAnimals,
+            ...extra,
+            retryable: ![
+                'invalid_contract',
+                'wrong_dimension',
+                'pen_changed',
+                'insufficient_source_adults',
+            ].includes(outcome),
+        });
+        log(bot, detail);
+        return false;
+    };
+    if (
+        !food
+        || ![source, gate, inside, outside].every(point => (
+            point && [point.x, point.y, point.z].every(Number.isFinite)
+        ))
+        || !bounds
+        || !['minX', 'maxX', 'minZ', 'maxZ', 'y'].every(key => Number.isFinite(bounds[key]))
+    ) return fail('invalid_contract', 'The livestock settlement contract is incomplete.');
+    if (normalizedDimension(bot.game?.dimension) !== normalizedDimension(dimension)) {
+        return fail('wrong_dimension', `The selected pen is in ${dimension}, not this dimension.`);
+    }
+    if (!currentFenceGate(bot, gate)) {
+        return fail('pen_changed', 'The exact selected fence gate is no longer present.');
+    }
+    const expectedFinal = baselineAnimals + adultCount + breedingPairs;
+    let insideAnimals = livestockInPen(bot, animal, bounds);
+    if (insideAnimals.length >= expectedFinal) {
+        if (!await setFenceGateOpen(bot, gate, false)) {
+            return fail('gate_close_failed', 'The livestock are already settled, but the exact pen gate could not be verified closed.');
+        }
+        setActionEvidence(bot, {
+            kind: 'livestock_settlement',
+            outcome: 'already_settled',
+            target,
+            requestedAdults: adultCount,
+            breedingPairs,
+            baselineAnimals,
+            finalAnimals: insideAnimals.length,
+            retryable: false,
+        });
+        log(bot, `The selected pen already contains the requested ${animal} settlement and its gate is closed.`);
+        return true;
+    }
+    if (inventoryCount(bot, food) < breedingPairs * 2) {
+        return fail(
+            'missing_breeding_food',
+            `Settling ${animal} requires ${breedingPairs * 2} ${food}; only ${inventoryCount(bot, food)} are carried.`,
+            { food, requiredFood: breedingPairs * 2, availableFood: inventoryCount(bot, food) },
+        );
+    }
+
+    const relocatedAlready = Math.max(0, insideAnimals.length - baselineAnimals);
+    const remainingAdults = Math.max(0, adultCount - relocatedAlready);
+    const sourceSearch = {
+        waypoints: rememberedLivestockSearchWaypoints(source),
+        cursor: 0,
+        attempts: 0,
+    };
+    const holdingPoint = livestockHoldingPoint(outside, inside, bounds);
+
+    let gateOpened = fenceGateIsOpen(currentFenceGate(bot, gate));
+    try {
+        for (let index = 0; index < remainingAdults; index += 1) {
+            const selected = await reacquireLivestockInRememberedRegion(
+                bot,
+                animal,
+                source,
+                bounds,
+                sourceSearch,
+            );
+            if (!selected) {
+                return fail(
+                    'insufficient_source_adults',
+                    `The bounded remembered region contains fewer than ${remainingAdults} available adult ${animal}.`,
+                    {
+                        relocatedAdults: index,
+                        requiredAdults: remainingAdults,
+                        searchedWaypoints: sourceSearch.attempts,
+                        searchRadius: REMEMBERED_LIVESTOCK_REGION_RADIUS,
+                    },
+                );
+            }
+            if (!await equip(bot, food)) return fail('food_equip_failed', `Could not hold ${food} to attract the selected ${animal}.`);
+            const selectedIds = [selected.id];
+            if (!await gatherSelectedLivestock(bot, selectedIds)) {
+                return fail('livestock_gather_failed', `The selected ${animal} would not gather around the held ${food}.`);
+            }
+            if (!await lureLivestockAroundPen(bot, selected, outside, bounds)) {
+                return fail('livestock_route_failed', `The selected ${animal} did not make verified progress to the exact pen gate.`);
+            }
+            if (!await setFenceGateOpen(bot, gate, true)) {
+                return fail('gate_open_failed', 'The exact selected pen gate could not be opened for the livestock crossing.');
+            }
+            gateOpened = true;
+            if (!await lureLivestockTo(bot, selectedIds, holdingPoint, {
+                distance: 1,
+                animalDistance: 1.5,
+            })) {
+                return fail('livestock_entry_failed', `The selected ${animal} did not cross into the exact pen.`);
+            }
+            const entered = await waitForWorldCondition(bot, () => (
+                selectedIds.every(id => livestockInPen(bot, animal, bounds).some(entity => entity.id === id))
+            ), 8_000, 100);
+            if (!entered) return fail('livestock_entry_unverified', `Minecraft did not confirm the selected ${animal} inside the pen.`);
+            if (!await releaseLivestockAttraction(bot, food)) {
+                return fail('food_release_failed', `The ${animal} entered the pen, but the attraction food could not be safely put away.`);
+            }
+            await interruptibleDelay(bot, 750);
+            const exited = await goToGoal(bot, new pf.goals.GoalNear(outside.x, outside.y, outside.z, 1), {
+                movements: () => noSprintLivestockMovements(bot),
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            });
+            if (!exited) return fail('pen_exit_failed', 'The bot could not exit the selected pen between livestock transfers.');
+            if (!await setFenceGateOpen(bot, gate, false)) {
+                return fail('gate_close_failed', 'The exact pen gate could not be closed after a livestock transfer.');
+            }
+            gateOpened = false;
+        }
+
+        if (bot.entity.position.distanceTo(new Vec3(holdingPoint.x, holdingPoint.y, holdingPoint.z)) > 2) {
+            if (!await setFenceGateOpen(bot, gate, true)) {
+                return fail('gate_open_failed', 'The exact selected pen gate could not be opened for breeding access.');
+            }
+            gateOpened = true;
+            const reached = await goToGoal(bot, new pf.goals.GoalNear(
+                holdingPoint.x,
+                holdingPoint.y,
+                holdingPoint.z,
+                1,
+            ), {
+                movements: () => noSprintLivestockMovements(bot),
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            });
+            if (!reached) return fail('pen_entry_failed', 'Could not enter the selected pen through native Pathfinder.');
+        }
+        if (!await setFenceGateOpen(bot, gate, false)) {
+            return fail('gate_close_failed', 'The exact pen gate could not be closed before interior breeding work.');
+        }
+        gateOpened = false;
+
+        insideAnimals = livestockInPen(bot, animal, bounds);
+        if (insideAnimals.length < baselineAnimals + adultCount) {
+            return fail(
+                'adult_settlement_unverified',
+                `The pen contains ${insideAnimals.length - baselineAnimals} of ${adultCount} requested new ${animal}.`,
+                { finalAnimals: insideAnimals.length },
+            );
+        }
+        if (!await breedAnimals(bot, animal, breedingPairs, 16, { bounds })) {
+            return fail('breeding_failed', `The relocated ${animal} reached the pen, but breeding did not verify.`);
+        }
+        if (!await releaseLivestockAttraction(bot, food)) {
+            return fail('food_release_failed', `The ${animal} were bred, but the attraction food could not be safely put away.`);
+        }
+        await interruptibleDelay(bot, 750);
+        if (!await setFenceGateOpen(bot, gate, true)) {
+            return fail('gate_open_failed', 'The exact selected pen gate could not be opened for the bot to exit.');
+        }
+        gateOpened = true;
+        const exited = await goToGoal(bot, new pf.goals.GoalNear(outside.x, outside.y, outside.z, 1), {
+            movements: () => noSprintLivestockMovements(bot),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        if (!exited) return fail('pen_exit_failed', 'The bot could not exit the selected pen before gate closure.');
+        if (!await setFenceGateOpen(bot, gate, false)) {
+            return fail('gate_close_failed', 'The livestock outcome is not complete because the exact pen gate did not close.');
+        }
+        gateOpened = false;
+        const finalAnimals = livestockInPen(bot, animal, bounds).length;
+        if (finalAnimals < expectedFinal) {
+            return fail(
+                'final_livestock_count_failed',
+                `The closed pen contains ${finalAnimals}; at least ${expectedFinal} ${animal} were required from the bound baseline.`,
+                { finalAnimals, expectedFinal },
+            );
+        }
+        setActionEvidence(bot, {
+            kind: 'livestock_settlement',
+            outcome: 'settled_and_bred',
+            target,
+            requestedAdults: adultCount,
+            breedingPairs,
+            baselineAnimals,
+            finalAnimals,
+            gateClosed: true,
+            retryable: false,
+        });
+        log(bot, `Settled ${adultCount} ${animal}, verified ${breedingPairs} breeding pair, exited, and closed the exact pen gate.`);
+        return true;
+    } finally {
+        if (gateOpened && bot.entity?.position?.distanceTo(new Vec3(gate.x, gate.y, gate.z)) <= 5) {
+            try { await setFenceGateOpen(bot, gate, false); } catch { /* best-effort world-safe cancellation cleanup */ }
+        }
+    }
+}
+
+export async function breedAnimals(bot, animalName, pairs=1, range=24, { bounds = null } = {}) {
     const animal = String(animalName || '').trim().toLowerCase();
-    const food = BREEDING_FOOD[animal];
+    const food = mc.breedingFoodForAnimal(animal);
     const pairCount = Math.max(1, Math.min(4, Math.floor(Number(pairs) || 1)));
     const searchRange = Math.max(8, Math.min(48, Math.floor(Number(range) || 24)));
     if (!food) {
@@ -17139,7 +17779,7 @@ export async function breedAnimals(bot, animalName, pairs=1, range=24) {
         return false;
     }
     const adults = world.getNearbyEntities(bot, searchRange)
-        .filter(entity => isAdultBreedingAnimal(entity, animal))
+        .filter(entity => isAdultBreedingAnimal(entity, animal) && entityInsideLivestockBounds(entity, bounds))
         .sort((left, right) => bot.entity.position.distanceTo(left.position) - bot.entity.position.distanceTo(right.position));
     const requiredAdults = pairCount * 2;
     if (adults.length < requiredAdults) {
@@ -17168,7 +17808,7 @@ export async function breedAnimals(bot, animalName, pairs=1, range=24) {
         return false;
     }
     const beforeIds = new Set(world.getNearbyEntities(bot, searchRange)
-        .filter(entity => entity?.name === animal)
+        .filter(entity => entity?.name === animal && entityInsideLivestockBounds(entity, bounds))
         .map(entity => entity.id));
     for (const parent of adults.slice(0, requiredAdults)) {
         if (bot.interrupt_code) return false;
@@ -17194,11 +17834,19 @@ export async function breedAnimals(bot, animalName, pairs=1, range=24) {
     const expectedBabies = pairCount;
     const bred = await waitForWorldCondition(bot, () => (
         world.getNearbyEntities(bot, searchRange)
-            .filter(entity => isBabyBreedingAnimal(entity, animal) && !beforeIds.has(entity.id))
+            .filter(entity => (
+                isBabyBreedingAnimal(entity, animal)
+                && entityInsideLivestockBounds(entity, bounds)
+                && !beforeIds.has(entity.id)
+            ))
             .length >= expectedBabies
     ), 12_000, 100);
     const newAnimals = world.getNearbyEntities(bot, searchRange)
-        .filter(entity => isBabyBreedingAnimal(entity, animal) && !beforeIds.has(entity.id))
+        .filter(entity => (
+            isBabyBreedingAnimal(entity, animal)
+            && entityInsideLivestockBounds(entity, bounds)
+            && !beforeIds.has(entity.id)
+        ))
         .length;
     setActionEvidence(bot, {
         kind: 'breed',

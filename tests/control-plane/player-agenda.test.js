@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import Vec3 from 'vec3';
 
 import {
   classifyDisposition,
@@ -395,6 +396,82 @@ test('parsePlayerAgenda preserves scout, exact memory, return, and guidance as o
     attempts: 0,
     evidence: { code: '', detail: '' },
   });
+});
+
+test('parsePlayerAgenda preserves remembered livestock relocation, breeding, pen closure, and return', () => {
+  const gate = new Vec3(0, 64, 2);
+  const boundary = new Set();
+  for (let coordinate = 0; coordinate <= 4; coordinate += 1) {
+    boundary.add(`${coordinate},64,0`);
+    boundary.add(`${coordinate},64,4`);
+    boundary.add(`0,64,${coordinate}`);
+    boundary.add(`4,64,${coordinate}`);
+  }
+  const bot = {
+    game: { dimension: 'minecraft:overworld' },
+    entities: {},
+    findBlocks: () => [gate],
+    blockAt: position => {
+      const key = `${position.x},${position.y},${position.z}`;
+      if (key === '0,64,2') {
+        return { name: 'spruce_fence_gate', boundingBox: 'block', position };
+      }
+      if (boundary.has(key)) return { name: 'spruce_fence', boundingBox: 'block', position };
+      if (position.y === 63) return { name: 'grass_block', boundingBox: 'block', position };
+      return { name: 'air', boundingBox: 'empty', position };
+    },
+  };
+  const plan = parsePlayerAgenda(
+    'LandingWitness',
+    'IronSuiteProof, guide me to the useful animals you remembered, bring two sheep back to the outpost pen, feed and breed them, then return to me.',
+    {
+      bot,
+      requesterPosition: { x: -2, y: 64, z: 2 },
+      memoryBank: {
+        recallUserPlaceDetails: name => name === 'useful_animals'
+          ? { x: 20, y: 64, z: 20, dimension: 'overworld' }
+          : null,
+      },
+    },
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => step.entry.kind), [
+    'acquire',
+    'visit',
+    'settle_livestock',
+    'goto',
+  ]);
+  assert.deepEqual(plan.steps.slice(1).map(step => step.dependency?.policy), [
+    'requires_success',
+    'requires_success',
+    'requires_success',
+  ]);
+  assert.deepEqual(plan.steps[0].entry, {
+    kind: 'acquire',
+    requester: 'LandingWitness',
+    target: 'wheat',
+    quantity: 2,
+    quantityMode: 'minimum',
+  });
+  const settlement = normalizeAgendaEntry(plan.steps[2].entry, {
+    now: () => 200,
+    sequence: 3,
+  });
+  assert.equal(settlement.target, 'sheep');
+  assert.equal(settlement.quantity, 2);
+  assert.equal(settlement.breedingPairs, 1);
+  assert.deepEqual({ x: settlement.x, y: settlement.y, z: settlement.z }, { x: 20, y: 64, z: 20 });
+  assert.deepEqual(settlement.penConstraint, {
+    gate: { x: 0, y: 64, z: 2 },
+    inside: { x: 2, y: 64, z: 2 },
+    outside: { x: -1, y: 64, z: 2 },
+    bounds: { minX: 0, maxX: 4, minZ: 0, maxZ: 4, y: 64 },
+    dimension: 'overworld',
+    baselineAnimals: 0,
+  });
+  assert.equal(plan.steps[3].entry.recipient, 'LandingWitness');
 });
 
 test('parsePlayerAgenda preserves custom construction as a barrier before sleep', () => {

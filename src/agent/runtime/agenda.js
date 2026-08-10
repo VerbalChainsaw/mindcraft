@@ -105,6 +105,9 @@ export const AGENDA_KINDS = Object.freeze({
   // only that new output in one exact container.
   prepare_food: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: true }),
   deposit_family: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  // One owned livestock action keeps attraction, gate state, breeding, and
+  // final enclosure verification inside the same cancellation lease.
+  settle_livestock: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true, needsPoint: true, needsPen: true }),
   sleep: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   // Coordinates are validated numbers, never text, so a patrol step cannot
   // smuggle anything executable through the store.
@@ -253,6 +256,54 @@ function normalizeContainerConstraint(raw) {
     dimension,
     source: boundedText(raw.source, 48) || 'player_context_here',
     observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
+function normalizePenConstraint(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda pen constraint must be an object.');
+  }
+  const normalizePoint = (point, label) => {
+    const normalized = {
+      x: finiteInteger(point?.x, NaN, -30e6, 30e6),
+      y: finiteInteger(point?.y, NaN, -256, 512),
+      z: finiteInteger(point?.z, NaN, -30e6, 30e6),
+    };
+    if (Object.values(normalized).some(value => !Number.isFinite(value))) {
+      throw new TypeError(`Agenda pen ${label} needs finite coordinates.`);
+    }
+    return Object.freeze(normalized);
+  };
+  const gate = normalizePoint(raw.gate, 'gate');
+  const inside = normalizePoint(raw.inside, 'inside stance');
+  const outside = normalizePoint(raw.outside, 'outside stance');
+  const bounds = {
+    minX: finiteInteger(raw.bounds?.minX, NaN, -30e6, 30e6),
+    maxX: finiteInteger(raw.bounds?.maxX, NaN, -30e6, 30e6),
+    minZ: finiteInteger(raw.bounds?.minZ, NaN, -30e6, 30e6),
+    maxZ: finiteInteger(raw.bounds?.maxZ, NaN, -30e6, 30e6),
+    y: finiteInteger(raw.bounds?.y, NaN, -256, 512),
+  };
+  const dimension = canonical(raw.dimension);
+  if (
+    Object.values(bounds).some(value => !Number.isFinite(value))
+    || bounds.minX >= bounds.maxX
+    || bounds.minZ >= bounds.maxZ
+    || !CANONICAL_NAME.test(dimension)
+    || gate.y !== bounds.y
+    || inside.x <= bounds.minX
+    || inside.x >= bounds.maxX
+    || inside.z <= bounds.minZ
+    || inside.z >= bounds.maxZ
+  ) throw new TypeError('Agenda pen constraint must identify one exact bounded enclosure.');
+  return Object.freeze({
+    gate,
+    inside,
+    outside,
+    bounds: Object.freeze(bounds),
+    dimension,
+    baselineAnimals: finiteInteger(raw.baselineAnimals, 0, 0, MAX_QUANTITY),
   });
 }
 
@@ -416,6 +467,12 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   const containerConstraint = ['deposit', 'deposit_family', 'storage_plan', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
+  const penConstraint = kind === 'settle_livestock'
+    ? normalizePenConstraint(raw.penConstraint)
+    : null;
+  if (kind === 'settle_livestock' && !penConstraint) {
+    throw new TypeError('A livestock settlement step needs one exact pen.');
+  }
   if (kind === 'explore' && !containerConstraint && raw.retainResults !== true) {
     throw new TypeError('An exploration step needs one exact home container.');
   }
@@ -516,6 +573,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     executor: spec.executor,
     target,
     quantity: spec.needsQuantity ? finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) : 0,
+    ...(kind === 'settle_livestock' ? {
+      breedingPairs: finiteInteger(raw.breedingPairs, 1, 1, 4),
+    } : {}),
     ...(kind === 'acquire' ? { quantityMode } : {}),
     ...(baselineInventory ? { baselineInventory } : {}),
     ...(kind === 'prepare_food'
@@ -540,6 +600,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
       : null,
     ...(containerConstraint ? { containerConstraint } : {}),
+    ...(penConstraint ? { penConstraint } : {}),
     dependsOnEntryId,
     dependencyPolicy,
     bindingRequest,
@@ -596,6 +657,7 @@ export function describeAgendaEntry(entry) {
       ? `explore a cave, collect a useful ${entry.quantity}-${readable} batch containing ${entry.requiredOutputs.map(requirement => requirement.item.replace(/_/g, ' ')).join(' and ')}, and retain it`
       : `explore and light a cave, collect ${entry.quantity} ${readable}, return, and store the result`;
     case 'scout': return `scout for ${entry.findings.join(' and ')}, remember the verified locations, return, and guide ${entry.requester} to ${entry.guideFinding || entry.findings[0]}`;
+    case 'settle_livestock': return `bring ${entry.quantity} ${readable} to the selected pen, breed ${entry.breedingPairs} pair, and close the gate`;
     case 'craft': return `craft ${entry.quantity} ${readable}`;
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';

@@ -415,6 +415,10 @@ function sourceBlocks(bot, target) {
       // sources. Treating them as generic acquisition leaves both threatens
       // structures and disguises one missing flower as a second strategy.
       && !String(block.name || '').startsWith('potted_')
+      // Crop drops depend on age and must preserve the exact farmland cell.
+      // The mature-crop capability owns both checks; raw collection may not
+      // treat an immature player crop as a static registry leaf.
+      && !mc.matureCropHarvestForBlock(block.name)
       && Array.isArray(block.drops)
       && block.drops.includes(item.id)
     ) sources.push(block);
@@ -1155,6 +1159,31 @@ function planUnboundSmeltingLogFamily(bot, context, target, amount, inputs, trai
 }
 
 function planFromWorldSource(bot, context, target, amount, trail) {
+  const crop = mc.matureCropHarvestForOutput(target);
+  const cropLearningKey = crop ? `harvest:${crop.crop}->${target}` : null;
+  if (crop && !methodExcluded(context, cropLearningKey)) {
+    const candidate = cloneContext(context);
+    const actionFailure = addCapabilityAction(bot, candidate, 'harvest_mature_crop', {
+      crop: crop.crop,
+      output: target,
+      count: Math.min(64, amount),
+      range: context.range,
+      expectedIncrease: amount,
+    }, {
+      kind: 'collect',
+      target,
+      expectedIncrease: amount,
+      reason: `Mature ${crop.crop} is a renewable ${target} source; harvest only mature plants and replant each exact farmland cell.`,
+      trail: [...trail, target, crop.crop],
+      learningKey: cropLearningKey,
+    });
+    if (!actionFailure) {
+      setLedgerCount(candidate, target, ledgerCount(candidate, target) + amount);
+      acceptContext(context, candidate);
+      return null;
+    }
+  }
+
   const sources = sourceBlocks(bot, target)
     .filter(source => placedBlockSourceIsGrounded(bot, context, source, target, trail))
     .filter(source => !methodExcluded(context, sourceLearningKey(source.name, target)))

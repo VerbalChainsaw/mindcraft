@@ -365,7 +365,7 @@ function plannedDisengagementCommand(goal, bot) {
   ));
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
-    && /(?:resource_not_found|search_exhausted)/.test(code)
+    && /(?:source_not_found|resource_not_found|search_exhausted)/.test(code)
   ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
@@ -412,6 +412,25 @@ function consecutiveLocalPlanFailures(goal) {
     failures += 1;
   }
   return failures;
+}
+
+function repeatedFailedPlannerMethods(goal, threshold = 2) {
+  const signatures = new Map();
+  const excluded = new Set();
+  for (const subgoal of goal?.subgoals || []) {
+    if (
+      subgoal.kind !== 'plan'
+      || subgoal.state !== 'failed'
+      || !subgoal.learningKey
+      || subgoal.targetInventoryAfter > subgoal.targetInventoryBefore
+      || isPreemption({ phase: 'failed', code: subgoal.code })
+    ) continue;
+    const signature = `${subgoal.learningKey}\u0000${subgoal.code || 'unknown'}`;
+    const failures = (signatures.get(signature) || 0) + 1;
+    signatures.set(signature, failures);
+    if (failures >= threshold) excluded.add(subgoal.learningKey);
+  }
+  return [...excluded];
 }
 
 export class GoalDirector {
@@ -1903,6 +1922,11 @@ export class GoalDirector {
             workstationRequirement: goal.memory?.workstationRequirement,
             accessRequirement: goal.memory?.accessRequirement,
             workstationConstraint: goal.workstationConstraint,
+            // One retry after a region change is useful evidence. Repeating
+            // the same no-progress method after that is not: temporarily
+            // exclude it for this goal so the catalogue must bind a genuinely
+            // different strategy or report that none exists.
+            excludedMethods: repeatedFailedPlannerMethods(goal),
           });
           const planSignature = JSON.stringify(
             (plan.actions || []).map(action => [

@@ -1157,6 +1157,7 @@ export class AgendaDirector {
           : 'none';
         return `!putFamilyInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)}, ${JSON.stringify(baselineManifest)})`;
       },
+      settle_livestock: () => `!settleLivestockAtPen(${JSON.stringify(entry.target)}, ${entry.quantity}, ${entry.breedingPairs}, ${entry.x}, ${entry.y}, ${entry.z}, ${entry.penConstraint.gate.x}, ${entry.penConstraint.gate.y}, ${entry.penConstraint.gate.z}, ${entry.penConstraint.inside.x}, ${entry.penConstraint.inside.y}, ${entry.penConstraint.inside.z}, ${entry.penConstraint.outside.x}, ${entry.penConstraint.outside.y}, ${entry.penConstraint.outside.z}, ${entry.penConstraint.bounds.minX}, ${entry.penConstraint.bounds.maxX}, ${entry.penConstraint.bounds.minZ}, ${entry.penConstraint.bounds.maxZ}, ${entry.penConstraint.bounds.y}, ${JSON.stringify(entry.penConstraint.dimension)}, ${entry.penConstraint.baselineAnimals})`,
       sleep: () => entry.bindingConstraint?.kind === 'structure_fixture'
         ? `!goToBedAt(${entry.bindingConstraint.position.x}, ${entry.bindingConstraint.position.y}, ${entry.bindingConstraint.position.z}, ${JSON.stringify(entry.bindingConstraint.dimension)})`
         : '!goToBed',

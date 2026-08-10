@@ -37,6 +37,49 @@ const FUEL_SMELT_OUTPUT = Object.freeze({
     mangrove_propagule: 0.5,
 });
 
+// Canonical attraction/feeding items for ordinary breedable livestock. Keep
+// this game rule in one data boundary so intent planning and physical feeding
+// cannot silently disagree about what an animal follows.
+const BREEDING_FOOD = Object.freeze({
+    cow: 'wheat',
+    sheep: 'wheat',
+    pig: 'carrot',
+    chicken: 'wheat_seeds',
+    rabbit: 'carrot',
+});
+
+// Mature crops are state-dependent sources: minecraft-data cannot express
+// "this block drops the requested food only at its maximum age" through the
+// ordinary static block.drops table. Keep that rule beside the other canonical
+// game semantics so the planner and physical harvester share one contract.
+const MATURE_CROP_HARVEST = Object.freeze({
+    wheat: Object.freeze({ crop: 'wheat', harvest: 'wheat', seed: 'wheat_seeds', maxAge: 7 }),
+    carrot: Object.freeze({ crop: 'carrots', harvest: 'carrot', seed: 'carrot', maxAge: 7 }),
+    potato: Object.freeze({ crop: 'potatoes', harvest: 'potato', seed: 'potato', maxAge: 7 }),
+    beetroot: Object.freeze({ crop: 'beetroots', harvest: 'beetroot', seed: 'beetroot_seeds', maxAge: 3 }),
+});
+
+const MATURE_CROP_BY_BLOCK = Object.freeze(Object.fromEntries(
+    Object.values(MATURE_CROP_HARVEST).map(spec => [spec.crop, spec]),
+));
+const MATURE_CROP_BY_OUTPUT = Object.freeze(Object.fromEntries(
+    Object.values(MATURE_CROP_HARVEST).flatMap(spec => (
+        [...new Set([spec.harvest, spec.seed])].map(output => [output, spec])
+    )),
+));
+
+export function breedingFoodForAnimal(animalName) {
+    return BREEDING_FOOD[String(animalName || '').trim().toLowerCase()] || null;
+}
+
+export function matureCropHarvestForOutput(itemName) {
+    return MATURE_CROP_BY_OUTPUT[String(itemName || '').trim().toLowerCase()] || null;
+}
+
+export function matureCropHarvestForBlock(blockName) {
+    return MATURE_CROP_BY_BLOCK[String(blockName || '').trim().toLowerCase()] || null;
+}
+
 /**
  * @typedef {string} ItemName
  * @typedef {string} BlockName

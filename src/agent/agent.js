@@ -879,6 +879,7 @@ export class Agent {
             role: this.runtime?.role,
             bot: this.bot,
             requesterPosition,
+            memoryBank: this.memory_bank,
         });
         if (!plan) return false;
         if (plan.rejection) {

@@ -1144,6 +1144,38 @@ defineCapability({
 });
 
 defineCapability({
+  id: 'harvest_mature_crop',
+  parameters: {
+    crop: { type: 'block_name' },
+    output: { type: 'item_name' },
+    count: { type: 'integer', minimum: 1, maximum: 64 },
+    range: { type: 'integer', minimum: 16, maximum: 512 },
+    expectedIncrease: { type: 'integer', minimum: 1 },
+  },
+  normalizeArguments: args => immutable({
+    crop: canonicalName(args?.crop),
+    output: canonicalName(args?.output),
+    count: boundedInteger(args?.count, 1, 1, 64),
+    range: boundedInteger(args?.range, 64, 16, 512),
+    expectedIncrease: boundedInteger(args?.expectedIncrease ?? args?.count, 1, 1, 64),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: `registered crop block ${args.crop}`, satisfied: validName(args.crop) && snapshot.hasBlock(args.crop) },
+    { requirement: `registered crop output ${args.output}`, satisfied: validName(args.output) && snapshot.hasItem(args.output) },
+    { requirement: 'positive bounded harvest count', satisfied: args.count >= 1 && args.count <= 64 },
+  ]),
+  expectedEffects: (_snapshot, args) => [inventoryEffect(args.output, args.expectedIncrease)],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!harvestMatureCrop',
+    command: `!harvestMatureCrop(${commandString(args.crop)}, ${commandString(args.output)}, ${args.count}, ${args.range})`,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyEffects,
+  cost: (_snapshot, args) => args.count * Math.max(1, Math.ceil(args.range / 16)),
+});
+
+defineCapability({
   id: 'collect_block',
   parameters: {
     source: { type: 'block_name' },
