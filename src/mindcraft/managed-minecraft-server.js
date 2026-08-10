@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import net from 'node:net';
 import { networkInterfaces as listNetworkInterfaces } from 'node:os';
+import { stripVTControlCharacters } from 'node:util';
 import mineflayer from 'mineflayer';
 import { terminateOwnedProcessTree } from './process-tree.js';
 
@@ -320,7 +321,13 @@ export function parseJavaMajor(output) {
 
 export function parseManagedPlayerPositionLogs(logs, playerName) {
   const name = String(playerName || '').trim();
-  const lines = Array.isArray(logs) ? logs.map(line => String(line || '')) : [];
+  // Paper decorates numeric NBT values with terminal color sequences when the
+  // managed console advertises color support. Parse the visible command
+  // result, not the transport decoration, so a valid player position cannot
+  // be downgraded to "unavailable" before navigation begins.
+  const lines = Array.isArray(logs)
+    ? logs.map(line => stripVTControlCharacters(String(line || '')))
+    : [];
   const escapedName = escapeRegExp(name);
   const prefix = new RegExp(`${escapedName} has the following entity data:\\s*`, 'i');
   let position = null;

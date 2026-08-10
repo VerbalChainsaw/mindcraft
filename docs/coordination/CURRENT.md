@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/functional checkpoint: recovery/iron-pickaxe-20260803 / a67f35f
-Milestone: return-safe common-resource gathering and truthful physical settlement accepted
+Branch/functional checkpoint: recovery/iron-pickaxe-20260803 / current HEAD (Paper player-location normalization repair)
+Milestone: authoritative player lookup and ordinary companion reunion repaired
 Sole writer and Minecraft runtime owner: Codex
 Owned subsystem: GoalDirector/Agenda capability engine, owned Pathfinder/CollectBlock mechanics, and ordinary companion loop
-Live blocker: none; the first material failure from normal two-player play selects the next tranche
-Last physical result: unchanged spruce/cobblestone request completed, verified 185/152 carried, returned beside FieldWitness at health 20
-Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held; Agenda complete
-Next: resume unscripted supervised play; prioritize authority, stewardship/infrastructure reuse, movement, truthfulness, then missing domains
+Live blocker: none for the active session; source activation is deferred to the next normal launcher restart so the connected player is not kicked
+Last physical result: Paper placed IronSuiteProof exactly two blocks beside phixxation after the failed remote lookup; the same deterministic `!goToPlayer("phixxation", 2)` path then verified `You have reached phixxation.`
+Runtime: Paper 1.21.11 healthy; IronSuiteProof and phixxation are connected near (-484, 67, 67)
+Next: continue unscripted supervised play; after the next normal launcher restart, remote player lookup will strip Paper terminal colors before parsing position and dimension
 Jordan review: none; Director requested uninterrupted product work

@@ -51,6 +51,22 @@ test('managed player observations are positive only with position and dimension,
   assert.equal(offline.code, 'player_not_found');
 });
 
+test('managed player observations ignore Paper terminal colors around numeric NBT values', () => {
+  const observation = managedServerModule.parseManagedPlayerPositionLogs([
+    '[11:13:27 INFO]: phixxation has the following entity data: [\u001b[38;5;3m-480.631\u001b[38;5;9md\u001b[0m, \u001b[38;5;3m66.9375\u001b[38;5;9md\u001b[0m, \u001b[38;5;3m70.029\u001b[38;5;9md\u001b[0m]',
+    '[11:13:27 INFO]: phixxation has the following entity data: "minecraft:overworld"',
+  ], 'phixxation');
+
+  assert.deepEqual(observation, {
+    success: true,
+    found: true,
+    code: 'player_position_found',
+    player: 'phixxation',
+    position: { x: -480.631, y: 66.9375, z: 70.029 },
+    dimension: 'minecraft:overworld',
+  });
+});
+
 test('managed player lookups serialize unqualified console results and preserve Floodgate-safe names', async () => {
   const manager = new managedServerModule.ManagedMinecraftServer();
   const stdin = new PassThrough();
