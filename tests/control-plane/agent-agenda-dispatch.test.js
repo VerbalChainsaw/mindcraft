@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { Agent } from '../../src/agent/agent.js';
 import { getCommand } from '../../src/agent/commands/index.js';
+import { resolvePlayerDirective } from '../../src/agent/player-directives.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 
 test('the central interrupt asks Mineflayer to wake a sleeping body', async () => {
@@ -85,6 +86,52 @@ test('an ordered item plan is validated and persisted atomically before executio
   ]);
   assert.equal(rejected.accepted, false);
   assert.equal(JSON.stringify(director.entries), before, 'a malformed later step must not publish a partial plan');
+});
+
+test('natural cleanup compiles one durable retained-inventory storage plan', () => {
+  const inventory = [
+    { name: 'raw_iron', count: 67 },
+    ...Array.from({ length: 11 }, (_, index) => ({ name: 'stone_pickaxe', count: 1, durabilityUsed: 90 + index })),
+    { name: 'stone_sword', count: 1 },
+  ];
+  const bot = {
+    game: { dimension: 'minecraft:overworld' },
+    registry: {
+      itemsByName: {
+        raw_iron: { id: 1 },
+        stone_pickaxe: { id: 2 },
+        stone_sword: { id: 3 },
+      },
+    },
+    inventory: { items: () => inventory },
+    findBlock: () => ({ name: 'chest', position: { x: 10, y: 64, z: 12 } }),
+  };
+  const request = 'Clean up after mining: put the ore and worn extra tools in this chest, but keep one good pickaxe and combat gear, then come back to me.';
+  const directive = resolvePlayerDirective('Gabriel', request, { bot });
+  assert.equal(directive?.assignmentKind, 'storage_plan');
+  assert.equal(directive?.deferToModel, true);
+  assert.match(directive?.modelInstruction || '', /!queueStoragePlan/);
+
+  const agent = { name: 'TestBot', bot, behavior_arbiter: { wake() {} } };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => 10_000,
+  });
+  agent.agenda_director = director;
+  const accepted = getCommand('!queueStoragePlan').perform(
+    agent,
+    'raw_iron:0|stone_pickaxe:1',
+    'Gabriel',
+    true,
+  );
+  assert.match(accepted, /durable 2-step storage plan/i);
+  assert.deepEqual(director.entries.map(entry => entry.kind), ['storage_plan', 'goto']);
+  assert.deepEqual(director.entries[0].storageRequirements, [
+    { target: 'raw_iron', retain: 0 },
+    { target: 'stone_pickaxe', retain: 1 },
+  ]);
+  assert.deepEqual(director.entries[0].containerConstraint.position, { x: 10, y: 64, z: 12 });
+  assert.equal(director.entries[1].recipient, 'Gabriel');
 });
 
 test('a final inventory checklist repairs a floor consumed by a later step and re-verifies the aggregate', () => {

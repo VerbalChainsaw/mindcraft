@@ -1129,6 +1129,12 @@ export class AgendaDirector {
       deposit: () => entry.containerConstraint
         ? `!putInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`
         : `!putInChest("${entry.target}", ${entry.quantity})`,
+      storage_plan: () => {
+        const encoded = entry.storageRequirements
+          .map(requirement => `${requirement.target}:${requirement.retain}`)
+          .join('|');
+        return `!storeInventoryPlanAt(${JSON.stringify(encoded)}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`;
+      },
       deposit_family: () => {
         const baselineManifest = entry.baselineInventory.length > 0
           ? entry.baselineInventory.map(item => `${item.name}:${item.count}`).join('|')

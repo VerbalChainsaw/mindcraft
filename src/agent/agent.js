@@ -65,6 +65,7 @@ const HOLD_SAFE_COMMANDS = new Set([
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
 const PLAYER_ITEM_PLAN_COMMANDS = new Set(['!queueItemPlan']);
+const PLAYER_STORAGE_PLAN_COMMANDS = new Set(['!queueStoragePlan']);
 const MAX_CONSTRUCTION_COMPILATION_TURNS = 6;
 const MAX_ITEM_PLAN_COMPILATION_TURNS = 3;
 const MAX_INGAME_CHAT_CHARS = 240;
@@ -118,9 +119,12 @@ export function correlatedAgendaPlanSubmissionAccepted({
     agendaEntries,
 } = {}) {
     const durableIds = new Set((Array.isArray(agendaEntries) ? agendaEntries : []).map(entry => entry?.id).filter(Boolean));
+    const allowedCommands = deferredAssignment?.kind === 'storage_plan'
+        ? PLAYER_STORAGE_PLAN_COMMANDS
+        : PLAYER_ITEM_PLAN_COMMANDS;
     return Boolean(
-        deferredAssignment?.kind === 'item_plan'
-        && PLAYER_ITEM_PLAN_COMMANDS.has(commandName)
+        ['item_plan', 'storage_plan'].includes(deferredAssignment?.kind)
+        && allowedCommands.has(commandName)
         && Number(submission?.generation) > (Number(previousGeneration) || 0)
         && submission?.selectedSkill === commandName
         && submission?.accepted === true
@@ -1106,8 +1110,8 @@ export class Agent {
                     memoryBank: this.memory_bank,
                 });
             if (directive?.deferToModel === true) {
-                const assignmentKind = directive.assignmentKind === 'item_plan'
-                    ? 'item_plan'
+                const assignmentKind = ['item_plan', 'storage_plan'].includes(directive.assignmentKind)
+                    ? directive.assignmentKind
                     : 'construction';
                 // Blueprint/item-plan compilation is cognition, not physical ownership.
                 // Retain an existing Stop while the model works; the eventual
@@ -1139,7 +1143,7 @@ export class Agent {
                     Math.max(
                         1,
                         Math.min(
-                            assignmentKind === 'item_plan'
+                            ['item_plan', 'storage_plan'].includes(assignmentKind)
                                 ? MAX_ITEM_PLAN_COMPILATION_TURNS
                                 : MAX_CONSTRUCTION_COMPILATION_TURNS,
                             Number(this.runtime?.limits?.maxPromptTurns) || 3,
@@ -1150,7 +1154,9 @@ export class Agent {
                 this.role_director.deferForManualCommand(
                     assignmentKind === 'item_plan'
                         ? 'Player item plan is being compiled.'
-                        : 'Player design request is being interpreted.',
+                        : assignmentKind === 'storage_plan'
+                            ? 'Player storage plan is being compiled.'
+                            : 'Player design request is being interpreted.',
                 );
                 if (directive.modelInstruction) {
                     await this.history.add('system', directive.modelInstruction);
@@ -1266,13 +1272,17 @@ export class Agent {
 
                 const allowedDeferredCommands = deferredModelAssignment?.kind === 'item_plan'
                     ? PLAYER_ITEM_PLAN_COMMANDS
-                    : PLAYER_DESIGN_COMMANDS;
+                    : deferredModelAssignment?.kind === 'storage_plan'
+                        ? PLAYER_STORAGE_PLAN_COMMANDS
+                        : PLAYER_DESIGN_COMMANDS;
                 if (deferredModelAssignment && !allowedDeferredCommands.has(command_name)) {
                     await this.history.add(
                         'system',
                         deferredModelAssignment.kind === 'item_plan'
                             ? `No command was executed: this item-plan assignment requires one !queueItemPlan, not ${command_name}.`
-                            : `No command was executed: this construction assignment requires !buildStructure or !designStructure, not ${command_name}.`,
+                            : deferredModelAssignment.kind === 'storage_plan'
+                                ? `No command was executed: this storage-plan assignment requires one !queueStoragePlan, not ${command_name}.`
+                                : `No command was executed: this construction assignment requires !buildStructure or !designStructure, not ${command_name}.`,
                     );
                     continue;
                 }
@@ -1364,7 +1374,7 @@ export class Agent {
                     this.history.add('system', execute_res);
                 const submittedJob = this.last_persistent_job_submission;
                 const submittedAgendaPlan = this.last_agenda_plan_submission;
-                const deferredAssignmentAccepted = deferredModelAssignment?.kind === 'item_plan'
+                const deferredAssignmentAccepted = ['item_plan', 'storage_plan'].includes(deferredModelAssignment?.kind)
                     ? correlatedAgendaPlanSubmissionAccepted({
                         deferredAssignment: deferredModelAssignment,
                         commandName: command_name,
@@ -1398,7 +1408,9 @@ export class Agent {
                     this.releaseOperatorHold(
                         acceptedAssignmentKind === 'item_plan'
                             ? 'player item plan accepted'
-                            : 'player design work order accepted',
+                            : acceptedAssignmentKind === 'storage_plan'
+                                ? 'player storage plan accepted'
+                                : 'player design work order accepted',
                     );
                     this.history.save();
                     break;
@@ -1416,7 +1428,7 @@ export class Agent {
                         if (deferredModelAssignment.repeatedFailures >= 2) {
                             await this.history.add(
                                 'system',
-                                `${deferredModelAssignment.kind === 'item_plan' ? 'Item-plan' : 'Construction'} compilation stopped because the same rejected result repeated without progress.`,
+                                `${deferredModelAssignment.kind === 'item_plan' ? 'Item-plan' : deferredModelAssignment.kind === 'storage_plan' ? 'Storage-plan' : 'Construction'} compilation stopped because the same rejected result repeated without progress.`,
                             );
                             break;
                         }
@@ -1434,22 +1446,29 @@ export class Agent {
             else { // conversation response
                 if (deferredModelAssignment) {
                     const compilingItemPlan = deferredModelAssignment.kind === 'item_plan';
+                    const compilingStoragePlan = deferredModelAssignment.kind === 'storage_plan';
                     const detail = compilingItemPlan
                         ? 'I did not produce a valid bounded item plan, so no work was queued. I am holding position.'
-                        : 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.';
+                        : compilingStoragePlan
+                            ? 'I did not produce a valid bounded storage plan, so no work was queued. I am holding position.'
+                            : 'I did not produce a valid bounded construction command, so no work order was created. I am holding position.';
                     await this.history.add(this.name, detail);
                     await this.history.add(
                         'system',
                         compilingItemPlan
                             ? 'The item request remains unassigned. Transcript claims are not durable work; only a correlated persisted Agenda plan may claim the checklist is queued.'
-                            : 'The construction request remains unassigned. Transcript claims are not durable work; only an active JobDirector order may claim construction is registered or underway.',
+                            : compilingStoragePlan
+                                ? 'The storage request remains unassigned. Transcript claims are not durable work; only a correlated persisted Agenda plan may claim cleanup is queued.'
+                                : 'The construction request remains unassigned. Transcript claims are not durable work; only an active JobDirector order may claim construction is registered or underway.',
                     );
                     const sameRetainedHold = deferredModelAssignment.holdGeneration !== null
                         && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
                     if (!this.isOperatorHeld() || sameRetainedHold) {
                         this.holdPosition(compilingItemPlan
                             ? 'player item plan was not compiled'
-                            : 'player design request was not compiled');
+                            : compilingStoragePlan
+                                ? 'player storage plan was not compiled'
+                                : 'player design request was not compiled');
                     }
                     this.history.save();
                     this.routeResponse(source, detail);
@@ -1466,14 +1485,16 @@ export class Agent {
             if (deferredModelAssignment) {
                 const interrupted = checkInterrupt();
                 const compilingItemPlan = deferredModelAssignment.kind === 'item_plan';
+                const compilingStoragePlan = deferredModelAssignment.kind === 'storage_plan';
+                const compiledLabel = compilingItemPlan ? 'Item-plan' : compilingStoragePlan ? 'Storage-plan' : 'Construction';
                 const assignmentState = interrupted ? 'interrupted' : 'compilation_exhausted';
                 const code = interrupted
-                    ? `${compilingItemPlan ? 'item_plan' : 'construction'}_compilation_interrupted`
-                    : `${compilingItemPlan ? 'item_plan' : 'construction'}_compilation_exhausted`;
+                    ? `${compilingItemPlan ? 'item_plan' : compilingStoragePlan ? 'storage_plan' : 'construction'}_compilation_interrupted`
+                    : `${compilingItemPlan ? 'item_plan' : compilingStoragePlan ? 'storage_plan' : 'construction'}_compilation_exhausted`;
                 const detail = interrupted
-                    ? `${compilingItemPlan ? 'Item-plan' : 'Construction'} compilation was interrupted before a correlated durable assignment was accepted.`
-                    : `${compilingItemPlan ? 'Item-plan' : 'Construction'} compilation ended without a correlated durable assignment.`;
-                if (!compilingItemPlan && deferredModelAssignment.agendaEntryId) {
+                    ? `${compiledLabel} compilation was interrupted before a correlated durable assignment was accepted.`
+                    : `${compiledLabel} compilation ended without a correlated durable assignment.`;
+                if (!compilingItemPlan && !compilingStoragePlan && deferredModelAssignment.agendaEntryId) {
                     this.agenda_director?.failConstructionAssignment?.(
                         deferredModelAssignment.agendaEntryId,
                         assignmentState,
@@ -1484,7 +1505,9 @@ export class Agent {
                 if (!this.isOperatorHeld()) {
                     this.holdPosition(compilingItemPlan
                         ? 'item plan assignment did not settle'
-                        : 'construction assignment did not settle');
+                        : compilingStoragePlan
+                            ? 'storage plan assignment did not settle'
+                            : 'construction assignment did not settle');
                 }
                 await this.history.add('system', detail);
                 deferredModelAssignment = null;

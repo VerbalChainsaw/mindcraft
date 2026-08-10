@@ -156,6 +156,130 @@ function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = f
 }
 queueOrderedItemPlan.manualAutonomyTakeover = true;
 
+const STORAGE_CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
+
+function currentStorageContainerConstraint(bot) {
+    if (typeof bot?.findBlock !== 'function') return null;
+    const block = bot.findBlock({
+        matching: candidate => STORAGE_CONTAINER_NAMES.has(candidate?.name),
+        maxDistance: 32,
+    });
+    const dimension = String(bot?.game?.dimension || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^minecraft:/, '');
+    if (
+        !STORAGE_CONTAINER_NAMES.has(block?.name)
+        || !block?.position
+        || ![block.position.x, block.position.y, block.position.z].every(Number.isFinite)
+        || !dimension
+    ) return null;
+    return {
+        name: block.name,
+        position: {
+            x: Math.floor(block.position.x),
+            y: Math.floor(block.position.y),
+            z: Math.floor(block.position.z),
+        },
+        dimension,
+        source: 'player_context_here',
+        observedAt: Date.now(),
+    };
+}
+
+function queueStoragePlan(agent, encodedPlan, playerName, returnToPlayer = false) {
+    const request = agent.actions?.currentRequestContext?.() || null;
+    const previousGeneration = Number(agent.last_agenda_plan_submission?.generation) || 0;
+    const recordSubmission = ({ accepted, code, entryIds = [] }) => {
+        agent.last_agenda_plan_submission = Object.freeze({
+            generation: previousGeneration + 1,
+            requestId: request?.requestId || null,
+            selectedSkill: request?.selectedSkill || null,
+            accepted: accepted === true,
+            code,
+            entryIds: Object.freeze(entryIds.slice(0, MAX_ORDERED_ITEM_PLAN_STEPS + 1)),
+        });
+    };
+    const reject = (code, message) => {
+        recordSubmission({ accepted: false, code });
+        return message;
+    };
+    const director = agent.agenda_director;
+    if (!director?.addMany) {
+        return reject('agenda_unavailable', 'The durable agenda is unavailable on this bot.');
+    }
+    const containerConstraint = currentStorageContainerConstraint(agent.bot);
+    if (!containerConstraint) {
+        return reject('storage_container_unavailable', 'The storage plan was not queued because no loaded chest or barrel could be bound.');
+    }
+    const tokens = String(encodedPlan || '')
+        .split('|')
+        .map(value => value.trim())
+        .filter(Boolean);
+    if (tokens.length < 1 || tokens.length > MAX_ORDERED_ITEM_PLAN_STEPS) {
+        return reject(
+            'storage_plan_size_invalid',
+            `The storage plan must contain between 1 and ${MAX_ORDERED_ITEM_PLAN_STEPS} carried item groups.`,
+        );
+    }
+
+    const storageRequirements = [];
+    const seen = new Set();
+    for (const token of tokens) {
+        const match = /^([a-z0-9_]{1,80}):(0|[1-9][0-9]{0,3})$/.exec(token);
+        if (!match) {
+            return reject('storage_plan_entry_invalid', `The storage plan was not queued: '${token.slice(0, 100)}' must use canonical_item:retain_quantity.`);
+        }
+        const target = match[1];
+        const retain = Number.parseInt(match[2], 10);
+        if (!agent.bot?.registry?.itemsByName?.[target]) {
+            return reject('storage_plan_target_unknown', `The storage plan was not queued: '${target}' is not a connected-registry item.`);
+        }
+        if (seen.has(target)) {
+            return reject('storage_plan_target_duplicate', `The storage plan was not queued: '${target}' appears more than once.`);
+        }
+        seen.add(target);
+        const carried = (agent.bot?.inventory?.items?.() || [])
+            .filter(item => item?.name === target)
+            .reduce((total, item) => total + Math.max(0, Number(item.count) || 0), 0);
+        if (carried <= retain) {
+            return reject(
+                'storage_plan_no_surplus',
+                `The storage plan was not queued: '${target}' has ${carried} carried and retain ${retain}, so there is no authorized surplus to store.`,
+            );
+        }
+        storageRequirements.push({ target, retain });
+    }
+
+    const entries = [{
+        kind: 'storage_plan',
+        requester: playerName,
+        storageRequirements,
+        containerConstraint,
+        note: 'model-selected authorized inventory cleanup',
+    }];
+    if (returnToPlayer === true) {
+        entries.push({
+            kind: 'goto',
+            requester: playerName,
+            recipient: playerName,
+            note: 'return after inventory cleanup',
+        });
+    }
+    const result = director.addMany(entries);
+    if (result.accepted !== true) {
+        return reject(result.code || 'storage_plan_rejected', `The storage plan was not queued: ${result.detail || result.code}.`);
+    }
+    recordSubmission({
+        accepted: true,
+        code: 'storage_plan_accepted',
+        entryIds: result.entries.map(entry => entry.id),
+    });
+    agent.behavior_arbiter?.wake?.('storage_plan_queued');
+    return `Queued one durable ${result.entries.length}-step storage plan: ${result.entries.map(entry => entry.description).join(', then ')}.`;
+}
+queueStoragePlan.manualAutonomyTakeover = true;
+
 /**
  * Collection is allowed to search the world, but it may not treat the active
  * Builder worksite as a resource deposit. Keep the policy here, where the
@@ -997,6 +1121,20 @@ export const actionsList = [
         perform: runAsAction(async (agent, item_name, num, x, y, z, dimension = '') => {
             return await skills.putInChestAt(agent.bot, item_name, num, x, y, z, dimension);
         })
+    },
+    {
+        name: '!storeInventoryPlanAt',
+        description: 'Execute one validated retained-inventory storage plan through a single exact chest or barrel session. Stackable items use native Mineflayer transfer; durable duplicates preserve the best requested copies.',
+        params: {
+            'encoded_plan': { type: 'string', description: 'Canonical_item:retain_quantity entries separated by |.' },
+            'x': { type: 'float', description: 'Assigned container x coordinate.' },
+            'y': { type: 'float', description: 'Assigned container y coordinate.' },
+            'z': { type: 'float', description: 'Assigned container z coordinate.' },
+            'dimension': { type: 'string', description: 'Assigned dimension.' },
+        },
+        perform: runAsAction(async (agent, encodedPlan, x, y, z, dimension = '') => {
+            return await skills.storeInventoryPlanAt(agent.bot, encodedPlan, x, y, z, dimension);
+        }),
     },
     {
         name: '!putFamilyInChestAt',
@@ -1946,6 +2084,17 @@ export const actionsList = [
             'return_to_player': { type: 'boolean', description: 'Whether to return to the requesting player after every item outcome completes.' },
         },
         perform: queueOrderedItemPlan,
+    },
+    {
+        name: '!queueStoragePlan',
+        description: 'Atomically bind one existing chest or barrel and queue a complete retained-inventory cleanup plan. The encoded plan is canonical_item:retain_quantity entries separated by |. Zero stores every carried copy; positive quantities preserve that many best copies. The optional return flag adds a final player return.',
+        compactDescription: 'Queue one complete storage cleanup before moving anything. Syntax: !queueStoragePlan("raw_iron:0|cobblestone:0|stone_pickaxe:1", "PlayerName", true). Include only carried authorized surplus. Counts mean how many to retain, not how many to deposit.',
+        params: {
+            'encoded_plan': { type: 'string', description: 'One to twelve canonical_item:retain_quantity entries separated by |.' },
+            'player_name': { type: 'string', description: 'Canonical requesting player name.' },
+            'return_to_player': { type: 'boolean', description: 'Whether to return to the requesting player after cleanup completes.' },
+        },
+        perform: queueStoragePlan,
     },
     {
         name: '!setAutonomy',

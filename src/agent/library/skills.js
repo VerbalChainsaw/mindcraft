@@ -9637,7 +9637,10 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
         log(bot, `You do not have any ${itemName} to put in the chest.`);
         return false;
     }
-    const toPut = num === -1 ? item.count : Math.min(Math.max(0, Math.floor(Number(num) || 0)), item.count);
+    const beforeCount = inventoryCount(bot, itemName);
+    const toPut = num === -1
+        ? beforeCount
+        : Math.min(Math.max(0, Math.floor(Number(num) || 0)), beforeCount);
     const target = { name: chest.name || 'chest', x: chest.position.x, y: chest.position.y, z: chest.position.z };
     if (toPut < 1) {
         setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'invalid_count', target, item: itemName, retryable: false });
@@ -9652,7 +9655,6 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
     }
     chest = approach.block;
 
-    const beforeCount = inventoryCount(bot, itemName);
     let chestContainer = null;
     let containerBefore = null;
     let beforeContainerCount = 0;
@@ -9757,6 +9759,330 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
 
 export async function putInChestAt(bot, itemName, num, x, y, z, dimension='') {
     return await putInChest(bot, itemName, num, { x, y, z, dimension });
+}
+
+function parsedStorageRequirements(encoded) {
+    const requirements = [];
+    const seen = new Set();
+    for (const token of String(encoded || '').split('|').map(value => value.trim()).filter(Boolean)) {
+        const match = /^([a-z0-9_]{1,64}):(0|[1-9][0-9]{0,3})$/.exec(token);
+        if (!match || seen.has(match[1])) return null;
+        seen.add(match[1]);
+        requirements.push({ target: match[1], retain: Math.min(2304, Number.parseInt(match[2], 10)) });
+    }
+    return requirements.length >= 1 && requirements.length <= 12 ? requirements : null;
+}
+
+function retainedItemValue(bot, item) {
+    const enchantmentValue = [...itemEnchantments(bot, item).values()]
+        .reduce((total, level) => total + Math.max(0, Number(level) || 0), 0);
+    const durability = toolDurability(bot, item);
+    const durabilityRatio = Number.isFinite(durability.max) && durability.max > 0
+        ? durability.remaining / durability.max
+        : 1;
+    return enchantmentValue * 1_000_000 + durabilityRatio * 10_000 + Math.min(9_999, durability.remaining);
+}
+
+function containerContentsPreservedExcept(before, after, allowedItems) {
+    const names = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+    for (const allowed of allowedItems) names.delete(allowed);
+    return [...names].every(name => (before?.[name] || 0) === (after?.[name] || 0));
+}
+
+function storageItemsCanStack(left, right) {
+    const Item = left?.constructor;
+    if (typeof Item?.equal === 'function') {
+        return Item.equal(left, right, false, true);
+    }
+    return left?.type === right?.type
+        && left?.metadata === right?.metadata
+        && JSON.stringify(left?.nbt ?? null) === JSON.stringify(right?.nbt ?? null);
+}
+
+/**
+ * Mirror Mineflayer's native container stacking rules without clicking a
+ * slot. This is policy preflight only: Mineflayer still performs every real
+ * transfer after the complete plan is proven to fit.
+ */
+function storageCapacityPreflight(container, requirements, plannedTransfers) {
+    const containerSlotCount = Math.max(0, Number(container?.inventoryStart) || 0);
+    const virtualSlots = Array.from({ length: containerSlotCount }, (_, slot) => {
+        const item = container?.slots?.[slot] || null;
+        return item
+            ? {
+                item,
+                count: Math.max(0, Number(item.count) || 0),
+                stackSize: Math.max(1, Number(item.stackSize) || 1),
+            }
+            : null;
+    });
+    const availableSlots = virtualSlots.filter(slot => slot === null).length;
+    let requiredSlots = 0;
+
+    for (const requirement of requirements) {
+        let remaining = Math.max(0, Number(plannedTransfers[requirement.target]) || 0);
+        const sources = (container?.items?.() || [])
+            .filter(item => item?.name === requirement.target);
+        const available = sources.reduce(
+            (total, item) => total + Math.max(0, Number(item.count) || 0),
+            0,
+        );
+        if (available < remaining) {
+            return {
+                fits: false,
+                outcome: 'storage_inventory_changed',
+                item: requirement.target,
+                required: remaining,
+                available,
+                requiredSlots,
+                availableSlots,
+                missingSlots: 0,
+            };
+        }
+
+        for (const source of sources) {
+            let sourceRemaining = Math.min(
+                remaining,
+                Math.max(0, Number(source.count) || 0),
+            );
+            while (sourceRemaining > 0) {
+                const partial = virtualSlots.find(slot => (
+                    slot
+                    && slot.count < slot.stackSize
+                    && storageItemsCanStack(slot.item, source)
+                ));
+                if (partial) {
+                    const moved = Math.min(sourceRemaining, partial.stackSize - partial.count);
+                    partial.count += moved;
+                    sourceRemaining -= moved;
+                    remaining -= moved;
+                    continue;
+                }
+
+                const stackSize = Math.max(1, Number(source.stackSize) || 1);
+                const moved = Math.min(sourceRemaining, stackSize);
+                const newSlot = { item: source, count: moved, stackSize };
+                const emptyIndex = virtualSlots.findIndex(slot => slot === null);
+                if (emptyIndex >= 0) virtualSlots[emptyIndex] = newSlot;
+                else virtualSlots.push(newSlot);
+                requiredSlots += 1;
+                sourceRemaining -= moved;
+                remaining -= moved;
+            }
+            if (remaining < 1) break;
+        }
+    }
+
+    const missingSlots = Math.max(0, requiredSlots - availableSlots);
+    return {
+        fits: missingSlots === 0,
+        outcome: missingSlots === 0 ? 'storage_capacity_available' : 'storage_capacity_blocked',
+        requiredSlots,
+        availableSlots,
+        missingSlots,
+    };
+}
+
+/**
+ * Store one complete retained-inventory plan through a single native container
+ * session. Stackable items use Mineflayer's transfer implementation. Durable
+ * single items use Mineflayer's exact-slot move so the worst copies leave
+ * first and the requested best copies remain carried.
+ */
+export async function storeInventoryPlanAt(bot, encodedPlan, x, y, z, dimension='') {
+    const requirements = parsedStorageRequirements(encodedPlan);
+    const target = { name: 'storage_plan', x, y, z };
+    if (!requirements) {
+        setActionEvidence(bot, { kind: 'storage_plan', outcome: 'invalid_storage_plan', target, retryable: false });
+        log(bot, 'The storage plan was invalid, so nothing was moved.');
+        return false;
+    }
+    const expectedDimension = normalizedDimension(dimension);
+    const currentDimension = normalizedDimension(bot.game?.dimension);
+    if (expectedDimension && expectedDimension !== currentDimension) {
+        setActionEvidence(bot, {
+            kind: 'storage_plan',
+            outcome: 'assigned_container_wrong_dimension',
+            target: { ...target, dimension: expectedDimension },
+            observed: currentDimension,
+            retryable: true,
+        });
+        return false;
+    }
+    const assigned = await loadAssignedContainerBlock(bot, { x, y, z });
+    if (!assigned.block) {
+        setActionEvidence(bot, {
+            kind: 'storage_plan',
+            outcome: assigned.outcome,
+            target,
+            observed: assigned.observed,
+            retryable: !['assigned_container_invalid', 'interrupted'].includes(assigned.outcome),
+        });
+        return false;
+    }
+    const approach = await approachContainerBlock(bot, assigned.block);
+    if (!approach.block) {
+        setActionEvidence(bot, {
+            kind: 'storage_plan',
+            outcome: approach.outcome,
+            target,
+            observed: approach.observed || null,
+            retryable: approach.outcome !== 'interrupted',
+        });
+        return false;
+    }
+
+    const beforeInventory = Object.fromEntries(requirements.map(requirement => [
+        requirement.target,
+        inventoryCount(bot, requirement.target),
+    ]));
+    const plannedTransfers = Object.fromEntries(requirements.map(requirement => [
+        requirement.target,
+        Math.max(0, beforeInventory[requirement.target] - requirement.retain),
+    ]));
+    let chestContainer = null;
+    let containerBefore = null;
+    let containerAfter = null;
+    try {
+        chestContainer = await openContainerForAction(bot, approach.block);
+        containerBefore = containerItemCounts(chestContainer);
+        const capacity = storageCapacityPreflight(chestContainer, requirements, plannedTransfers);
+        if (!capacity.fits) {
+            setActionEvidence(bot, {
+                kind: 'storage_plan',
+                outcome: capacity.outcome,
+                target,
+                plannedTransfers,
+                capacity,
+                retryable: false,
+            });
+            log(bot, capacity.outcome === 'storage_inventory_changed'
+                ? `${capacity.item} changed before storage could begin, so nothing was moved.`
+                : `The selected container has ${capacity.availableSlots} free slot${capacity.availableSlots === 1 ? '' : 's'}, but the complete cleanup needs ${capacity.requiredSlots}; nothing was moved.`);
+            return false;
+        }
+        for (const requirement of requirements) {
+            if (bot.interrupt_code) throw new Error('Storage cleanup was interrupted.');
+            const toStore = plannedTransfers[requirement.target];
+            if (toStore < 1) continue;
+            const carried = chestContainer.items()
+                .filter(item => item?.name === requirement.target);
+            const available = carried.reduce((total, item) => total + Math.max(0, Number(item.count) || 0), 0);
+            if (available < toStore) {
+                throw new Error(`${requirement.target} changed before storage could finish.`);
+            }
+            const singleItems = carried.every(item => Math.max(1, Number(item.stackSize) || 1) === 1);
+            if (singleItems) {
+                const surplus = carried
+                    .slice()
+                    .sort((left, right) => retainedItemValue(bot, left) - retainedItemValue(bot, right))
+                    .slice(0, toStore);
+                const emptySlots = [];
+                for (let slot = 0; slot < chestContainer.inventoryStart; slot += 1) {
+                    if (!chestContainer.slots[slot]) emptySlots.push(slot);
+                }
+                if (emptySlots.length < surplus.length) {
+                    throw new Error(`The selected container needs ${surplus.length - emptySlots.length} more slot(s) for ${requirement.target}.`);
+                }
+                for (const [index, item] of surplus.entries()) {
+                    await bot.moveSlotItem(item.slot, emptySlots[index]);
+                }
+            } else {
+                const item = carried[0];
+                await chestContainer.deposit(item.type, null, toStore);
+            }
+            const containerStart = containerBefore[requirement.target] || 0;
+            await waitForWorldCondition(
+                bot,
+                () => (containerItemCounts(chestContainer)[requirement.target] || 0) >= containerStart + toStore,
+                1_500,
+                INVENTORY_POLL_MS,
+            );
+        }
+        containerAfter = containerItemCounts(chestContainer);
+        const allowed = new Set(requirements.map(requirement => requirement.target));
+        const unrelatedPreserved = containerContentsPreservedExcept(containerBefore, containerAfter, allowed);
+        await closeContainerQuietly(chestContainer);
+        chestContainer = null;
+        await waitForWorldCondition(
+            bot,
+            () => requirements.every(requirement => inventoryCount(bot, requirement.target) === requirement.retain),
+            1_500,
+            INVENTORY_POLL_MS,
+        );
+        const transfers = {};
+        const verified = requirements.every(requirement => {
+            const inventoryTransferred = Math.max(0, beforeInventory[requirement.target] - inventoryCount(bot, requirement.target));
+            const containerTransferred = Math.max(
+                0,
+                (containerAfter[requirement.target] || 0) - (containerBefore[requirement.target] || 0),
+            );
+            transfers[requirement.target] = Math.min(inventoryTransferred, containerTransferred);
+            return inventoryTransferred === plannedTransfers[requirement.target]
+                && containerTransferred === plannedTransfers[requirement.target];
+        });
+        if (!verified || !unrelatedPreserved) {
+            setActionEvidence(bot, {
+                kind: 'storage_plan',
+                outcome: 'storage_plan_unverified',
+                target,
+                plannedTransfers,
+                transfers,
+                unrelatedPreserved,
+                retryable: Object.values(transfers).every(value => value === 0),
+            });
+            log(bot, 'Minecraft did not verify the complete storage cleanup without changing unrelated contents.');
+            return false;
+        }
+        setActionEvidence(bot, {
+            kind: 'storage_plan',
+            outcome: 'stored',
+            target,
+            plannedTransfers,
+            transfers,
+            retained: Object.fromEntries(requirements.map(requirement => [requirement.target, requirement.retain])),
+            unrelatedPreserved,
+            retryable: false,
+        });
+        log(bot, `Stored ${Object.values(transfers).reduce((total, value) => total + value, 0)} authorized item${Object.values(transfers).reduce((total, value) => total + value, 0) === 1 ? '' : 's'} and preserved the requested carried set.`);
+        return true;
+    } catch (error) {
+        containerAfter = chestContainer ? containerItemCounts(chestContainer) : containerAfter;
+        await closeContainerQuietly(chestContainer);
+        chestContainer = null;
+        await waitForWorldCondition(
+            bot,
+            () => requirements.some(requirement => (
+                inventoryCount(bot, requirement.target) !== beforeInventory[requirement.target]
+            )),
+            1_000,
+            INVENTORY_POLL_MS,
+        );
+        const transfers = Object.fromEntries(requirements.map(requirement => [
+            requirement.target,
+            Math.min(
+                Math.max(0, beforeInventory[requirement.target] - inventoryCount(bot, requirement.target)),
+                Math.max(
+                    0,
+                    ((containerAfter?.[requirement.target] || 0) - (containerBefore?.[requirement.target] || 0)),
+                ),
+            ),
+        ]));
+        const transferred = Object.values(transfers).reduce((total, value) => total + value, 0);
+        setActionEvidence(bot, {
+            kind: 'storage_plan',
+            outcome: bot.interrupt_code ? 'interrupted' : transferred > 0 ? 'partial' : 'storage_blocked',
+            target,
+            plannedTransfers,
+            transfers,
+            error: String(error?.message || error).slice(0, 240),
+            retryable: !bot.interrupt_code && transferred === 0,
+        });
+        log(bot, `Storage cleanup stopped after moving ${transferred} item${transferred === 1 ? '' : 's'}: ${String(error?.message || error).slice(0, 180)}.`);
+        return false;
+    } finally {
+        await closeContainerQuietly(chestContainer);
+    }
 }
 
 function familyBaselineCounts(bot, family, encoded) {

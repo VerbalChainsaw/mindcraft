@@ -841,7 +841,7 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
       // inventory contract. Leave the whole line to Agent's correlated
       // item-plan compiler. Construction remains the only deferred assignment
       // represented by a durable Builder barrier here.
-      if (directive.assignmentKind === 'item_plan') return null;
+      if (['item_plan', 'storage_plan'].includes(directive.assignmentKind)) return null;
       steps.push({
         segment,
         command: null,

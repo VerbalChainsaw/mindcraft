@@ -45,6 +45,19 @@ stalls, dishonest completion or restart replay, then missing gameplay domains.
 Known dormant P1 debt remains in the master/forward plans and should activate
 only when live play reaches it.
 
+The first dedicated Home Stewardship request now compiles one broad cleanup
+into a durable retained-inventory plan bound to an exact existing container.
+Mineflayer still owns the container window and transfers; V2 owns authorization,
+which durable copies remain carried, whole-plan capacity preflight, cancellation,
+and exact verification. Paper proved the corrected capacity boundary: with
+three chest slots available and ten surplus stone pickaxes remaining, the bot
+moved nothing, spent one attempt, returned to the player, and preserved every
+item and health 20. A prior preflight-defect run had safely moved all authorized
+stackable mining output plus one wooden pickaxe, but that partial result is not
+full acceptance. Complete cleanup remains pending adequate player-authorized
+storage; do not create or rearrange storage without permission merely to close
+the proof.
+
 The next broad play request also proved function-constrained general building.
 One addressed request for a fenced, gated, lit animal pen preserved its
 containment, access, and lighting outcome, compiled through the existing

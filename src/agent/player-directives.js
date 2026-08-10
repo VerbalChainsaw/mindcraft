@@ -219,6 +219,20 @@ function describesModelSelectedItemPlan(text) {
     return asksForInventoryWork && namesASet && delegatesSelection && !explicitlyBuilds;
 }
 
+function describesModelSelectedStoragePlan(text) {
+    const asksForStorage = /\b(?:clean up|organize|sort|put|store|stash|deposit)\b/.test(text);
+    const explicitlyCleansUp = /\b(?:clean up|organize|sort)\b/.test(text);
+    const alsoAcquires = /\b(?:explore|find|search|gather|collect|mine|acquire|make|craft|prepare)\b/.test(text);
+    const namesASet = /\b(?:inventory|ore|ores|stone|dirt|sand|materials|resources|supplies|gear|equipment|tools|items)\b/.test(text);
+    const delegatesSelection = /\b(?:loose|worn|extra|spare|surplus|unneeded|useful|working|good|best|all but)\b/.test(text);
+    const namesContainer = /\b(?:chest|barrel)\b/.test(text);
+    return asksForStorage
+        && namesASet
+        && delegatesSelection
+        && namesContainer
+        && (explicitlyCleansUp || !alsoAcquires);
+}
+
 export function resolvePlayerDirective(playerName, message, context = {}) {
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
@@ -367,6 +381,18 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // --- Items, containers, and gear ----------------------------------------
     // These verbs are unambiguous, so they resolve before the broader
     // acquisition parsing further down ever sees the message.
+
+    if (describesModelSelectedStoragePlan(text)) {
+        const shouldReturn = /\b(?:return|come back|head back|go back)\b/.test(text);
+        return {
+            command: null,
+            response: '',
+            releasesHold: true,
+            deferToModel: true,
+            assignmentKind: 'storage_plan',
+            modelInstruction: `This player authorized one broad inventory-cleanup outcome whose concrete storage list requires bounded judgment. Compile the COMPLETE storage list before any physical work. Return exactly one !queueStoragePlan command in your first response, with 1-12 real carried canonical item names encoded as canonical_item:retain_quantity entries separated by |, requester ${commandString(playerName)}, and return_to_player ${shouldReturn}. The quantity is how many of that item must remain in the bot inventory after cleanup; zero means store all carried copies. Include only items the player authorized for storage and only when current INVENTORY contains surplus above the retained quantity. For duplicate durable tools, retain the requested best instances; the deterministic storage capability chooses which physical copies to preserve. Do not acquire, mine, craft, build, place, break, discard, or move anywhere except the selected existing container and the optional player return. Do not issue remember, search, inspection, individual chest-transfer, or conversational commands first.`,
+        };
+    }
 
     if (/\bchest\b/.test(text)) {
         if (/\b(?:what(?:'s| is) in|check|look in|peek in|show(?: me)?(?: the)? contents)\b/.test(text)) {

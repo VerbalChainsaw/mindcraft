@@ -57,6 +57,7 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] Randomized supervised play then exercised one natural cave/iron/coal/return outcome. The request now remains one durable Explorer order plus a settlement-dependent return, retains every named resource, prevents terminal job replay, and uses native round-trip route proof for cave and exposed-ore stances. Owned Mineflayer placement receipts tolerate delayed authoritative cache updates, ordinary Pathfinder movement no longer builds towers or declares a stall before its own search horizon, and “surface” now means a stance with a native route to surrounding terrain rather than merely open sky. The live run preserved the worksite, increased coal from 8 to 10, failed missing iron honestly, climbed from the exact formerly false y70 surface to a usable y72 exit, and returned beside LandingWitness at health 20.
 - [x] The follow-on cave campaign now binds the existing deterministic mining-corridor strategy after exposed-cave exhaustion, protects every accumulated feet/head/support cell from later excavation, propagates that route contract through capability binding, and retraces exact cleared cells with native Pathfinder and digging disabled. Its delegated all-in-one replay completed inside the broader Resource-to-Project request: the bot retained nine fresh raw iron and nine fresh coal from the expedition, returned over its saved route, manufactured the requested iron pickaxe and bucket, stored both in the exact chest, and returned to the player at health 20. Carried excavation debris can now fund bounded capacity recovery while world cobblestone remains protected.
 - [x] Resource-to-Project composition is physically accepted. One natural request became a durable generic Explorer order, two GoalDirector acquisitions, two exact deposits, and one player return; it added no item recipe, ore route, controller, or executor. The last blocker was not crafting logic: owned Pathfinder abstracted away which side of a partial fence collision cell the body occupied and advertised a first edge through the fence onto a furnace. The package now preserves the exact initial body pose, rejects collision-crossing first edges, retains real open-side and low-enclosure exits, and routes around the obstruction. Paper verified a second iron pickaxe and one bucket in the selected chest, the bot beside LandingWitness, health 20, and durable Operator Stop.
+- [~] Home Stewardship now has one generic retained-inventory cleanup path. Cognition selects only authorized carried surplus once; Agenda persists canonical item/retain floors plus one exact chest; Mineflayer owns the real window and transfers; V2 preserves the best durable copies, verifies both inventories, and preflights the complete container capacity before moving anything. The first live run safely deposited 67 raw iron, 34 coal, 64 granite, 33 diorite, 256 cobblestone, 51 andesite, 84 dirt, 10 sand, and one wooden pickaxe before exposing the missing preflight. On the corrected unchanged rerun, the exact chest had three free slots while ten extra stone pickaxes required ten, so the bot moved nothing, spent one attempt instead of two, returned to the player, and Paper verified every item and health 20 unchanged. Full all-groups cleanup remains externally blocked by the selected chest's physical capacity; the exact-slot durable-tool success path is installed but not yet physically accepted.
 - [ ] P1 package debt: table crafting still opens its window outside the `openBlock`/`openEntity` gate. Route that raw opener through the package generation boundary before a broad outcome requires crafting immediately after aborted container work; do not claim global UI serialization meanwhile.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
@@ -139,13 +140,15 @@ unchanged request passed physically on 2026-08-09 after the owned Pathfinder
 partial-collision start primitive was corrected. Freeze this campaign; do not
 turn its workstation arrangement or item quantities into new acceptance slices.
 
-### Next lane: Home Stewardship
+### Active lane: Home Stewardship
 
-The next broad play should use the existing lived-in outpost as an ordinary
-shared base: reuse its fixtures and storage, preserve buildings, farm, paths,
-contents, and access, and complete one player-valued maintenance or restocking
-outcome. Let natural play choose the exact outcome and first blocker. Do not
-pre-author a furnace, chest, crop, or item permutation merely to certify it.
+The first ordinary shared-base cleanup request now compiles and executes through
+one durable generic storage plan. Its corrected rerun reached a truthful world
+precondition: the exact selected chest had three free slots but the remaining
+authorized tool cleanup required ten. Resume Home Stewardship with adequate
+player-authorized existing storage or another ordinary maintenance/restocking
+outcome. Do not enlarge the chest, move unrelated contents, place storage, or
+invent a capacity permutation merely to certify the installed path.
 
 ## Next-stage product program
 
@@ -158,7 +161,7 @@ The project is now in player-led capability expansion. These goals are ordered b
 5. **Broader player capability.** Add missing exploration, transport, farming, combat, building, and advanced-progression behavior only when a useful natural request reaches that domain. Grow the existing capability catalogue and owned packages at the demonstrated seam; never teach recipes one by one or introduce another executor.
 6. **Release readiness after playability.** Only after sustained single-companion sessions are dependable should the project spend a tranche on cross-session repeatability, packaging, operator UX, or additional bots. Release evidence must come from the exact shipped runtime rather than a parallel harness.
 
-The immediate working session begins with IronSuiteProof Operator Stop-held after the complete Resource-to-Project campaign. Freeze its collection, manufacturing, exact storage, and return path. Begin one ordinary Home Stewardship request in the lived-in outpost and repair only the first shared player-visible blocker it exposes. Preserve the package-first movement mandate, generic capability catalogue, one ActionManager executor, and broad-run acceptance rule.
+The current working session ends with IronSuiteProof Operator Stop-held after the first Home Stewardship request reached a precise external capacity blocker. Freeze the generic cleanup compilation, exact-container binding, capacity preflight, single-attempt failure, and player return. Continue broad lived-in-base play from adequate player-authorized storage or another useful maintenance outcome; do not turn this into a chest-size test series. Preserve the package-first movement mandate, generic capability catalogue, one ActionManager executor, and broad-run acceptance rule.
 
 ## Remaining product tranches
 
@@ -178,6 +181,7 @@ The immediate working session begins with IronSuiteProof Operator Stop-held afte
 - Freeze the proven river/worksite/furnace route. Future broad requests may reuse its shared primitives, but do not manufacture shoreline, furnace, or smelting permutations absent a product-scale regression.
 - Prefer non-destructive native routes; do not tear up terrain, paths, or buildings for convenience.
 - Discover and reuse reachable furnaces, crafting tables, storage, farms, shelters, and player-designated shared structures.
+- [~] Compile broad inventory cleanup into one exact-container retained-inventory plan, preserve requested gear, and reject insufficient capacity before mutation. The natural outpost cleanup physically proved exact binding, native stackable transfers, unrelated-content preservation, one-attempt capacity refusal, and player return; complete success remains pending adequate authorized storage.
 - Bind building work to an explicit player-owned site and cleanup contract instead of ad-hoc block placement.
 - [x] Farm establishment binds a complete rectangular hydrated site, safe service stances, and a non-destructive native route before changing soil; this proves farm-site stewardship only, not general structure ownership.
 
@@ -198,7 +202,7 @@ The immediate working session begins with IronSuiteProof Operator Stop-held afte
 - [x] Complete Gabriel's ordinary landing-area starter-supply request through one durable model-selected item plan, generic prerequisites, aggregate minimum-floor verification, and native return.
 - [x] Complete the follow-on shared-worksite request through one function-constrained Builder order plus durable return, then prove that command-only idle survival does not invent optional construction after completion.
 - [x] Use randomized two-player play to select the next blocker: the cave/iron/coal/return request proved durable multi-resource intent, protected-site departure, return-safe cave/ore stance binding, truthful terminal failure, real surface egress, and player return.
-- [ ] Complete that unchanged request by binding a second deterministic acquisition strategy after cave/exposed-ore no-progress; prove it acquires iron without reopening the return-safe movement seams or adding item-specific planning.
+- [x] Complete that unchanged request by binding a second deterministic acquisition strategy after cave/exposed-ore no-progress. The follow-on Resource-to-Project run used the same corridor strategy to acquire nine fresh raw iron and nine fresh coal, manufactured and stored an iron pickaxe and bucket, preserved the work area, and returned at health 20 without item-specific planning.
 - Move strategy and retry policy out of `skills.js` incrementally; retain its hard-won safety mechanics in bounded execution adapters.
 - Prove second-run repeatability and interruption/resumption across resource, crafting, home, farming, exploration, and combat campaigns.
 

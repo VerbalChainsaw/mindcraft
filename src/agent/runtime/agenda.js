@@ -22,6 +22,7 @@ const CANONICAL_NAME = /^[a-z0-9_]{1,64}$/;
 const MAX_ENTRIES = 24;
 const MAX_QUANTITY = 2304;
 const MAX_INVENTORY_REQUIREMENTS = 12;
+const MAX_STORAGE_REQUIREMENTS = 12;
 const MAX_EXPLORATION_OUTPUTS = 12;
 const MAX_INVENTORY_RECONCILIATIONS = 12;
 const MAX_NOTE = 160;
@@ -88,6 +89,10 @@ export const AGENDA_KINDS = Object.freeze({
   farm_visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   maintain_farm: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   deposit: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  // A storage cleanup is one atomic, restart-safe retained-inventory contract.
+  // The model may choose the concrete carried items, but the persisted plan
+  // contains only canonical names, retained counts, and one exact container.
+  storage_plan: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   // Food stocking is two ordinary bounded mechanics joined by the durable
   // queue: prepare additional safe food at one exact furnace, then deposit
   // only that new output in one exact container.
@@ -284,6 +289,28 @@ function normalizeInventoryRequirements(raw) {
   }));
 }
 
+function normalizeStorageRequirements(raw) {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_STORAGE_REQUIREMENTS) {
+    throw new TypeError(`A storage plan needs 1-${MAX_STORAGE_REQUIREMENTS} typed requirements.`);
+  }
+  const seen = new Set();
+  return Object.freeze(raw.map(requirement => {
+    if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+      throw new TypeError('A storage requirement must be an object.');
+    }
+    const target = canonical(requirement.target);
+    if (!CANONICAL_NAME.test(target) || !isNameFaithful(requirement.target, target)) {
+      throw new TypeError('A storage requirement needs a canonical target name.');
+    }
+    if (seen.has(target)) throw new TypeError(`Storage target '${target}' is duplicated.`);
+    seen.add(target);
+    return Object.freeze({
+      target,
+      retain: finiteInteger(requirement.retain, 0, 0, MAX_QUANTITY),
+    });
+  }));
+}
+
 function normalizeExplorationOutputs(raw) {
   if (raw == null) return Object.freeze([]);
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_EXPLORATION_OUTPUTS) {
@@ -379,7 +406,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (kind === 'prepare_food' && !normalizedWorkstation) {
     throw new TypeError('A food preparation step needs one exact furnace.');
   }
-  const containerConstraint = ['deposit', 'deposit_family', 'explore'].includes(kind)
+  const containerConstraint = ['deposit', 'deposit_family', 'storage_plan', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
   if (kind === 'explore' && !containerConstraint && raw.retainResults !== true) {
@@ -396,6 +423,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   }
   if (kind === 'deposit_family' && !containerConstraint) {
     throw new TypeError('A family deposit step needs one exact chest or barrel.');
+  }
+  if (kind === 'storage_plan' && !containerConstraint) {
+    throw new TypeError('A storage plan needs one exact chest or barrel.');
   }
   const baselineInventory = kind === 'deposit_family'
     ? normalizeBaselineInventory(raw.baselineInventory)
@@ -446,6 +476,9 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     : '';
   const inventoryRequirements = kind === 'inventory_checklist'
     ? normalizeInventoryRequirements(raw.inventoryRequirements)
+    : null;
+  const storageRequirements = kind === 'storage_plan'
+    ? normalizeStorageRequirements(raw.storageRequirements)
     : null;
   const requiredOutputs = kind === 'explore'
     ? normalizeExplorationOutputs(raw.requiredOutputs)
@@ -502,6 +535,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
         MAX_INVENTORY_RECONCILIATIONS,
       ),
     } : {}),
+    ...(storageRequirements ? { storageRequirements } : {}),
     note: boundedText(raw.note),
     state,
     // Correlates a durable agenda entry with the exact GoalDirector or
@@ -545,6 +579,7 @@ export function describeAgendaEntry(entry) {
     case 'deposit': return entry.containerConstraint
       ? `put up to ${entry.quantity} ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`
       : `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
+    case 'storage_plan': return `store ${entry.storageRequirements.length} authorized inventory group${entry.storageRequirements.length === 1 ? '' : 's'} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`;
     case 'prepare_food': return `prepare ${entry.quantity} additional safe food points at the selected furnace`;
     case 'deposit_family': return `put the newly prepared ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`;
     case 'shelter': return 'build a shelter';
