@@ -616,6 +616,193 @@ function deliveryStep(order, snapshot) {
   });
 }
 
+function outcomeTarget(outcome) {
+  const target = outcome?.verification?.target || outcome?.binding?.target;
+  if (!target || ![target.x, target.y, target.z].every(Number.isFinite)) return null;
+  return target;
+}
+
+function scoutObservationStep(order, finding) {
+  if (finding === 'animal') {
+    return createCapabilityRequest('observe_useful_animal', {
+      home: order.target,
+      range: order.constraints?.maxDistance,
+    }, {
+      nextPhase: 'execute',
+      code: 'scout_useful_animal',
+      target: { name: 'useful_animal' },
+      keepAnchor: true,
+      checkpointOnSuccess: outcome => {
+        const target = outcomeTarget(outcome);
+        return target ? {
+          ...order.checkpoint,
+          scoutAnimalName: target.name,
+          scoutAnimalX: target.x,
+          scoutAnimalY: target.y,
+          scoutAnimalZ: target.z,
+        } : null;
+      },
+    });
+  }
+  return createCapabilityRequest('survey_nearby_cave', {
+    home: order.target,
+    range: order.constraints?.maxDistance,
+    excludedTargets: order.checkpoint?.failedTargets || [],
+    light: false,
+  }, {
+    nextPhase: 'execute',
+    code: 'scout_nearby_cave',
+    target: { name: 'cave_region' },
+    keepAnchor: true,
+    checkpointOnSuccess: outcome => {
+      const target = outcomeTarget(outcome);
+      return target ? {
+        ...order.checkpoint,
+        scoutCaveX: target.x,
+        scoutCaveY: target.y,
+        scoutCaveZ: target.z,
+      } : null;
+    },
+  });
+}
+
+function scoutFindingRecorded(checkpoint, finding) {
+  const prefix = finding === 'animal' ? 'scoutAnimal' : 'scoutCave';
+  return ['X', 'Y', 'Z'].every(axis => Number.isFinite(checkpoint?.[`${prefix}${axis}`]));
+}
+
+function scoutSearchRelocationStep(order) {
+  const completed = Math.max(0, Number(order.checkpoint?.scoutSearchRelocations) || 0);
+  if (completed >= CAVE_SEARCH_DIRECTIONS.length) {
+    return {
+      terminal: true,
+      code: 'scout_region_exhausted',
+      detail: 'No requested finding had a safe verified observation after the bounded radial scout route.',
+      retryable: false,
+    };
+  }
+  const [directionX, directionZ] = CAVE_SEARCH_DIRECTIONS[completed];
+  const directionLength = Math.hypot(directionX, directionZ);
+  const radius = Math.min(
+    CAVE_SEARCH_RELOCATION_DISTANCE,
+    Math.max(16, Number(order.constraints?.maxDistance) || 64),
+  );
+  const x = Math.round(order.target.x + ((radius * directionX) / directionLength));
+  const z = Math.round(order.target.z + ((radius * directionZ) / directionLength));
+  return createCapabilityRequest('relocate_search_region', {
+    x,
+    y: order.target.y,
+    z,
+    closeness: 8,
+    minimumDisplacement: 16,
+    dimension: order.checkpoint.homeDimension,
+  }, {
+    nextPhase: 'execute',
+    code: 'scout_search_waypoint',
+    target: { name: 'scout_search_region', x, y: order.target.y, z },
+    keepAnchor: true,
+    recoveryAction: true,
+    // Mark the region attempted before movement begins. A blocked waypoint is
+    // still evidence that this approach is unsuitable; retrying it unchanged
+    // would spend the entire recovery budget on one identical signature.
+    checkpoint: {
+      ...order.checkpoint,
+      scoutSearchRelocations: completed + 1,
+    },
+  });
+}
+
+export function nextScoutStep(order, snapshot = {}) {
+  if (order.role !== 'scout' || order.kind !== 'scout' || order.target?.name !== 'scout_region') {
+    return { terminal: true, code: 'invalid_scout_order', retryable: false };
+  }
+  const checkpoint = order.checkpoint || {};
+  if (!checkpoint.homeDimension || !Array.isArray(checkpoint.scoutFindings)) {
+    return {
+      terminal: true,
+      code: 'scout_contract_missing',
+      detail: 'The scout route has no exact home dimension or requested finding set.',
+      retryable: false,
+    };
+  }
+  if (snapshot.dimension !== checkpoint.homeDimension) {
+    return {
+      terminal: true,
+      code: 'scout_wrong_dimension',
+      detail: `The scout route begins in ${checkpoint.homeDimension}; the bot is in ${snapshot.dimension || 'an unknown dimension'}.`,
+      retryable: false,
+    };
+  }
+  if (['assess', 'prepare', 'acquire'].includes(order.phase)) {
+    return { phase: 'execute', code: 'scout_route_bound' };
+  }
+  if (!['execute', 'recover', 'deliver', 'verify'].includes(order.phase)) {
+    return { terminal: true, code: 'unsupported_scout_phase', retryable: false };
+  }
+
+  // Animals are usually observed near the player-facing surface. Bind that
+  // fact before entering a cave can unload it; cave selection then uses its
+  // existing safe round-trip route probe from the protected origin.
+  const missingFinding = checkpoint.scoutFindings
+    .slice()
+    .sort((left, right) => Number(right === 'animal') - Number(left === 'animal'))
+    .find(finding => !scoutFindingRecorded(checkpoint, finding));
+  if (missingFinding) {
+    if (order.phase === 'recover' && order.evidence?.code === 'source_not_found') {
+      return scoutSearchRelocationStep(order);
+    }
+    return scoutObservationStep(order, missingFinding);
+  }
+
+  if (checkpoint.scoutReturned !== true) {
+    return {
+      command: `!goToPlayer(${JSON.stringify(order.requester)}, 3)`,
+      nextPhase: 'execute',
+      code: 'scout_return_to_requester',
+      target: { name: order.requester },
+      keepAnchor: true,
+      recoveryAction: true,
+      checkpointOnSuccess: {
+        ...checkpoint,
+        scoutReturned: true,
+      },
+    };
+  }
+
+  const guideFinding = checkpoint.scoutGuideFinding;
+  if (guideFinding && checkpoint.scoutGuideComplete !== true) {
+    const prefix = guideFinding === 'animal' ? 'scoutAnimal' : 'scoutCave';
+    return createCapabilityRequest('navigate_exact', {
+      x: checkpoint[`${prefix}X`],
+      y: checkpoint[`${prefix}Y`],
+      z: checkpoint[`${prefix}Z`],
+      closeness: 2,
+      dimension: checkpoint.homeDimension,
+    }, {
+      nextPhase: 'verify',
+      code: 'scout_guide_to_finding',
+      target: {
+        name: `${guideFinding}_location`,
+        x: checkpoint[`${prefix}X`],
+        y: checkpoint[`${prefix}Y`],
+        z: checkpoint[`${prefix}Z`],
+      },
+      keepAnchor: true,
+      checkpointOnSuccess: {
+        ...checkpoint,
+        scoutGuideComplete: true,
+      },
+    });
+  }
+
+  return {
+    complete: true,
+    code: 'scout_route_complete',
+    detail: 'Verified findings were remembered, the bot returned, and the requested guidance route settled.',
+    checkpoint,
+  };
+}
+
 export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { planItem = null } = {}) {
   if (order.role !== 'miner' || order.kind !== 'explore' || order.target?.name !== 'ores') {
     return { terminal: true, code: 'invalid_expedition_order', retryable: false };

@@ -346,6 +346,57 @@ test('parsePlayerAgenda preserves the broad remembered-farm workflow as typed st
   assert.deepEqual(plan.unresolved, []);
 });
 
+test('parsePlayerAgenda preserves scout, exact memory, return, and guidance as one durable outcome', () => {
+  const message = 'IronSuiteProof, scout a useful area around this outpost. Remember one nearby cave and one useful animal location, come back, then guide me to the cave without damaging buildings or paths.';
+  const bot = {
+    entity: { position: { x: 8119.5, y: 69, z: 7981.5 } },
+    game: { dimension: 'minecraft:overworld' },
+  };
+  const plan = parsePlayerAgenda('LandingWitness', message, {
+    bot,
+    requesterPosition: { x: 8105.5, y: 69, z: 7939.5 },
+  });
+
+  assert.ok(plan);
+  assert.equal(plan.multiStep, true);
+  assert.equal(plan.steps.length, 1);
+  assert.deepEqual(normalizeAgendaEntry(plan.steps[0].entry, {
+    now: () => 100,
+    sequence: 1,
+  }), {
+    id: 'agenda-100-1',
+    kind: 'scout',
+    executor: 'job',
+    target: '',
+    quantity: 0,
+    findings: ['cave', 'animal'],
+    guideFinding: 'cave',
+    completion: '',
+    recipient: '',
+    requester: 'LandingWitness',
+    radius: 64,
+    x: 8105,
+    y: 69,
+    z: 7939,
+    homeDimension: 'overworld',
+    workstationConstraint: null,
+    dependsOnEntryId: '',
+    dependencyPolicy: '',
+    bindingRequest: null,
+    bindingConstraint: null,
+    constructionIntent: null,
+    assignmentState: '',
+    note: '',
+    state: 'pending',
+    executorId: '',
+    createdAt: 100,
+    startedAt: null,
+    finishedAt: null,
+    attempts: 0,
+    evidence: { code: '', detail: '' },
+  });
+});
+
 test('parsePlayerAgenda preserves custom construction as a barrier before sleep', () => {
   const plan = parsePlayerAgenda(
     'Gabriel',

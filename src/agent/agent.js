@@ -872,12 +872,13 @@ export class Agent {
      * single-directive path below. Model-compiled construction is the exception
      * because its typed barrier owns the player's required-function contract.
      */
-    async dispatchPlayerAgenda(source, canonicalPlayer, message) {
+    async dispatchPlayerAgenda(source, canonicalPlayer, message, requesterPosition = null) {
         const director = this.agenda_director;
         if (!director?.add) return false;
         const plan = parsePlayerAgenda(canonicalPlayer || source, message, {
             role: this.runtime?.role,
             bot: this.bot,
+            requesterPosition,
         });
         if (!plan) return false;
         if (plan.rejection) {
@@ -1087,7 +1088,12 @@ export class Agent {
             // deterministically into the Agenda queue before the single-directive
             // path, so serial plans never need a model round trip. A lone task
             // returns false here and continues below unchanged.
-            const agendaDispatch = await this.dispatchPlayerAgenda(source, canonicalPlayer, message);
+            const agendaDispatch = await this.dispatchPlayerAgenda(
+                source,
+                canonicalPlayer,
+                message,
+                companionResolution?.entity?.position || null,
+            );
             if (agendaDispatch === true) {
                 return true;
             }

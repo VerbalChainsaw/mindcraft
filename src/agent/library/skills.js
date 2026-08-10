@@ -14616,23 +14616,51 @@ export async function goToNearestEntity(bot, entityType, min_distance=2, range=6
         return false;
     }
     const requestedDistance = Math.max(0, Math.min(32, Number(min_distance) || 0));
-    const target = { name: entityType, id: entity.id };
+    let target = {
+        name: entityType,
+        id: entity.id,
+        x: entity.position.x,
+        y: entity.position.y,
+        z: entity.position.z,
+    };
     let distance = bot.entity.position.distanceTo(entity.position);
     log(bot, `Found ${entityType} ${distance.toFixed(1)} blocks away.`);
     const reached = await goToGoal(bot, new pf.goals.GoalFollow(entity, requestedDistance));
     const observed = bot.entities?.[entity.id];
-    if (!reached || !observed?.position) {
+    if (!observed?.position) {
         setActionEvidence(bot, {
             kind: 'movement',
-            outcome: !observed?.position ? 'target_lost' : bot.lastActionEvidence?.outcome || 'unreachable',
+            outcome: 'target_lost',
             target,
             retryable: true,
         });
-        if (!observed?.position) log(bot, `${entityType} left verified world state before arrival.`);
+        log(bot, `${entityType} left verified world state before arrival.`);
         return false;
     }
+    target = {
+        name: entityType,
+        id: observed.id,
+        x: observed.position.x,
+        y: observed.position.y,
+        z: observed.position.z,
+    };
     distance = bot.entity.position.distanceTo(observed.position);
-    if (distance > requestedDistance + 1) {
+    // GoalFollow can settle just after its moving target takes another step.
+    // Trust the final Minecraft distance when it is still inside one ordinary
+    // entity-width of the requested radius instead of turning successful
+    // native pursuit into a false failure and another identical retry.
+    const physicallySettled = distance <= requestedDistance + 1.5;
+    if (!reached && !physicallySettled) {
+        setActionEvidence(bot, {
+            kind: 'movement',
+            outcome: bot.lastActionEvidence?.outcome || 'unreachable',
+            target,
+            distance,
+            retryable: true,
+        });
+        return false;
+    }
+    if (!physicallySettled) {
         setActionEvidence(bot, { kind: 'movement', outcome: 'target_moved', target, distance, retryable: true });
         log(bot, `${entityType} is still ${distance.toFixed(1)} blocks away.`);
         return false;
@@ -15174,7 +15202,58 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
     distance = normalizePlayerDistance(distance, 3);
     const goal = new pf.goals.GoalFollow(player, distance);
 
-    const reached = await goToGoal(bot, goal);
+    let reached = await goToGoal(bot, goal);
+    if (!reached && !bot.interrupt_code) {
+        resolution = resolvePhysicalPlayer(bot, username);
+        player = resolution.entity;
+        const settledDistance = player?.position
+            ? bot.entity.position.distanceTo(player.position)
+            : Number.POSITIVE_INFINITY;
+        if (settledDistance <= distance + 1) {
+            reached = true;
+            log(bot, `Minecraft already shows ${username} within ${settledDistance.toFixed(1)} blocks despite Pathfinder's late failure.`);
+        }
+    }
+    if (
+        !reached
+        && !bot.interrupt_code
+        && bot.lastActionEvidence?.outcome === 'path_timeout'
+    ) {
+        // A dynamic GoalFollow can time out while the same stationary player's
+        // exact observed region has a valid native route. Change the planning
+        // strategy once inside this owned action: route to the immutable
+        // observation, then reacquire and verify the live player below. This is
+        // not another executor and it never turns a stale coordinate into
+        // success; final completion remains player-relative.
+        resolution = resolvePhysicalPlayer(bot, username);
+        player = resolution.entity;
+        if (player?.position) {
+            const observed = player.position.clone();
+            const regionGoal = new pf.goals.GoalNear(
+                Math.floor(observed.x),
+                Math.floor(observed.y),
+                Math.floor(observed.z),
+                Math.max(2, distance),
+            );
+            log(bot, `Dynamic pursuit timed out; routing once to ${username}'s verified current region.`);
+            reached = await goToGoal(bot, regionGoal, {
+                movements: () => safeMovements(bot),
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            });
+        }
+    }
+    if (!reached && !bot.interrupt_code) {
+        resolution = resolvePhysicalPlayer(bot, username);
+        player = resolution.entity;
+        const settledDistance = player?.position
+            ? bot.entity.position.distanceTo(player.position)
+            : Number.POSITIVE_INFINITY;
+        if (settledDistance <= distance + 1) {
+            reached = true;
+            log(bot, `Minecraft confirmed ${username} within ${settledDistance.toFixed(1)} blocks after the fallback settled.`);
+        }
+    }
     if (!reached) return false;
     resolution = resolvePhysicalPlayer(bot, username);
     target = playerTargetEvidence(resolution);

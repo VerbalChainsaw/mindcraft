@@ -3,7 +3,7 @@ import Vec3 from 'vec3';
 import { isCookableFood } from '../../utils/food-semantics.js';
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
-import { isPreemption } from './action-result.js';
+import { createActionResult, isPreemption } from './action-result.js';
 import {
   capabilityCommand,
   executeCapabilityAction,
@@ -27,7 +27,7 @@ import {
 } from './jobs/structure-material-binder.js';
 import { canonicalMiningTarget, miningKnowledge, nextMinerStep } from './jobs/miner-plan.js';
 import { canonicalLogFamily, nextLumberjackStep } from './jobs/lumberjack-plan.js';
-import { nextExplorerStep } from './jobs/explorer-plan.js';
+import { nextExplorerStep, nextScoutStep } from './jobs/explorer-plan.js';
 import {
   isProtectedGameplayBlock,
   isReplaceableGameplayBlock,
@@ -42,7 +42,7 @@ import {
   blockMatchesPlacement,
 } from './block-placement-contract.js';
 
-const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack']);
+const JOB_ROLES = new Set(['builder', 'miner', 'lumberjack', 'scout']);
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 const PLAYER_JOB_SOURCES = new Set(['player', 'restart']);
 const JOB_RETRY_MS = 1_000;
@@ -806,6 +806,7 @@ function defaultOrderFor(agent, completedOrderIds) {
 
 function reducerFor(order) {
   if (order.role === 'miner' && order.kind === 'explore') return nextExplorerStep;
+  if (order.role === 'scout' && order.kind === 'scout') return nextScoutStep;
   if (order.role === 'builder') return nextBuilderStep;
   if (order.role === 'miner') return nextMinerStep;
   if (order.role === 'lumberjack') return nextLumberjackStep;
@@ -898,6 +899,7 @@ export class JobDirector extends RoleDirector {
             this.now(),
           );
           this.store.save(this.activeOrder);
+          this.rememberScoutFindings(this.activeOrder);
         }
       }
     } catch (error) {
@@ -1154,11 +1156,49 @@ export class JobDirector extends RoleDirector {
     }
   }
 
+  rememberScoutFindings(order) {
+    if (order?.role !== 'scout' || order.kind !== 'scout' || order.source !== 'player') return;
+    const memory = this.agent.memory_bank;
+    if (!memory?.rememberUserPlace) return;
+    const findings = [
+      ['nearby_cave', 'scoutCave'],
+      ['useful_animals', 'scoutAnimal'],
+    ];
+    for (const [name, prefix] of findings) {
+      const point = {
+        x: order.checkpoint?.[`${prefix}X`],
+        y: order.checkpoint?.[`${prefix}Y`],
+        z: order.checkpoint?.[`${prefix}Z`],
+      };
+      if (![point.x, point.y, point.z].every(Number.isFinite)) continue;
+      const current = memory.recallUserPlaceDetails?.(name);
+      if (
+        current
+        && current.dimension === order.checkpoint.homeDimension
+        && ['x', 'y', 'z'].every(axis => Number(current[axis]) === Number(point[axis]))
+      ) continue;
+      try {
+        if (!memory.rememberUserPlace(
+          name,
+          point.x,
+          point.y,
+          point.z,
+          order.checkpoint.homeDimension,
+        )) {
+          console.warn(`[scout-memory] Could not persist verified ${name} for ${order.id}.`);
+        }
+      } catch (error) {
+        console.warn(`[scout-memory] Could not persist verified ${name}: ${String(error?.message || error).slice(0, 180)}`);
+      }
+    }
+  }
+
   persist(order) {
     const previousPhase = this.activeOrder?.phase;
     this.activeOrder = normalizeWorkOrder(order);
     this.store.save(this.activeOrder);
     this.rememberPlayerStructure(this.activeOrder);
+    this.rememberScoutFindings(this.activeOrder);
     if (previousPhase && previousPhase !== this.activeOrder.phase) {
       this.agent.publishBehaviorEvent?.({
         type: 'job.changed',
@@ -1497,6 +1537,26 @@ export class JobDirector extends RoleDirector {
           const preempted = isPreemption(result);
           const transferred = Math.max(0, Math.floor(Number(outcome?.verification?.transferred) || 0));
           const transferCheckpoint = step.checkpointOnVerifiedTransfer;
+          let successCheckpoint = null;
+          if (result.phase === 'succeeded' && step.checkpointOnSuccess) {
+            try {
+              successCheckpoint = typeof step.checkpointOnSuccess === 'function'
+                ? step.checkpointOnSuccess(outcome, result, orderAtDispatch)
+                : step.checkpointOnSuccess;
+              if (!successCheckpoint || typeof successCheckpoint !== 'object' || Array.isArray(successCheckpoint)) {
+                throw new TypeError('Verified action did not produce its required durable checkpoint.');
+              }
+            } catch (error) {
+              result = createActionResult({
+                ...result,
+                phase: 'failed',
+                code: 'job_checkpoint_invalid',
+                detail: String(error?.message || error).slice(0, 280),
+                retryable: true,
+              });
+              successCheckpoint = null;
+            }
+          }
           const verifiedOrder = transferCheckpoint && transferred > 0
             ? {
               ...orderAtDispatch,
@@ -1508,12 +1568,12 @@ export class JobDirector extends RoleDirector {
                 ),
               },
             }
-            : result.phase === 'succeeded' && step.checkpointOnSuccess
+            : result.phase === 'succeeded' && successCheckpoint
               ? {
                 ...orderAtDispatch,
                 checkpoint: {
                   ...orderAtDispatch.checkpoint,
-                  ...step.checkpointOnSuccess,
+                  ...successCheckpoint,
                 },
               }
               : orderAtDispatch;

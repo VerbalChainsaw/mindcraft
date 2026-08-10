@@ -85,6 +85,12 @@ const CAVE_EXPEDITION_CUES = Object.freeze([
   /\b(?:return|come back|head back)\b/i,
   /\b(?:store|put|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i,
 ]);
+const SCOUT_REQUEST_CUES = Object.freeze([
+  /\b(?:scout|survey|look around|explore)\b/i,
+  /\b(?:remember|record|mark|note)\b/i,
+  /\b(?:return|come back|head back)\b/i,
+  /\b(?:guide|lead|show|take)\b/i,
+]);
 const FOOD_STOCKING_CUES = Object.freeze([
   /\b(?:stock|gather|collect|prepare|secure)\b[\s\S]*\b(?:food|meals?|provisions?)\b/i,
   /\b(?:cook|smelt)\b/i,
@@ -339,6 +345,57 @@ function caveExpeditionPlan(playerName, message, context) {
           },
         ]
       : [exploreStep],
+  };
+}
+
+// Compile observation, durable memory, return, and guidance as one work order.
+// The language layer chooses only the requested finding categories; exact
+// coordinates are bound later from verified Minecraft state by the capability
+// catalogue and never guessed or replayed from model text.
+function scoutMemoryPlan(playerName, message, context) {
+  const text = normalizeMessage(message).trim();
+  if (!SCOUT_REQUEST_CUES.every(pattern => pattern.test(text))) return null;
+  const findings = [];
+  if (/\b(?:cave|cavern|underground entrance)\b/i.test(text)) findings.push('cave');
+  if (/\b(?:animal|animals|livestock|wildlife)\b/i.test(text)) findings.push('animal');
+  if (findings.length === 0) return null;
+
+  const guideClause = text.match(/\b(?:guide|lead|show|take)\b[\s\S]*?\b(cave|cavern|animal|animals|livestock|wildlife)\b/i);
+  const guideFinding = /^(?:cave|cavern)$/i.test(guideClause?.[1] || '')
+    ? 'cave'
+    : /^(?:animal|animals|livestock|wildlife)$/i.test(guideClause?.[1] || '')
+      ? 'animal'
+      : '';
+  if (!guideFinding || !findings.includes(guideFinding)) return null;
+
+  const bot = context?.bot;
+  const position = context?.requesterPosition;
+  const homeDimension = String(bot?.game?.dimension || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
+  if (!position || ![position.x, position.y, position.z].every(Number.isFinite) || !homeDimension) {
+    return { rejection: 'I could not bind that scout route to your current loaded position, so I did not start only part of it.' };
+  }
+  const requestedRadius = Number(text.match(/\b(?:within|radius(?:\s+of)?)\s+(\d{1,3})\s+blocks?\b/i)?.[1]);
+  const radius = Math.max(16, Math.min(128, Number.isFinite(requestedRadius) ? requestedRadius : 64));
+  return {
+    steps: [{
+      segment: text,
+      command: null,
+      response: `I will scout within ${radius} blocks, remember one verified ${findings.join(' and one verified ')}, return to you, then guide you to the ${guideFinding}.`,
+      entry: {
+        kind: 'scout',
+        requester: playerName,
+        findings,
+        guideFinding,
+        radius,
+        x: Math.floor(position.x),
+        y: Math.floor(position.y),
+        z: Math.floor(position.z),
+        homeDimension,
+      },
+    }],
   };
 }
 
@@ -743,6 +800,24 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const body = disposition === 'interrupt'
     ? (text.replace(INTERRUPT_LEADING, '').trim() || text)
     : text;
+  const scout = scoutMemoryPlan(playerName, body, context);
+  if (scout?.rejection) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: [],
+      unresolved: [],
+      rejection: scout.rejection,
+    };
+  }
+  if (scout?.steps) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: scout.steps,
+      unresolved: [],
+    };
+  }
   const resourceProject = resourceProjectPlan(playerName, body, context);
   if (resourceProject?.rejection) {
     return {

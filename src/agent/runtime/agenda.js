@@ -54,6 +54,7 @@ const DEPENDENCY_POLICIES = new Set(['requires_success', 'after_settlement']);
 const BINDING_KINDS = new Set(['world_block', 'structure_fixture']);
 const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
+const SCOUT_FINDINGS = new Set(['cave', 'animal']);
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
@@ -68,6 +69,12 @@ export const AGENDA_KINDS = Object.freeze({
   harvest: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   stockpile: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   explore: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true, needsPoint: true }),
+  // Scouting is one durable player outcome: observe requested world facts,
+  // remember their exact verified positions, return to the requester, then
+  // lead them to the requested finding. The job owns the whole route so live
+  // coordinates never have to leak through several independently settling
+  // agenda entries.
+  scout: Object.freeze({ executor: 'job', needsTarget: false, needsQuantity: false, needsPoint: true, needsRadius: true }),
   shelter: Object.freeze({ executor: 'job', needsTarget: false, needsQuantity: false }),
   // The model compiles custom geometry, but the persisted entry stores only a
   // typed barrier. AgendaDirector binds it to the exact accepted Builder order
@@ -412,11 +419,11 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (kind === 'explore' && !containerConstraint && raw.retainResults !== true) {
     throw new TypeError('An exploration step needs one exact home container.');
   }
-  const homeDimension = kind === 'explore'
+  const homeDimension = ['explore', 'scout'].includes(kind)
     ? canonical(raw.homeDimension || containerConstraint?.dimension)
     : '';
-  if (kind === 'explore' && !CANONICAL_NAME.test(homeDimension)) {
-    throw new TypeError('An exploration step needs one exact home dimension.');
+  if (['explore', 'scout'].includes(kind) && !CANONICAL_NAME.test(homeDimension)) {
+    throw new TypeError('An exploration or scout step needs one exact home dimension.');
   }
   if (kind === 'explore' && containerConstraint && containerConstraint.dimension !== homeDimension) {
     throw new TypeError('An exploration home dimension must match its selected container.');
@@ -483,6 +490,18 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   const requiredOutputs = kind === 'explore'
     ? normalizeExplorationOutputs(raw.requiredOutputs)
     : Object.freeze([]);
+  const scoutFindings = kind === 'scout'
+    ? Object.freeze([...new Set((Array.isArray(raw.findings) ? raw.findings : [])
+      .map(canonical)
+      .filter(value => SCOUT_FINDINGS.has(value)))])
+    : Object.freeze([]);
+  if (kind === 'scout' && scoutFindings.length === 0) {
+    throw new TypeError('A scout step needs at least one supported finding.');
+  }
+  const scoutGuideFinding = kind === 'scout' ? canonical(raw.guideFinding) : '';
+  if (scoutGuideFinding && !scoutFindings.includes(scoutGuideFinding)) {
+    throw new TypeError('A scout guide target must belong to its requested findings.');
+  }
   const reconciliationTarget = kind === 'inventory_checklist'
     ? canonical(raw.reconciliationTarget)
     : '';
@@ -505,14 +524,18 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     ...(['explore', 'prepare_food'].includes(kind) && raw.bestEffort === true ? { bestEffort: true } : {}),
     ...(kind === 'explore' && raw.retainResults === true ? { retainResults: true } : {}),
     ...(requiredOutputs.length > 0 ? { requiredOutputs } : {}),
+    ...(scoutFindings.length > 0 ? { findings: scoutFindings } : {}),
+    ...(scoutGuideFinding ? { guideFinding: scoutGuideFinding } : {}),
     completion,
     recipient: spec.needsRecipient ? recipient : '',
     requester,
-    radius: spec.needsRadius ? finiteInteger(raw.radius, 8, 2, 32) : 0,
+    radius: spec.needsRadius
+      ? finiteInteger(raw.radius, kind === 'scout' ? 64 : 8, 2, kind === 'scout' ? 128 : 32)
+      : 0,
     x: point ? point.x : 0,
     y: point ? point.y : 0,
     z: point ? point.z : 0,
-    ...(kind === 'explore' ? { homeDimension } : {}),
+    ...(['explore', 'scout'].includes(kind) ? { homeDimension } : {}),
     workstationConstraint: normalizedWorkstation
       ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
       : null,
@@ -572,6 +595,7 @@ export function describeAgendaEntry(entry) {
     case 'explore': return entry.retainResults
       ? `explore a cave, collect a useful ${entry.quantity}-${readable} batch containing ${entry.requiredOutputs.map(requirement => requirement.item.replace(/_/g, ' ')).join(' and ')}, and retain it`
       : `explore and light a cave, collect ${entry.quantity} ${readable}, return, and store the result`;
+    case 'scout': return `scout for ${entry.findings.join(' and ')}, remember the verified locations, return, and guide ${entry.requester} to ${entry.guideFinding || entry.findings[0]}`;
     case 'craft': return `craft ${entry.quantity} ${readable}`;
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';

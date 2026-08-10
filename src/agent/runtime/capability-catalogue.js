@@ -1,4 +1,5 @@
 import { createActionResult } from './action-result.js';
+import { isHuntable } from '../../utils/mcdata.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import {
   assessStableMiningCollectionTarget,
@@ -316,6 +317,7 @@ function bindNearbyCave(context, args) {
     .filter(position => (
       position
       && Math.hypot(position.x - args.home.x, position.z - args.home.z) >= 12
+      && Math.hypot(position.x - args.home.x, position.z - args.home.z) <= args.range
       && position.y <= args.home.y - 6
       && !targetExcluded(position, args.excludedTargets)
       && isSafeCaveStance(bot, position)
@@ -340,9 +342,17 @@ function bindNearbyCave(context, args) {
       const target = { name: 'cave_region', x: position.x, y: position.y, z: position.z };
       return immutable({
         ok: true,
-        commandName: '!lightCaveAt',
-        command: `!lightCaveAt(${position.x}, ${position.y}, ${position.z})`,
+        commandName: args.light ? '!lightCaveAt' : '!goToCoordinates',
+        command: args.light
+          ? `!lightCaveAt(${position.x}, ${position.y}, ${position.z})`
+          : `!goToCoordinates(${position.x}, ${position.y}, ${position.z}, 2)`,
+        light: args.light,
         target,
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        closeness: 2,
+        dimension: context.snapshot?.dimension || '',
         routeStatus: route.status,
         pathLength: route.pathLength,
         returnRouteStatus: route.returnStatus,
@@ -359,6 +369,55 @@ function bindNearbyCave(context, args) {
         : 'Observed cave stances had no non-destructive native route.'
       : 'No safe untried cave stance was observed in the bounded region.',
     target: fallbackTarget,
+  });
+}
+
+function bindUsefulAnimal(context, args) {
+  const bot = context?.bot;
+  const origin = context?.snapshot?.position;
+  const candidates = Object.values(bot?.entities || {})
+    .filter(entity => (
+      isHuntable(entity)
+      && entity?.position
+      && [entity.position.x, entity.position.y, entity.position.z].every(Number.isFinite)
+      && Math.hypot(
+        entity.position.x - args.home.x,
+        entity.position.y - args.home.y,
+        entity.position.z - args.home.z,
+      ) <= args.range
+    ))
+    .sort((left, right) => (
+      Math.hypot(
+        left.position.x - origin.x,
+        left.position.y - origin.y,
+        left.position.z - origin.z,
+      ) - Math.hypot(
+        right.position.x - origin.x,
+        right.position.y - origin.y,
+        right.position.z - origin.z,
+      )
+    ));
+  const entity = candidates[0];
+  if (!entity) {
+    return immutable({
+      ok: false,
+      code: 'source_not_found',
+      detail: 'No useful adult animal is currently observed in the bounded scout region.',
+      target: { name: 'useful_animal' },
+    });
+  }
+  const target = {
+    name: canonicalName(entity.name),
+    id: Number.isFinite(entity.id) ? entity.id : null,
+    x: entity.position.x,
+    y: entity.position.y,
+    z: entity.position.z,
+  };
+  return immutable({
+    ok: true,
+    commandName: '!searchForEntity',
+    command: `!searchForEntity(${commandString(target.name)}, ${args.range})`,
+    target,
   });
 }
 
@@ -478,22 +537,68 @@ function verifyReturnableExposedOreCollection(before, after, binding, { result }
   });
 }
 
-function verifyCaveSurvey(_before, _after, binding, { result } = {}) {
+function verifyCaveSurvey(_before, after, binding, { result } = {}) {
   const skill = result?.evidence?.skill;
+  const arrived = Boolean(
+    after?.position
+    && Math.hypot(
+      after.position.x - binding.target.x,
+      after.position.y - binding.target.y,
+      after.position.z - binding.target.z,
+    ) <= binding.closeness + 0.75
+  );
+  const verified = binding.light === false
+    ? arrived
+    : Boolean(
+      skill?.kind === 'cave_survey'
+      && ['cave_lit', 'already_lit'].includes(skill.outcome)
+      && skill?.target?.name === 'cave_region'
+      && ['x', 'y', 'z'].every(axis => Number(skill.target?.[axis]) === Number(binding.target?.[axis]))
+    );
+  return immutable({
+    ok: verified,
+    code: verified
+      ? binding.light === false ? 'cave_observation_verified' : 'cave_survey_verified'
+      : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? binding.light === false
+        ? 'Minecraft confirmed arrival at the selected safe, returnable cave stance.'
+        : 'Minecraft confirmed the selected cave stance was reached and lit.'
+      : binding.light === false
+        ? 'Minecraft did not confirm arrival at the selected cave stance.'
+        : 'Minecraft did not confirm lighting at the selected cave stance.',
+    target: binding.target,
+    torchesPlaced: Math.max(0, Number(skill?.torchesPlaced) || 0),
+  });
+}
+
+function verifyUsefulAnimal(_before, _after, binding, { agent, result } = {}) {
+  const skill = result?.evidence?.skill;
+  const observed = agent?.bot?.entities?.[binding.target?.id];
+  const target = observed?.position
+    ? {
+        name: canonicalName(observed.name),
+        id: observed.id,
+        x: observed.position.x,
+        y: observed.position.y,
+        z: observed.position.z,
+      }
+    : binding.target;
   const verified = Boolean(
-    skill?.kind === 'cave_survey'
-    && ['cave_lit', 'already_lit'].includes(skill.outcome)
-    && skill?.target?.name === 'cave_region'
-    && ['x', 'y', 'z'].every(axis => Number(skill.target?.[axis]) === Number(binding.target?.[axis]))
+    observed?.position
+    && isHuntable(observed)
+    && skill?.kind === 'movement'
+    && ['arrived', 'already_at_target'].includes(skill.outcome)
+    && Number(skill?.target?.id) === Number(binding.target?.id)
+    && [target.x, target.y, target.z].every(Number.isFinite)
   );
   return immutable({
     ok: verified,
-    code: verified ? 'cave_survey_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    code: verified ? 'useful_animal_observation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
     detail: verified
-      ? 'Minecraft confirmed the selected cave stance was reached and lit.'
-      : 'Minecraft did not confirm lighting at the selected cave stance.',
-    target: binding.target,
-    torchesPlaced: Math.max(0, Number(skill?.torchesPlaced) || 0),
+      ? `Minecraft confirmed the observed ${target.name} and its current location.`
+      : 'Minecraft did not confirm the bound useful animal at settlement.',
+    target,
   });
 }
 
@@ -803,22 +908,47 @@ defineCapability({
     home: { type: 'point' },
     range: { type: 'integer', minimum: 16, maximum: 128 },
     excludedTargets: { type: 'target_list', maximum: 24 },
+    light: { type: 'boolean' },
   },
   normalizeArguments: args => immutable({
     home: normalizePoint(args?.home),
     range: boundedInteger(args?.range, 64, 16, 128),
     excludedTargets: normalizeExcludedTargets(args?.excludedTargets),
+    light: args?.light !== false,
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: 'finite home-base position', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
     { requirement: 'connected cave observations', satisfied: Boolean(snapshot.position) },
-    { requirement: 'carried torch', satisfied: (Number(snapshot.inventory.get('torch')) || 0) > 0 },
+    { requirement: 'carried torch when lighting is requested', satisfied: !args.light || (Number(snapshot.inventory.get('torch')) || 0) > 0 },
   ]),
-  expectedEffects: () => [immutable({ kind: 'cave_route_lit' })],
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: args.light ? 'cave_route_lit' : 'cave_route_observed',
+  })],
   bind: bindNearbyCave,
   execute: executeBoundCommand,
   verify: verifyCaveSurvey,
   cost: (_snapshot, args) => Math.max(4, Math.ceil(args.range / 8)),
+});
+
+defineCapability({
+  id: 'observe_useful_animal',
+  parameters: {
+    home: { type: 'point' },
+    range: { type: 'integer', minimum: 16, maximum: 128 },
+  },
+  normalizeArguments: args => immutable({
+    home: normalizePoint(args?.home),
+    range: boundedInteger(args?.range, 64, 16, 128),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite scout origin', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
+    { requirement: 'connected entity observations', satisfied: Boolean(snapshot.position) },
+  ]),
+  expectedEffects: () => [immutable({ kind: 'useful_animal_observed' })],
+  bind: bindUsefulAnimal,
+  execute: executeBoundCommand,
+  verify: verifyUsefulAnimal,
+  cost: () => 2,
 });
 
 defineCapability({

@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { isPreemption } from './action-result.js';
 
-const ROLES = new Set(['builder', 'miner', 'lumberjack']);
-const KINDS = new Set(['stockpile', 'build', 'emergency_shelter', 'mine', 'harvest', 'explore']);
+const ROLES = new Set(['builder', 'miner', 'lumberjack', 'scout']);
+const KINDS = new Set(['stockpile', 'build', 'emergency_shelter', 'mine', 'harvest', 'explore', 'scout']);
 const SOURCES = new Set(['player', 'role', 'survival', 'restart']);
 const PHASES = new Set([
   'assess',
@@ -242,6 +242,7 @@ function normalizeCheckpoint(checkpoint) {
     'miningRegionRelocations',
     'corridorSearchLegs',
     'corridorRequirementProgress',
+    'scoutSearchRelocations',
   ]) {
     if (Number.isFinite(checkpoint[key])) normalized[key] = finiteInteger(checkpoint[key], 0, 0, 4096);
   }
@@ -255,6 +256,8 @@ function normalizeCheckpoint(checkpoint) {
   }
   if (checkpoint.caveLit === true) normalized.caveLit = true;
   if (checkpoint.caveLightingComplete === true) normalized.caveLightingComplete = true;
+  if (checkpoint.scoutReturned === true) normalized.scoutReturned = true;
+  if (checkpoint.scoutGuideComplete === true) normalized.scoutGuideComplete = true;
   if (checkpoint.bestEffort === true) normalized.bestEffort = true;
   if (checkpoint.retainResults === true) normalized.retainResults = true;
   if (checkpoint.miningRelocationPending === true) normalized.miningRelocationPending = true;
@@ -269,6 +272,27 @@ function normalizeCheckpoint(checkpoint) {
   }
   const homeDimension = boundedText(checkpoint.homeDimension, 64);
   if (CANONICAL_NAME.test(homeDimension)) normalized.homeDimension = homeDimension;
+  const scoutFindings = [...new Set((Array.isArray(checkpoint.scoutFindings)
+    ? checkpoint.scoutFindings
+    : [])
+    .map(value => boundedText(value, 32))
+    .filter(value => ['cave', 'animal'].includes(value)))];
+  if (scoutFindings.length > 0) normalized.scoutFindings = Object.freeze(scoutFindings);
+  const scoutGuideFinding = boundedText(checkpoint.scoutGuideFinding, 32);
+  if (scoutFindings.includes(scoutGuideFinding)) {
+    normalized.scoutGuideFinding = scoutGuideFinding;
+  }
+  for (const [prefix, includeName] of [['scoutCave', false], ['scoutAnimal', true]]) {
+    const coordinates = ['X', 'Y', 'Z'].map(axis => Number(checkpoint[`${prefix}${axis}`]));
+    if (!coordinates.every(Number.isFinite)) continue;
+    normalized[`${prefix}X`] = Math.floor(coordinates[0]);
+    normalized[`${prefix}Y`] = Math.floor(coordinates[1]);
+    normalized[`${prefix}Z`] = Math.floor(coordinates[2]);
+    if (includeName) {
+      const name = boundedText(checkpoint.scoutAnimalName, 64);
+      if (CANONICAL_NAME.test(name)) normalized.scoutAnimalName = name;
+    }
+  }
   const containerName = boundedText(checkpoint.containerName, 64);
   const containerDimension = boundedText(checkpoint.containerDimension, 64);
   const containerCoordinates = ['containerX', 'containerY', 'containerZ']
