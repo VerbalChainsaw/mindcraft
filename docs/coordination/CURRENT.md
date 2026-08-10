@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/commit: recovery/iron-pickaxe-20260803 / 84c70fe return-safe mining baseline plus additive diagnostic-continuation contract
-Milestone: deterministic mining corridors now preserve and retrace their complete accumulated route instead of excavating through earlier stairs
+Branch/commit: recovery/iron-pickaxe-20260803 / Resource-to-Project checkpoint (parent 0cd615e)
+Milestone: broad Resource-to-Project campaign physically accepted end to end
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: supervised exploration, deterministic mining access/return, inventory capacity, and truthful Agenda settlement
-Live blocker: the latest full-inventory coal leg exposed cobblestone provenance; source now distinguishes carried excavation debris from protected world cobblestone, but one integrated replay remains pending
-Last physical result: one unchanged run gained 6 raw iron and 4 coal, retraced from y23 to y111, returned beside LandingWitness at health 20; a second returned with +1 iron but failed coal capacity truthfully
+Owned subsystem: Home Stewardship through the existing capability engine and owned runtime packages
+Live blocker: none; next blocker must come from ordinary player-valued base use
+Last physical result: +9 raw iron/+9 coal expedition, iron pickaxe and bucket crafted, exact chest deposits verified, player return, health 20
 Runtime: Paper 1.21.11 healthy; IronSuiteProof Operator Stop-held; LandingWitness disconnected
-Next: use the next ordinary collection-heavy play request as the integrated capacity/return replay; do not reopen route architecture or invent a narrow campaign
+Next: freeze Resource-to-Project and begin one broad lived-in-outpost Home Stewardship request
 Jordan review: none; Director cancelled the external review gate for uninterrupted product work

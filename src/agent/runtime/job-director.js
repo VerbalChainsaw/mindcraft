@@ -90,12 +90,24 @@ function dimensionName(value) {
 function failedAcquisitionRecovery(step, result) {
   const method = String(step?.methodKey || '');
   if (!/^(?:collect|harvest):/.test(method)) return {};
-  if (result?.retryable !== true || !ACQUISITION_METHOD_FAILURE.test(String(result?.code || ''))) return {};
   const skillTarget = result?.evidence?.skill?.target;
   const target = [result?.target, skillTarget].find(candidate => (
     candidate?.name
     && [candidate.x, candidate.y, candidate.z].every(Number.isFinite)
   ));
+  const exactMiningTargetFailure = Boolean(
+    target
+    && result?.evidence?.skill?.kind === 'mining_search'
+    && result.evidence.skill.targetBound === true
+    && !['interrupted', 'return_route_failed'].includes(result.evidence.skill.outcome)
+  );
+  if (
+    result?.retryable !== true
+    || (
+      !ACQUISITION_METHOD_FAILURE.test(String(result?.code || ''))
+      && !exactMiningTargetFailure
+    )
+  ) return {};
   if (target) {
     return {
       failedMethod: method,

@@ -55,7 +55,8 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 - [x] The broad landing-area starter-supply request now compiles one complete model-selected output list into a durable typed Agenda before physical work begins. Each entry is a minimum carried floor rather than a blind additional quantity, and a final aggregate checklist restores any promise consumed by later work before allowing the return step. The full unchanged run independently gathered coal, crafted torches, reconciled both coal and torch floors after cross-step consumption, and returned with all four stone tools, 16 oak logs, 50 cobblestone, 8 coal, and 19 torches. A same-request repeat reverified the carried set and returned through native Pathfinder in 16 seconds. Paper observed the bot remain beside the player without movement for 15 seconds at health 20/full air; command-only autonomy now suppresses optional survival-lane debris collection while retaining bodily survival, self-defense, and player-defense.
 - [x] The unchanged natural request to set up a small shared work area and return now becomes one durable construction barrier followed by one typed player-return step. The model composed a bounded 33-cell structure with access, crafting, smelting, storage, and light through the generic design language; Builder completed it from carried inventory with zero productive failures, and Paper verified every cell under the authoritative placement contract before the bot returned beside the witness. Generic setup verbs, multiword worksite nouns, required-function guidance, curly punctuation, and return phrasing were repaired at shared language/Agenda boundaries. Command-only idle survival no longer invents optional shelter construction after terminal player work; a live night proof retained bodily survival and defense while the healthy bot stayed idle.
 - [x] Randomized supervised play then exercised one natural cave/iron/coal/return outcome. The request now remains one durable Explorer order plus a settlement-dependent return, retains every named resource, prevents terminal job replay, and uses native round-trip route proof for cave and exposed-ore stances. Owned Mineflayer placement receipts tolerate delayed authoritative cache updates, ordinary Pathfinder movement no longer builds towers or declares a stall before its own search horizon, and “surface” now means a stance with a native route to surrounding terrain rather than merely open sky. The live run preserved the worksite, increased coal from 8 to 10, failed missing iron honestly, climbed from the exact formerly false y70 surface to a usable y72 exit, and returned beside LandingWitness at health 20.
-- [~] The follow-on cave campaign now binds the existing deterministic mining-corridor strategy after exposed-cave exhaustion, protects every accumulated feet/head/support cell from later excavation, propagates that route contract through capability binding, and retraces exact cleared cells with native Pathfinder and digging disabled. One unchanged run increased raw iron from 23 to 29 and coal from 8 to 12, climbed the 116-cell route from y23 to y111 at health 20, and then completed the player-relative return. That run exposed and corrected duplicate static-home ownership for retained expeditions. A second fresh run returned safely but failed its coal leg when a full inventory contained mostly cobblestone; source now gives verified mining-capacity cleanup a separate carried-excavation-debris classification while world cobblestone remains non-clearable, and aligns the 12-slot request with a 12-action release ceiling. The final all-in-one replay remains pending and is deliberately delegated to the next ordinary collection-heavy play request rather than a third synthetic underground marathon.
+- [x] The follow-on cave campaign now binds the existing deterministic mining-corridor strategy after exposed-cave exhaustion, protects every accumulated feet/head/support cell from later excavation, propagates that route contract through capability binding, and retraces exact cleared cells with native Pathfinder and digging disabled. Its delegated all-in-one replay completed inside the broader Resource-to-Project request: the bot retained nine fresh raw iron and nine fresh coal from the expedition, returned over its saved route, manufactured the requested iron pickaxe and bucket, stored both in the exact chest, and returned to the player at health 20. Carried excavation debris can now fund bounded capacity recovery while world cobblestone remains protected.
+- [x] Resource-to-Project composition is physically accepted. One natural request became a durable generic Explorer order, two GoalDirector acquisitions, two exact deposits, and one player return; it added no item recipe, ore route, controller, or executor. The last blocker was not crafting logic: owned Pathfinder abstracted away which side of a partial fence collision cell the body occupied and advertised a first edge through the fence onto a furnace. The package now preserves the exact initial body pose, rejects collision-crossing first edges, retains real open-side and low-enclosure exits, and routes around the obstruction. Paper verified a second iron pickaxe and one bucket in the selected chest, the bot beside LandingWitness, health 20, and durable Operator Stop.
 - [ ] P1 package debt: table crafting still opens its window outside the `openBlock`/`openEntity` gate. Route that raw opener through the package generation boundary before a broad outcome requires crafting immediately after aborted container work; do not claim global UI serialization meanwhile.
 - [~] A successful campaign proves the shared path it exercised, not arbitrary repeatability or production readiness. The bot remains a research companion with known product gaps below.
 - [ ] Release readiness requires broad cross-domain repeatability, world stewardship, stable companion behavior, clean cancellation across dependency calls, and sustained unattended play.
@@ -91,7 +92,60 @@ The supervised-play entry gate has passed. The next objective is to turn the pro
 4. **Sustained truthful play:** run longer mixed companion sessions now. Exercise Stop/restart when ordinary play requires it, not as a ritual; fix stale ownership, misleading narration, or replay only when physically observed.
 5. **Broaden gameplay by outcomes:** add exploration, farming, combat, building, transport, and advanced mechanics through useful natural requests—not mechanic inventories or item-by-item certification.
 
-Known bounded defects remain visible without becoming preemptive projects: table crafting still bypasses the container-open generation gate; indefinite manufactured delivery may transfer only the parsed requested quantity rather than the full recipe batch; and runtime learning can rank sources but cannot yet switch between genuinely different acquisition strategies. Activate each only when the current broad playtest reaches it.
+Known bounded defects remain visible without becoming preemptive projects: table crafting still bypasses the container-open generation gate; indefinite manufactured delivery may transfer only the parsed requested quantity rather than the full recipe batch; runtime learning can rank sources but cannot yet switch between genuinely different acquisition strategies; planner workstation perception is capped below the executor's approach range; and identical retryable capability signatures can still be replayed across nested GoalDirector/Agenda budgets. Activate each only when broad play reaches it, except that a repeated identical signature must terminate or change method promptly if observed again.
+
+## Broad campaign program
+
+Gameplay expansion is organized into four player-valued campaign families, not
+individual recipes or mechanics:
+
+1. **Companion Journey:** travel with the player, remain close without
+   oscillation, cross ordinary terrain and water, protect the player, obey
+   interruption and Stop, and return safely.
+2. **Resource-to-Project:** gather raw materials, manage tools and inventory,
+   reuse or establish authorized infrastructure, manufacture a useful finished
+   outcome, store or deliver it, and return.
+3. **Home Stewardship:** use a lived-in base without damaging structures, paths,
+   farms, contents, or access; maintain and restock authorized shared fixtures.
+4. **Explore-Remember-Guide:** scout a bounded area, remember useful places and
+   observations, report truthfully, guide the player, and return home.
+
+Campaigns rotate one or two real stress conditions—authority changes, survival
+hazards, interruption/restart, another player, or resource scarcity—rather than
+running every permutation. Every campaign uses the same acceptance questions:
+did the requested world outcome exist; did player authority and Stop hold; was
+the world preserved; did long work make progress or change strategy promptly;
+did interruption avoid replay; and was the final report truthful?
+
+An ordinary run still repairs the first material shared blocker. An explicitly
+diagnostic run may continue after a fully settled safe failure under
+`docs/contracts/diagnostic-continuation-policy.md`, but scaffolded evidence never
+counts as acceptance. The unchanged unassisted Paper-verified request remains
+the final gate.
+
+### Completed lane: Resource-to-Project
+
+The active broad request is:
+
+> Stop, use this outpost as home. Find a cave and gather 8 fresh iron and 8
+> fresh coal without damaging our buildings or paths. Return, make an iron
+> pickaxe and bucket with our furnace and table, and store both tools in this
+> chest, then come back to me.
+
+This combined mining capacity with durable planning, strategy selection, tool
+and inventory management, smelting, crafting, bound infrastructure, exact
+storage, stewardship, player-relative return, and truthful settlement. The
+unchanged request passed physically on 2026-08-09 after the owned Pathfinder
+partial-collision start primitive was corrected. Freeze this campaign; do not
+turn its workstation arrangement or item quantities into new acceptance slices.
+
+### Next lane: Home Stewardship
+
+The next broad play should use the existing lived-in outpost as an ordinary
+shared base: reuse its fixtures and storage, preserve buildings, farm, paths,
+contents, and access, and complete one player-valued maintenance or restocking
+outcome. Let natural play choose the exact outcome and first blocker. Do not
+pre-author a furnace, chest, crop, or item permutation merely to certify it.
 
 ## Next-stage product program
 
@@ -104,7 +158,7 @@ The project is now in player-led capability expansion. These goals are ordered b
 5. **Broader player capability.** Add missing exploration, transport, farming, combat, building, and advanced-progression behavior only when a useful natural request reaches that domain. Grow the existing capability catalogue and owned packages at the demonstrated seam; never teach recipes one by one or introduce another executor.
 6. **Release readiness after playability.** Only after sustained single-companion sessions are dependable should the project spend a tranche on cross-session repeatability, packaging, operator UX, or additional bots. Release evidence must come from the exact shipped runtime rather than a parallel harness.
 
-The immediate working session begins with IronSuiteProof Operator Stop-held after the randomized cave/resource/return request preserved the worksite, collected coal, recovered to a genuinely usable surface, and returned to LandingWitness, but failed to find raw iron. Keep that unchanged broad request active. Add one planner-bindable deterministic acquisition alternative from the existing bounded mining-corridor capability, switch to it only after cave/exposed search produces comparable no-progress evidence, and rerun physically. This is a generic strategy-selection tranche, not an iron route, larger retry budget, learning framework, or new executor.
+The immediate working session begins with IronSuiteProof Operator Stop-held after the complete Resource-to-Project campaign. Freeze its collection, manufacturing, exact storage, and return path. Begin one ordinary Home Stewardship request in the lived-in outpost and repair only the first shared player-visible blocker it exposes. Preserve the package-first movement mandate, generic capability catalogue, one ActionManager executor, and broad-run acceptance rule.
 
 ## Remaining product tranches
 

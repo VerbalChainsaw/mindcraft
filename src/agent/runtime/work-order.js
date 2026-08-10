@@ -239,7 +239,9 @@ function normalizeCheckpoint(checkpoint) {
     'deliveryIndex',
     'deliveryOffset',
     'caveSearchRelocations',
+    'miningRegionRelocations',
     'corridorSearchLegs',
+    'corridorRequirementProgress',
   ]) {
     if (Number.isFinite(checkpoint[key])) normalized[key] = finiteInteger(checkpoint[key], 0, 0, 4096);
   }
@@ -255,8 +257,15 @@ function normalizeCheckpoint(checkpoint) {
   if (checkpoint.caveLightingComplete === true) normalized.caveLightingComplete = true;
   if (checkpoint.bestEffort === true) normalized.bestEffort = true;
   if (checkpoint.retainResults === true) normalized.retainResults = true;
+  if (checkpoint.miningRelocationPending === true) normalized.miningRelocationPending = true;
+  const lastFailedTargetActionId = boundedText(checkpoint.lastFailedTargetActionId, 96);
+  if (lastFailedTargetActionId) normalized.lastFailedTargetActionId = lastFailedTargetActionId;
   if (['exposed_cave', 'mining_corridor'].includes(checkpoint.acquisitionStrategy)) {
     normalized.acquisitionStrategy = checkpoint.acquisitionStrategy;
+  }
+  const corridorRequirementItem = boundedText(checkpoint.corridorRequirementItem, 64);
+  if (CANONICAL_NAME.test(corridorRequirementItem)) {
+    normalized.corridorRequirementItem = corridorRequirementItem;
   }
   const homeDimension = boundedText(checkpoint.homeDimension, 64);
   if (CANONICAL_NAME.test(homeDimension)) normalized.homeDimension = homeDimension;
@@ -556,6 +565,7 @@ export function workOrderCollectionExclusions(order, requestedName = null) {
       ) <= 8
     ));
     return {
+      name: target.name,
       x: Math.floor(target.x),
       y: Math.floor(target.y),
       z: Math.floor(target.z),
@@ -769,6 +779,7 @@ export function advanceWorkOrder(order, result, {
         checkpoint: {
           ...current.checkpoint,
           failedTargets: [...(current.checkpoint.failedTargets || []), target].slice(-MAX_FAILED_TARGETS),
+          lastFailedTargetActionId: result.actionId,
           ...(failedMethods ? { failedMethods } : {}),
         },
         evidence: { code: result.code, detail: result.detail, actionId: result.actionId },

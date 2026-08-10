@@ -249,6 +249,52 @@ test('parsePlayerAgenda preserves the complete cave expedition as one durable wo
   assert.equal(persistedRetainedStep.containerConstraint, undefined);
 });
 
+test('parsePlayerAgenda composes a broad resource project from generic typed capabilities', () => {
+  const chest = { name: 'chest', position: { x: 8104, y: 69, z: 7940 } };
+  const names = ['iron_pickaxe', 'bucket'];
+  const bot = {
+    entity: { position: { x: 8105.5, y: 69, z: 7938.5 } },
+    game: { dimension: 'overworld' },
+    registry: {
+      itemsByName: Object.fromEntries(names.map(name => [name, {
+        name,
+        displayName: name.replaceAll('_', ' '),
+      }])),
+    },
+    findBlock: ({ matching }) => matching(chest) ? chest : null,
+  };
+  const plan = parsePlayerAgenda(
+    'LandingWitness',
+    'Stop, use this outpost as home. Find a cave and gather 8 fresh iron and 8 fresh coal without damaging our buildings or paths. Return, make an iron pickaxe and bucket with our furnace and table, and store both tools in this chest, then come back to me.',
+    { bot },
+  );
+
+  assert.ok(plan);
+  assert.equal(plan.disposition, 'interrupt');
+  assert.equal(plan.multiStep, true);
+  assert.deepEqual(plan.steps.map(step => [step.entry.kind, step.entry.target]), [
+    ['explore', 'ores'],
+    ['acquire', 'iron_pickaxe'],
+    ['acquire', 'bucket'],
+    ['deposit', 'iron_pickaxe'],
+    ['deposit', 'bucket'],
+    ['goto', undefined],
+  ]);
+  assert.deepEqual(plan.steps[0].entry.requiredOutputs, [
+    { source: 'iron_ore', item: 'raw_iron', quantity: 8 },
+    { source: 'coal_ore', item: 'coal', quantity: 8 },
+  ]);
+  assert.equal(plan.steps[0].entry.quantity, 16);
+  assert.ok(plan.steps.slice(1, -1).every(step => step.dependency?.policy === 'requires_success'));
+  assert.equal(plan.steps.at(-1).dependency.policy, 'after_settlement');
+  assert.ok(plan.steps.slice(3, 5).every(step => (
+    step.entry.containerConstraint.position.x === chest.position.x
+    && step.entry.containerConstraint.position.y === chest.position.y
+    && step.entry.containerConstraint.position.z === chest.position.z
+  )));
+  assert.deepEqual(plan.unresolved, []);
+});
+
 test('parsePlayerAgenda preserves additional food preparation and exact storage as one durable plan', () => {
   const chest = { name: 'chest', position: { x: 8104, y: 69, z: 7940 } };
   const furnace = { name: 'furnace', position: { x: 8102, y: 70, z: 7938 } };

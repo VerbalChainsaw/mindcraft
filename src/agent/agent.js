@@ -649,6 +649,18 @@ export class Agent {
         try { this.bot.pathfinder.setGoal(null); } catch { /* no pathfinder goal */ }
         try { this.bot.pvp.stop(); } catch { /* no combat target */ }
         try { this.bot.deactivateItem(); } catch { /* no active item */ }
+        // Sleeping is a physical Mineflayer owner just like digging,
+        // Pathfinder, combat, and an open window. A noncritical sleep action
+        // must yield to Stop even if the higher-level sleep loop has not yet
+        // reached its next cancellation poll.
+        try {
+            if (this.bot.isSleeping) {
+                const waking = this.bot.wake?.();
+                if (waking && typeof waking.catch === 'function') {
+                    void waking.catch(() => { /* entityWake remains authoritative */ });
+                }
+            }
+        } catch { /* already awake or disconnected */ }
         // An open container or crafting window survives every other
         // cancellation here, and a bot holding one cannot be moved. Closing it
         // is what lets a reflex actually take the body back mid-craft.

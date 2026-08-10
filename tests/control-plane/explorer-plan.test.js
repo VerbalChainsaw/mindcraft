@@ -144,6 +144,8 @@ test('Explorer composes preparation, cave survey, exposed ore, exact return, and
   assert.equal(switchStrategy.phase, 'execute');
   assert.equal(switchStrategy.code, 'expedition_strategy_changed');
   assert.equal(switchStrategy.checkpoint.acquisitionStrategy, 'mining_corridor');
+  assert.equal(switchStrategy.checkpoint.corridorRequirementItem, 'raw_iron');
+  assert.equal(switchStrategy.checkpoint.corridorRequirementProgress, 0);
 
   const corridorOrder = normalizeWorkOrder({
     ...retainedOrder,
@@ -162,6 +164,102 @@ test('Explorer composes preparation, cave survey, exposed ore, exact return, and
     preservedReturnRoute: [],
   });
 
+  const excludeFailedOreTarget = nextExplorerStep(normalizeWorkOrder({
+    ...corridorOrder,
+    phase: 'recover',
+    resumePhase: 'execute',
+    checkpoint: {
+      ...corridorOrder.checkpoint,
+      failedTargets: [{ name: 'iron_ore', x: 44, y: 15, z: 22 }],
+      lastFailedTargetActionId: 'unsafe-iron-stance',
+    },
+    evidence: {
+      code: 'skill_stance_unverified',
+      detail: 'The exact target approach settled safely without a usable mining stance.',
+      actionId: 'unsafe-iron-stance',
+    },
+  }), {
+    inventory: { raw_iron: 2 },
+    y: 16,
+  }, null, {
+    planItem: () => ({ status: 'complete' }),
+  });
+  assert.equal(excludeFailedOreTarget.capability.id, 'advance_mining_corridor');
+  assert.deepEqual(excludeFailedOreTarget.capability.arguments.excludedTargets, [{
+    name: 'iron_ore',
+    x: 44,
+    y: 15,
+    z: 22,
+    radius: 4,
+  }]);
+
+  const blockedDepth = normalizeWorkOrder({
+    ...corridorOrder,
+    phase: 'recover',
+    resumePhase: 'execute',
+    checkpoint: {
+      ...corridorOrder.checkpoint,
+      caveSearchRelocations: 2,
+      miningReturnRoute: [
+        { x: 58, y: 70, z: 20 },
+        { x: 60, y: 64, z: 20 },
+      ],
+    },
+    evidence: {
+      code: 'skill_no_safe_depth_corridor',
+      detail: 'The local staircase reached a flooded cave boundary.',
+      actionId: 'depth-flooded',
+    },
+  });
+  const planDifferentRegion = nextExplorerStep(blockedDepth, {
+    inventory: { raw_iron: 2, torch: 8 },
+    x: 60,
+    y: 48,
+    z: 20,
+  }, null, { planItem: () => ({ status: 'complete' }) });
+  assert.equal(planDifferentRegion.phase, 'recover');
+  assert.equal(planDifferentRegion.code, 'mining_region_change_planned');
+  assert.equal(planDifferentRegion.checkpoint.miningRelocationPending, true);
+
+  const pendingRelocation = normalizeWorkOrder({
+    ...blockedDepth,
+    checkpoint: planDifferentRegion.checkpoint,
+  });
+  const relocateMiningRegion = nextExplorerStep(pendingRelocation, {
+    inventory: { raw_iron: 2, torch: 8 },
+    x: 60,
+    y: 48,
+    z: 20,
+  }, null, { planItem: () => ({ status: 'complete' }) });
+  assert.equal(relocateMiningRegion.capability.id, 'relocate_search_region');
+  assert.deepEqual(relocateMiningRegion.capability.arguments, {
+    x: 10,
+    y: 70,
+    z: -28,
+    closeness: 8,
+    minimumDisplacement: 16,
+    dimension: 'overworld',
+  });
+  assert.equal(relocateMiningRegion.recoveryAction, true);
+  assert.equal(relocateMiningRegion.checkpointOnSuccess.miningRegionRelocations, 1);
+  assert.equal(relocateMiningRegion.checkpointOnSuccess.miningRelocationPending, false);
+  assert.deepEqual(relocateMiningRegion.checkpointOnSuccess.miningReturnRoute, []);
+
+  const retrySameRelocation = nextExplorerStep(normalizeWorkOrder({
+    ...pendingRelocation,
+    evidence: {
+      code: 'skill_unreachable',
+      detail: 'The route to the new region was temporarily blocked.',
+      actionId: 'region-route-1',
+    },
+  }), {
+    inventory: { raw_iron: 2, torch: 8 },
+    x: 60,
+    y: 48,
+    z: 20,
+  }, null, { planItem: () => ({ status: 'complete' }) });
+  assert.deepEqual(retrySameRelocation.capability.arguments, relocateMiningRegion.capability.arguments);
+
   const advanceCorridor = nextExplorerStep(corridorOrder, {
     inventory: { raw_iron: 2 },
     y: 16,
@@ -172,10 +270,22 @@ test('Explorer composes preparation, cave survey, exposed ore, exact return, and
     output: 'raw_iron',
     length: 8,
     preservedReturnRoute: [],
+    excludedTargets: [],
   });
   assert.equal(advanceCorridor.checkpointOnSuccess.corridorSearchLegs, 1);
 
-  const reuseCurrentDepthForCoal = nextExplorerStep(corridorOrder, {
+  const switchCurrentDepthToCoal = nextExplorerStep(corridorOrder, {
+    inventory: { raw_iron: 3 },
+    y: 16,
+  });
+  assert.equal(switchCurrentDepthToCoal.phase, 'execute');
+  assert.equal(switchCurrentDepthToCoal.code, 'expedition_corridor_requirement_changed');
+  assert.equal(switchCurrentDepthToCoal.checkpoint.corridorRequirementItem, 'coal');
+  assert.equal(switchCurrentDepthToCoal.checkpoint.corridorSearchLegs, 0);
+  const reuseCurrentDepthForCoal = nextExplorerStep(normalizeWorkOrder({
+    ...corridorOrder,
+    checkpoint: switchCurrentDepthToCoal.checkpoint,
+  }), {
     inventory: { raw_iron: 3 },
     y: 16,
   });
@@ -185,7 +295,28 @@ test('Explorer composes preparation, cave survey, exposed ore, exact return, and
     output: 'coal',
     length: 8,
     preservedReturnRoute: [],
+    excludedTargets: [],
   });
+
+  const resetAfterVerifiedIron = nextExplorerStep(normalizeWorkOrder({
+    ...corridorOrder,
+    checkpoint: {
+      ...corridorOrder.checkpoint,
+      requiredOutputs: [
+        { source: 'iron_ore', item: 'raw_iron', quantity: 3 },
+        { source: 'coal_ore', item: 'coal', quantity: 1 },
+      ],
+      corridorRequirementItem: 'raw_iron',
+      corridorRequirementProgress: 0,
+      corridorSearchLegs: 7,
+    },
+  }), {
+    inventory: { raw_iron: 4 },
+    y: 16,
+  });
+  assert.equal(resetAfterVerifiedIron.code, 'expedition_corridor_output_progressed');
+  assert.equal(resetAfterVerifiedIron.checkpoint.corridorRequirementProgress, 2);
+  assert.equal(resetAfterVerifiedIron.checkpoint.corridorSearchLegs, 0);
 
   const corridorComplete = nextExplorerStep(corridorOrder, {
     inventory: { raw_iron: 3, coal: 7 },

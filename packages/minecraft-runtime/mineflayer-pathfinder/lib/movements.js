@@ -693,6 +693,66 @@ class Movements {
     neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'climb_up'))
   }
 
+  startTransitionIsExecutable (node, neighbor) {
+    const start = node?.physicalStart
+    if (!start || !neighbor) return true
+
+    const sourcePosition = new Vec3(
+      Math.floor(start.x),
+      Math.floor(start.y),
+      Math.floor(start.z)
+    )
+    const sourceBlock = this.bot.blockAt(sourcePosition, false)
+    if (!sourceBlock?.position || !Array.isArray(sourceBlock.shapes) || sourceBlock.shapes.length === 0) return true
+
+    const width = Number(start.width)
+    const height = Number(start.height)
+    const halfWidth = Number.isFinite(width) && width > 0 ? width / 2 : 0.3
+    const bodyHeight = Number.isFinite(height) && height > 0 ? height : 1.8
+    const target = {
+      x: neighbor.x + 0.5,
+      y: neighbor.y,
+      z: neighbor.z + 0.5
+    }
+    const sweep = {
+      minX: Math.min(start.x, target.x) - halfWidth,
+      maxX: Math.max(start.x, target.x) + halfWidth,
+      minY: Math.min(start.y, target.y),
+      maxY: Math.max(start.y, target.y) + bodyHeight,
+      minZ: Math.min(start.z, target.z) - halfWidth,
+      maxZ: Math.max(start.z, target.z) + halfWidth
+    }
+    const locomotion = neighbor.locomotion?.type
+    const canJumpClear = locomotion === 'step_up' || locomotion === 'drop_down'
+    const jumpHeight = 1.25
+    const epsilon = 1e-6
+
+    return !sourceBlock.shapes.some(shape => {
+      if (!Array.isArray(shape) || shape.length < 6 || !shape.every(Number.isFinite)) return true
+      const collision = {
+        minX: sourceBlock.position.x + shape[0],
+        minY: sourceBlock.position.y + shape[1],
+        minZ: sourceBlock.position.z + shape[2],
+        maxX: sourceBlock.position.x + shape[3],
+        maxY: sourceBlock.position.y + shape[4],
+        maxZ: sourceBlock.position.z + shape[5]
+      }
+      const overlapsSweep = sweep.minX < collision.maxX - epsilon &&
+        sweep.maxX > collision.minX + epsilon &&
+        sweep.minY < collision.maxY - epsilon &&
+        sweep.maxY > collision.minY + epsilon &&
+        sweep.minZ < collision.maxZ - epsilon &&
+        sweep.maxZ > collision.minZ + epsilon
+      if (!overlapsSweep) return false
+
+      // Native jump execution can leave low enclosing blocks such as a
+      // cauldron. A fence or wall rises 1.5 blocks above the feet and cannot
+      // be cleared by the ordinary 1.25-block jump, so that edge must not enter
+      // the graph in the first place.
+      return !canJumpClear || collision.maxY - start.y > jumpHeight + epsilon
+    })
+  }
+
   // Jump up, down or forward over a 1 block gap
   getMoveParkourForward (node, dir, neighbors) {
     const block0 = this.getBlock(node, 0, -1, 0)
@@ -810,7 +870,9 @@ class Movements {
     // exit must be represented by an ordinary supported horizontal node.
     this.getMoveClimbUpThroughTrapdoor(node, neighbors)
 
-    return neighbors
+    return node?.physicalStart
+      ? neighbors.filter(neighbor => this.startTransitionIsExecutable(node, neighbor))
+      : neighbors
   }
 
   // Update lava avoidance based on bot's current state

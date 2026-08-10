@@ -217,9 +217,18 @@ index 0000000..b07cd65
 +  DEFAULT_RESPONSE_HORIZON_MS
 +}
 diff --git a/node_modules/mineflayer/lib/plugins/bed.js b/node_modules/mineflayer/lib/plugins/bed.js
-index 9b526f6..fdfd96f 100644
+index 9b526f6..5cf1720 100644
 --- a/node_modules/mineflayer/lib/plugins/bed.js
 +++ b/node_modules/mineflayer/lib/plugins/bed.js
+@@ -70,7 +70,7 @@ function inject (bot) {
+     } else {
+       bot._client.write('entity_action', {
+         entityId: bot.entity.id,
+-        actionId: 2,
++        actionId: 'leave_bed',
+         jumpBoost: 0
+       })
+     }
 @@ -147,22 +147,40 @@ function inject (bot) {
        }
 

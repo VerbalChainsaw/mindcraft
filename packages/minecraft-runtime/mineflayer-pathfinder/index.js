@@ -109,6 +109,21 @@ function inject (bot) {
       )
       const offset = (dy > 0.001 && bot.entity.onGround && hasStandingSurface) ? 1 : 0
       start = new Move(p.x, p.y + offset, p.z, movements.countScaffoldingItems(), 0)
+      // A legal Minecraft body can share a block coordinate with a partial
+      // collision shape while standing beside it. A fence is the common case:
+      // floor(position) names the fence cell even though the body is outside
+      // its narrow collision arms. The abstract start node alone loses which
+      // side the body occupies and may advertise an impossible first edge
+      // straight through the shape. Preserve the exact body pose only on the
+      // first graph node so Movements can reject that false transition without
+      // changing ordinary block-to-block path expansion.
+      start.physicalStart = {
+        x: startPos.x,
+        y: startPos.y,
+        z: startPos.z,
+        width: bot.entity?.width,
+        height: bot.entity?.height
+      }
     }
     if (movements.allowEntityDetection) {
       if (resetEntityIntersects) {

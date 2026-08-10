@@ -245,6 +245,7 @@ function normalizeExcludedTargets(value) {
       x: Number(target?.x),
       y: Number(target?.y),
       z: Number(target?.z),
+      radius: Math.max(0, Math.min(16, Math.floor(Number(target?.radius) || 0))),
     }))
     .filter(target => [target.x, target.y, target.z].every(Number.isFinite)));
 }
@@ -762,12 +763,14 @@ defineCapability({
     output: { type: 'item_name' },
     length: { type: 'integer', minimum: 4, maximum: 32 },
     preservedReturnRoute: { type: 'point_list', maximum: 512 },
+    excludedTargets: { type: 'target_list', maximum: 24 },
   },
   normalizeArguments: args => immutable({
     source: canonicalName(args?.source),
     output: canonicalName(args?.output),
     length: boundedInteger(args?.length, 8, 4, 32),
     preservedReturnRoute: normalizeMiningReturnRoute(args?.preservedReturnRoute),
+    excludedTargets: normalizeExcludedTargets(args?.excludedTargets),
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: `registered mining source ${args.source}`, satisfied: validName(args.source) && snapshot.hasBlock(args.source) },
@@ -786,6 +789,7 @@ defineCapability({
     source: args.source,
     output: args.output,
     preservedReturnRouteCells: args.preservedReturnRoute.length,
+    excludedTargets: args.excludedTargets,
     target: { name: args.source },
   }),
   execute: executeBoundCommand,

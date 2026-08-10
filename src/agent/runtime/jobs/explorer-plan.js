@@ -1,5 +1,6 @@
 import { createCapabilityRequest } from '../capability-catalogue.js';
 import { familyEntriesFromCounts } from '../item-family.js';
+import { workOrderCollectionExclusions } from '../work-order.js';
 import {
   downwardMiningDepthTarget,
   miningKnowledge,
@@ -10,6 +11,7 @@ const PREPARED_TORCHES = 8;
 const PICKAXE_DURABILITY_RESERVE = 48;
 const CAVE_SEARCH_RELOCATION_DISTANCE = 48;
 const RETAINED_CAVE_SEARCH_RELOCATIONS = 2;
+const MAX_MINING_REGION_RELOCATIONS = 2;
 const MINING_CORRIDOR_LENGTH = 8;
 const MAX_MINING_CORRIDOR_LEGS = 8;
 const PICKAXE_TIER = Object.freeze({
@@ -227,6 +229,7 @@ function caveSearchRelocationStep(order, snapshot) {
     : CAVE_SEARCH_DIRECTIONS.length;
   if (completed >= relocationLimit) {
     if (retainedRequirements.length > 0) {
+      const requirement = outstandingRequirements(snapshot, order.checkpoint)[0] || null;
       return {
         phase: 'execute',
         code: 'expedition_strategy_changed',
@@ -236,6 +239,14 @@ function caveSearchRelocationStep(order, snapshot) {
           caveLit: false,
           acquisitionStrategy: 'mining_corridor',
           corridorSearchLegs: 0,
+          ...(requirement ? {
+            corridorRequirementItem: requirement.item,
+            corridorRequirementProgress: requirementProgress(
+              snapshot,
+              order.checkpoint,
+              requirement,
+            ),
+          } : {}),
         },
         target: {
           name: 'mining_corridor',
@@ -276,6 +287,56 @@ function caveSearchRelocationStep(order, snapshot) {
     checkpointOnSuccess: {
       ...order.checkpoint,
       caveSearchRelocations: completed + 1,
+    },
+  });
+}
+
+function miningRegionRelocationStep(order) {
+  const checkpoint = order.checkpoint || {};
+  const completed = Math.max(0, Number(checkpoint.miningRegionRelocations) || 0);
+  if (completed >= MAX_MINING_REGION_RELOCATIONS) {
+    return {
+      terminal: true,
+      code: 'mining_strategy_exhausted',
+      detail: order.evidence?.detail || 'No safe deterministic mining corridor was available in the bounded alternative regions.',
+      retryable: false,
+    };
+  }
+
+  // Continue the same deterministic region sequence used by cave search so a
+  // failed depth corridor cannot send the bot back to a region it just ruled
+  // out. Relocation remains an existing bounded recovery capability; it does
+  // not move navigation or excavation policy into Explorer.
+  const priorRegions = Math.max(0, Number(checkpoint.caveSearchRelocations) || 0);
+  const [directionX, directionZ] = CAVE_SEARCH_DIRECTIONS[
+    (priorRegions + completed) % CAVE_SEARCH_DIRECTIONS.length
+  ];
+  const directionLength = Math.hypot(directionX, directionZ);
+  const x = Math.round(order.target.x + (
+    (CAVE_SEARCH_RELOCATION_DISTANCE * directionX) / directionLength
+  ));
+  const z = Math.round(order.target.z + (
+    (CAVE_SEARCH_RELOCATION_DISTANCE * directionZ) / directionLength
+  ));
+  return createCapabilityRequest('relocate_search_region', {
+    x,
+    y: order.target.y,
+    z,
+    closeness: 8,
+    minimumDisplacement: 16,
+    dimension: checkpoint.homeDimension,
+  }, {
+    nextPhase: 'execute',
+    code: 'mining_region_relocation',
+    target: { name: 'mining_search_region', x, y: order.target.y, z },
+    keepAnchor: true,
+    recoveryAction: true,
+    checkpointOnSuccess: {
+      ...checkpoint,
+      miningRegionRelocations: completed + 1,
+      miningRelocationPending: false,
+      corridorSearchLegs: 0,
+      miningReturnRoute: [],
     },
   });
 }
@@ -330,6 +391,30 @@ function miningCorridorStep(order, snapshot) {
       retryable: false,
     };
   }
+  const currentRequirementProgress = requirementProgress(
+    snapshot,
+    order.checkpoint,
+    requirement,
+  );
+  if (
+    order.checkpoint?.corridorRequirementItem !== requirement.item
+    || currentRequirementProgress > (
+      Number(order.checkpoint?.corridorRequirementProgress) || 0
+    )
+  ) {
+    return {
+      phase: 'execute',
+      code: order.checkpoint?.corridorRequirementItem === requirement.item
+        ? 'expedition_corridor_output_progressed'
+        : 'expedition_corridor_requirement_changed',
+      checkpoint: {
+        ...order.checkpoint,
+        corridorRequirementItem: requirement.item,
+        corridorRequirementProgress: currentRequirementProgress,
+        corridorSearchLegs: 0,
+      },
+    };
+  }
   const depthTarget = downwardMiningDepthTarget(knowledge, snapshot.y, 8);
   if (depthTarget !== null) {
     return createCapabilityRequest('reach_mining_depth', {
@@ -364,6 +449,7 @@ function miningCorridorStep(order, snapshot) {
     output: miningOutputName(requirement.source),
     length: MINING_CORRIDOR_LENGTH,
     preservedReturnRoute: order.checkpoint?.miningReturnRoute || [],
+    excludedTargets: workOrderCollectionExclusions(order),
   }, {
     methodKey: `collect:mining_corridor->${requirement.item}`,
     nextPhase: 'execute',
@@ -373,6 +459,8 @@ function miningCorridorStep(order, snapshot) {
     checkpointOnSuccess: {
       ...order.checkpoint,
       corridorSearchLegs: completedLegs + 1,
+      corridorRequirementItem: requirement.item,
+      corridorRequirementProgress: currentRequirementProgress,
     },
   });
 }
@@ -567,17 +655,57 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
       if (checkpoint.acquisitionStrategy === 'mining_corridor') {
         const prerequisite = prerequisiteStep(order, planItem);
         if (prerequisite) return prerequisite;
-        if (/(?:corridor_search_exhausted|no_safe_depth_corridor|return_route_failed|stance_unverified|inventory_full)/.test(String(order.evidence?.code || ''))) {
+        if (checkpoint.miningRelocationPending === true) {
+          return miningRegionRelocationStep(order);
+        }
+        if (
+          checkpoint.lastFailedTargetActionId
+          && checkpoint.lastFailedTargetActionId === order.evidence?.actionId
+        ) {
+          // The physical adapter safely settled after rejecting one exact ore
+          // approach. Its coordinate is already in failedTargets, so rebind a
+          // different target instead of declaring the whole mining strategy
+          // exhausted or relocating away from otherwise productive terrain.
+          return executionStep({ ...order, phase: 'execute' }, snapshot, planItem);
+        }
+        const corridorFailure = /(?:corridor_search_exhausted|no_safe_depth_corridor|return_route_failed|stance_unverified|inventory_full|non_convergent_depth_route|preserved_route_endpoint_unreachable|open_route_settlement_failed)/
+          .test(String(order.evidence?.code || ''));
+        if (corridorFailure) {
           const partial = bestEffortDelivery(
             order,
             snapshot,
             'expedition_best_effort_corridor_complete',
           );
           if (partial) return partial;
+        }
+        if (/(?:corridor_search_exhausted|no_safe_depth_corridor)/.test(String(order.evidence?.code || ''))) {
+          const completedRelocations = Math.max(
+            0,
+            Number(checkpoint.miningRegionRelocations) || 0,
+          );
+          if (completedRelocations < MAX_MINING_REGION_RELOCATIONS) {
+            return {
+              phase: 'recover',
+              code: 'mining_region_change_planned',
+              detail: 'The local mining corridor is unsafe or exhausted; returning through settled geometry and binding a different region.',
+              checkpoint: {
+                ...checkpoint,
+                miningRelocationPending: true,
+              },
+            };
+          }
           return {
             terminal: true,
             code: 'mining_strategy_exhausted',
             detail: order.evidence?.detail || 'The deterministic mining-corridor strategy cannot make safe progress from this region.',
+            retryable: false,
+          };
+        }
+        if (/(?:return_route_failed|stance_unverified|inventory_full|non_convergent_depth_route|preserved_route_endpoint_unreachable|open_route_settlement_failed)/.test(String(order.evidence?.code || ''))) {
+          return {
+            terminal: true,
+            code: 'mining_strategy_exhausted',
+            detail: order.evidence?.detail || 'The deterministic mining-corridor strategy cannot settle safely.',
             retryable: false,
           };
         }

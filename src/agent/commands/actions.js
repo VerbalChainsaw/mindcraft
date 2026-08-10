@@ -769,6 +769,7 @@ export const actionsList = [
             return await skills.mineSearchTunnel(agent.bot, resource_name, length, null, {
                 preservedReturnRoute: activeMiningReturnRoute(agent),
                 expectedProtectedRouteCells: protected_route_cells,
+                excludedTargets: collectionExclusionsForAgent(agent, resource_name),
             });
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },

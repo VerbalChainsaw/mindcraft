@@ -74,6 +74,8 @@ const SEGMENT_DELIMITER = '\u0000';
 const COLLECTIVE_DELIVERY = /^(?:please\s+)?(?:make|craft|prepare)\s+(?:me\s+)?([\s\S]+?)(?:,\s*)?(?:and\s+)?then\s+(?:bring|deliver|give)\s+(?:them|those|all(?:\s+of\s+them)?)\s+(?:here|to\s+me)\s*[.!?]*$/i;
 const MANUFACTURE_VERB = /\b(?:make|craft|prepare)\b/i;
 const COLLECTIVE_STORAGE_TAIL = /(?:[,;\u2014\u2013-]\s*|\s+)\band\s+((?:store|put|stash|deposit)\b[\s\S]*)$/i;
+const RESOURCE_PROJECT_STORAGE_TAIL = /(?:[,;\u2014\u2013-]\s*|\s+)(?:and\s+)?((?:store|put|stash|deposit)\b[\s\S]*)$/i;
+const WORKSTATION_QUALIFIER = /\s+(?:using|with)\s+(?:(?:the|our|this|nearby|existing)\s+)*(?:furnace|crafting\s+table|table|workstations?)\b[\s\S]*$/i;
 const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 const CAVE_EXPEDITION_CUES = Object.freeze([
   /\bexplore\b/i,
@@ -297,17 +299,7 @@ function caveExpeditionPlan(playerName, message, context) {
   }
   const explicitQuantity = text.match(/\b(\d{1,3})\s+(?:useful\s+)?(?:exposed\s+)?ores?\b/i);
   const requiredOutputs = retainedExpedition
-    ? resourceMentions.map((mention, index) => {
-        const previousEnd = index > 0
-          ? resourceMentions[index - 1].index + resourceMentions[index - 1].label.length
-          : Math.max(0, text.search(/\b(?:collect|gather|mine)\b/i));
-        const quantityScope = text.slice(previousEnd, mention.index + mention.label.length);
-        return {
-          source: mention.target,
-          item: miningOutputName(mention.target),
-          quantity: requestedQuantity(quantityScope) || 1,
-        };
-      })
+    ? miningOutputRequirements(text, resourceMentions)
     : [];
   const namedQuantity = requiredOutputs.reduce((total, requirement) => total + requirement.quantity, 0);
   const bestEffort = !explicitQuantity && requiredOutputs.every(requirement => requirement.quantity === 1);
@@ -350,19 +342,139 @@ function caveExpeditionPlan(playerName, message, context) {
   };
 }
 
-function listedManufacturedOutputs(value, bot) {
+function miningOutputRequirements(text, resourceMentions) {
+  return resourceMentions.map((mention, index) => {
+    const previousEnd = index > 0
+      ? resourceMentions[index - 1].index + resourceMentions[index - 1].label.length
+      : Math.max(0, text.search(/\b(?:collect|gather|mine)\b/i));
+    const quantityScope = text.slice(previousEnd, mention.index + mention.label.length);
+    return {
+      source: mention.target,
+      item: miningOutputName(mention.target),
+      quantity: requestedQuantity(quantityScope) || 1,
+    };
+  });
+}
+
+function listedManufacturedOutputs(value, bot, { minimum = 2 } = {}) {
   const fragments = String(value || '')
     .replace(/[.!?]+$/g, '')
     .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
     .map(fragment => fragment.trim())
     .filter(Boolean);
-  if (fragments.length < 2 || fragments.length * 2 > MAX_SEGMENTS) return null;
+  if (fragments.length < minimum || fragments.length * 2 > MAX_SEGMENTS) return null;
   const outputs = fragments.map(fragment => ({
     fragment,
     target: canonicalListedItem(fragment, bot),
     quantity: requestedQuantity(fragment) || 1,
   }));
   return outputs.some(output => !output.target) ? null : outputs;
+}
+
+// A resource project is one ordinary player outcome whose phases already have
+// durable executors: retain freshly mined inputs, manufacture registry-backed
+// outputs, place those exact outputs in one observed container, then return.
+// Compile only that typed composition here; recipes and physical policy remain
+// owned by GoalDirector, the capability catalogue, and the existing adapters.
+function resourceProjectPlan(playerName, message, context) {
+  const text = normalizeMessage(message).trim();
+  if (
+    !/\bcave\b/i.test(text)
+    || !/\b(?:find|explore|look for|search for)\b/i.test(text)
+    || !/\b(?:collect|gather|mine)\b/i.test(text)
+    || !/\b(?:return|come back|head back)\b/i.test(text)
+  ) return null;
+
+  const manufacture = MANUFACTURE_VERB.exec(text);
+  if (!manufacture) return null;
+  const afterVerb = text.slice(manufacture.index + manufacture[0].length);
+  const storage = RESOURCE_PROJECT_STORAGE_TAIL.exec(afterVerb);
+  if (!storage || !/\b(?:chest|barrel)\b/i.test(storage[1])) return null;
+
+  const resourceMentions = miningResources(text.slice(0, manufacture.index));
+  if (resourceMentions.length === 0) return null;
+  const outputClause = afterVerb
+    .slice(0, storage.index)
+    .replace(WORKSTATION_QUALIFIER, '')
+    .trim();
+  const outputs = listedManufacturedOutputs(outputClause, context?.bot, { minimum: 1 });
+  if (!outputs) return null;
+
+  const bot = context?.bot;
+  const position = bot?.entity?.position;
+  const homeDimension = String(bot?.game?.dimension || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
+  const containerConstraint = currentContainerConstraint(bot);
+  if (!position || ![position.x, position.y, position.z].every(Number.isFinite) || !homeDimension) {
+    return { rejection: 'I could not bind that resource project to my current home-base position, so I did not start only part of it.' };
+  }
+  if (!containerConstraint) {
+    return { rejection: 'I could not bind that resource project to a loaded chest or barrel, so I did not start only part of it.' };
+  }
+
+  const requiredOutputs = miningOutputRequirements(text, resourceMentions);
+  const resourceQuantity = Math.max(1, Math.min(64,
+    requiredOutputs.reduce((total, requirement) => total + requirement.quantity, 0),
+  ));
+  const explore = {
+    segment: text.slice(0, manufacture.index).trim(),
+    command: null,
+    response: `I will protect this work area as home, collect fresh ${requiredOutputs.map(requirement => requirement.item.replaceAll('_', ' ')).join(' and ')}, retain it, and return.`,
+    entry: {
+      kind: 'explore',
+      requester: playerName,
+      target: 'ores',
+      quantity: resourceQuantity,
+      retainResults: true,
+      requiredOutputs,
+      x: Math.floor(position.x),
+      y: Math.floor(position.y),
+      z: Math.floor(position.z),
+      homeDimension,
+    },
+  };
+  const acquisitions = outputs.map(output => ({
+    segment: output.fragment,
+    command: `!requestItemGoal("acquire", ${JSON.stringify(output.target)}, ${output.quantity}, ${JSON.stringify(playerName)}, "inventory")`,
+    response: `I will make ${output.quantity} ${output.target.replaceAll('_', ' ')}.`,
+    entry: {
+      kind: 'acquire',
+      requester: playerName,
+      target: output.target,
+      quantity: output.quantity,
+      completion: 'inventory',
+    },
+    dependency: { policy: 'requires_success' },
+  }));
+  const deposits = outputs.map(output => ({
+    segment: `store ${output.quantity} ${output.target.replaceAll('_', ' ')}`,
+    command: `!putInChestAt(${JSON.stringify(output.target)}, ${output.quantity}, ${containerConstraint.position.x}, ${containerConstraint.position.y}, ${containerConstraint.position.z}, ${JSON.stringify(containerConstraint.dimension)})`,
+    response: `I will store ${output.quantity} ${output.target.replaceAll('_', ' ')} in the selected ${containerConstraint.name.replaceAll('_', ' ')}.`,
+    entry: {
+      kind: 'deposit',
+      requester: playerName,
+      target: output.target,
+      quantity: output.quantity,
+      containerConstraint,
+    },
+    dependency: { policy: 'requires_success' },
+  }));
+  return {
+    steps: [
+      explore,
+      ...acquisitions,
+      ...deposits,
+      {
+        segment: `return to ${playerName}`,
+        command: `!goToPlayer(${JSON.stringify(playerName)}, 2)`,
+        response: `I will return to ${playerName}.`,
+        entry: { kind: 'goto', requester: playerName, recipient: playerName },
+        dependency: { policy: 'after_settlement' },
+      },
+    ],
+  };
 }
 
 function collectiveStoragePlan(playerName, message, context) {
@@ -631,6 +743,24 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const body = disposition === 'interrupt'
     ? (text.replace(INTERRUPT_LEADING, '').trim() || text)
     : text;
+  const resourceProject = resourceProjectPlan(playerName, body, context);
+  if (resourceProject?.rejection) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: [],
+      unresolved: [],
+      rejection: resourceProject.rejection,
+    };
+  }
+  if (resourceProject?.steps) {
+    return {
+      disposition,
+      multiStep: true,
+      steps: resourceProject.steps,
+      unresolved: [],
+    };
+  }
   const expedition = caveExpeditionPlan(playerName, body, context);
   if (expedition?.rejection) {
     return {

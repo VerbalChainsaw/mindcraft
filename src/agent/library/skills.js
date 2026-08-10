@@ -159,6 +159,7 @@ const MAX_COLLECTION_SEARCH_RELOCATIONS = 3;
 const MIN_COLLECTION_SEARCH_STEP = 24;
 const MAX_COLLECTION_SEARCH_STEP = 40;
 const MIN_COLLECTION_RESCAN_PROGRESS = 4;
+const ENTITY_ROUTE_PENALTY = 10;
 const MAX_COLLECTION_TARGET_FAILURES = 1;
 const COLLECTION_FAILED_TARGET_EXCLUSION_RADIUS = 4;
 const MAX_COLLECTION_ACCESS_RECOVERIES = 2;
@@ -1318,7 +1319,13 @@ function safeMovements(bot) {
     movements.allowParkour = false;
     movements.allowSprinting = true;
     movements.canOpenDoors = true;
-    movements.entitiesToAvoid.add('player');
+    // Players and other solid entities are expensive route cells, not world
+    // geometry. Absolute player exclusion can erase the only doorway when a
+    // requester is standing beside the bot; Pathfinder then reports no path
+    // to every resource in the world. Its native finite entity cost preserves
+    // ordinary detours while still permitting one truthful exit route when a
+    // nearby player temporarily occupies the only usable corridor.
+    movements.entityCost = ENTITY_ROUTE_PENALTY;
     movements.dontMineUnderFallingBlock = true;
     movements.dontCreateFlow = true;
     movements.placeCost = 8;
@@ -11333,7 +11340,7 @@ function isAuthorizedMiningRouteBlock(
     );
 }
 
-function nearestKnownMiningTarget(bot, resourceName = '') {
+function nearestKnownMiningTarget(bot, resourceName = '', exclusions = []) {
     const origin = bot.entity?.position;
     if (!origin || !resourceName || typeof bot.findBlocks !== 'function') return null;
     const names = miningTargetBlockNames(resourceName);
@@ -11344,7 +11351,11 @@ function nearestKnownMiningTarget(bot, resourceName = '') {
             count: 24,
         }) || [])
             .map(position => bot.blockAt(position))
-            .filter(block => block?.position && names.has(block.name));
+            .filter(block => (
+                block?.position
+                && names.has(block.name)
+                && !collectionPositionExcluded(block.position, exclusions)
+            ));
         blocks.sort((left, right) => {
             const leftHorizontal = Math.hypot(left.position.x - origin.x, left.position.z - origin.z);
             const rightHorizontal = Math.hypot(right.position.x - origin.x, right.position.z - origin.z);
@@ -12514,6 +12525,109 @@ async function traverseClearedMiningCell(bot, step) {
     };
 }
 
+function fallingBlockEntitiesInMiningCell(bot, target) {
+    return Object.values(bot.entities || {}).filter(entity => (
+        entity?.name === 'falling_block'
+        && entity.position
+        && Math.floor(entity.position.x) === target.x
+        && Math.floor(entity.position.z) === target.z
+        && entity.position.y >= target.y - 0.5
+        && entity.position.y <= target.y + MAX_MINING_FALLING_COLUMN + 2
+    ));
+}
+
+async function restorePreservedMiningRouteCell(bot, target) {
+    const feet = target;
+    const head = target.offset(0, 1, 0);
+    const support = target.offset(0, -1, 0);
+    const supportBlock = bot.blockAt(support);
+    if (!isAnchoredGameplaySupport(bot, supportBlock)) {
+        return { success: false, outcome: 'return_route_support_changed', cleared: 0 };
+    }
+    if (miningRouteTouchesLiquid(bot, [feet, head])) {
+        return { success: false, outcome: 'return_route_liquid_risk', cleared: 0 };
+    }
+
+    let cleared = 0;
+    let settlementPending = false;
+    while (true) {
+        if (bot.interrupt_code) {
+            return { success: false, outcome: 'interrupted', cleared };
+        }
+        if (isMiningRouteCellReturnable(bot, target)) {
+            const fallingEntities = fallingBlockEntitiesInMiningCell(bot, target);
+            if (fallingEntities.length > 0) {
+                const settled = await waitForWorldCondition(
+                    bot,
+                    () => fallingBlockEntitiesInMiningCell(bot, target).length === 0,
+                    GROUND_SETTLE_TIMEOUT_MS,
+                    25,
+                );
+                if (!settled) {
+                    return {
+                        success: false,
+                        outcome: bot.interrupt_code ? 'interrupted' : 'return_route_debris_unsettled',
+                        cleared,
+                    };
+                }
+                settlementPending = true;
+                continue;
+            }
+            if (!settlementPending) {
+                return {
+                    success: true,
+                    outcome: cleared > 0 ? 'return_route_debris_restored' : 'return_route_ready',
+                    cleared,
+                };
+            }
+            await interruptibleDelay(
+                bot,
+                Math.min(
+                    GROUND_SETTLE_TIMEOUT_MS,
+                    FALLING_BLOCK_SETTLE_MS * MAX_MINING_FALLING_COLUMN,
+                ),
+            );
+            settlementPending = false;
+            continue;
+        }
+        const blocked = [bot.blockAt(feet), bot.blockAt(head)]
+            .filter(block => block && !isCollectionStandingCellClear(block))
+            .sort((left, right) => left.position.y - right.position.y);
+        const lowest = blocked[0] || null;
+        if (!lowest || !isFallingGameplayBlock(lowest)) {
+            return { success: false, outcome: 'return_route_changed', cleared };
+        }
+        const column = boundedFallingRouteColumn(bot, lowest.position);
+        if (!column.ok || column.blocks.length === 0) {
+            return { success: false, outcome: column.outcome, cleared };
+        }
+        if (cleared >= MAX_MINING_FALLING_COLUMN) {
+            return { success: false, outcome: 'return_route_debris_limit', cleared };
+        }
+        if (miningRouteTouchesLiquid(bot, column.blocks.map(block => block.position))) {
+            return {
+                success: false,
+                outcome: 'return_route_liquid_risk',
+                cleared,
+            };
+        }
+        if (!await breakBlockAt(
+            bot,
+            lowest.position.x,
+            lowest.position.y,
+            lowest.position.z,
+            {
+                requireHarvest: false,
+                acceptFallingReplacement: true,
+            },
+        )) {
+            return { success: false, outcome: 'return_route_debris_not_cleared', cleared };
+        }
+        cleared += 1;
+        settlementPending = true;
+    }
+}
+
 export async function traverseMiningRouteCell(bot, x, y, z) {
     const target = new Vec3(
         Math.floor(Number(x)),
@@ -12529,29 +12643,70 @@ export async function traverseMiningRouteCell(bot, x, y, z) {
         });
         return false;
     }
-    if (!isMiningRouteCellReturnable(bot, target)) {
+    const fallingEntitiesObserved = fallingBlockEntitiesInMiningCell(bot, target).length;
+    if (fallingEntitiesObserved > 0) {
+        const settled = await waitForWorldCondition(
+            bot,
+            () => fallingBlockEntitiesInMiningCell(bot, target).length === 0,
+            GROUND_SETTLE_TIMEOUT_MS,
+            25,
+        );
+        if (!settled) {
+            setActionEvidence(bot, {
+                kind: 'mining_return',
+                outcome: bot.interrupt_code ? 'interrupted' : 'return_route_debris_unsettled',
+                target: { name: 'mining_return_cell', x: target.x, y: target.y, z: target.z },
+                fallingEntitiesObserved,
+                retryable: !bot.interrupt_code,
+            });
+            log(bot, `Falling debris did not settle clear of preserved mining cell ${target.x}, ${target.y}, ${target.z}.`);
+            return false;
+        }
+    }
+    const restoration = await restorePreservedMiningRouteCell(bot, target);
+    if (!restoration.success) {
         setActionEvidence(bot, {
             kind: 'mining_return',
-            outcome: 'return_route_changed',
+            outcome: restoration.outcome,
             target: { name: 'mining_return_cell', x: target.x, y: target.y, z: target.z },
+            debrisRestored: restoration.cleared,
             retryable: false,
         });
-        log(bot, `The preserved mining return cell at ${target.x}, ${target.y}, ${target.z} is no longer safe.`);
+        log(bot, `The preserved mining return cell at ${target.x}, ${target.y}, ${target.z} could not be safely restored (${restoration.outcome.replace(/_/g, ' ')}).`);
         return false;
     }
     const traversal = await traverseClearedMiningCell(bot, target);
-    const success = traversal.success === true;
+    if (traversal.success && (fallingEntitiesObserved > 0 || restoration.cleared > 0)) {
+        // The relevant falling column changed during this action. Give the
+        // authoritative world one final bounded settlement interval before
+        // checkpointing the route index; otherwise gravel can push the bot
+        // backward immediately after ActionManager releases ownership.
+        await interruptibleDelay(bot, FALLING_BLOCK_SETTLE_MS);
+    }
+    const success = Boolean(
+        traversal.success === true
+        && !bot.interrupt_code
+        && fallingBlockEntitiesInMiningCell(bot, target).length === 0
+        && physicallyOccupiesStandingCell(bot, target)
+        && isMiningRouteCellReturnable(bot, target)
+    );
     setActionEvidence(bot, {
         kind: 'mining_return',
-        outcome: success ? 'route_cell_returned' : traversal.outcome,
+        outcome: success
+            ? 'route_cell_returned'
+            : traversal.success
+                ? 'return_route_settlement_changed'
+                : traversal.outcome,
         target: { name: 'mining_return_cell', x: target.x, y: target.y, z: target.z },
         observedPosition: traversal.observed || null,
+        fallingEntitiesObserved,
+        debrisRestored: restoration.cleared,
         returnable: success,
-        routeDigging: false,
+        routeDigging: restoration.cleared > 0,
         retryable: !success && !bot.interrupt_code,
     });
     log(bot, success
-        ? `Returned through preserved mining cell ${target.x}, ${target.y}, ${target.z}.`
+        ? `Returned through preserved mining cell ${target.x}, ${target.y}, ${target.z}${restoration.cleared > 0 ? ` after clearing ${restoration.cleared} settled debris block${restoration.cleared === 1 ? '' : 's'}` : ''}.`
         : `Could not settle on preserved mining cell ${target.x}, ${target.y}, ${target.z}.`);
     return success;
 }
@@ -13074,6 +13229,7 @@ export async function mineSearchTunnel(
     const requestedLength = Math.max(4, Math.min(32, Math.floor(Number(length) || MINING_TUNNEL_LENGTH)));
     const requestedBlocks = miningTargetBlockNames(requested);
     const preservedReturnRoute = normalizePreservedMiningReturnRoute(options.preservedReturnRoute);
+    const excludedTargets = normalizeCollectionExclusions(options.excludedTargets);
     const expectedProtectedRouteCells = Number.isFinite(options.expectedProtectedRouteCells)
         ? Math.max(0, Math.floor(options.expectedProtectedRouteCells))
         : null;
@@ -13104,12 +13260,13 @@ export async function mineSearchTunnel(
         && prospectiveMiningStandingPositions(bot, livePreferredTarget).length > 0
     )
         ? livePreferredTarget
-        : nearestKnownMiningTarget(bot, requested);
+        : nearestKnownMiningTarget(bot, requested, excludedTargets);
     if (knownTarget) {
         const staged = await stageMiningStaircase(bot);
         if (!staged) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
+                targetBound: true,
                 outcome: bot.interrupt_code ? 'interrupted' : 'staging_unreachable',
                 target: {
                     name: knownTarget.name,
@@ -13130,6 +13287,7 @@ export async function mineSearchTunnel(
         if (!stagedTarget || !requestedBlocks.has(stagedTarget.name)) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
+                targetBound: true,
                 outcome: 'target_changed',
                 target: {
                     name: knownTarget.name,
@@ -13189,6 +13347,7 @@ export async function mineSearchTunnel(
                 : null;
             setActionEvidence(bot, {
                 kind: 'mining_search',
+                targetBound: true,
                 outcome: plan.outcome || 'no_safe_route',
                 target: {
                     name: stagedTarget.name,
@@ -13245,6 +13404,7 @@ export async function mineSearchTunnel(
         if (!access.success) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
+                targetBound: true,
                 outcome: access.outcome,
                 target: {
                     name: stagedTarget.name,
@@ -13299,6 +13459,7 @@ export async function mineSearchTunnel(
             );
             setActionEvidence(bot, {
                 kind: 'mining_search',
+                targetBound: true,
                 outcome: 'search_advanced',
                 target: {
                     name: stagedTarget.name,
@@ -13350,9 +13511,39 @@ export async function mineSearchTunnel(
             allowAccessRecovery: false,
         });
         if (!collected) return false;
-        const collectedPosition = observedSupportedStandingCell(bot) || bot.entity.position;
+        let collectedPosition = observedSupportedStandingCell(bot);
+        if (!collectedPosition || !isMiningRouteCellReturnable(bot, collectedPosition)) {
+            // CollectBlock may finish the inventory effect while the body is
+            // still brushing a collision boundary. Never persist raw entity
+            // coordinates as a cleared return cell: settle through native
+            // Pathfinder on the already preflighted stance first.
+            await traverseClearedMiningCell(bot, plan.stance);
+            collectedPosition = observedSupportedStandingCell(bot);
+        }
+        if (!collectedPosition || !isMiningRouteCellReturnable(bot, collectedPosition)) {
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                targetBound: true,
+                outcome: 'collection_settlement_unverified',
+                target: {
+                    name: stagedTarget.name,
+                    x: stagedTarget.position.x,
+                    y: stagedTarget.position.y,
+                    z: stagedTarget.position.z,
+                },
+                observedPosition: bot.entity?.position?.clone?.() || null,
+                routeSteps: plan.route.length,
+                excavated: access.excavated,
+                routeDigging: true,
+                returnable: false,
+                retryable: true,
+            });
+            log(bot, `Collected ${stagedTarget.name}, but no verified return-route stance settled before release.`);
+            return false;
+        }
         setActionEvidence(bot, {
             kind: 'mining_search',
+            targetBound: true,
             outcome: 'resource_collected',
             target: {
                 name: stagedTarget.name,
@@ -13655,7 +13846,9 @@ export async function collectExposedOreAt(
 export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     const boundedY = Math.max(-60, Math.min(300, Math.floor(Number(targetY) || 0)));
     const boundedRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
-    const origin = bot.entity?.position;
+    let origin = observedSupportedStandingCell(bot)
+        || bot.entity?.position?.floored?.()
+        || null;
     const target = { name: 'open_cave_route', y: boundedY };
     const preservedReturnRoute = normalizePreservedMiningReturnRoute(options.preservedReturnRoute);
     const expectedProtectedRouteCells = Number.isFinite(options.expectedProtectedRouteCells)
@@ -13708,6 +13901,53 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
         return true;
     };
 
+    // Once deterministic excavation begins, the persisted route endpoint is
+    // the only honest continuation stance. Re-probing arbitrary open caves on
+    // every bounded leg can climb far above that endpoint, stall, and then
+    // make a short local descent look like global progress. Rejoin the exact
+    // cleared endpoint after interruption/restart and keep A* excavation off.
+    const routeEndpoint = preservedReturnRoute.at(-1) || null;
+    if (routeEndpoint && !sameMiningCell(origin, routeEndpoint)) {
+        const rejoined = await goToGoal(
+            bot,
+            new pf.goals.GoalBlock(routeEndpoint.x, routeEndpoint.y, routeEndpoint.z),
+            {
+                movements: () => clearedMiningMovements(bot),
+                stallTimeoutMs: NAVIGATION_STALL_TIMEOUT_MS,
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        );
+        await waitForWorldCondition(
+            bot,
+            () => physicallyOccupiesStandingCell(bot, routeEndpoint),
+            GROUND_SETTLE_TIMEOUT_MS,
+            25,
+        );
+        if (!rejoined || !physicallyOccupiesStandingCell(bot, routeEndpoint)) {
+            setActionEvidence(bot, {
+                kind: 'mining_relocation',
+                outcome: bot.interrupt_code
+                    ? 'interrupted'
+                    : 'preserved_route_endpoint_unreachable',
+                target: {
+                    ...target,
+                    x: routeEndpoint.x,
+                    z: routeEndpoint.z,
+                },
+                observedY: bot.entity?.position?.y ?? null,
+                routeDigging: false,
+                returnable: false,
+                retryable: !bot.interrupt_code,
+            });
+            log(bot, bot.interrupt_code
+                ? 'Stopped before the preserved mining-route endpoint settled.'
+                : 'Could not rejoin the exact preserved mining-route endpoint without excavation.');
+            return false;
+        }
+        origin = observedSupportedStandingCell(bot) || routeEndpoint;
+    }
+
     if (Math.abs(origin.y - boundedY) <= 6 && safeSpace(
         Math.floor(origin.x),
         Math.floor(origin.y),
@@ -13724,58 +13964,101 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     }
 
     const candidates = [];
-    const baseX = Math.floor(origin.x);
-    const baseZ = Math.floor(origin.z);
-    for (let radius = 8; radius <= boundedRange; radius += 8) {
-        for (let direction = 0; direction < 16; direction += 1) {
-            const angle = (direction / 16) * Math.PI * 2;
-            const x = Math.floor(baseX + (Math.cos(angle) * radius));
-            const z = Math.floor(baseZ + (Math.sin(angle) * radius));
-            for (const yOffset of [0, -3, 3, -6, 6]) {
-                const y = boundedY + yOffset;
-                if (!safeSpace(x, y, z)) continue;
-                candidates.push({
-                    x,
-                    y,
-                    z,
-                    distance: origin.distanceTo(new Vec3(x, y, z)),
-                });
+    if (preservedReturnRoute.length === 0) {
+        const baseX = Math.floor(origin.x);
+        const baseZ = Math.floor(origin.z);
+        for (let radius = 8; radius <= boundedRange; radius += 8) {
+            for (let direction = 0; direction < 16; direction += 1) {
+                const angle = (direction / 16) * Math.PI * 2;
+                const x = Math.floor(baseX + (Math.cos(angle) * radius));
+                const z = Math.floor(baseZ + (Math.sin(angle) * radius));
+                for (const yOffset of [0, -3, 3, -6, 6]) {
+                    const y = boundedY + yOffset;
+                    if (!safeSpace(x, y, z)) continue;
+                    candidates.push({
+                        x,
+                        y,
+                        z,
+                        distance: origin.distanceTo(new Vec3(x, y, z)),
+                    });
+                }
             }
         }
-    }
-    candidates.sort((left, right) => left.distance - right.distance);
+        candidates.sort((left, right) => left.distance - right.distance);
 
-    const openRoute = probeSafeRoundTripNavigationStances(
-        bot,
-        candidates.slice(0, 24),
-        origin,
-        2_000,
-    );
-    if (openRoute.reachable && openRoute.terminalPosition) {
-        const candidate = openRoute.terminalPosition;
-        if (await goToPosition(bot, candidate.x, candidate.y, candidate.z, 1)) {
-            if (Math.abs(bot.entity.position.y - boundedY) <= 8) {
+        const openRoute = probeSafeRoundTripNavigationStances(
+            bot,
+            candidates.slice(0, 24),
+            origin,
+            2_000,
+        );
+        if (openRoute.reachable && openRoute.terminalPosition) {
+            const candidate = openRoute.terminalPosition;
+            if (await goToPosition(bot, candidate.x, candidate.y, candidate.z, 1)) {
+                if (Math.abs(bot.entity.position.y - boundedY) <= 8) {
+                    setActionEvidence(bot, {
+                        kind: 'mining_relocation',
+                        outcome: 'productive_depth_reached',
+                        target: {
+                            ...target,
+                            x: candidate.x,
+                            z: candidate.z,
+                        },
+                        observedY: bot.entity.position.y,
+                        routeDigging: false,
+                        returnable: true,
+                        retryable: false,
+                    });
+                    return true;
+                }
+            }
+
+            // A successful read-only probe does not guarantee live execution
+            // will finish under changing entities or chunk state. Never begin
+            // deterministic excavation from that partial route position.
+            const returned = physicallyOccupiesStandingCell(bot, origin) || await goToGoal(
+                bot,
+                new pf.goals.GoalBlock(origin.x, origin.y, origin.z),
+                {
+                    movements: () => clearedMiningMovements(bot),
+                    stallTimeoutMs: NAVIGATION_STALL_TIMEOUT_MS,
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: false,
+                },
+            );
+            await waitForWorldCondition(
+                bot,
+                () => physicallyOccupiesStandingCell(bot, origin),
+                GROUND_SETTLE_TIMEOUT_MS,
+                25,
+            );
+            if (!returned || !physicallyOccupiesStandingCell(bot, origin)) {
                 setActionEvidence(bot, {
                     kind: 'mining_relocation',
-                    outcome: 'productive_depth_reached',
-                    target: {
-                        ...target,
-                        x: candidate.x,
-                        z: candidate.z,
-                    },
-                    observedY: bot.entity.position.y,
+                    outcome: bot.interrupt_code
+                        ? 'interrupted'
+                        : 'open_route_settlement_failed',
+                    target,
+                    observedY: bot.entity?.position?.y ?? null,
                     routeDigging: false,
-                    returnable: true,
-                    retryable: false,
+                    returnable: false,
+                    retryable: !bot.interrupt_code,
                 });
-                return true;
+                log(bot, bot.interrupt_code
+                    ? 'Stopped before the failed open-route probe settled.'
+                    : 'The open-route probe did not execute and its exact origin could not be restored.');
+                return false;
             }
+            origin = observedSupportedStandingCell(bot) || origin;
         }
     }
 
     if (boundedY < bot.entity.position.y - 6) {
         const staircase = await carveExploratoryDepthRoute(bot, boundedY, { preservedReturnRoute });
-        if (staircase.progressed) {
+        const verticalProgress = Number.isFinite(staircase.observedY)
+            ? origin.y - staircase.observedY
+            : 0;
+        if (staircase.progressed && verticalProgress >= 1) {
             setActionEvidence(bot, {
                 kind: 'mining_relocation',
                 outcome: staircase.success ? 'staircase_depth_reached' : 'mining_depth_advanced',
@@ -13788,7 +14071,7 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
                 },
                 observedY: staircase.observedY,
                 observedPosition: staircase.observed || null,
-                verticalProgress: staircase.verticalProgress,
+                verticalProgress,
                 routeSteps: staircase.routeSteps,
                 excavated: staircase.excavated,
                 durability: staircase.durability || null,
@@ -13799,8 +14082,25 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
             });
             log(bot, staircase.success
                 ? `Carved and followed a preflighted staircase to the productive y=${boundedY} band.`
-                : `Advanced ${staircase.verticalProgress} vertical block${staircase.verticalProgress === 1 ? '' : 's'} toward the productive y=${boundedY} band through a preflighted returnable staircase.`);
+                : `Advanced ${verticalProgress} vertical block${verticalProgress === 1 ? '' : 's'} toward the productive y=${boundedY} band through a preflighted returnable staircase.`);
             return true;
+        }
+        if (staircase.progressed) {
+            setActionEvidence(bot, {
+                kind: 'mining_relocation',
+                outcome: 'non_convergent_depth_route',
+                target,
+                observedY: staircase.observedY,
+                verticalProgress,
+                routeSteps: staircase.routeSteps,
+                excavated: staircase.excavated,
+                routeDigging: true,
+                returnable: staircase.returnable === true,
+                returnRoute: staircase.returnRoute || [],
+                retryable: true,
+            });
+            log(bot, 'The bounded staircase did not finish below its action origin, so no mining-depth progress was accepted.');
+            return false;
         }
         setActionEvidence(bot, {
             kind: 'mining_relocation',

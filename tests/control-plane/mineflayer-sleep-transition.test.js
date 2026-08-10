@@ -46,3 +46,23 @@ test('owned Mineflayer sleep returns a completed transition when Paper skips dir
   assert.equal(bot.listenerCount('sleep'), 0);
   assert.equal(bot.listenerCount('time'), 0);
 });
+
+test('owned Mineflayer wake uses the protocol-mapped leave-bed action', async () => {
+  const packets = [];
+  const bot = Object.assign(new EventEmitter(), {
+    _client: Object.assign(new EventEmitter(), {
+      write(name, payload) { packets.push({ name, payload }); },
+    }),
+    entity: { id: 11, position: new Vec3(0, 64, 0) },
+    supportFeature() { return false; },
+  });
+  injectBedPlugin(bot);
+  bot.isSleeping = true;
+
+  await bot.wake();
+
+  assert.deepEqual(packets, [{
+    name: 'entity_action',
+    payload: { entityId: 11, actionId: 'leave_bed', jumpBoost: 0 },
+  }]);
+});

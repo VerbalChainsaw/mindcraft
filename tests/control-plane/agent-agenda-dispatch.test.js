@@ -5,6 +5,27 @@ import { Agent } from '../../src/agent/agent.js';
 import { getCommand } from '../../src/agent/commands/index.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 
+test('the central interrupt asks Mineflayer to wake a sleeping body', async () => {
+  let wakeCalls = 0;
+  const bot = {
+    interrupt_code: false,
+    isSleeping: true,
+    wake() {
+      wakeCalls += 1;
+      return Promise.resolve();
+    },
+    pathfinder: { setGoal() {} },
+    pvp: { stop() {} },
+    clearControlStates() {},
+  };
+
+  Agent.prototype.requestInterrupt.call({ bot });
+  await Promise.resolve();
+
+  assert.equal(bot.interrupt_code, true);
+  assert.equal(wakeCalls, 1);
+});
+
 test('an ordered item plan is validated and persisted atomically before execution', () => {
   let saved = [];
   let wakes = 0;
