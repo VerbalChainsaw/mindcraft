@@ -314,18 +314,24 @@ export class AgendaDirector {
    * list, then publish and persist it once. The Agenda still only sequences;
    * GoalDirector, JobDirector, and ActionManager retain physical ownership.
    */
-  addMany(rawEntries) {
+  addMany(rawEntries, {
+    replaceUnfinished = false,
+    reason = 'Superseded by a new player plan.',
+  } = {}) {
     if (!Array.isArray(rawEntries) || rawEntries.length < 1) {
       return { accepted: false, code: 'invalid_agenda_plan', detail: 'An agenda plan needs at least one typed step.' };
     }
-    const liveEntries = this.entries.filter(entry => !isTerminalAgendaState(entry.state));
+    const replacing = replaceUnfinished === true;
+    const liveEntries = replacing
+      ? []
+      : this.entries.filter(entry => !isTerminalAgendaState(entry.state));
     if (liveEntries.length + rawEntries.length > AGENDA_LIMITS.maxEntries) {
       return { accepted: false, code: 'agenda_full', detail: `The agenda can hold at most ${AGENDA_LIMITS.maxEntries} unfinished steps.` };
     }
 
     const staged = [];
     let stagedSequence = this.sequence;
-    let previous = this.entries.at(-1) || null;
+    let previous = replacing ? null : this.entries.at(-1) || null;
     try {
       for (const raw of rawEntries) {
         stagedSequence += 1;
@@ -348,18 +354,43 @@ export class AgendaDirector {
     }
 
     this.sequence = stagedSequence;
-    // Keep the queue bounded by discarding finished history, never live work.
-    this.entries = [...liveEntries, ...staged];
+    let replaced = 0;
+    if (replacing) {
+      const unfinished = this.entries.filter(entry => !isTerminalAgendaState(entry.state));
+      replaced = unfinished.length;
+      if (replaced > 0) {
+        try { this.agent.goal_director?.cancel?.(reason); } catch { /* executor may be absent */ }
+        try { this.agent.job_director?.cancel?.(reason); } catch { /* executor may be absent */ }
+        this.directDispatchGeneration += 1;
+        this.dispatching = false;
+      }
+      const cancelled = unfinished.map(entry => normalizeAgendaEntry({
+        ...entry,
+        state: 'cancelled',
+        ...(entry.kind === 'construction' ? { assignmentState: 'cancelled' } : {}),
+        finishedAt: this.now(),
+        evidence: { code: 'agenda_replaced', detail: reason },
+      }));
+      const historyLimit = Math.max(0, AGENDA_LIMITS.maxEntries - staged.length);
+      const cancelledHistory = historyLimit > 0 ? cancelled.slice(-historyLimit) : [];
+      this.entries = [...cancelledHistory, ...staged];
+    } else {
+      // Keep the queue bounded by discarding finished history, never live work.
+      this.entries = [...liveEntries, ...staged];
+    }
     this.nextEligibleAt = 0;
     this.persist();
     this.setStatus(
       'waiting',
-      'agenda_plan_added',
-      `Queued ${staged.length} step${staged.length === 1 ? '' : 's'} as one plan.`,
+      replacing ? 'agenda_plan_replaced' : 'agenda_plan_added',
+      replacing
+        ? `Replaced ${replaced} unfinished step${replaced === 1 ? '' : 's'} with ${staged.length} new step${staged.length === 1 ? '' : 's'}.`
+        : `Queued ${staged.length} step${staged.length === 1 ? '' : 's'} as one plan.`,
     );
     const firstPosition = liveEntries.length + 1;
     return {
       accepted: true,
+      replaced,
       entries: staged.map((entry, index) => ({
         id: entry.id,
         description: describeAgendaEntry(entry),
@@ -661,6 +692,8 @@ export class AgendaDirector {
         state: succeeded ? 'complete' : 'failed',
         code: last?.evidence?.code || 'goal_ended',
         detail: last?.evidence?.detail || '',
+        retryable: last?.evidence?.retryable !== false,
+        completionBlocked: last?.evidence?.completionBlocked === true,
       };
     }
     if (entry.executor === 'job') {
@@ -722,6 +755,20 @@ export class AgendaDirector {
       counts,
       unmet: counts.filter(requirement => requirement.count < requirement.quantity),
     };
+  }
+
+  inventoryChecklistPhysicalBlocker(entry) {
+    const requirements = new Set((entry.inventoryRequirements || []).map(requirement => requirement.target));
+    return this.entries.find(candidate => (
+      candidate.kind === 'acquire'
+      && candidate.requester === entry.requester
+      && candidate.state === 'failed'
+      && candidate.evidence?.completionBlocked === true
+      && requirements.has(candidate.target)
+      && candidate.createdAt <= entry.createdAt
+      && Number.isFinite(candidate.finishedAt)
+      && candidate.finishedAt >= entry.createdAt
+    )) || null;
   }
 
   dispatchInventoryChecklistCorrection(entry, requirement) {
@@ -1320,6 +1367,22 @@ export class AgendaDirector {
     }
 
     if (next.kind === 'inventory_checklist') {
+      const physicalBlocker = this.inventoryChecklistPhysicalBlocker(next);
+      if (physicalBlocker) {
+        const detail = `${physicalBlocker.target} reached a blocked physical postcondition (${physicalBlocker.evidence.code || 'capability_postcondition_blocked'}); inventory from another source cannot certify this plan.`;
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: {
+            code: 'inventory_checklist_physical_postcondition_blocked',
+            detail,
+            retryable: false,
+            completionBlocked: true,
+          },
+        });
+        this.setStatus('failed', 'inventory_checklist_physical_postcondition_blocked', detail, next.id);
+        return;
+      }
       const checklist = this.inventoryChecklistState(next);
       if (!checklist.valid) {
         this.replace(next.id, {

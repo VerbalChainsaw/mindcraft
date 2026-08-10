@@ -3,6 +3,9 @@ import test from 'node:test';
 import Vec3 from 'vec3';
 
 import Movements from '../packages/minecraft-runtime/mineflayer-pathfinder/lib/movements.js';
+import goalsModule from '../packages/minecraft-runtime/mineflayer-pathfinder/lib/goals.js';
+
+const { GoalLookAtBlock } = goalsModule;
 
 function climbMovement(blocksByOffset) {
   const movements = Object.create(Movements.prototype);
@@ -26,6 +29,41 @@ function climbMovement(blocksByOffset) {
   movements.allow1by1towers = false;
   return movements;
 }
+
+test('Pathfinder accepts an overhead block reached by the survival eye ray', () => {
+  const target = new Vec3(4, 75, 7);
+  const world = {
+    raycast(start, direction, reach) {
+      const lowerFace = target.offset(0.5, 0, 0.5);
+      if (start.distanceTo(lowerFace) > reach) return null;
+      assert.ok(direction.y > 0);
+      assert.equal(reach, 4.5);
+      return { position: target, face: 0 };
+    },
+  };
+  const goal = new GoalLookAtBlock(target, world);
+
+  // Feet at y=70 put the player's eye at y=71.6. The lower face of the y=75
+  // log is only 3.4 blocks away and is a normal survival interaction.
+  assert.equal(goal.isEnd(new Vec3(4, 70, 7)), true);
+});
+
+test('Pathfinder requires independent support before settling a destructive interaction stance', () => {
+  const target = new Vec3(4, 69, 7);
+  const world = {
+    raycast() {
+      return { position: target, face: 1 };
+    },
+  };
+  const goal = new GoalLookAtBlock(target, world, {
+    requireIndependentSupport: true,
+  });
+
+  // Feet directly above the target would make the bot dig away its own
+  // support. An adjacent, equally visible standing cell is valid.
+  assert.equal(goal.isEnd(new Vec3(4, 70, 7)), false);
+  assert.equal(goal.isEnd(new Vec3(5, 69, 7)), true);
+});
 
 test('Pathfinder climbs only into another physics-supported climbable cell', () => {
   const node = { x: 4, y: 64, z: 7, remainingBlocks: 0 };
@@ -141,6 +179,33 @@ test('Pathfinder represents a one-block waterline bank as a native step-up', () 
   assert.equal(neighbors.length, 1);
   assert.equal(neighbors[0].y, 63);
   assert.equal(neighbors[0].locomotion.type, 'step_up');
+});
+
+test('Pathfinder omits bridge placement when the movement owner has no construction authority', () => {
+  const node = { x: 4, y: 64, z: 7, remainingBlocks: 8 };
+  const movement = Object.create(Movements.prototype);
+  movement.canPlaceBlocks = false;
+  movement.liquidCost = 1;
+  movement.exclusionStep = () => 0;
+  movement.getNumEntitiesAt = () => 0;
+  movement.safeOrBreak = () => 0;
+  movement.openableAction = () => null;
+  movement.getBlock = (_node, x, y, z) => ({
+    position: new Vec3(node.x + x, node.y + y, node.z + z),
+    physical: false,
+    replaceable: true,
+    liquid: false,
+    safe: true,
+  });
+  movement.makeMove = () => {
+    throw new Error('a no-construction movement must not advertise a placement edge');
+  };
+
+  const neighbors = [];
+  movement.getMoveForward(node, { x: 1, z: 0 }, neighbors);
+  movement.getMoveJumpUp(node, { x: 1, z: 0 }, neighbors);
+  movement.getMoveUp(node, neighbors);
+  assert.deepEqual(neighbors, []);
 });
 
 test('Pathfinder counts drop depth between standing cells rather than destination support', () => {

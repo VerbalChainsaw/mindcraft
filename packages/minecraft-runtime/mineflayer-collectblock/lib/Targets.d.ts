@@ -16,6 +16,8 @@ export declare class Targets {
     getClosest(): Collectable | null;
     /** Gets the closest pending dropped-item entity, if one exists. */
     getClosestDrop(): Entity | null;
+    /** Gets the closest pending block while leaving item drops queued. */
+    getClosestBlock(): Block | null;
     get empty(): boolean;
     clear(): void;
     removeTarget(target: Collectable): void;

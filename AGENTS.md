@@ -11,6 +11,12 @@ Direct implementation is authorized; working Minecraft gameplay is the primary d
 - Preserve the LLM/conversation architecture and route direct and natural-language requests through the same deterministic gameplay skills.
 - Stop when the requested physical gameplay works.
 
+## Specialist escalation
+
+- Codeplan is for materially different mechanisms, architecture/ownership/persistence/API/package/concurrency/lifecycle boundaries, a disproven local mechanism, or a materially expensive wrong choice. Do not invoke it for each ordinary gameplay blocker or routine continuation after a mechanism is selected.
+- Center Audit is for a specific cross-owner uncertainty, an important safety/authority/state/cancellation/concurrency/persistence/false-success invariant, a repeated failure class after one ordinary repair, an ambiguous owner after targeted tracing, or an explicit Director request. One audit owns one claim and returns its result to implementation.
+- A broad run finding another reproducible defect is not by itself a reason to plan or audit. Use the normal repair loop when the owner and repair are clear.
+
 ## Package-first mechanics rule
 
 - The project owns judgment: goals, target selection, permissions, safety policy, budgets, interruption, evidence, verification, recovery, and reporting.
@@ -33,3 +39,11 @@ Direct implementation is authorized; working Minecraft gameplay is the primary d
 - Do not normalize every duplicated seam merely because it exists. Record non-blocking duplication and theoretical risks for later; prefer a deferred note over expanding the active tranche.
 - Every review request must state: the player-visible outcome being improved, the new failure class that justified the slice, why the correction is shared rather than item-specific, what behavior is now frozen, and the next broad campaign. Keep this concise and do not create a new review artifact system.
 - Stop when the broad physical outcome works truthfully and repeatably enough for play. Do not pursue exhaustive certification, perfect coverage, or formal completeness before returning to real gameplay.
+
+### Campaign governor
+
+- A single broad gameplay campaign may normally consume at most two newly exposed repair classes before checkpointing and recentering.
+- After two distinct shared defects are repaired, preserve the useful progress and report the next blocker separately. Do not automatically begin a third repair or audit cycle.
+- Continue immediately through a third class only when it is safety-critical, causes false success or data corruption, prevents the broad outcome from functioning at all, or the Director explicitly says to continue.
+- If one mechanic has already received two repair cycles and then exposes increasingly narrow geometry, noun, fixture, permutation, or environment-specific failures, preserve the concrete remaining defect and return to another high-frequency player-valued scenario.
+- Do not use that escape hatch for safety-critical defects, false success, corruption, or a mechanic that still fails in ordinary play.

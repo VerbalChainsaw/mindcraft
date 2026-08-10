@@ -1,14 +1,12 @@
 {
-  "name": "@mindcraft/mineflayer-collectblock",
-  "version": "1.6.0-mindcraft.2",
+  "name": "mineflayer-collectblock",
+  "version": "1.6.0-mindcraft.5",
   "description": "Mindcraft-owned bounded Mineflayer collection runtime",
   "private": true,
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "ts-standard && tsc && require-self",
-    "clean": "rm -rf lib",
-    "test": "test"
+    "test": "node --check lib/CollectBlock.js && node --check lib/Targets.js"
   },
   "repository": {
     "type": "git",
@@ -32,12 +30,6 @@
     "mineflayer": "^4.0.0",
     "mineflayer-pathfinder": "^2.1.1",
     "mineflayer-tool": "^1.1.0"
-  },
-  "devDependencies": {
-    "@types/node": "^18.6.4",
-    "require-self": "^0.2.3",
-    "ts-standard": "^11.0.0",
-    "typescript": "^4.1.3"
   },
   "files": [
     "lib/**/*"

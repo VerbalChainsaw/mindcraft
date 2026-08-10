@@ -88,6 +88,59 @@ test('an ordered item plan is validated and persisted atomically before executio
   assert.equal(JSON.stringify(director.entries), before, 'a malformed later step must not publish a partial plan');
 });
 
+test('an interrupting model-compiled item plan replaces the whole unfinished agenda atomically', () => {
+  const cancellations = [];
+  const agent = {
+    name: 'TestBot',
+    bot: { inventory: { slots: [] } },
+    actions: {
+      currentRequestContext: () => ({
+        requestId: 'replacement-request',
+        selectedSkill: '!queueItemPlan',
+        agendaDisposition: 'interrupt',
+      }),
+    },
+    behavior_arbiter: { wake() {} },
+    goal_director: { cancel(reason) { cancellations.push(['goal', reason]); } },
+    job_director: { cancel(reason) { cancellations.push(['job', reason]); } },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => 9_500,
+  });
+  agent.agenda_director = director;
+  director.addMany([
+    { kind: 'acquire', requester: 'OldPlayer', target: 'cobblestone', quantity: 75 },
+    {
+      kind: 'inventory_checklist',
+      requester: 'OldPlayer',
+      inventoryRequirements: [{ target: 'cobblestone', quantity: 75 }],
+    },
+    { kind: 'goto', requester: 'OldPlayer', recipient: 'OldPlayer' },
+  ]);
+  director.replace(director.entries[0].id, {
+    state: 'active',
+    startedAt: 9_500,
+    executorId: 'old-goal',
+  });
+
+  const result = getCommand('!queueItemPlan').perform(
+    agent,
+    'logs:144|planks:75',
+    'FieldWitness',
+    true,
+  );
+
+  assert.match(result, /durable 4-step item plan/i);
+  assert.equal(director.entries.filter(entry => entry.state === 'cancelled').length, 3);
+  assert.deepEqual(
+    director.entries.filter(entry => entry.state === 'pending').map(entry => entry.requester),
+    ['FieldWitness', 'FieldWitness', 'FieldWitness', 'FieldWitness'],
+  );
+  assert.deepEqual(cancellations.map(([owner]) => owner), ['goal', 'job']);
+  assert.equal(director.status.code, 'agenda_plan_replaced');
+});
+
 test('natural cleanup compiles one durable retained-inventory storage plan', () => {
   const inventory = [
     { name: 'raw_iron', count: 67 },
@@ -206,6 +259,78 @@ test('a final inventory checklist repairs a floor consumed by a later step and r
   assert.equal(director.entries[0].state, 'complete');
   assert.equal(director.entries[0].evidence.code, 'inventory_checklist_verified');
   assert.equal(saved.at(-1).state, 'complete');
+});
+
+test('a final inventory checklist cannot erase an acquire step physical postcondition failure', () => {
+  let now = 25_000;
+  let submittedGoal = null;
+  let submissions = 0;
+  const bot = {
+    // The inventory floor is deliberately satisfied. The unfinished physical
+    // transaction, not item arithmetic, must keep the plan from passing.
+    inventory: { slots: [{ name: 'spruce_log', count: 182 }] },
+  };
+  const goalDirector = {
+    activeGoal: null,
+    lastGoal: null,
+    submit(goal) {
+      submissions += 1;
+      submittedGoal = goal;
+      this.activeGoal = goal;
+      return { accepted: true, id: goal.id };
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot,
+    actions: { executing: false },
+    job_director: { activeOrder: null },
+    goal_director: goalDirector,
+    isOperatorHeld: () => false,
+  };
+  const director = new AgendaDirector(agent, {
+    now: () => now,
+    resolveTarget: (_bot, name) => ({
+      requestedName: name,
+      canonicalName: name,
+      inventoryName: name,
+      acquisitionName: name,
+      acquisitionKind: 'planned',
+    }),
+    store: { lastError: null, load: () => [], save() {} },
+  });
+  director.addMany([
+    { kind: 'acquire', requester: 'Gabriel', target: 'spruce_log', quantity: 182, quantityMode: 'minimum' },
+    {
+      kind: 'inventory_checklist',
+      requester: 'Gabriel',
+      inventoryRequirements: [{ target: 'spruce_log', quantity: 182 }],
+    },
+  ]);
+
+  director.update();
+  goalDirector.activeGoal = null;
+  goalDirector.lastGoal = {
+    ...submittedGoal,
+    phase: 'failed',
+    evidence: {
+      code: 'skill_tree_incomplete',
+      detail: 'Five connected logs remain.',
+      retryable: false,
+      completionBlocked: true,
+    },
+  };
+  now += 1;
+  director.update();
+  assert.equal(director.entries[0].state, 'failed');
+  assert.equal(director.entries[0].evidence.completionBlocked, true);
+
+  now += 6_000;
+  director.update();
+  assert.equal(director.entries[1].state, 'failed');
+  assert.equal(director.entries[1].evidence.code, 'inventory_checklist_physical_postcondition_blocked');
+  assert.equal(director.entries[1].evidence.completionBlocked, true);
+  assert.equal(submissions, 1, 'the checklist must not launch a fresh acquisition that forgets the unfinished site');
 });
 
 // Drive Agent.dispatchPlayerAgenda against a minimal fake `this`, so the

@@ -43,6 +43,7 @@ export function createCommandRequestContext({
     selectedSkill = '',
     args = [],
     requestedAt = Date.now(),
+    agendaDisposition = 'append',
 } = {}) {
     const normalizedArgs = Object.freeze((Array.isArray(args) ? args : [])
         .slice(0, MAX_COMMAND_REQUEST_ARGS)
@@ -54,6 +55,7 @@ export function createCommandRequestContext({
         selectedSkill: boundedRequestText(selectedSkill, 80),
         args: normalizedArgs,
         requestedAt: Number.isFinite(timestamp) && timestamp >= 0 ? Math.floor(timestamp) : Date.now(),
+        agendaDisposition: agendaDisposition === 'interrupt' ? 'interrupt' : 'append',
     });
 }
 
@@ -363,7 +365,11 @@ function argumentCountError(command, count) {
     return `Command ${command.name} was given ${count} args, but requires ${requirement} args.`;
 }
 
-export async function executeCommand(agent, message, { owner = 'player', routeOrigin = 'internal' } = {}) {
+export async function executeCommand(agent, message, {
+    owner = 'player',
+    routeOrigin = 'internal',
+    agendaDisposition = 'append',
+} = {}) {
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
         return parsed; //The command was incorrectly formatted or an invalid input was given.
@@ -381,6 +387,7 @@ export async function executeCommand(agent, message, { owner = 'player', routeOr
                 routeOrigin,
                 selectedSkill: parsed.commandName,
                 args: parsed.args,
+                agendaDisposition,
             });
             const perform = () => command.perform(agent, ...parsed.args);
             const performWithRequestContext = typeof agent.actions?.runWithRequestContext === 'function'

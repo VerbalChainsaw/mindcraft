@@ -603,6 +603,15 @@ test('parsePlayerAgenda does not retype a model-selected item plan as constructi
     { bot: {} },
   );
   assert.equal(plan, null);
+
+  assert.equal(
+    parsePlayerAgenda(
+      'LandingWitness',
+      'Build your supplies up to at least 24 logs and 48 cobblestone around the outpost without damaging buildings, paths, farms, pens, or work areas. Finish every natural tree you start, reuse what you already have, then come back to me and wait.',
+      { bot: {} },
+    ),
+    null,
+  );
 });
 
 test('parsePlayerAgenda preserves a model-compiled worksite and its requested return', () => {

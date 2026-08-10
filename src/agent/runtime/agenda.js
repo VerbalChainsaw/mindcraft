@@ -634,6 +634,10 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     evidence: Object.freeze({
       code: boundedText(raw.evidence?.code, 64),
       detail: boundedText(raw.evidence?.detail, 240),
+      ...(typeof raw.evidence?.retryable === 'boolean' ? { retryable: raw.evidence.retryable } : {}),
+      ...(typeof raw.evidence?.completionBlocked === 'boolean'
+        ? { completionBlocked: raw.evidence.completionBlocked }
+        : {}),
     }),
   });
 }

@@ -214,6 +214,7 @@ class GoalLookAtBlock extends Goal {
     this.world = world
     this.reach = options.reach || 4.5 // default survival: 4.5 creative: 5
     this.entityHeight = options.entityHeight || 1.6
+    this.requireIndependentSupport = options.requireIndependentSupport === true
   }
 
   heuristic (node) {
@@ -224,7 +225,24 @@ class GoalLookAtBlock extends Goal {
   }
 
   isEnd (node) {
-    if (node.distanceTo(this.pos.offset(0, this.entityHeight, 0)) > this.reach) return false
+    // Breaking a block that currently supports the player's standing cell is
+    // not a settled interaction stance. Callers that remove their target can
+    // require Pathfinder to step onto independent support before the normal
+    // reach/visibility proof succeeds. Locomotion remains native Pathfinder;
+    // the caller merely states the physical precondition of the interaction.
+    if (
+      this.requireIndependentSupport &&
+      node.x === this.pos.x &&
+      node.y - 1 === this.pos.y &&
+      node.z === this.pos.z
+    ) return false
+
+    // The ray starts at the player's eye and is already bounded by `reach`
+    // below. The former precheck measured from the player's feet to a point
+    // entityHeight above the target, which rejected ordinary overhead blocks
+    // that a survival player can physically reach (for example, the crown of
+    // a six-block tree). Let the same bounded Minecraft ray that proves a
+    // visible face also prove the real interaction distance.
     // Check faces that could be seen from the current position. If the delta is smaller then 0.5 that means the bot cam most likely not see the face as the block is 1 block thick
     // this could be false for blocks that have a smaller bounding box then 1x1x1
     const dx = node.x - (this.pos.x + 0.5)

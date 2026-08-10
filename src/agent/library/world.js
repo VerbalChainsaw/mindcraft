@@ -445,7 +445,7 @@ function clearPathMovementsFor(bot) {
     if (cached) return cached;
     const movements = new pf.Movements(bot);
     movements.canDig = false;
-    movements.canPlaceOn = false;
+    movements.canPlaceBlocks = false;
     movements.canOpenDoors = false;
     clearPathMovements.set(bot, movements);
     return movements;

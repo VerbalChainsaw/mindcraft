@@ -28,6 +28,10 @@ class Movements {
 
     this.dontCreateFlow = true
     this.dontMineUnderFallingBlock = true
+    // Physical block placement is a separate authority from opening a door.
+    // Callers may disable bridge, step-fill, and tower edges while retaining
+    // native locomotion and openable interactions.
+    this.canPlaceBlocks = true
     this.allow1by1towers = true
     this.allowFreeMotion = false
     this.allowParkour = true
@@ -37,6 +41,12 @@ class Movements {
     this.allowParkourAscend = false
     this.allowSprinting = true
     this.allowEntityDetection = true
+    // Callers that explicitly authorize temporary building may bound and
+    // account for every physical placement. Ordinary movement leaves the
+    // bound infinite but still has allow1by1towers disabled by V2 policy.
+    this.maxScaffoldingPlacements = Infinity
+    this.scaffoldingPlacementsUsed = 0
+    this.onBlockPlaced = null
 
     this.entitiesToAvoid = new Set()
     this.passableEntities = new Set(require('./passableEntities.json'))
@@ -181,7 +191,16 @@ class Movements {
         if (item.type === id) count += item.count
       }
     }
-    return count
+    const configuredLimit = Number(this.maxScaffoldingPlacements)
+    const remainingLimit = Number.isFinite(configuredLimit)
+      ? Math.max(0, Math.floor(configuredLimit) - this.scaffoldingPlacementsUsed)
+      : count
+    return Math.min(count, remainingLimit)
+  }
+
+  recordScaffoldingPlacement (placement) {
+    this.scaffoldingPlacementsUsed += 1
+    if (typeof this.onBlockPlaced === 'function') this.onBlockPlaced(placement)
   }
 
   getScaffoldingItem () {
@@ -365,6 +384,7 @@ class Movements {
     if (blockB.physical && !blockH.physical && !blockC.physical && (this.getNumEntitiesAt(blockB.position, 0, 1, 0) > 0)) return // It is fine if an ent falls on B so long as we don't need to replace block C
 
     if (!blockC.physical) {
+      if (this.canPlaceBlocks === false) return
       if (node.remainingBlocks === 0) return // not enough blocks to place
 
       if (this.getNumEntitiesAt(blockC.position, 0, 0, 0) > 0) return // Check for any entities in the way of a block placement
@@ -433,6 +453,7 @@ class Movements {
     const toPlace = []
 
     if (!blockD.physical && !blockC.liquid) {
+      if (this.canPlaceBlocks === false) return
       if (node.remainingBlocks === 0) return // not enough blocks to place
 
       if (this.getNumEntitiesAt(blockD.position, 0, 0, 0) > 0) return // D intersects an entity hitbox
@@ -648,7 +669,7 @@ class Movements {
       const destination = this.getBlock(node, 0, 1, 0)
       if (!destination.climbable) return
     } else {
-      if (!this.allow1by1towers || node.remainingBlocks === 0) return // not enough blocks to place
+      if (this.canPlaceBlocks === false || !this.allow1by1towers || node.remainingBlocks === 0) return // not enough blocks to place
 
       if (!block1.replaceable) {
         if (!this.safeToBreak(block1)) return

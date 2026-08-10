@@ -54,6 +54,27 @@ class Targets {
         }
         return closest;
     }
+    /**
+     * Gets the closest pending block while deliberately ignoring item drops.
+     * A caller may use this for one bound vertical component where abandoning
+     * a temporary climbing stance after every break makes the remaining
+     * blocks physically unreachable. Drops remain queued and are still
+     * collected before the task settles.
+     */
+    getClosestBlock() {
+        let closest = null;
+        let distance = 0;
+        for (const target of this.targets) {
+            if (target?.constructor?.name !== 'Block')
+                continue;
+            const dist = target.position.distanceTo(this.bot.entity.position);
+            if (closest == null || dist < distance) {
+                closest = target;
+                distance = dist;
+            }
+        }
+        return closest;
+    }
     get empty() {
         return this.targets.length === 0;
     }

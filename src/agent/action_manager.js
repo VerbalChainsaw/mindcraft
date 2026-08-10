@@ -97,6 +97,7 @@ function normalizeRequestContext(value) {
         requestedAt: Number.isFinite(Number(value.requestedAt))
             ? Math.max(0, Math.floor(Number(value.requestedAt)))
             : null,
+        agendaDisposition: value.agendaDisposition === 'interrupt' ? 'interrupt' : 'append',
     });
 }
 

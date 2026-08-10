@@ -30,6 +30,7 @@ const CANONICAL_NAME = /^[a-z0-9_]{1,80}$/;
 const MAX_SUBGOALS = 128;
 const MAX_QUANTITY = 2304;
 const MAX_FAILED_TARGETS = 24;
+const MAX_MINING_RETURN_CELLS = 512;
 
 const SMALL_NUMBERS = Object.freeze({
   zero: 0,
@@ -366,6 +367,8 @@ function normalizeEvidence(raw) {
     detail: boundedText(raw.detail, 360),
     verified: raw.verified === true,
     at: Number.isFinite(raw.at) ? raw.at : Date.now(),
+    ...(typeof raw.retryable === 'boolean' ? { retryable: raw.retryable } : {}),
+    ...(typeof raw.completionBlocked === 'boolean' ? { completionBlocked: raw.completionBlocked } : {}),
   });
 }
 
@@ -609,10 +612,38 @@ export function normalizeGoalContract(raw) {
   const checkpointSource = raw.checkpoint && typeof raw.checkpoint === 'object' && !Array.isArray(raw.checkpoint)
     ? raw.checkpoint
     : {};
+  const miningReturnRoute = [];
+  if (Array.isArray(checkpointSource.miningReturnRoute)) {
+    for (const rawCell of checkpointSource.miningReturnRoute.slice(0, MAX_MINING_RETURN_CELLS)) {
+      if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
+      const cell = Object.freeze({
+        x: Math.floor(rawCell.x),
+        y: Math.floor(rawCell.y),
+        z: Math.floor(rawCell.z),
+      });
+      const previous = miningReturnRoute.at(-1);
+      if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
+      miningReturnRoute.push(cell);
+    }
+  }
+  const miningReturnDimension = boundedText(checkpointSource.miningReturnDimension, 64)
+    .toLowerCase()
+    .replace(/^minecraft:/, '')
+    .replace(/[^a-z0-9_]/g, '');
   const checkpoint = Object.freeze({
     baselineInventory: finiteInteger(checkpointSource.baselineInventory, 0, 0, 100_000),
     targetInventory: finiteInteger(checkpointSource.targetInventory, quantity, 0, 100_000),
     delivered: finiteInteger(checkpointSource.delivered, 0, 0, quantity),
+    ...(miningReturnRoute.length > 0 ? {
+      miningReturnRoute: Object.freeze(miningReturnRoute),
+      miningReturnIndex: finiteInteger(
+        checkpointSource.miningReturnIndex,
+        miningReturnRoute.length - 1,
+        -1,
+        miningReturnRoute.length - 1,
+      ),
+      ...(miningReturnDimension ? { miningReturnDimension } : {}),
+    } : {}),
   });
   const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
   return Object.freeze({

@@ -56,6 +56,12 @@ export interface CollectOptions {
      */
     toolPolicy?: CollectionToolPolicy;
     /**
+     * Finish the queued blocks in one bound component before pursuing their
+     * drops. Drops remain owned by the task and must settle before completion.
+     * Defaults to false.
+     */
+    deferDropPickupUntilBlocksComplete?: boolean;
+    /**
      * Called between physical targets. When it returns true, remaining queued
      * targets are released and collection completes successfully. This lets a
      * caller provide fallback candidates without over-collecting its requested

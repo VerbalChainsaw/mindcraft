@@ -25,6 +25,21 @@ test('CollectBlock finishes a mined drop before routing to another block', () =>
 
     assert.equal(targets.getClosest(), nextBlock);
     assert.equal(targets.getClosestDrop(), minedDrop);
+    assert.equal(targets.getClosestBlock(), nextBlock);
     targets.removeTarget(minedDrop);
     assert.equal(targets.getClosestDrop(), null);
+});
+
+test('CollectBlock can retain a vertical work stance until every bound block is cut', () => {
+    const targets = new Targets({ entity: { position: new Vec3(0, 64, 0) } });
+    const crown = new Block(new Vec3(0, 70, 0));
+    const lowerDrop = new Entity(new Vec3(4, 64, 0));
+
+    targets.appendTargets([crown, lowerDrop]);
+
+    assert.equal(targets.getClosestDrop(), lowerDrop);
+    assert.equal(targets.getClosestBlock(), crown);
+    targets.removeTarget(crown);
+    assert.equal(targets.getClosestBlock(), null);
+    assert.equal(targets.getClosestDrop(), lowerDrop);
 });

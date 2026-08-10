@@ -3,9 +3,13 @@ import test from 'node:test';
 import Vec3 from 'vec3';
 
 import {
+    assessTreeScaffoldDescentStep,
+    assessMiningSurfaceDisturbance,
     assessStableMiningCollectionTarget,
     findStableMiningCollectionCandidates,
     isLocalNavigationFoliage,
+    treeScaffoldPositionAuthorized,
+    treeSettlementStances,
 } from '../src/agent/library/skills.js';
 import { assessAnchoredGameplaySupport } from '../src/agent/runtime/gameplay-safety.js';
 
@@ -43,6 +47,130 @@ function fixture({ supported }) {
         },
     };
 }
+
+test('tree scaffolding is authorized only inside voxels from the exact bound component', () => {
+    const tree = {
+        logs: [
+            block('spruce_log', 8, 64, 3),
+            block('spruce_log', 8, 65, 3),
+            block('spruce_log', 8, 66, 3),
+        ],
+    };
+
+    assert.equal(treeScaffoldPositionAuthorized(tree, new Vec3(8, 65, 3)), true);
+    assert.equal(treeScaffoldPositionAuthorized(tree, new Vec3(9, 65, 3)), false);
+    assert.equal(treeScaffoldPositionAuthorized(tree, new Vec3(8, 67, 3)), false);
+});
+
+test('tree settlement steps onto natural terrain instead of accepting its owned pillar', () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const base = new Vec3(8, 66, 3);
+    const ownedPillar = block('dirt', 8, 66, 3);
+    put(ownedPillar);
+    // A three-block step down is native, damage-free locomotion. Tree
+    // settlement must keep this real terrain candidate instead of inheriting
+    // the one-block descent limit used inside deterministic mining corridors.
+    put(block('grass_block', 9, 63, 3));
+    const bot = {
+        entity: { position: new Vec3(8.5, 67, 3.5) },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+
+    const stances = treeSettlementStances(
+        bot,
+        { base, logs: [block('spruce_log', 8, 66, 3)] },
+        [{ position: ownedPillar.position }],
+    );
+
+    assert.ok(stances.some(position => position.equals(new Vec3(9, 64, 3))));
+    assert.ok(stances.every(position => !position.equals(new Vec3(8, 67, 3))));
+});
+
+test('tree scaffold teardown descends through exact owned support before natural terrain', () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const upper = block('dirt', 8, 66, 3);
+    const lower = block('dirt', 8, 65, 3);
+    put(upper);
+    put(lower);
+    put(block('grass_block', 8, 64, 3));
+    const bot = {
+        entity: { position: new Vec3(8.5, 67, 3.5) },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+    const scaffolds = [
+        { position: upper.position, itemName: 'dirt' },
+        { position: lower.position, itemName: 'dirt' },
+    ];
+
+    const first = assessTreeScaffoldDescentStep(bot, scaffolds);
+    assert.equal(first.ok, true);
+    assert.equal(first.landingKind, 'owned_scaffold');
+    assert.ok(first.target.equals(new Vec3(8, 66, 3)));
+    assert.ok(first.expectedFeet.equals(new Vec3(8, 66, 3)));
+
+    blocks.delete('8:65:3');
+    const unsafe = assessTreeScaffoldDescentStep(bot, scaffolds);
+    assert.equal(unsafe.ok, false);
+    assert.equal(unsafe.outcome, 'tree_scaffold_landing_unsafe');
+});
+
+test('mining allows a compact entrance but rejects a visible surface trench before excavation', () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const visibleDirt = (x, z = 0) => {
+        const dirt = block('dirt', x, 64, z);
+        const air = block('air', x, 65, z);
+        air.skyLight = 15;
+        put(dirt);
+        put(air);
+        return dirt;
+    };
+    const bot = {
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || Object.assign(block('stone', position.x, position.y, position.z), { skyLight: 0 });
+        },
+    };
+
+    const compact = assessMiningSurfaceDisturbance(bot, [
+        [visibleDirt(0)],
+        [visibleDirt(1)],
+        [visibleDirt(2)],
+        [block('stone', 3, 63, 0)],
+    ]);
+    assert.deepEqual(compact, {
+        ok: true,
+        outcome: 'compact_surface_entrance',
+        visibleBlocks: 3,
+        lastVisibleStep: 2,
+    });
+
+    const lateSurfaceCut = assessMiningSurfaceDisturbance(bot, [
+        [], [], [], [visibleDirt(4)],
+    ]);
+    assert.equal(lateSurfaceCut.ok, false);
+    assert.equal(lateSurfaceCut.outcome, 'surface_excavation_not_bounded');
+
+    const wideSurfaceCut = assessMiningSurfaceDisturbance(bot, [[
+        visibleDirt(10),
+        visibleDirt(11),
+        visibleDirt(12),
+        visibleDirt(13),
+        visibleDirt(14),
+        visibleDirt(15),
+        visibleDirt(16),
+    ]]);
+    assert.equal(wideSurfaceCut.ok, false);
+    assert.equal(wideSurfaceCut.outcome, 'surface_excavation_budget_exceeded');
+});
 
 test('natural mining requires recoverable drop support and a stance not supported by the target', () => {
     const unsupported = fixture({ supported: false });

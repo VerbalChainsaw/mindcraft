@@ -177,6 +177,9 @@ const MINING_ROUTE_STEP_TIMEOUT_MS = 2_000;
 const MINING_ROUTE_STEP_ESTIMATE_MS = 450;
 const MINING_ROUTE_DEADLINE_RESERVE_MS = 3_500;
 const MAX_MINING_EXCAVATION_BLOCKS = 96;
+const MAX_MINING_SURFACE_EXCAVATION_BLOCKS = 6;
+const MAX_MINING_SURFACE_EXCAVATION_STEPS = 3;
+const MAX_MINING_SURFACE_STAGE_DISTANCE = 10;
 const MAX_MINING_CORRIDOR_EXPANSIONS = 6_000;
 const MAX_MINING_CORRIDOR_SOLUTIONS = 12;
 const MAX_MINING_CORRIDOR_DETOUR = 8;
@@ -377,7 +380,23 @@ const TOOL_TIER = Object.freeze({
 const HUNTABLE_FOOD_ANIMALS = new Set(['chicken', 'cow', 'pig', 'rabbit', 'sheep']);
 
 function setActionEvidence(bot, evidence) {
-    bot.lastActionEvidence = { ...evidence, recordedAt: Date.now() };
+    const previous = bot.lastActionEvidence;
+    const preservesVerifiedMiningRoute = Boolean(
+        previous?.routeDigging === true
+        && previous?.returnable === true
+        && Array.isArray(previous?.returnRoute)
+        && previous.returnRoute.length > 0
+        && evidence?.returnable !== false
+    );
+    bot.lastActionEvidence = {
+        ...(preservesVerifiedMiningRoute ? {
+            routeDigging: true,
+            returnable: true,
+            returnRoute: previous.returnRoute,
+        } : {}),
+        ...evidence,
+        recordedAt: Date.now(),
+    };
 }
 
 function collectionErrorOutcome(error) {
@@ -1309,6 +1328,7 @@ function safeMovements(bot) {
     // breaking; following, workstation approaches, pickup, and recovery may
     // only use native movement through existing space.
     movements.canDig = false;
+    movements.canPlaceBlocks = false;
     movements.allow1by1towers = false;
     movements.allowParkour = false;
     movements.allowSprinting = true;
@@ -1869,6 +1889,11 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
     allowPillars = false,
     allowNaturalRouteDigging = false,
     requireReturnableRoute = false,
+    maxScaffoldingPlacements = Infinity,
+    onBlockPlaced = null,
+    placementAuthorizer = null,
+    placementExclusions = null,
+    additionalSafeToBreak = null,
 } = {}) {
     const targetBlocks = Array.isArray(targetBlockOrBlocks)
         ? targetBlockOrBlocks
@@ -1878,6 +1903,13 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
         .map(block => `${block.type}:${block.position.x}:${block.position.y}:${block.position.z}`));
     const safetyGuard = collectionSafetyMovements(bot);
     const movements = collectionSafetyMovements(bot);
+    // This movement is already capability-scoped: safeToBreak below permits
+    // only the selected resource and the explicitly authorized natural route
+    // cells. Do not inherit the large generic anti-destruction dig penalty
+    // here. Pathfinder treats sufficiently expensive edges as unreachable,
+    // which made a legal route through a few spruce leaves disappear before
+    // it could reach the trunk or its authorized temporary scaffold.
+    movements.digCost = 1;
     // collectblock mutates its Movements instance before starting. Keep the
     // authoritative safety checks on a separate instance and expose only the
     // exact bounded target set to pathfinder; every incidental route block
@@ -1891,11 +1923,34 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
             allowNaturalRouteDigging
             && safetyGuard.defaultSafeToBreak(candidate)
             && isNaturalFillBlock(bot, candidate)
+        ) || (
+            typeof additionalSafeToBreak === 'function'
+            && safetyGuard.defaultSafeToBreak(candidate)
+            && additionalSafeToBreak(candidate) === true
         );
     };
     // A whole-tree harvest may need one temporary pillar to reach the crown.
     // This is never enabled for generic collection or ordinary navigation.
+    movements.canPlaceBlocks = allowPillars === true;
     movements.allow1by1towers = allowPillars === true;
+    movements.maxScaffoldingPlacements = Number.isFinite(maxScaffoldingPlacements)
+        ? Math.max(0, Math.floor(maxScaffoldingPlacements))
+        : Infinity;
+    movements.onBlockPlaced = typeof onBlockPlaced === 'function' ? onBlockPlaced : null;
+    if (allowPillars === true && typeof placementAuthorizer === 'function') {
+        // Pathfinder owns how to execute a legal tower edge, while the
+        // capability owns where construction is authorized. A denied cell is
+        // removed from A* before execution, preventing speculative pillars
+        // from bloating search or appearing around the worksite.
+        movements.exclusionAreasPlace.push(block => (
+            placementAuthorizer(block?.position) === true ? 0 : 1_000
+        ));
+    }
+    if (Array.isArray(placementExclusions) && placementExclusions.length > 0) {
+        movements.exclusionAreasPlace.push(block => (
+            collectionPositionExcluded(block?.position, placementExclusions) ? 1_000 : 0
+        ));
+    }
     if (requireReturnableRoute) {
         // A collection plugin may pursue a falling drop after breaking the
         // target. Never advertise a descent it cannot climb back from when
@@ -2226,6 +2281,7 @@ function collectionSearchEvidence(bot, search) {
 
 async function recoverCollectionAccess(bot, resourceName, selection, search, {
     allowNaturalRouteDigging = false,
+    preservedReturnRoute = [],
 } = {}) {
     if (bot.interrupt_code || !bot.entity?.position) return false;
     const attemptedTargets = new Set(search.accessRecoveryTargets || []);
@@ -2276,6 +2332,10 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
                 candidate.name,
                 MINING_TUNNEL_LENGTH,
                 candidate,
+                {
+                    preservedReturnRoute,
+                    expectedProtectedRouteCells: preservedReturnRoute.length,
+                },
             );
             const end = bot.entity?.position;
             const moved = end?.distanceTo(start) || 0;
@@ -5794,6 +5854,9 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             Math.floor(searchOptions.preferredPosition.z),
         )
         : null;
+    const preservedReturnRoute = normalizePreservedMiningReturnRoute(
+        searchOptions?.preservedReturnRoute,
+    );
     const excludedPositions = normalizeCollectionExclusions(exclude);
     const retryDifferentCollectionTarget = (outcome, target) => {
         if (
@@ -5908,6 +5971,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 searchOptions?.allowAccessRecovery !== false
                 && await recoverCollectionAccess(bot, blockType, selection, search, {
                     allowNaturalRouteDigging,
+                    preservedReturnRoute,
                 })
             );
             if (recoveredAccess) {
@@ -6466,8 +6530,11 @@ const NATURAL_TREE_SUPPORTS = new Set([
 ]);
 const MAX_TREE_LOGS = 64;
 const MAX_WHOLE_TREE_PASSES = 4;
+const MAX_TEMPORARY_TREE_SCAFFOLDS = 8;
 const TREE_HORIZONTAL_RADIUS = 6;
 const TREE_VERTICAL_RADIUS = 32;
+const TREE_SETTLEMENT_RADIUS = 6;
+const MAX_TREE_SETTLEMENT_STANCES = 24;
 const TREE_NEIGHBORS = Object.freeze((() => {
     const offsets = [];
     for (let x = -1; x <= 1; x++) {
@@ -6482,6 +6549,30 @@ const TREE_NEIGHBORS = Object.freeze((() => {
 
 function blockPositionKey(position) {
     return `${position.x}:${position.y}:${position.z}`;
+}
+
+function ownedTemporaryScaffoldMatches(scaffold, block) {
+    if (!scaffold?.itemName || !block?.position) return false;
+    if (block.name === scaffold.itemName) return true;
+    // Exposed placed dirt may naturally spread into grass or mycelium before
+    // a long tree transaction finishes. The exact placement coordinate is
+    // still authoritative; accepting only these vanilla transformations lets
+    // cleanup reclaim its own block without broadening into nearby terrain.
+    return scaffold.itemName === 'dirt'
+        && ['grass_block', 'mycelium'].includes(block.name);
+}
+
+export function treeScaffoldPositionAuthorized(tree, position) {
+    if (!position || !Array.isArray(tree?.logs)) return false;
+    // A temporary tree scaffold may occupy only a voxel that belonged to the
+    // exact natural component before this action removed it. This gives native
+    // Pathfinder a narrow vertical corridor without granting construction
+    // authority anywhere else in the forest or player worksite.
+    return tree.logs.some(log => (
+        log?.position?.x === position.x
+        && log.position.y === position.y
+        && log.position.z === position.z
+    ));
 }
 
 function treeCanopyBlock(name) {
@@ -6576,6 +6667,285 @@ function carriedLogCount(bot, woodTypes=null) {
             ? total + Math.max(0, Number(item.count) || 0)
             : total
     ), 0);
+}
+
+export function treeSettlementStances(bot, tree, placedScaffolds=[]) {
+    const base = tree?.base;
+    if (!base?.offset || typeof bot?.blockAt !== 'function') return [];
+    const placedSupportKeys = new Set([...placedScaffolds]
+        .map(scaffold => scaffold?.position || scaffold)
+        .filter(position => position?.offset)
+        .map(blockPositionKey));
+    const current = bot.entity?.position;
+    const currentY = Number(current?.y);
+    const minY = base.y - TREE_SETTLEMENT_RADIUS;
+    const maxY = Math.max(
+        base.y + TREE_SETTLEMENT_RADIUS,
+        Number.isFinite(currentY) ? Math.ceil(currentY) + 2 : base.y,
+    );
+    const candidates = [];
+    const candidateKeys = new Set();
+
+    for (let distance = 0; distance <= TREE_SETTLEMENT_RADIUS; distance += 1) {
+        for (let dx = -distance; dx <= distance; dx += 1) {
+            for (let dz = -distance; dz <= distance; dz += 1) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== distance) continue;
+                const stance = loadedSurfaceStandingCell(
+                    bot,
+                    base.x + dx,
+                    base.z + dz,
+                    minY,
+                    maxY,
+                );
+                if (!stance) continue;
+                const support = bot.blockAt(stance.offset(0, -1, 0));
+                if (
+                    !NATURAL_FILL_BLOCKS.has(String(support?.name || ''))
+                    || placedSupportKeys.has(blockPositionKey(support.position))
+                ) continue;
+                const key = blockPositionKey(stance);
+                if (candidateKeys.has(key)) continue;
+                candidateKeys.add(key);
+                candidates.push(stance);
+            }
+        }
+    }
+
+    return candidates
+        .sort((left, right) => (
+            (current?.distanceTo(left) ?? Number.POSITIVE_INFINITY)
+                - (current?.distanceTo(right) ?? Number.POSITIVE_INFINITY)
+            || left.distanceTo(base) - right.distanceTo(base)
+            || left.y - right.y
+            || left.x - right.x
+            || left.z - right.z
+        ))
+        .slice(0, MAX_TREE_SETTLEMENT_STANCES);
+}
+
+export function assessTreeScaffoldDescentStep(bot, placedScaffolds=[]) {
+    const scaffolds = [...placedScaffolds]
+        .filter(scaffold => scaffold?.position?.offset && scaffold?.itemName);
+    const feet = observedSupportedStandingCell(bot);
+    if (!feet) return { ok: false, outcome: 'tree_scaffold_body_unsettled' };
+
+    const supportPosition = feet.offset(0, -1, 0);
+    const supportBlock = bot.blockAt(supportPosition);
+    const ownedSupport = scaffolds.find(scaffold => (
+        blockPositionKey(scaffold.position) === blockPositionKey(supportPosition)
+        && ownedTemporaryScaffoldMatches(scaffold, supportBlock)
+    ));
+    if (!ownedSupport) {
+        return { ok: false, outcome: 'tree_scaffold_not_supporting_body' };
+    }
+
+    const landingSupportPosition = supportPosition.offset(0, -1, 0);
+    const landingSupport = bot.blockAt(landingSupportPosition);
+    const ownedLandingSupport = scaffolds.some(scaffold => (
+        blockPositionKey(scaffold.position) === blockPositionKey(landingSupportPosition)
+        && ownedTemporaryScaffoldMatches(scaffold, landingSupport)
+    ));
+    if (
+        !landingSupport
+        || isLiquidGameplayBlock(landingSupport)
+        || isHazardousGameplayBlock(landingSupport)
+        || isFallingGameplayBlock(landingSupport)
+        || (!ownedLandingSupport && !isAnchoredGameplaySupport(bot, landingSupport))
+    ) {
+        return {
+            ok: false,
+            outcome: 'tree_scaffold_landing_unsafe',
+            target: supportPosition,
+            observed: landingSupport?.name || 'unloaded',
+        };
+    }
+
+    const adjacentLiquid = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .map(([dx, dz]) => bot.blockAt(supportPosition.offset(dx, 0, dz)))
+        .find(isLiquidGameplayBlock);
+    if (adjacentLiquid) {
+        return {
+            ok: false,
+            outcome: 'tree_scaffold_landing_liquid',
+            target: supportPosition,
+            observed: adjacentLiquid.name,
+        };
+    }
+
+    return {
+        ok: true,
+        outcome: 'tree_scaffold_descent_ready',
+        target: supportPosition,
+        expectedFeet: supportPosition.clone(),
+        landingSupport: landingSupportPosition,
+        landingKind: ownedLandingSupport ? 'owned_scaffold' : 'natural_terrain',
+    };
+}
+
+async function reclaimSupportingTreeScaffolds(bot, placedScaffolds) {
+    const scaffolds = [...placedScaffolds]
+        .filter(scaffold => scaffold?.position?.offset && scaffold?.itemName)
+        .slice(0, MAX_TEMPORARY_TREE_SCAFFOLDS);
+    let reclaimed = 0;
+    while (reclaimed < scaffolds.length && !bot.interrupt_code) {
+        const step = assessTreeScaffoldDescentStep(bot, scaffolds);
+        if (step.outcome === 'tree_scaffold_not_supporting_body') {
+            return { complete: true, outcome: 'tree_scaffold_descent_complete', reclaimed };
+        }
+        if (!step.ok) return { complete: false, ...step, reclaimed };
+
+        if (!await breakBlockAt(
+            bot,
+            step.target.x,
+            step.target.y,
+            step.target.z,
+            { requireHarvest: false },
+        )) {
+            return {
+                complete: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'tree_scaffold_break_failed',
+                target: step.target,
+                reclaimed,
+            };
+        }
+        const landed = await waitForWorldCondition(
+            bot,
+            () => physicallyOccupiesStandingCell(bot, step.expectedFeet),
+            GROUND_SETTLE_TIMEOUT_MS,
+            25,
+        );
+        if (!landed) {
+            return {
+                complete: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'tree_scaffold_descent_unverified',
+                target: step.target,
+                reclaimed,
+            };
+        }
+        reclaimed += 1;
+    }
+    const pending = assessTreeScaffoldDescentStep(bot, scaffolds);
+    return pending.outcome === 'tree_scaffold_not_supporting_body'
+        ? { complete: true, outcome: 'tree_scaffold_descent_complete', reclaimed }
+        : { complete: false, ...pending, reclaimed };
+}
+
+function pendingOwnedTreeScaffolds(bot, placedScaffolds) {
+    return [...placedScaffolds]
+        .filter(scaffold => scaffold?.position?.offset && scaffold?.itemName)
+        .map(scaffold => ({
+            scaffold,
+            block: bot.blockAt(scaffold.position),
+        }))
+        .filter(({ scaffold, block }) => ownedTemporaryScaffoldMatches(scaffold, block))
+        .sort((left, right) => (
+            right.block.position.y - left.block.position.y
+            || left.block.position.x - right.block.position.x
+            || left.block.position.z - right.block.position.z
+        ));
+}
+
+async function reclaimDetachedTreeScaffolds(bot, tree, placedScaffolds) {
+    const scaffolds = [...placedScaffolds]
+        .filter(scaffold => scaffold?.position?.offset && scaffold?.itemName)
+        .slice(0, MAX_TEMPORARY_TREE_SCAFFOLDS);
+    let reclaimed = 0;
+    while (reclaimed < scaffolds.length && !bot.interrupt_code) {
+        const pending = pendingOwnedTreeScaffolds(bot, scaffolds);
+        if (pending.length === 0) {
+            return { complete: true, outcome: 'tree_scaffold_cleanup_complete', reclaimed };
+        }
+
+        // CollectBlock is authoritative for reaching and breaking the exact
+        // placed block, but it receives only one target. A bulk queue lets its
+        // nearest-target heuristic break a pillar base before its top. The
+        // tree transaction instead binds the highest remaining owned cell and
+        // verifies its removal before selecting the next one.
+        const target = pending[0].block;
+        bot.collectBlock.movements = targetScopedCollectionMovements(bot, [target], {
+            allowPillars: false,
+        });
+        let collectionError = null;
+        try {
+            await runBoundedCollectionOperation(
+                bot,
+                () => bot.collectBlock.collect([target], {
+                    ignoreNoPath: true,
+                    targetTimeoutMs: 5_000,
+                    targetStallTimeoutMs: 2_000,
+                    maxTargetFailures: 1,
+                }),
+                () => bot.collectBlock.cancelTask(),
+            );
+        } catch (error) {
+            collectionError = error;
+        }
+        const live = bot.blockAt(pending[0].scaffold.position);
+        if (ownedTemporaryScaffoldMatches(pending[0].scaffold, live)) {
+            return {
+                complete: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'tree_scaffold_cleanup_failed',
+                reclaimed,
+                target: pending[0].scaffold.position,
+                error: collectionError,
+            };
+        }
+        reclaimed += 1;
+
+        // Reaching one target may move the body back into the changing
+        // canopy. Re-establish a verified natural stance before binding the
+        // next exact cleanup target.
+        const settlement = await settleTreeTransactionOnTerrain(bot, tree, scaffolds);
+        if (!settlement.settled) {
+            return {
+                complete: false,
+                outcome: settlement.outcome,
+                reclaimed,
+                target: pending[0].scaffold.position,
+            };
+        }
+    }
+    const pending = pendingOwnedTreeScaffolds(bot, scaffolds);
+    return pending.length === 0
+        ? { complete: true, outcome: 'tree_scaffold_cleanup_complete', reclaimed }
+        : {
+            complete: false,
+            outcome: bot.interrupt_code ? 'interrupted' : 'tree_scaffold_cleanup_bounded',
+            reclaimed,
+            target: pending[0].scaffold.position,
+        };
+}
+
+async function settleTreeTransactionOnTerrain(bot, tree, placedScaffolds) {
+    const stances = treeSettlementStances(bot, tree, placedScaffolds);
+    if (stances.length === 0) {
+        return { settled: false, outcome: 'tree_terrain_stance_unavailable', target: null };
+    }
+    let settled = isAtCollectionStance(bot, stances);
+    if (!settled && !bot.interrupt_code) {
+        const reached = await goToGoal(bot, collectionApproachGoal(stances), {
+            // This is ordinary locomotion away from an owned temporary
+            // pillar, not traversal through a preflighted mining corridor.
+            // The corridor policy deliberately caps drops at one block; using
+            // it here erased Pathfinder's native, damage-free route from the
+            // top of a short tree scaffold to nearby terrain.
+            movements: () => safeMovements(bot),
+            allowHealthBoundedDescent: false,
+            // The collector may finish inside the exact tree's changing
+            // canopy. The shared navigation primitive owns one bounded local
+            // foliage escape, then native Pathfinder retries the same verified
+            // terrain stance. Without it, an ordinary leaf collision turns a
+            // completed tree into a false permanent settlement failure.
+            allowLocalRecovery: true,
+        });
+        settled = Boolean(reached && isAtCollectionStance(bot, stances));
+    }
+    const target = stances.find(stance => physicallyOccupiesStandingCell(bot, stance)) || null;
+    return {
+        settled,
+        outcome: settled ? 'tree_terrain_settled' : 'tree_terrain_settlement_unverified',
+        target,
+    };
 }
 
 function collectionCandidateShortlist(bot, blocks, collapseVerticalColumns = false) {
@@ -6696,6 +7066,7 @@ export function findNearestCollectibleBlock(bot, blockTypes, range=64, exclude=n
 
 async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.POSITIVE_INFINITY, {
     completeStartedTree = false,
+    placementExclusions = null,
 } = {}) {
     const before = carriedLogCount(bot, woodTypes);
     const ordered = [...(tree?.logs || [])]
@@ -6707,15 +7078,33 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
         .map(block => bot.blockAt(block.position))
         .filter(block => block?.position && woodTypes.has(block.name));
     if (targets.length === 0) {
-        return { count: 0, remaining: [], error: null, passes: 0 };
+        return {
+            count: 0,
+            remaining: [],
+            error: null,
+            passes: 0,
+            settledOnTerrain: true,
+            settlementOutcome: 'tree_not_started',
+            settlementTarget: null,
+            scaffoldsPlaced: 0,
+            scaffoldsReclaimed: 0,
+            remainingScaffolds: [],
+        };
     }
 
     let operationError = null;
     let passes = 0;
+    let accessRecoveryUsed = false;
+    const placedScaffolds = new Map();
+    let scaffoldCleanup = { placed: 0, reclaimed: 0, remaining: [] };
+    let settlement = { settled: false, outcome: 'tree_terrain_settlement_pending', target: null };
     bot.modes.pause('unstuck');
     bot.modes.pause('elbow_room');
     try {
-        while (targets.length > 0 && passes < (completeStartedTree ? MAX_WHOLE_TREE_PASSES : 1)) {
+        while (
+            targets.length > 0
+            && passes < (completeStartedTree ? MAX_WHOLE_TREE_PASSES + 1 : 1)
+        ) {
             const targetCountBeforePass = targets.length;
             // CollectBlock owns native locomotion, exact target breaking, drop
             // pursuit, and settled cancellation. A complete-tree caller may
@@ -6723,7 +7112,34 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
             // removed at least one real log; that is monotonic geometry
             // convergence, not an identical retry.
             bot.collectBlock.movements = targetScopedCollectionMovements(bot, targets, {
-                allowPillars: false,
+                allowPillars: completeStartedTree,
+                maxScaffoldingPlacements: Math.max(
+                    0,
+                    MAX_TEMPORARY_TREE_SCAFFOLDS - placedScaffolds.size,
+                ),
+                placementExclusions,
+                // The verified natural trunk owns only its immediately
+                // attached canopy. Ordinary navigation still cannot clear
+                // foliage, and distant/player landscaping remains outside
+                // this exact tree transaction.
+                additionalSafeToBreak: candidate => (
+                    treeCanopyBlock(candidate?.name)
+                    && !collectionPositionExcluded(candidate?.position, placementExclusions)
+                    && isEnvironmentallySafeToClear(bot, candidate)
+                    && tree.logs.some(log => (
+                        Math.abs(log.position.x - candidate.position.x) <= 2
+                        && Math.abs(log.position.y - candidate.position.y) <= 2
+                        && Math.abs(log.position.z - candidate.position.z) <= 2
+                    ))
+                ),
+                onBlockPlaced: placement => {
+                    if (!placement?.position || !placement.itemName) return;
+                    placedScaffolds.set(blockPositionKey(placement.position), {
+                        position: placement.position.clone(),
+                        itemName: placement.itemName,
+                    });
+                },
+                placementAuthorizer: position => treeScaffoldPositionAuthorized(tree, position),
             });
             try {
                 await runBoundedCollectionOperation(
@@ -6732,6 +7148,7 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
                         ignoreNoPath: true,
                         targetTimeoutMs: 8_000,
                         targetStallTimeoutMs: 3_000,
+                        deferDropPickupUntilBlocksComplete: completeStartedTree,
                         isSatisfied: () => !completeStartedTree
                             && carriedLogCount(bot, woodTypes) - before >= limit,
                         maxTargetFailures: Math.min(2, targets.length),
@@ -6746,7 +7163,95 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
                 .map(block => bot.blockAt(block.position))
                 .filter(block => block?.position && woodTypes.has(block.name));
             if (!completeStartedTree || targets.length === 0 || bot.interrupt_code) break;
-            if (targets.length >= targetCountBeforePass) break;
+            if (targets.length >= targetCountBeforePass) {
+                // A no-progress pass after the tree changed most often means
+                // the body is wedged in its canopy, not that the remaining
+                // connected logs require a new strategy. Permit one shared,
+                // bounded foliage escape and then resubmit only the verified
+                // remainder. A second identical signature ends the action.
+                if (!accessRecoveryUsed && passes <= MAX_WHOLE_TREE_PASSES) {
+                    accessRecoveryUsed = true;
+                    const recovery = await attemptLocalNavigationEscape(bot);
+                    if (recovery.success) continue;
+                }
+                break;
+            }
+        }
+        if (!bot.interrupt_code && placedScaffolds.size > 0) {
+            // A tree pillar is an exact, bounded construction transaction.
+            // Reclaim its supporting cells from the top down while descending
+            // one verified block at a time. Giving the whole column to a
+            // nearest-target collector lets it break the base first, turning
+            // the remaining cleanup into falling debris or body support.
+            const descent = await reclaimSupportingTreeScaffolds(
+                bot,
+                placedScaffolds.values(),
+            );
+            if (!descent.complete && !operationError) {
+                operationError = new Error(`Tree scaffold descent failed: ${descent.outcome}.`);
+                operationError.name = 'TreeScaffoldDescentUnverified';
+            }
+        }
+        if (!bot.interrupt_code) {
+            // Tree completion owns a usable body stance as well as the log
+            // delta. Move off the exact temporary trunk/pillar while it still
+            // exists, using native Pathfinder through already-clear space.
+            // Cleanup can then reclaim the support without asking the bot to
+            // mine the block it is standing on.
+            settlement = await settleTreeTransactionOnTerrain(
+                bot,
+                tree,
+                placedScaffolds.values(),
+            );
+            if (!settlement.settled && !operationError) {
+                operationError = new Error('Tree collection could not settle on verified nearby terrain.');
+                operationError.name = 'TreeSettlementUnverified';
+            }
+        }
+        if (placedScaffolds.size > 0 && !bot.interrupt_code && settlement.settled) {
+            const cleanup = await reclaimDetachedTreeScaffolds(
+                bot,
+                tree,
+                placedScaffolds.values(),
+            );
+            if (!cleanup.complete && !operationError) {
+                operationError = cleanup.error
+                    || new Error(`Tree scaffold cleanup failed: ${cleanup.outcome}.`);
+            }
+            const remaining = [...placedScaffolds.values()].filter(scaffold => {
+                const block = bot.blockAt(scaffold.position);
+                return ownedTemporaryScaffoldMatches(scaffold, block);
+            });
+            scaffoldCleanup = {
+                placed: placedScaffolds.size,
+                reclaimed: placedScaffolds.size - remaining.length,
+                remaining,
+            };
+            // Breaking the owned pillar is not sufficient if target pursuit
+            // climbed back into foliage. Re-verify the same terrain contract
+            // before releasing the tree transaction.
+            settlement = await settleTreeTransactionOnTerrain(
+                bot,
+                tree,
+                placedScaffolds.values(),
+            );
+            if (!settlement.settled && !operationError) {
+                operationError = new Error('Tree cleanup did not settle on verified nearby terrain.');
+                operationError.name = 'TreeSettlementUnverified';
+            }
+            log(
+                bot,
+                `Reclaimed ${scaffoldCleanup.reclaimed}/${scaffoldCleanup.placed} temporary tree scaffold block(s).`,
+            );
+            if (remaining.length > 0 && !operationError) {
+                operationError = new Error(`Failed to reclaim ${remaining.length} temporary tree scaffold block(s).`);
+            }
+        } else if (placedScaffolds.size > 0) {
+            scaffoldCleanup = {
+                placed: placedScaffolds.size,
+                reclaimed: 0,
+                remaining: [...placedScaffolds.values()],
+            };
         }
     } finally {
         const routeMovements = safeMovements(bot);
@@ -6765,6 +7270,12 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
         remaining,
         error: operationError,
         passes,
+        settledOnTerrain: settlement.settled,
+        settlementOutcome: settlement.outcome,
+        settlementTarget: settlement.target,
+        scaffoldsPlaced: scaffoldCleanup.placed,
+        scaffoldsReclaimed: scaffoldCleanup.reclaimed,
+        remainingScaffolds: scaffoldCleanup.remaining,
     };
 }
 
@@ -6789,6 +7300,8 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     let collected = 0;
     let stumpTarget = null;
     let completeTrees = 0;
+    let temporaryScaffoldsPlaced = 0;
+    let temporaryScaffoldsReclaimed = 0;
 
     // `num` remains the physical bound for recipe and GoalDirector collection.
     // A lumberjack work order may explicitly add the stronger stewardship
@@ -6859,9 +7372,11 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                         completeStartedTree
                             ? Number.POSITIVE_INFINITY
                             : Math.max(1, target - collected),
-                        { completeStartedTree },
+                        { completeStartedTree, placementExclusions: failedTargets },
                     );
                     collected += harvested.count;
+                    temporaryScaffoldsPlaced += harvested.scaffoldsPlaced;
+                    temporaryScaffoldsReclaimed += harvested.scaffoldsReclaimed;
                     if (bot.interrupt_code) {
                         setActionEvidence(bot, {
                             kind: 'collect',
@@ -6877,10 +7392,46 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                     if (harvested.count > 0 && harvested.remaining.length === 0) {
                         completeTrees += 1;
                     }
+                    if (harvested.remainingScaffolds.length > 0 && !bot.interrupt_code) {
+                        setActionEvidence(bot, {
+                            kind: 'collect',
+                            outcome: 'tree_cleanup_incomplete',
+                            completionBlocked: true,
+                            target: stumpTarget,
+                            count: harvested.count,
+                            scaffoldsPlaced: harvested.scaffoldsPlaced,
+                            scaffoldsReclaimed: harvested.scaffoldsReclaimed,
+                            remainingTargets: harvested.remainingScaffolds.map(scaffold => ({
+                                name: scaffold.itemName,
+                                x: scaffold.position.x,
+                                y: scaffold.position.y,
+                                z: scaffold.position.z,
+                            })),
+                            retryable: false,
+                        });
+                        log(bot, `Stopped because ${harvested.remainingScaffolds.length} temporary tree scaffold block(s) could not be reclaimed.`);
+                        return false;
+                    }
+                    if (!harvested.settledOnTerrain && !bot.interrupt_code) {
+                        setActionEvidence(bot, {
+                            kind: 'collect',
+                            outcome: harvested.settlementOutcome || 'tree_terrain_settlement_unverified',
+                            completionBlocked: true,
+                            target: stumpTarget,
+                            count: harvested.count,
+                            remainingCount: harvested.remaining.length,
+                            scaffoldsPlaced: harvested.scaffoldsPlaced,
+                            scaffoldsReclaimed: harvested.scaffoldsReclaimed,
+                            retryable: false,
+                        });
+                        log(bot, 'Stopped because the completed tree transaction did not settle on verified nearby terrain.');
+                        return false;
+                    }
                     if (completeStartedTree && harvested.remaining.length > 0) {
                         setActionEvidence(bot, {
                             kind: 'collect',
                             outcome: 'tree_incomplete',
+                            completionBlocked: true,
                             target: stumpTarget,
                             count: harvested.count,
                             remainingCount: harvested.remaining.length,
@@ -7046,6 +7597,8 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             target: stumpTarget || { name: 'wood' },
             count: collected,
             completeTrees,
+            temporaryScaffoldsPlaced,
+            temporaryScaffoldsReclaimed,
             search: collectionSearchEvidence(bot, search),
             retryable: false,
         });
@@ -12015,9 +12568,59 @@ function stableMiningStagingCandidates(bot) {
     return candidates.sort((left, right) => left.distance - right.distance);
 }
 
-async function stageMiningStaircase(bot) {
-    const current = observedSupportedStandingCell(bot);
+async function stageMiningStaircase(bot, targetBlock = null) {
+    let current = observedSupportedStandingCell(bot);
     if (!current) return false;
+    const target = targetBlock?.position;
+    const horizontalDistance = target
+        ? Math.hypot(target.x - current.x, target.z - current.z)
+        : 0;
+    if (
+        target?.offset
+        && occupiedOpenSurfaceStandingCell(bot)
+        && horizontalDistance > MAX_MINING_SURFACE_STAGE_DISTANCE
+    ) {
+        // Native locomotion owns the ordinary trip to a remote mine face. A
+        // deterministic mining corridor may create a compact entrance, but it
+        // must never substitute a long surface trench for walking around the
+        // terrain first.
+        const minY = Number.isFinite(Number(bot.game?.minY)) ? Number(bot.game.minY) : -64;
+        const height = Number.isFinite(Number(bot.game?.height)) ? Number(bot.game.height) : 384;
+        const maxY = minY + Math.max(1, height) - 1;
+        const candidates = surfaceEgressStances(bot, target, minY, maxY)
+            .filter(position => {
+                const support = bot.blockAt(position.offset(0, -1, 0));
+                return support
+                    && !isProtectedGameplayBlock(support)
+                    && !isHazardousGameplayBlock(support)
+                    && !isLiquidGameplayBlock(support);
+            });
+        const route = probeSafeNavigationStances(bot, candidates, 1_200);
+        const staging = route.reachable && route.terminalPosition
+            ? new Vec3(
+                route.terminalPosition.x,
+                route.terminalPosition.y,
+                route.terminalPosition.z,
+            )
+            : null;
+        if (!staging) return false;
+        const reached = await goToGoal(
+            bot,
+            new pf.goals.GoalBlock(staging.x, staging.y, staging.z),
+            {
+                movements: () => safeMovements(bot),
+                stallTimeoutMs: NAVIGATION_STALL_TIMEOUT_MS,
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        );
+        if (bot.interrupt_code || (!reached && !physicallyOccupiesStandingCell(bot, staging))) {
+            return false;
+        }
+        current = observedSupportedStandingCell(bot);
+        if (!current) return false;
+        log(bot, `Walked non-destructively to a surface mining site ${Math.round(horizontalDistance)} blocks nearer the selected ${targetBlock.name}.`);
+    }
     if (isStableMiningStagingCell(bot, current)) {
         const settled = await waitForWorldCondition(
             bot,
@@ -12345,6 +12948,55 @@ function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
     };
 }
 
+function miningExcavationTouchesOpenSky(bot, block) {
+    if (!block?.position?.offset) return false;
+    return [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]
+        .some(([x, y, z]) => {
+            const neighbour = bot.blockAt(block.position.offset(x, y, z));
+            return Boolean(
+                neighbour
+                && neighbour.boundingBox === 'empty'
+                && Number(neighbour.skyLight) > 0
+            );
+        });
+}
+
+export function assessMiningSurfaceDisturbance(bot, stepExcavationBlocks) {
+    const visible = [];
+    for (const [stepIndex, blocks] of (stepExcavationBlocks || []).entries()) {
+        for (const block of blocks || []) {
+            if (!miningExcavationTouchesOpenSky(bot, block)) continue;
+            visible.push({ stepIndex, block });
+        }
+    }
+    const lastVisibleStep = visible.reduce(
+        (maximum, entry) => Math.max(maximum, entry.stepIndex),
+        -1,
+    );
+    if (visible.length > MAX_MINING_SURFACE_EXCAVATION_BLOCKS) {
+        return {
+            ok: false,
+            outcome: 'surface_excavation_budget_exceeded',
+            visibleBlocks: visible.length,
+            lastVisibleStep,
+        };
+    }
+    if (lastVisibleStep >= MAX_MINING_SURFACE_EXCAVATION_STEPS) {
+        return {
+            ok: false,
+            outcome: 'surface_excavation_not_bounded',
+            visibleBlocks: visible.length,
+            lastVisibleStep,
+        };
+    }
+    return {
+        ok: true,
+        outcome: visible.length > 0 ? 'compact_surface_entrance' : 'subterranean_route',
+        visibleBlocks: visible.length,
+        lastVisibleStep,
+    };
+}
+
 function toolDurabilityReserve(bot, item) {
     const durability = toolDurability(bot, item);
     if (!Number.isFinite(durability.max)) return 0;
@@ -12616,6 +13268,18 @@ function assessMiningAccessPlan(
             )),
         );
     }
+    const surfaceDisturbance = assessMiningSurfaceDisturbance(bot, stepExcavationBlocks);
+    if (!surfaceDisturbance.ok) {
+        return {
+            ...surfaceDisturbance,
+            route,
+            stance,
+            origin,
+            excavationBlocks: [...excavation.values()],
+            stepExcavationBlocks,
+            stepEstimatedDigMs,
+        };
+    }
     if (!sameMiningCell(stance, previous)) {
         return { ok: false, outcome: 'route_misses_target_stance', route, stance };
     }
@@ -12738,6 +13402,7 @@ function assessMiningAccessPlan(
         allowUnharvestedBreaks,
         allowNaturalFoliageExcavation: allowNaturalFoliageExcavation === true,
         stageFallingDebris: stageFallingDebris === true,
+        surfaceDisturbance,
     };
 }
 
@@ -13720,7 +14385,7 @@ export async function mineSearchTunnel(
         ? livePreferredTarget
         : nearestKnownMiningTarget(bot, requested, excludedTargets);
     if (knownTarget) {
-        const staged = await stageMiningStaircase(bot);
+        const staged = await stageMiningStaircase(bot, knownTarget);
         if (!staged) {
             setActionEvidence(bot, {
                 kind: 'mining_search',

@@ -212,10 +212,19 @@ function describesMultiBlockConstruction(text, requiredFunctions = []) {
 }
 
 function describesModelSelectedItemPlan(text) {
-    const asksForInventoryWork = /\b(?:gather|collect|acquire|secure|prepare|make|craft|stock up on)\b/.test(text);
+    // "Build up our supplies" is inventory work, not authorization to place
+    // blocks. Keep this ordinary phrasal-verb form ahead of the generic
+    // construction boundary so the existing capability engine owns it.
+    const growsInventory = /\b(?:build|grow|bring|get|fill|top)\s+(?:(?:my|your|our|the)\s+)?(?:supplies|stock|inventory|resources|materials|provisions)\s+up\b/.test(text)
+        || /\b(?:build|grow|bring|get|fill|top)\s+up\s+(?:(?:my|your|our|the)\s+)?(?:supplies|stock|inventory|resources|materials|provisions)\b/.test(text);
+    const asksForInventoryWork = /\b(?:gather|collect|acquire|secure|prepare|make|craft|stock up on|restock)\b/.test(text)
+        || growsInventory;
     const namesASet = /\b(?:supplies|resources|materials|provisions|gear|equipment|tools|items)\b/.test(text);
     const delegatesSelection = /\b(?:sensible|basic|essential|starter|useful|whatever|whichever|what you need|you need|needed)\b/.test(text);
     const explicitlyBuilds = new RegExp(`${CONSTRUCTION_VERB.source}.{0,80}\\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|tower|bridge|wall|pen|platform|roof|dock|barn|workshop|worksite|workspace|work area)\\b`).test(text);
+    // Safety qualifiers commonly name nearby structures ("without damaging
+    // the outpost"). They do not change the object of "build supplies up".
+    if (growsInventory && namesASet) return true;
     return asksForInventoryWork && namesASet && delegatesSelection && !explicitlyBuilds;
 }
 

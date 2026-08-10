@@ -28,6 +28,8 @@ const DROPPED_ITEM_NUDGE_MAX_DISTANCE = 2.25;
 const BLOCK_DROP_BIND_HORIZONTAL_RADIUS = 1.5;
 const BLOCK_DROP_BIND_MAX_RISE = 1.5;
 const BLOCK_DROP_BIND_MAX_FALL = 3.5;
+const DEFERRED_DROP_BIND_HORIZONTAL_RADIUS = 2.5;
+const DEFERRED_DROP_BIND_MAX_FALL = 32;
 const SKIPPABLE_TARGET_ERRORS = new Set(['NoPath', 'Timeout', 'TargetStalled', 'TargetTimeout']);
 function isDropFromMinedBlock(block, entity) {
     if (!block?.position || entity?.name !== 'item' || !entity.position)
@@ -53,6 +55,38 @@ function isDropFromMinedBlock(block, entity) {
     }
 }
 exports.isDropFromMinedBlock = isDropFromMinedBlock;
+function refreshDeferredDrops(bot, options) {
+    if (!options.deferDropPickupUntilBlocksComplete
+        || options.targets.getClosestBlock() != null)
+        return;
+    for (const entity of Object.values(bot.entities || {})) {
+        if (entity?.name !== 'item' || !entity.position || entity.isValid === false)
+            continue;
+        if (options.deferredDropInitialEntityIds.has(entity.id)
+            || options.deferredDropAttemptedIds.has(entity.id))
+            continue;
+        let itemType;
+        try {
+            itemType = entity.getDroppedItem?.()?.type;
+        }
+        catch (_a) {
+            continue;
+        }
+        const bound = options.deferredDropSources.some(source => {
+            if (!source.dropTypes.has(itemType))
+                return false;
+            const dx = Math.abs(entity.position.x - (source.position.x + 0.5));
+            const dy = entity.position.y - (source.position.y + 0.5);
+            const dz = Math.abs(entity.position.z - (source.position.z + 0.5));
+            return dx <= DEFERRED_DROP_BIND_HORIZONTAL_RADIUS
+                && dz <= DEFERRED_DROP_BIND_HORIZONTAL_RADIUS
+                && dy <= BLOCK_DROP_BIND_MAX_RISE
+                && dy >= -DEFERRED_DROP_BIND_MAX_FALL;
+        });
+        if (bound)
+            options.targets.appendTarget(entity);
+    }
+}
 function createDroppedItemPickupGoal(entity) {
     // Item voxels are often not standable: drops can rest beneath a low
     // ceiling, inside a mined block cavity, or against a wall. Minecraft
@@ -200,7 +234,10 @@ function collectAll(bot, options) {
             // block transaction. Pick it up before routing to another block;
             // otherwise an unreachable next block can make real progress look
             // like a failed collection action.
-            const closest = options.targets.getClosestDrop() || options.targets.getClosest();
+            refreshDeferredDrops(bot, options);
+            const closest = options.deferDropPickupUntilBlocksComplete
+                ? options.targets.getClosestBlock() || options.targets.getClosestDrop()
+                : options.targets.getClosestDrop() || options.targets.getClosest();
             if (closest == null)
                 break;
             if (!(0, Inventory_1.hasInventoryRoomForTarget)(bot, closest)) {
@@ -209,7 +246,9 @@ function collectAll(bot, options) {
             try {
                 switch (closest.constructor.name) {
                     case 'Block': {
-                        const goal = new mineflayer_pathfinder_1.goals.GoalLookAtBlock(closest.position, bot.world);
+                        const goal = new mineflayer_pathfinder_1.goals.GoalLookAtBlock(closest.position, bot.world, {
+                            requireIndependentSupport: true
+                        });
                         yield gotoWithTargetLimits(bot, goal, options.targetTimeoutMs, options.targetStallTimeoutMs, options.targetSearchRadius);
                         yield mineBlock(bot, closest, options);
                         break;
@@ -218,6 +257,8 @@ function collectAll(bot, options) {
                         // Don't collect any entities that are marked as 'invalid'
                         if (!closest.isValid)
                             break;
+                        if (options.deferDropPickupUntilBlocksComplete)
+                            options.deferredDropAttemptedIds.add(closest.id);
                         const tempEvents = new TemporarySubscriber_1.TemporarySubscriber(bot);
                         let finishPickupWait;
                         let pickupObserved = false;
@@ -362,9 +403,12 @@ function mineBlock(bot, block, options) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         // @ts-expect-error
-        if (((_a = bot.blockAt(block.position)) === null || _a === void 0 ? void 0 : _a.type) !== block.type || ((_b = bot.blockAt(block.position)) === null || _b === void 0 ? void 0 : _b.type) === 0 || !bot.pathfinder.movements.safeToBreak(block)) {
+        if (((_a = bot.blockAt(block.position)) === null || _a === void 0 ? void 0 : _a.type) !== block.type || ((_b = bot.blockAt(block.position)) === null || _b === void 0 ? void 0 : _b.type) === 0) {
             options.targets.removeTarget(block);
             return;
+        }
+        if (!bot.pathfinder.movements.safeToBreak(block)) {
+            throw (0, Util_1.error)('UnsafeTarget', `The live target at ${block.position.x}, ${block.position.y}, ${block.position.z} is not safe to break from the settled stance.`);
         }
         yield equipCollectionTool(bot, block, options.toolPolicy);
         if (bot.heldItem !== null && !block.canHarvest(bot.heldItem.type)) {
@@ -499,6 +543,18 @@ class CollectBlock {
                     : options.targetStallTimeoutMs),
                 targetSearchRadius: boundedTargetSearchRadius(options.targetSearchRadius),
                 toolPolicy: options.toolPolicy === 'fastest' ? 'fastest' : 'preserve_durability',
+                deferDropPickupUntilBlocksComplete: options.deferDropPickupUntilBlocksComplete === true,
+                deferredDropSources: (Array.isArray(target) ? target : [target])
+                    .filter(candidate => candidate?.constructor?.name === 'Block' && candidate.position)
+                    .map(candidate => ({
+                    position: candidate.position.clone(),
+                    dropTypes: new Set((Array.isArray(candidate.drops) ? candidate.drops : [])
+                        .filter(type => Number.isInteger(type)))
+                })),
+                deferredDropInitialEntityIds: new Set(Object.values(this.bot.entities || {})
+                    .filter(entity => entity?.name === 'item')
+                    .map(entity => entity.id)),
+                deferredDropAttemptedIds: new Set(),
                 targets: this.targets
             };
             if (this.bot.pathfinder == null) {

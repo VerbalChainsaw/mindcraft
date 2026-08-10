@@ -90,6 +90,7 @@ test('request context bounds, sanitizes, clones, and permits only scalar or null
     selectedSkill: `!${'skill\u0007 '.repeat(30)}`,
     args: sourceArgs,
     requestedAt: 1234.9,
+    agendaDisposition: 'interrupt',
   });
   sourceArgs[0] = 'mutated';
 
@@ -100,6 +101,7 @@ test('request context bounds, sanitizes, clones, and permits only scalar or null
   assert.equal(context.selectedSkill.length <= 80, true);
   assert.equal(/[\u0000-\u001f\u007f]/.test(context.selectedSkill), false);
   assert.equal(context.requestedAt, 1234);
+  assert.equal(context.agendaDisposition, 'interrupt');
 });
 
 test('route origins remain distinct and unknown values fall back to internal', () => {

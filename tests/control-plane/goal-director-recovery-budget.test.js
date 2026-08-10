@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { GoalDirector } from '../../src/agent/runtime/goal-director.js';
+import { capabilityCommand } from '../../src/agent/runtime/capability-catalogue.js';
 import { createItemGoalContract, normalizeGoalContract } from '../../src/agent/runtime/goal-contract.js';
 
 function subgoal(kind, index, state = 'succeeded') {
@@ -395,6 +396,129 @@ test('recovery history does not spend the productive-step ceiling, which still f
   assert.deepEqual(director.collectionExclusions(), [
     { x: 4, y: 12, z: 8, radius: 4 },
   ]);
+});
+
+test('a verified mining route survives a partially productive failure and must be retraced before inventory-goal completion', () => {
+  const director = createDirector();
+  const base = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'Director',
+    target: {
+      requestedName: 'cobblestone',
+      canonicalName: 'cobblestone',
+      inventoryName: 'cobblestone',
+      acquisitionName: 'stone',
+      family: null,
+      acquisitionKind: 'collect_block',
+    },
+    quantity: 1,
+  });
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  director.agent.bot.inventory.slots = [{ name: 'cobblestone', count: 1 }];
+  director.activeGoal = normalizeGoalContract({
+    ...base,
+    subgoals: [{
+      ...subgoal('plan', 1, 'acting'),
+      targetName: 'cobblestone',
+      expectedIncrease: 1,
+      targetInventoryBefore: 0,
+    }],
+  });
+
+  director.handleResult('plan', {
+    actionId: 'cobble-through-corridor',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    detail: 'Collected cobblestone through a verified two-cell route before the next target was unreachable.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'mining_search',
+        outcome: 'resource_collected',
+        target: { name: 'stone', x: 4, y: 30, z: 8 },
+        returnRoute: [
+          { x: 2, y: 32, z: 8 },
+          { x: 3, y: 31, z: 8 },
+        ],
+        routeDigging: true,
+        returnable: true,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.phase, 'verify_complete');
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute, [
+    { x: 2, y: 32, z: 8 },
+    { x: 3, y: 31, z: 8 },
+  ]);
+  assert.equal(director.activeGoal.checkpoint.miningReturnIndex, 1);
+  assert.equal(director.activeGoal.checkpoint.miningReturnDimension, 'overworld');
+  assert.equal(director.verify().code, 'mining_return_pending');
+
+  const dispatched = [];
+  director.dispatch = (kind, command, step) => {
+    dispatched.push({ kind, command, step });
+    return true;
+  };
+  director.nextAttemptAt = 0;
+  director.update();
+  assert.equal(dispatched[0].kind, 'recover');
+  assert.equal(
+    capabilityCommand(dispatched[0].step.capability),
+    '!traverseMiningRouteCell(3, 31, 8)',
+  );
+  assert.equal(dispatched[0].step.capability.id, 'traverse_mining_route_cell');
+  assert.deepEqual(dispatched[0].step.capability.arguments, {
+    x: 3,
+    y: 31,
+    z: 8,
+    dimension: 'overworld',
+  });
+
+  director.appendActingSubgoal('recover', '!traverseMiningRouteCell(3, 31, 8)');
+  director.handleResult('recover', {
+    actionId: 'return-tail',
+    phase: 'succeeded',
+    code: 'skill_route_cell_returned',
+    detail: 'Returned through the inner route cell.',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'mining_return',
+        outcome: 'route_cell_returned',
+        target: { name: 'mining_return_cell', x: 3, y: 31, z: 8 },
+        returnable: true,
+      },
+    },
+  });
+  assert.equal(director.activeGoal.checkpoint.miningReturnIndex, 0);
+
+  director.nextAttemptAt = 0;
+  director.update();
+  assert.deepEqual(dispatched[1].step.capability.arguments, {
+    x: 2,
+    y: 32,
+    z: 8,
+    dimension: 'overworld',
+  });
+  director.appendActingSubgoal('recover', '!traverseMiningRouteCell(2, 32, 8)');
+  director.handleResult('recover', {
+    actionId: 'return-origin',
+    phase: 'succeeded',
+    code: 'skill_route_cell_returned',
+    detail: 'Returned to the route origin.',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'mining_return',
+        outcome: 'route_cell_returned',
+        target: { name: 'mining_return_cell', x: 2, y: 32, z: 8 },
+        returnable: true,
+      },
+    },
+  });
+  assert.equal(director.activeGoal.checkpoint.miningReturnIndex, -1);
+  assert.equal(director.verify().code, 'inventory_goal_verified');
 });
 
 test('an Agenda-owned goal failure settles upward without activating Hold or announcing a false terminal outcome', async () => {

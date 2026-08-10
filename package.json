@@ -21,7 +21,7 @@
         "mineflayer": "4.37.1",
         "mineflayer-armor-manager": "^2.0.1",
         "mineflayer-auto-eat": "^3.3.6",
-        "mineflayer-collectblock": "^1.4.1",
+        "mineflayer-collectblock": "file:packages/minecraft-runtime/mineflayer-collectblock",
         "mineflayer-pathfinder": "file:packages/minecraft-runtime/mineflayer-pathfinder",
         "mineflayer-pvp": "1.3.2",
         "mineflayer-tool": "^1.1.0",

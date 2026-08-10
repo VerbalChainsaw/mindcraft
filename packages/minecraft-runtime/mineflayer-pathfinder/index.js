@@ -1052,21 +1052,29 @@ function inject (bot) {
       }
       if (canPlace) {
         if (!lockEquipItem.tryAcquire()) return
+        const placement = placingBlock
+        const placementMovements = stateMovements
         bot.equip(block, 'hand')
           .then(function () {
             lockEquipItem.release()
-            const refBlock = bot.blockAt(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z), false)
+            const refBlock = bot.blockAt(new Vec3(placement.x, placement.y, placement.z), false)
+            const placedPosition = refBlock.position.offset(placement.dx, placement.dy, placement.dz)
             if (!lockPlaceBlock.tryAcquire()) return
-            bot.world.setBlockStateId(refBlock.position.offset(placingBlock.dx, placingBlock.dy, placingBlock.dz), 1)
+            bot.world.setBlockStateId(placedPosition, 1)
             if (interactableBlocks.includes(refBlock.name)) {
               bot.setControlState('sneak', true)
             }
-            bot.placeBlock(refBlock, new Vec3(placingBlock.dx, placingBlock.dy, placingBlock.dz))
+            bot.placeBlock(refBlock, new Vec3(placement.dx, placement.dy, placement.dz))
               .then(function () {
                 // Dont release Sneak if the block placement was not successful
                 bot.setControlState('sneak', false)
                 bot.setControlState('jump', false)
-                if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.returnPos) returningPos = placingBlock.returnPos.clone()
+                if (bot.pathfinder.LOSWhenPlacingBlocks && placement.returnPos) returningPos = placement.returnPos.clone()
+                placementMovements?.recordScaffoldingPlacement?.({
+                  position: placedPosition.clone(),
+                  itemName: block.name,
+                  itemType: block.type
+                })
               })
               .catch(_ignoreError => {
                 resetPath('place_error')

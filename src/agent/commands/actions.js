@@ -42,9 +42,26 @@ const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
 const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
 const MAX_ORDERED_ITEM_PLAN_STEPS = 12;
 
+function woodCollectionActionTimeoutMinutes(count, completeStartedTree = true) {
+    if (completeStartedTree !== true) return RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES;
+    // One connected natural tree is the stewardship transaction even when the
+    // requested inventory remainder is small. Keep one propagated hard
+    // deadline, but size it for native climbing and exact scaffold cleanup;
+    // CollectBlock's per-target stall watchdog still fails silent routes in a
+    // few seconds instead of waiting for this outer ceiling.
+    const requested = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
+    // A minimum quantity may span two natural components because the final
+    // started tree must also finish. This is only the absolute ownership
+    // ceiling: target navigation still has a three-second no-progress
+    // watchdog, so extra time is earned by real cutting, pickup, or cleanup.
+    return Math.min(5, 2.5 + requested / 24);
+}
+
 function activeMiningReturnRoute(agent) {
-    const route = agent?.job_director?.activeOrder?.checkpoint?.miningReturnRoute;
-    return Array.isArray(route) ? route : [];
+    const jobRoute = agent?.job_director?.activeOrder?.checkpoint?.miningReturnRoute;
+    if (Array.isArray(jobRoute) && jobRoute.length > 0) return jobRoute;
+    const goalRoute = agent?.goal_director?.activeGoal?.checkpoint?.miningReturnRoute;
+    return Array.isArray(goalRoute) ? goalRoute : [];
 }
 
 function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = false) {
@@ -142,7 +159,10 @@ function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = f
         });
     }
 
-    const result = director.addMany(entries);
+    const result = director.addMany(entries, {
+        replaceUnfinished: request?.agendaDisposition === 'interrupt',
+        reason: 'Superseded by a player-requested item plan.',
+    });
     if (result.accepted !== true) {
         return reject(result.code || 'item_plan_rejected', `The item plan was not queued: ${result.detail || result.code}.`);
     }
@@ -266,7 +286,10 @@ function queueStoragePlan(agent, encodedPlan, playerName, returnToPlayer = false
             note: 'return after inventory cleanup',
         });
     }
-    const result = director.addMany(entries);
+    const result = director.addMany(entries, {
+        replaceUnfinished: request?.agendaDisposition === 'interrupt',
+        reason: 'Superseded by a player-requested storage plan.',
+    });
     if (result.accepted !== true) {
         return reject(result.code || 'storage_plan_rejected', `The storage plan was not queued: ${result.detail || result.code}.`);
     }
@@ -313,7 +336,8 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
             await prepareAction(agent, ...args);
         }
         const actionFnWithAgent = async () => actionFn(agent, ...args);
-        const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout, resume });
+        const actionTimeout = typeof timeout === 'function' ? timeout(agent, ...args) : timeout;
+        const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout: actionTimeout, resume });
         if (code_return.interrupted && !code_return.timedout)
             return;
         if (code_return.result?.phase && code_return.result.phase !== 'succeeded') {
@@ -1280,9 +1304,9 @@ export const actionsList = [
             'num': { type: 'int', description: 'Maximum number of blocks to collect.', domain: [1, Number.MAX_SAFE_INTEGER] },
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
             'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
-            'complete_started_tree': { type: 'boolean', description: 'For lumberjack work only, finish the bounded connected natural tree once harvesting starts.', optional: true, default: false },
+            'complete_started_tree': { type: 'boolean', description: 'Finish the bounded connected natural tree once harvesting starts.', optional: true, default: true },
         },
-        perform: runAsAction(async (agent, type, num, range, relocate = false, complete_started_tree = false) => {
+        perform: runAsAction(async (agent, type, num, range, relocate = false, complete_started_tree = true) => {
             if (skills.isWoodBlockType(type)) {
                 return await skills.collectWood(
                     agent.bot,
@@ -1305,9 +1329,14 @@ export const actionsList = [
                 {
                     relocate: relocate === true,
                     preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
+                    preservedReturnRoute: activeMiningReturnRoute(agent),
                 },
             );
-        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, (_agent, type, num, _range, _relocate = false, complete_started_tree = true) => (
+            skills.isWoodBlockType(type)
+                ? woodCollectionActionTimeoutMinutes(num, complete_started_tree)
+                : RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES
+        ))
     },
     {
         name: '!prepareMaterial',
@@ -1385,20 +1414,20 @@ export const actionsList = [
                 num,
                 64,
                 collectionExclusionsForAgent(agent),
-                { relocate: true },
+                { relocate: true, completeStartedTree: true },
             );
-        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, (_agent, num) => woodCollectionActionTimeoutMinutes(num, true))
     },
     {
         name: '!collectWoodInRange',
-        description: 'Collect a bounded number of safe reachable logs using an explicit scan radius and optional bounded relocation.',
+        description: 'Collect at least a bounded number of safe reachable logs, finishing every bounded connected natural tree that harvesting starts.',
         params: {
-            'num': { type: 'int', description: 'Maximum number of logs to collect.', domain: [1, 64, '[]'] },
+            'num': { type: 'int', description: 'Minimum log target; completing the final bounded tree may carry additional logs.', domain: [1, 64, '[]'] },
             'range': { type: 'int', description: 'Maximum search radius.', domain: [16, 512] },
             'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
-            'complete_started_tree': { type: 'boolean', description: 'For lumberjack work only, finish the bounded connected natural tree once harvesting starts.', optional: true, default: false },
+            'complete_started_tree': { type: 'boolean', description: 'Finish the bounded connected natural tree once harvesting starts.', optional: true, default: true },
         },
-        perform: runAsAction(async (agent, num, range, relocate = false, complete_started_tree = false) => {
+        perform: runAsAction(async (agent, num, range, relocate = false, complete_started_tree = true) => {
             return await skills.collectWood(
                 agent.bot,
                 num,
@@ -1409,7 +1438,9 @@ export const actionsList = [
                     completeStartedTree: complete_started_tree === true,
                 },
             );
-        }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, (_agent, num, _range, _relocate = false, complete_started_tree = true) => (
+            woodCollectionActionTimeoutMinutes(num, complete_started_tree)
+        ))
     },
     {
         name: '!craftRecipe',

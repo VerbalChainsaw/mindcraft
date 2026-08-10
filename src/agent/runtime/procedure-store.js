@@ -22,6 +22,7 @@ const SAFE_COMMANDS = new Set([
   '!giveFamilyToPlayer',
   '!givePlayer',
   '!goToCoordinates',
+  '!traverseMiningRouteCell',
   '!goToSurface',
   '!moveAway',
 ]);

@@ -21,7 +21,7 @@ import { resolveBlockedActions } from './command-policy.js';
 import { addressesAgent } from './chat-address.js';
 import { resolvePlayerDirective, routeCompoundToolGoal } from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
-import { parsePlayerAgenda } from './player-agenda.js';
+import { classifyDisposition, parsePlayerAgenda } from './player-agenda.js';
 import { normalizeRuntimeBehavior } from './runtime/behavior-config.js';
 import { JobDirector } from './runtime/job-director.js';
 import { GoalDirector } from './runtime/goal-director.js';
@@ -1142,6 +1142,9 @@ export class Agent {
                     kind: assignmentKind,
                     holdGeneration: this.operator_hold_generation,
                     agendaEntryId: queuedConstruction?.entryId || null,
+                    agendaDisposition: ['item_plan', 'storage_plan'].includes(assignmentKind)
+                        ? classifyDisposition(message)
+                        : 'append',
                     lastFailureSignature: '',
                     repeatedFailures: 0,
                 };
@@ -1372,6 +1375,7 @@ export class Agent {
                 let execute_res = await executeCommand(this, res, {
                     owner: commandOwner,
                     routeOrigin: 'model-selected',
+                    agendaDisposition: deferredModelAssignment?.agendaDisposition || 'append',
                 });
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);

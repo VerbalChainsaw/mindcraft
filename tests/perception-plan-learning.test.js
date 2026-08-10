@@ -377,7 +377,7 @@ test('A lone observed log does not suppress generic natural-tree collection for 
   });
 
   assert.equal(plan.status, 'ready');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64, false, true)');
   assert.equal(probes.every(probe => probe.maxDistance <= 16), true);
   assert.equal(
     new Set(probes.map(probe => `${probe.matching}:${probe.maxDistance}`)).size,
@@ -397,7 +397,7 @@ test('Equivalent plank recipes collect generic wood before binding an unobserved
 
   assert.equal(plan.status, 'ready');
   assert.equal(plan.nextStep.capability.id, 'collect_wood');
-  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64)');
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64, false, true)');
 });
 
 test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {
@@ -1007,6 +1007,84 @@ test('Verified capability effects supersede a stale executor failure', async () 
   assert.equal(outcome.result.code, 'capability_effects_verified');
   assert.equal(outcome.result.retryable, false);
   assert.equal(outcome.result.evidence.capability.executorResult.code, 'skill_unreachable');
+});
+
+test('Inventory effects cannot supersede a required physical cleanup postcondition', async () => {
+  const bot = plannerBot();
+  const plan = buildPrerequisitePlan(bot, { target: 'test_gem', quantity: 1 });
+  const agent = { bot, last_action_result: null };
+
+  const outcome = await executeCapabilityAction(plan.nextStep.capability, {
+    agent,
+    executeCommand: () => {
+      bot.inventory.slots = [{ name: 'test_gem', count: 1 }];
+      agent.last_action_result = {
+        actionId: 'unfinished-tree-transaction',
+        label: 'action:collectBlocksInRange',
+        phase: 'failed',
+        code: 'skill_tree_incomplete',
+        detail: 'The inventory changed, but connected logs remain.',
+        evidence: {
+          skill: {
+            kind: 'collect',
+            outcome: 'tree_incomplete',
+            completionBlocked: true,
+          },
+        },
+        retryable: false,
+        startedAt: 1,
+        finishedAt: 2,
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, true);
+  assert.equal(outcome.result.phase, 'failed');
+  assert.equal(outcome.result.code, 'skill_tree_incomplete');
+  assert.equal(outcome.result.retryable, false);
+});
+
+test('A nearby position cannot supersede an unverified exact mining-route cell', async () => {
+  const bot = plannerBot();
+  bot.entity = { position: { x: 8.5, y: 58, z: 12.5 } };
+  bot.game = { dimension: 'overworld' };
+  const agent = { bot, last_action_result: null };
+  const capability = createCapabilityRequest('traverse_mining_route_cell', {
+    x: 8,
+    y: 58,
+    z: 12,
+    dimension: 'overworld',
+  }).capability;
+
+  const outcome = await executeCapabilityAction(capability, {
+    agent,
+    executeCommand: () => {
+      agent.last_action_result = {
+        actionId: 'changed-return-cell',
+        label: 'action:traverseMiningRouteCell',
+        phase: 'failed',
+        code: 'skill_return_route_changed',
+        detail: 'The saved cell is no longer returnable.',
+        evidence: {
+          skill: {
+            kind: 'mining_return',
+            outcome: 'return_route_changed',
+            returnable: false,
+            target: { x: 8, y: 58, z: 12 },
+          },
+        },
+        retryable: false,
+        startedAt: 1,
+        finishedAt: 2,
+      };
+      return false;
+    },
+  });
+
+  assert.equal(outcome.verification.ok, false);
+  assert.equal(outcome.result.phase, 'failed');
+  assert.equal(outcome.result.code, 'skill_return_route_changed');
 });
 
 test('Verified partial inventory acquisition advances without spending a productive attempt', async () => {

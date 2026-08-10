@@ -622,6 +622,37 @@ function verifyNavigation(_before, after, binding) {
   });
 }
 
+function verifyMiningRouteCell(_before, after, binding, { result } = {}) {
+  const position = after?.position;
+  const skill = result?.evidence?.skill;
+  const exactPosition = Boolean(
+    position
+    && Math.floor(position.x) === binding.x
+    && Math.floor(position.y) === binding.y
+    && Math.floor(position.z) === binding.z
+  );
+  const exactEvidence = Boolean(
+    skill?.kind === 'mining_return'
+    && skill?.outcome === 'route_cell_returned'
+    && skill?.returnable === true
+    && Number(skill?.target?.x) === binding.x
+    && Number(skill?.target?.y) === binding.y
+    && Number(skill?.target?.z) === binding.z
+  );
+  const verified = Boolean(
+    exactPosition
+    && exactEvidence
+    && (!binding.dimension || after.dimension === binding.dimension)
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'mining_route_cell_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed the exact returnable mining cell ${binding.x}, ${binding.y}, ${binding.z}.`
+      : `Minecraft did not confirm the exact returnable mining cell ${binding.x}, ${binding.y}, ${binding.z}.`,
+  });
+}
+
 function verifySearchRegionRelocation(before, after, binding) {
   const origin = before?.position;
   const position = after?.position;
@@ -690,11 +721,16 @@ defineCapability({
     count: { type: 'integer', minimum: 1, maximum: 64 },
     range: { type: 'integer', minimum: 16, maximum: 512 },
     expectedIncrease: { type: 'integer', minimum: 1 },
+    completeStartedTree: { type: 'boolean' },
   },
   normalizeArguments: args => immutable({
     count: boundedInteger(args?.count, 1, 1, 64),
     range: boundedInteger(args?.range, 64, 16, 512),
     expectedIncrease: boundedInteger(args?.expectedIncrease ?? args?.count, 1, 1, 64),
+    // Natural trees are a world-stewardship unit. Once an ordinary collection
+    // action starts a bounded connected tree, leaving its upper half floating
+    // is worse than carrying a few logs beyond the requested minimum.
+    completeStartedTree: args?.completeStartedTree !== false,
   }),
   preconditions: (_snapshot, args) => preconditionReport([
     { requirement: 'positive bounded wood count', satisfied: args.count >= 1 && args.count <= 64 },
@@ -707,7 +743,7 @@ defineCapability({
     // GoalDirector owns region changes between productive planner actions.
     // Keeping this action to one region prevents the physical skill from
     // spending several hidden relocations before the Director can replan.
-    command: `!collectWoodInRange(${args.count}, ${args.range})`,
+    command: `!collectWoodInRange(${args.count}, ${args.range}, false, ${args.completeStartedTree})`,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,
@@ -1020,6 +1056,7 @@ defineCapability({
 
 defineCapability({
   id: 'traverse_mining_route_cell',
+  commandName: '!traverseMiningRouteCell',
   parameters: {
     x: { type: 'number' },
     y: { type: 'number' },
@@ -1043,6 +1080,7 @@ defineCapability({
     z: args.z,
     closeness: 0.75,
   })],
+  command: args => `!traverseMiningRouteCell(${args.x}, ${args.y}, ${args.z})`,
   bind: (_context, args) => immutable({
     ok: true,
     commandName: '!traverseMiningRouteCell',
@@ -1054,7 +1092,7 @@ defineCapability({
     dimension: args.dimension,
   }),
   execute: executeBoundCommand,
-  verify: verifyNavigation,
+  verify: verifyMiningRouteCell,
   cost: () => 1,
 });
 
@@ -1676,6 +1714,7 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
   };
 
   const skill = result.evidence?.skill;
+  const completionBlocked = skill?.completionBlocked === true;
   const verifiedMiningProgress = Boolean(
     skill?.kind === 'mining_search'
     && skill?.outcome === 'search_advanced'
@@ -1738,7 +1777,7 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
     || verifiedInventoryProgress
     || verifiedStorageProgress;
 
-  if (!verification.ok && verifiedPartialProgress && result.phase === 'failed') {
+  if (!completionBlocked && !verification.ok && verifiedPartialProgress && result.phase === 'failed') {
     const progressDetail = verifiedStorageProgress
       ? `Minecraft verified a partial exact-container transfer of ${verification.transferred}`
       : verifiedInventoryProgress
@@ -1765,7 +1804,7 @@ function reconcileCapabilityResult(result, verification, capability, preconditio
   // capability outcome once the complete expected effect is present. Blocked,
   // interrupted, and cancelled actions remain censored ownership outcomes;
   // unrelated inventory movement must not turn them into method successes.
-  if (verification.ok && ['failed', 'requested'].includes(result.phase)) {
+  if (!completionBlocked && verification.ok && ['failed', 'requested'].includes(result.phase)) {
     return createActionResult({
       ...result,
       phase: 'succeeded',

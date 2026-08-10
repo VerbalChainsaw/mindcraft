@@ -52,6 +52,7 @@ const MAX_LOCAL_VERTICAL_INTERACTION_REACH = 4.5;
 // spends productive budget without changing strategy; relocate once and let
 // the next plan bind a genuinely different region instead.
 const MAX_LOCAL_CONCRETE_TARGET_FAILURES = 1;
+const MAX_MINING_RETURN_CELLS = 512;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 
 function boundedText(value, maximum = 280, fallback = '') {
@@ -105,6 +106,96 @@ function actionResultEvidence(result) {
   return result?.evidence?.skill && typeof result.evidence.skill === 'object'
     ? result.evidence.skill
     : null;
+}
+
+function sameMiningRouteCell(left, right) {
+  return Boolean(left && right && ['x', 'y', 'z'].every(axis => (
+    Number.isFinite(left?.[axis])
+    && Number.isFinite(right?.[axis])
+    && Math.floor(left[axis]) === Math.floor(right[axis])
+  )));
+}
+
+function checkpointWithVerifiedMiningRoute(checkpoint, result, bot) {
+  const skill = actionResultEvidence(result);
+  if (
+    !['succeeded', 'failed', 'interrupted'].includes(result?.phase)
+    || skill?.routeDigging !== true
+    || skill?.returnable !== true
+    || !Array.isArray(skill.returnRoute)
+    || skill.returnRoute.length < 1
+  ) return checkpoint;
+
+  const incoming = [];
+  for (const rawCell of skill.returnRoute) {
+    if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
+    const cell = {
+      x: Math.floor(rawCell.x),
+      y: Math.floor(rawCell.y),
+      z: Math.floor(rawCell.z),
+    };
+    if (!sameMiningRouteCell(incoming.at(-1), cell)) incoming.push(cell);
+  }
+  if (incoming.length < 1) return checkpoint;
+
+  const prior = Array.isArray(checkpoint?.miningReturnRoute)
+    && Number(checkpoint?.miningReturnIndex) >= 0
+    ? [...checkpoint.miningReturnRoute]
+    : [];
+  const continuous = prior.length < 1 || sameMiningRouteCell(prior.at(-1), incoming[0]);
+  const combined = continuous ? prior : [];
+  for (const cell of incoming) {
+    if (sameMiningRouteCell(combined.at(-1), cell)) continue;
+    if (combined.length >= MAX_MINING_RETURN_CELLS) break;
+    combined.push(cell);
+  }
+  if (combined.length < 1) return checkpoint;
+  const dimension = normalizedDimension(bot?.game?.dimension);
+  return {
+    ...checkpoint,
+    miningReturnRoute: combined,
+    miningReturnIndex: combined.length - 1,
+    ...(dimension ? { miningReturnDimension: dimension } : {}),
+  };
+}
+
+function checkpointAfterMiningReturnStep(checkpoint, result, actingSubgoal) {
+  if (
+    actingSubgoal?.kind !== 'recover'
+    || actingSubgoal.commandName !== '!traverseMiningRouteCell'
+    || result?.phase !== 'succeeded'
+  ) return checkpoint;
+  const route = checkpoint?.miningReturnRoute || [];
+  const index = Number.isFinite(checkpoint?.miningReturnIndex)
+    ? Math.min(route.length - 1, Math.floor(checkpoint.miningReturnIndex))
+    : route.length - 1;
+  if (index < 0) return checkpoint;
+  const target = actionResultEvidence(result)?.target;
+  if (!sameMiningRouteCell(route[index], target)) return checkpoint;
+  return {
+    ...checkpoint,
+    miningReturnIndex: index - 1,
+  };
+}
+
+function pendingMiningReturn(goal) {
+  const route = goal?.checkpoint?.miningReturnRoute || [];
+  const index = Number.isFinite(goal?.checkpoint?.miningReturnIndex)
+    ? Math.min(route.length - 1, Math.floor(goal.checkpoint.miningReturnIndex))
+    : route.length - 1;
+  if (index < 0 || !route[index]) return null;
+  return { cell: route[index], index };
+}
+
+function goalOutputReadyForHandoff(bot, goal) {
+  if (!goal) return false;
+  if (goal.kind === 'deliver') {
+    const delivered = Math.max(0, Number(goal.checkpoint?.delivered) || 0);
+    if (delivered >= goal.quantity) return true;
+    return inventoryCountForGoalTarget(bot, goal.target) >= Math.max(0, goal.quantity - delivered);
+  }
+  return inventoryCountForGoalTarget(bot, goal.target) >= goal.checkpoint.targetInventory
+    && completionRequirementSatisfied(bot, goal.target, goal.completion);
 }
 
 function verifiedMiningRouteProgress(kind, skill) {
@@ -659,13 +750,21 @@ export class GoalDirector {
 
   verify(goal = this.activeGoal) {
     if (!goal) return { complete: false, code: 'no_goal', detail: 'No typed goal is active.' };
+    const miningReturn = pendingMiningReturn(goal);
     if (goal.kind === 'deliver') {
-      const complete = goal.checkpoint.delivered >= goal.quantity;
+      const delivered = goal.checkpoint.delivered >= goal.quantity;
+      const complete = delivered && !miningReturn;
       return {
         complete,
-        code: complete ? 'delivery_verified' : 'delivery_incomplete',
+        code: complete
+          ? 'delivery_verified'
+          : delivered && miningReturn
+            ? 'mining_return_pending'
+            : 'delivery_incomplete',
         detail: complete
           ? `Minecraft confirmed ${goal.checkpoint.delivered} ${goal.target.family || goal.target.inventoryName} received by ${goal.destination.player}.`
+          : delivered && miningReturn
+            ? `The requested delivery is physically verified, but the bot must still return through ${miningReturn.index + 1} preserved mining-route cell${miningReturn.index === 0 ? '' : 's'} before releasing the goal.`
           : `Minecraft has confirmed ${goal.checkpoint.delivered} of ${goal.quantity} delivered.`,
       };
     }
@@ -676,7 +775,7 @@ export class GoalDirector {
       goal.target,
       goal.completion,
     );
-    const complete = inventoryComplete && equipmentComplete;
+    const complete = inventoryComplete && equipmentComplete && !miningReturn;
     const completionLabel = goal.completion.kind === 'main_hand'
       ? 'main hand'
       : goal.completion.kind === 'off_hand'
@@ -687,12 +786,18 @@ export class GoalDirector {
       : `${goal.completion.kind}_goal`;
     return {
       complete,
-      code: complete ? `${codePrefix}_verified` : `${codePrefix}_incomplete`,
+      code: complete
+        ? `${codePrefix}_verified`
+        : inventoryComplete && equipmentComplete && miningReturn
+          ? 'mining_return_pending'
+          : `${codePrefix}_incomplete`,
       detail: complete
         ? goal.completion.kind === 'inventory'
           ? `Inventory contains ${current}; required post-goal count was ${goal.checkpoint.targetInventory}.`
           : `Minecraft confirms ${goal.target.inventoryName} in the ${completionLabel}.`
-        : !inventoryComplete
+        : inventoryComplete && equipmentComplete && miningReturn
+          ? `Minecraft confirms the requested output, but the bot must still return through ${miningReturn.index + 1} preserved mining-route cell${miningReturn.index === 0 ? '' : 's'} before completion.`
+          : !inventoryComplete
           ? `Inventory contains ${current}; required count is ${goal.checkpoint.targetInventory} before ${completionLabel} completion.`
           : `Inventory contains ${current}, but Minecraft does not confirm ${goal.target.inventoryName} in the ${completionLabel}.`,
     };
@@ -758,7 +863,7 @@ export class GoalDirector {
     return completed;
   }
 
-  fail(code, detail) {
+  fail(code, detail, { retryable = null, completionBlocked = false } = {}) {
     const failed = normalizeGoalContract({
       ...this.activeGoal,
       phase: 'failed',
@@ -769,6 +874,8 @@ export class GoalDirector {
         detail,
         verified: false,
         at: this.now(),
+        ...(typeof retryable === 'boolean' ? { retryable } : {}),
+        ...(completionBlocked === true ? { completionBlocked: true } : {}),
       },
       updatedAt: this.now(),
     });
@@ -1229,7 +1336,8 @@ export class GoalDirector {
       kind === 'deliver'
       && transferredBeforeFinish > 0
     ) || miningRouteProgress;
-    if (verifiedStepProgress && effectiveResult.phase === 'failed') {
+    const completionBlocked = actionResultEvidence(effectiveResult)?.completionBlocked === true;
+    if (verifiedStepProgress && effectiveResult.phase === 'failed' && !completionBlocked) {
       // A bounded adapter can produce only part of its requested inventory
       // effect, or advance a returnable corridor without producing the item
       // yet. Both are successful planner operations even though the original
@@ -1247,6 +1355,26 @@ export class GoalDirector {
           : `${effectiveResult.detail || 'The bounded action ended before its full effect.'} GoalDirector verified partial target-state progress and will replan the remainder.`,
         retryable: false,
       };
+    }
+    let durableActionCheckpoint = checkpointWithVerifiedMiningRoute(
+      this.activeGoal.checkpoint,
+      effectiveResult,
+      this.agent.bot,
+    );
+    durableActionCheckpoint = checkpointAfterMiningReturnStep(
+      durableActionCheckpoint,
+      effectiveResult,
+      actingSubgoal,
+    );
+    if (durableActionCheckpoint !== this.activeGoal.checkpoint) {
+      // Persist the route or its completed cell before ActionManager releases
+      // the physical action. A restart may re-verify the world, but it must
+      // never forget the only proven way out of a corridor it just created.
+      this.persist({
+        ...this.activeGoal,
+        checkpoint: durableActionCheckpoint,
+        updatedAt: this.now(),
+      });
     }
     this.finishLatestSubgoal(effectiveResult);
     this.rememberOperationalProgress(effectiveResult, miningRouteProgress);
@@ -1290,6 +1418,24 @@ export class GoalDirector {
         && effectiveResult.phase === 'succeeded'
       );
 
+    if (completionBlocked) {
+      // Inventory progress cannot erase a physical postcondition owned by the
+      // capability. A tree transaction that left connected logs, temporary
+      // scaffolding, or an unsafe body stance is not complete merely because
+      // the requested item floor happened to be reached.
+      this.persist({
+        ...goal,
+        checkpoint,
+        updatedAt: this.now(),
+      });
+      this.fail(
+        effectiveResult.code || 'capability_postcondition_blocked',
+        effectiveResult.detail || 'The capability produced items but did not satisfy its required physical postcondition.',
+        { retryable: false, completionBlocked: true },
+      );
+      return;
+    }
+
     if (delivered) {
       this.persist({ ...goal, checkpoint, phase: 'verify_complete', updatedAt: this.now() });
       this.nextAttemptAt = this.now() + SUCCESS_DELAY_MS;
@@ -1325,6 +1471,8 @@ export class GoalDirector {
     }
 
     const preemptionRecovery = isPreemption(effectiveResult);
+    const miningReturnFailure = kind === 'recover'
+      && actingSubgoal?.commandName === '!traverseMiningRouteCell';
     const relocationFailure = kind === 'recover';
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
@@ -1399,6 +1547,23 @@ export class GoalDirector {
         'preemption_cleared',
         'The higher-priority action released control; reassessing the same goal immediately.',
         true,
+      );
+      return;
+    }
+    if (miningReturnFailure) {
+      // Route traversal already performs bounded debris settlement and exact
+      // stance verification. Reissuing the identical blocked cell would be a
+      // recovery loop, not a new strategy, and must not consume productive
+      // attempts or quietly release the completed inventory goal underground.
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        updatedAt: this.now(),
+      });
+      this.fail(
+        'mining_return_failed',
+        effectiveResult.detail || 'The preserved mining return route could not be traversed safely.',
       );
       return;
     }
@@ -1773,6 +1938,40 @@ export class GoalDirector {
       return;
     }
     if (this.now() < this.nextAttemptAt) return;
+
+    const returnStep = pendingMiningReturn(this.activeGoal);
+    if (returnStep && goalOutputReadyForHandoff(this.agent.bot, this.activeGoal)) {
+      const routeDimension = normalizedDimension(this.activeGoal.checkpoint.miningReturnDimension);
+      const currentDimension = normalizedDimension(this.agent.bot?.game?.dimension);
+      if (routeDimension && currentDimension && routeDimension !== currentDimension) {
+        this.fail(
+          'mining_return_dimension_changed',
+          `The preserved mining route is in ${routeDimension}, but the bot is now in ${currentDimension}; refusing to guess a cross-dimension return.`,
+        );
+        return;
+      }
+      const route = createCapabilityRequest('traverse_mining_route_cell', {
+        ...returnStep.cell,
+        dimension: routeDimension || currentDimension,
+      }, {
+        reason: 'Exit the exact verified mining route before releasing the completed player outcome.',
+      });
+      this.persist({
+        ...this.activeGoal,
+        phase: 'recover',
+        evidence: {
+          actionId: '',
+          phase: 'recover',
+          code: 'mining_return_pending',
+          detail: `Returning through preserved mining cell ${returnStep.index + 1} of ${this.activeGoal.checkpoint.miningReturnRoute.length}.`,
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.dispatch('recover', route.command || null, route);
+      return;
+    }
 
     const verification = this.verify();
     if (verification.complete) {
