@@ -225,15 +225,62 @@ export class Prompter {
         return this.profile.modes;
     }
 
+    // Every configured route, flattened to unique leaf providers. Lifecycle
+    // ownership used to stop at the four general models, so a stopped agent left
+    // reasoning, memory, triage, and autonomy generations running. Worse, a
+    // profile that names several providers for one key gets a FallbackRouter,
+    // and `model.cancelPending?.()` on a router silently did nothing -- optional
+    // chaining turned "this wrapper has no such method" into "nothing to do",
+    // so even the four listed routes were reached in name only.
+    // Leaves are de-duplicated because specialists chain to the chat model, so
+    // one provider is reachable through several routes but must be handled once.
+    _lifecycleLeaves(routes) {
+        const leaves = new Set();
+        for (const route of routes.filter(Boolean)) {
+            if (typeof route.leafModels === 'function') {
+                for (const leaf of route.leafModels()) leaves.add(leaf);
+            } else {
+                leaves.add(route);
+            }
+        }
+        return leaves;
+    }
+
+    _generalRoutes() {
+        return [this.chat_model, this.code_model, this.vision_model, this.embedding_model];
+    }
+
+    _specialistRoutes() {
+        return [this.reasoning_model, this.memory_model, this.triage_model, this.autonomy_model];
+    }
+
+    _allModelLeaves() {
+        return [...this._lifecycleLeaves([...this._generalRoutes(), ...this._specialistRoutes()])];
+    }
+
     async initExamples() {
         try {
-            const preflightModels = [...new Set([
-                this.chat_model,
-                this.code_model,
-                this.vision_model,
-                this.embedding_model,
-            ].filter(Boolean))];
-            await Promise.all(preflightModels.map(model => model.preflight?.()));
+            // The general routes keep their original fatal preflight: a bot that
+            // cannot reach its chat model should fail loudly at startup.
+            // Specialist-only leaves are preflighted but not made fatal --
+            // withChatBackstop exists precisely so a specialist degrades to the
+            // chat model instead of dying, and a fatal preflight here would
+            // contradict that by turning a recoverable specialist into a failed
+            // startup.
+            const requiredLeaves = this._lifecycleLeaves(this._generalRoutes());
+            const optionalLeaves = [...this._lifecycleLeaves(this._specialistRoutes())]
+                .filter(leaf => !requiredLeaves.has(leaf));
+            await Promise.all([...requiredLeaves].map(model => model.preflight?.()));
+            const optionalResults = await Promise.allSettled(
+                optionalLeaves.map(model => model.preflight?.()),
+            );
+            for (const result of optionalResults) {
+                if (result.status === 'rejected') {
+                    console.warn(
+                        `[model-lifecycle] Specialist model preflight failed; it will fall back to the chat model: ${String(result.reason?.message || result.reason).slice(0, 240)}`,
+                    );
+                }
+            }
             this.convo_examples = new Examples(this.embedding_model, settings.num_examples);
             this.coding_examples = new Examples(this.embedding_model, settings.num_examples);
             
@@ -258,14 +305,8 @@ export class Prompter {
     }
 
     cancelPendingModelGeneration() {
-        const models = new Set([
-            this.chat_model,
-            this.code_model,
-            this.vision_model,
-            this.embedding_model,
-        ].filter(Boolean));
         let cancelled = 0;
-        for (const model of models) {
+        for (const model of this._allModelLeaves()) {
             cancelled += Number(model.cancelPending?.() || 0);
         }
         return cancelled;
@@ -273,13 +314,8 @@ export class Prompter {
 
     dispose() {
         if (this._disposePromise) return this._disposePromise;
-        const models = [...new Set([
-            this.chat_model,
-            this.code_model,
-            this.vision_model,
-            this.embedding_model,
-        ].filter(Boolean))];
-        this._disposePromise = Promise.allSettled(models.map(model => model.dispose?.()))
+        this._disposePromise = Promise
+            .allSettled(this._allModelLeaves().map(model => model.dispose?.()))
             .then(() => undefined);
         return this._disposePromise;
     }

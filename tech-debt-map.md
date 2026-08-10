@@ -2,7 +2,7 @@
 
 **Purpose:** Maintain a living, evidence-based register of technical debt without turning maintenance into a competing architecture program.
 
-**Last reconciled:** 2026-08-10, branch `recovery/iron-pickaxe-20260803`, source checkpoint `2917ef7` plus an uncommitted reliability tranche (TD-LIFE-001, TD-ACT-001, TD-PROMPT-002, TD-PROV-001, TD-JOB-001).
+**Last reconciled:** 2026-08-10, branch `recovery/iron-pickaxe-20260803`, source checkpoint `8e58d0b` (reliability tranche: TD-LIFE-001, TD-ACT-001, TD-PROMPT-002, TD-PROV-001, TD-JOB-001) plus a model-lifecycle tranche closing TD-MODEL-001's plumbing and opening TD-MODEL-002.
 
 **Anchor drift note (2026-08-10):** `src/agent/library/skills.js` is now 19,829 lines, not the 13,682 recorded under TD-PHY-001. Line anchors in records last touched on 2026-08-04/06 should be re-verified before use; the anchors cited in the reliability-tranche records below were re-verified on 2026-08-10.
 
@@ -71,7 +71,8 @@ The 2026-08-04 expansion used the built `center-geo` scanner interactively again
 | TD-DEP-001 | P1 | Active migration debt | Owned Minecraft dependency graph | The owned Pathfinder is imported directly while registry Pathfinder remains installed; the root lockfile is explicitly ignored and the installed graph contains a second legacy Mineflayer. |
 | TD-IO-001 | P2 | Conditional on measurement | Durable state persistence | Goal/job persistence performs synchronous `fsync` writes on the agent event loop. |
 | TD-PROV-001 | P2 | Repaired 2026-08-10, live probe pending | Provider transport | OpenAI-compatible and Qwen adapters now lift `timeout`/`timeout_seconds` onto the SDK client. |
-| TD-MODEL-001 | P2 | Confirmed lifecycle gap | Model routing/cancellation | Specialist models and routed provider children are not uniformly preflighted, cancelled, or disposed. |
+| TD-MODEL-001 | — | Closed 2026-08-10 (plumbing) | Model routing/cancellation | Lifecycle now forwards through routers to unique leaf providers across all eight routes. |
+| TD-MODEL-002 | P2 | Confirmed, newly exposed 2026-08-10 | Provider cancellation capability | Only `codex.js` implements `cancelPending`; the OpenAI-family adapters cannot abort an in-flight request, so Operator Stop still cannot stop a running generation on the active profile. |
 | TD-PROMPT-001 | P2 | Conditional on measurement | Prompt assembly | Prompt expansion repeats world queries and example embedding/ranking work for unchanged inputs. |
 | TD-PROMPT-002 | P2 | Repaired 2026-08-10 | Coding/autonomy generation | `awaiting_coding` now releases in `finally`; both floating `startLoop()` launches route through a guarded sink. |
 | TD-LIFE-001 | P2 | Repaired 2026-08-10, live stop pending | Agent process lifecycle | The child entrypoint now maps one SIGINT/SIGTERM into one bounded `teardownAndExit`. |
@@ -330,9 +331,23 @@ These items are deliberately recorded without scheduling a consolidation project
 - **Why this is debt:** Lifecycle ownership stops at wrapper objects instead of reaching the provider job that owns network/process resources. A stopped autonomy turn can continue consuming time or credits, and a specialist Codex app-server can outlive Prompter disposal.
 - **Risk if ignored:** Operator Stop may prevent later physical execution but still pay for discarded inference; shutdown can leak specialist provider resources; preflight may report readiness without checking the actual routed provider.
 - **Correct boundary:** Every model wrapper forwards idempotent `preflight`, `cancelPending`, and `dispose` to each unique child. Prompter owns one complete set of every configured model, including specialists and routers.
-- **Activation gate:** Before claiming universal Operator Stop cancellation or when specialist/routed providers are used by the active profile.
-- **Exit criteria:** Injected child providers prove exactly-once lifecycle forwarding, and an actual in-flight specialist generation is cancelled and settled without producing a later action or lingering provider process.
+- **Activation gate:** Before claiming universal Operator Stop cancellation or when specialist/routed providers are used by the active profile. — **Gate was already met:** `profiles/local-quickstart.json`, the profile named by `launcher-config.json`, declares `model` as a two-entry array plus `reasoning_model`, `autonomy_model`, and `memory_model`. This was a live defect on the running configuration, not a latent one.
+- **Additional evidence found 2026-08-10 (worse than recorded):** `FallbackRouter` implemented **none** of `preflight`, `cancelPending`, or `dispose`. Because `buildModel()` returns a router whenever a key names several providers, `model.cancelPending?.()` optional-chained to `undefined` even for the four routes that *were* enumerated. On the active profile `cancelPendingModelGeneration()` therefore returned 0 and `dispose()` disposed nothing — the omission was total, not partial.
+- **Resolution (2026-08-10):** `FallbackRouter` gained `leafModels()`, which flattens nested routers into a de-duplicated leaf set, plus `preflight`/`cancelPending`/`dispose` built on it. `Prompter` now flattens all eight routes (the four general plus reasoning, memory, triage, autonomy) to unique leaves and drives lifecycle from that set, so a provider reachable through five routes is still handled once. Preflight deliberately keeps the general routes fatal and treats specialist-only leaves as non-fatal with a warning, because `withChatBackstop` exists so a specialist degrades to the chat model rather than failing startup.
+- **Verification:** `tests/control-plane/model-lifecycle.test.js` — five checks covering router forwarding, nested-router flattening, exactly-once cancellation across the real `local-quickstart` route shape, specialist disposal, and repeat-dispose idempotency. Four fail against the pre-fix code.
+- **Exit criteria:** Injected child providers prove exactly-once lifecycle forwarding — **met**. The second half (an actual in-flight specialist generation cancelled and settled) is **not met and cannot be met at this boundary**; it now depends on TD-MODEL-002.
 - **Do not solve by:** Killing the whole agent process for ordinary cancellation or assuming an ignored response means the provider request was cancelled.
+
+### TD-MODEL-002 — No OpenAI-family adapter can abort an in-flight generation
+
+- **Priority/status:** P2, confirmed; exposed while closing TD-MODEL-001's plumbing.
+- **Evidence:** A repository-wide search for `cancelPending(` across `src/models` returns exactly one implementation, `src/models/codex.js:802`. `gpt.js`, `openai_compatible.js`, `qwen.js`, and the other OpenAI-shaped adapters implement none, and construct requests without an `AbortSignal`.
+- **Why this is debt:** TD-MODEL-001 guarantees Operator Stop now *reaches* every configured provider. On `local-quickstart.json` every leaf is an `api: openai` model, so each reached leaf has no `cancelPending` and the call is still a no-op. The agent stops issuing new actions, but the in-flight generation runs to completion and is paid for.
+- **Why it was invisible before:** With the plumbing broken, the cancellation count was zero for a *routing* reason, which masked the fact that it would also be zero for a *capability* reason.
+- **Correct boundary:** Each adapter owns an `AbortController` per in-flight request, passes the signal to the SDK call, and `cancelPending()` aborts and returns the number of aborted jobs. The router/Prompter forwarding built for TD-MODEL-001 already delivers the call.
+- **Activation gate:** Before claiming Operator Stop halts model spend, or when a stop is observed to be followed by a late-arriving action.
+- **Exit criteria:** A stop during a real generation aborts the HTTP request, settles it as a cancelled turn rather than an error, and produces no later action from the discarded response.
+- **Do not solve by:** Discarding the response while letting the request run, or killing the agent process.
 
 ### TD-PROMPT-001 — Repeated prompt-assembly work
 

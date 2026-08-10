@@ -115,6 +115,43 @@ export class FallbackRouter {
     throw new Error('No embedding provider was reachable.');
   }
 
+  // Lifecycle is not routing. A stopped agent must reach every provider it ever
+  // built, not just the one currently preferred -- otherwise Operator Stop
+  // cancels a router that owns no network job while its children keep
+  // generating. Children may themselves be routers, and a specialist route
+  // chains to the chat model, so the same leaf is reachable by several paths
+  // and must still be torn down exactly once. Hence a de-duplicated leaf set.
+  leafModels() {
+    const leaves = new Set();
+    for (const entry of this.entries) {
+      const model = entry.model;
+      if (!model) continue;
+      if (typeof model.leafModels === 'function') {
+        for (const leaf of model.leafModels()) leaves.add(leaf);
+      } else {
+        leaves.add(model);
+      }
+    }
+    return leaves;
+  }
+
+  async preflight() {
+    await Promise.all([...this.leafModels()].map((model) => model.preflight?.()));
+  }
+
+  cancelPending() {
+    let cancelled = 0;
+    for (const model of this.leafModels()) {
+      cancelled += Number(model.cancelPending?.() || 0);
+    }
+    return cancelled;
+  }
+
+  dispose() {
+    return Promise.allSettled([...this.leafModels()].map((model) => model.dispose?.()))
+      .then(() => undefined);
+  }
+
   snapshot() {
     const now = this.now();
     return {
