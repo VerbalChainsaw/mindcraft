@@ -40,6 +40,7 @@ import { ProgressionDirector } from './runtime/progression-director.js';
 import { AgendaDirector } from './runtime/agenda-director.js';
 import { RuleEngine } from './runtime/rule-engine.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
+import { BehaviorFlightRecorder, isTelemetryBookmarkMessage } from './runtime/behavior-flight-recorder.js';
 import { signalInterrupt } from './runtime/interruptible-delay.js';
 import { minecraftWeather } from './runtime/weather-state.js';
 
@@ -387,6 +388,13 @@ export class Agent {
             console.warn(`[landmark] Spatial recall is unavailable: ${String(error?.message || error).slice(0, 240)}`);
         }
         this.behavior_arbiter = new BehaviorArbiter(this);
+        try {
+            this.flight_recorder = new BehaviorFlightRecorder(this);
+        } catch (error) {
+            // Diagnostics must never become a spawn prerequisite.
+            this.flight_recorder = null;
+            console.warn(`[telemetry] Flight recorder is unavailable: ${String(error?.message || error).slice(0, 240)}`);
+        }
         
         // Connection Handler
         const onDisconnect = (event, reason) => {
@@ -461,6 +469,10 @@ export class Agent {
               
                 const startupDialogue = await this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
+                this.flight_recorder?.recordRuntimeEvent?.('runtime.started', {
+                    loadMemory: load_mem === true,
+                    lifecycleRestart: init_message === 'Agent process restarted.',
+                });
                 emitStartupMilestone('handlers_ready');
                 await serverProxy.ready();
                 serverProxy.startStateStream();
@@ -527,6 +539,14 @@ export class Agent {
             if (settings.only_chat_with.length > 0 && !settings.only_chat_with.includes(username)) return;
             try {
                 if (ignore_messages.some((m) => message.startsWith(m))) return;
+
+                if (isTelemetryBookmarkMessage(message)) {
+                    const recorded = this.flight_recorder?.bookmark?.(username, message) === true;
+                    void this.openChat(recorded
+                        ? 'Telemetry bookmark saved. Keep playing; I captured the current state and recent context.'
+                        : 'Telemetry bookmark could not be saved; the recorder is unavailable.');
+                    return;
+                }
 
                 this.shut_up = false;
 
@@ -781,6 +801,7 @@ export class Agent {
     recordActionResult(result) {
         this.last_action_result = result || null;
         this.behavior_arbiter?.recordOutcome?.(result);
+        this.flight_recorder?.recordActionResult?.(result);
         // A terminal result is an edge, not durable state: the next automatic
         // action can replace it before a debounced/heartbeat sample is sent.
         // Flush it immediately so observers can correlate the exact action ID.
@@ -805,6 +826,7 @@ export class Agent {
     }
 
     publishBehaviorEvent(event) {
+        this.flight_recorder?.recordBehaviorEvent?.(event);
         // Every coordinate-bearing sighting funnels through here, so this is the
         // one place spatial recall has to be fed.
         try {
@@ -1890,7 +1912,9 @@ export class Agent {
     }
 
     async update(delta) {
-        return await this.behavior_arbiter.update(delta);
+        const result = await this.behavior_arbiter.update(delta);
+        this.flight_recorder?.observeRuntime?.();
+        return result;
     }
 
     isIdle() {
@@ -1920,6 +1944,7 @@ export class Agent {
             try { this.requestInterrupt(); } catch { /* best effort runtime cleanup */ }
             try { this.vision_interpreter?.dispose?.(); } catch { /* optional vision cleanup */ }
             await this.prompter?.dispose?.();
+            await this.flight_recorder?.close?.(msg);
             this.history.add('system', String(msg || 'Killing agent process...').slice(0, 500));
             try { this.bot.chat(code > 1 ? 'Restarting.' : 'Exiting.'); } catch { /* disconnected bot */ }
             this.history.save();

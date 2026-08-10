@@ -1,10 +1,10 @@
 # Current Minecraft Companion checkpoint
-Branch/functional checkpoint: recovery/iron-pickaxe-20260803 / current HEAD plus model-selected workstation authority repair
-Milestone: authoritative player lookup, mining-progress settlement, and nearby-workstation resolution repaired
+Branch/functional checkpoint: recovery/iron-pickaxe-20260803 / current HEAD plus live behavioral flight recorder integration
+Milestone: bounded failure telemetry and deterministic player `WTF` bookmarks are online
 Sole writer and Minecraft runtime owner: Codex
-Owned subsystem: GoalDirector/Agenda capability engine, owned Pathfinder/CollectBlock mechanics, and ordinary companion loop
-Live blocker: the resumed coal order crossed the repaired `skill_search_advanced` boundary, then exhausted three attempts on the distinct `skill_stance_unverified` failure near the exposed seam; preserve this as the next mining campaign
-Last physical result: coordinate-free crafting resolved the real table at (-484, 68, 64) and Minecraft verified exactly three carried stone pickaxes; the resumed 32-coal order then continued through three bounded search-tunnel steps instead of falsely terminating on the first verified corridor advance
-Runtime: Paper 1.21.11 healthy; restarted IronSuiteProof PID 151300 and phixxation remain connected; bot is near (-489, 67, 62) with 20 coal and three stone pickaxes
-Next: investigate the ordinary coal-seam stable-stance failure as a separate campaign; activate managed player-location color stripping on the next normal launcher restart
+Owned subsystem: ordinary companion loop, behavioral flight recorder, and existing GoalDirector/Agenda capability engine
+Live blocker: none for telemetry; preserve the separate coal-seam `skill_stance_unverified` failure for the next mining campaign
+Last physical result: a disposable Paper client sent `WTF`, IronSuiteProof acknowledged the bookmark, and JSONL sequence 2 preserved fresh canonical state plus recent dialogue
+Runtime: Paper 1.21.11 healthy; IronSuiteProof PID 159007 is world-ready; recorder reports one live file, zero dropped records, and no error
+Next: resume ordinary companion play, use `WTF` at suspicious behavior, and inspect clustered flight records before selecting the next shared repair seam
 Jordan review: none; Director requested uninterrupted product work

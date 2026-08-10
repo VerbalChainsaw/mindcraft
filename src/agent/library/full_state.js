@@ -1092,6 +1092,7 @@ export function getFullState(agent, { deep = false } = {}) {
         },
         performance: {
             prompt: agent.prompter?.performance?.conversation || null,
+            flightRecorder: agent.flight_recorder?.snapshot?.() || null,
         },
     };
 
