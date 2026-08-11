@@ -60,11 +60,14 @@ export class GLHF {
             }
         }
         if (finalRes === null) {
-            finalRes = "I thought too hard, sorry, try again";
+            finalRes = recordProviderFailure('glhf', new Error('No valid response after max attempts.'));
         }
         return finalRes;
     }
 
+    // Stays async so callers get a rejected promise; a sync throw would
+    // break `.catch()` on this interface.
+    // eslint-disable-next-line require-await
     async embed(text) {
         throw new Error('Embeddings are not supported by glhf.');
     }

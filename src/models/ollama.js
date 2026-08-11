@@ -66,7 +66,7 @@ export class Ollama {
 
         if (finalRes == null) {
             console.warn("Could not get a valid response after max attempts.");
-            finalRes = 'I thought too hard, sorry, try again.';
+            finalRes = recordProviderFailure('ollama', new Error('No valid response after max attempts.'));
         }
         return finalRes;
     }
@@ -98,7 +98,7 @@ export class Ollama {
         return data;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",

@@ -22,7 +22,12 @@ const CONTROL_PLANE_FILES = [
   // where the file runs, not which lint lane happens to name it.
   "src/models/cancellation.js",
   "src/models/fallback-router.js",
+  "src/models/glhf.js",
   "src/models/gpt.js",
+  "src/models/huggingface.js",
+  "src/models/hyperbolic.js",
+  "src/models/ollama.js",
+  "src/models/provider-failure.js",
   "src/models/qwen.js",
   "src/process/agent_process.js",
   "src/process/init_agent.js",
@@ -30,6 +35,7 @@ const CONTROL_PLANE_FILES = [
   "tools/scenario-lab.mjs",
   "tools/scenario-lab/**/*.mjs",
   "tools/measure-persistence-cost.mjs",
+  "tools/sweep-silent-failures.mjs",
   "tools/verify-provider-transport.mjs",
   "tests/control-plane/**/*.js",
 ];

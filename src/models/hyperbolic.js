@@ -103,11 +103,14 @@ export class Hyperbolic {
 
         if (finalRes == null) {
             console.warn("Could not get a valid <think> block or normal response after max attempts.");
-            finalRes = 'I thought too hard, sorry, try again.';
+            finalRes = recordProviderFailure('hyperbolic', new Error('No valid response after max attempts.'));
         }
         return finalRes;
     }
 
+    // Stays async so callers get a rejected promise; a sync throw would
+    // break `.catch()` on this interface.
+    // eslint-disable-next-line require-await
     async embed(text) {
         throw new Error('Embeddings are not supported by Hyperbolic.');
     }

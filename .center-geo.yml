@@ -1,0 +1,111 @@
+# center-geo scan config for this repository.
+#
+#   node C:/Users/zerop/Development/center-geo/dist/cli/main.js \
+#        scan . -c .center-geo.yml --format json --output-dir <outdir>
+#
+# Exists because the scanner's DEFAULT config gives wrong answers here, in two
+# ways that both look like results rather than mistakes. Both were found on
+# 2026-08-11; see tech-debt-map.md "Rescan 2026-08-11".
+#
+# 1. Stray node_modules backups are indexed. The default exclude is
+#    **/node_modules/** which does NOT match a directory *named*
+#    node_modules.windows-corrupt-<stamp>, and the default include carries a
+#    global **/*.{cpp,h,py,...}. A default run saw 955 files and returned five
+#    of its top twenty "critical" hypotheses from ANGLE C++ preprocessor
+#    sources and node-gyp Python inside such a backup. The offending directory
+#    was deleted on 2026-08-11, but this machine evidently makes them, so the
+#    exclusion stays as a guard.
+#
+# 2. Boundary and path engines silently report zero. The defaults tag
+#    src/ui/** and src/db/**, which do not exist here, and the path engine only
+#    activates when entry_tags and sink_tags are set. The 2026-08-04 scan
+#    recorded "boundary and path produced zero signals" as though that were a
+#    clean bill of health. It was an unconfigured engine.
+#
+# Scoped to src/**: packages/ is vendored runtime (see TD-DEP-001) and
+# src/mindcraft/public/** is browser dashboard code, neither of which is the
+# agent architecture this scan is meant to map.
+
+include:
+  - "src/**/*.js"
+  - "src/**/*.mjs"
+exclude:
+  - "**/node_modules/**"
+  - "**/node_modules.*/**"
+  - "node_modules.*/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.git/**"
+  - "packages/**"
+  - "src/mindcraft/public/**"
+
+generated:
+  globs:
+    - "**/*.generated.js"
+    - "**/__generated__/**"
+
+tests:
+  globs:
+    - "**/*.test.js"
+    - "**/*.spec.js"
+    - "**/__tests__/**"
+
+# Factual groupings of this repo's layers. forbidden_crossings is deliberately
+# empty: the boundary engine should report structure, not assert architectural
+# policy this project has not written down.
+boundaries:
+  tags:
+    control_plane:
+      globs: ["src/mindcraft/**"]
+    process:
+      globs: ["src/process/**"]
+    agent_core:
+      globs: ["src/agent/*.js"]
+    runtime:
+      globs: ["src/agent/runtime/**"]
+    physical:
+      globs: ["src/agent/library/**"]
+    providers:
+      globs: ["src/models/**"]
+  forbidden_crossings: []
+
+engines:
+  radial:
+    enabled: true
+    max_depth: 4
+    max_nodes: 500
+  cycle:
+    enabled: true
+    max_cycle_size: 50
+  boundary:
+    enabled: true
+  anomaly:
+    enabled: true
+    percentile_threshold: 0.95
+    min_absolute_edges: 2
+  convergent:
+    enabled: true
+    convergent_min_branches: 2
+  path:
+    enabled: true
+    max_depth: 8
+    # Traces how control-plane input reaches physical execution -- the exact
+    # boundary this project's doctrine is about.
+    entry_tags: ["control_plane"]
+    sink_tags: ["physical"]
+
+scoring:
+  geometry_bonus_per_extra_geometry: 0.5
+  independence_bonus_per_extra_independent_method: 0.2
+  boundary_bonus: 0.3
+  state_bonus: 0.2
+  cycle_bonus: 0.4
+  test_gap_bonus: 0.1
+  contradiction_penalty: 0.5
+  capability_gap_penalty: 0.3
+
+report:
+  # The default of 20 was entirely consumed by rank ties, so none of the files
+  # under investigation appeared at all.
+  top_n_hypotheses: 60
+  redact: true
