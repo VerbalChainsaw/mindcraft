@@ -7,7 +7,7 @@
 // normalizeRule() generates ids as `rule-<createdAt>-<sequence>` and default
 // names as `<trigger> -> <action>`, both of which contain hyphens.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -114,17 +114,34 @@ test('Given an unknown id, when removal is attempted, then nothing is removed', 
 // The other half of TD-TEXT-001: rules.js encoded a correct control-character
 // range as literal binary bytes, which made ordinary source search treat the
 // file as binary. Both files must stay readable as text.
-// This file is included in the sweep deliberately: writing it reproduced the
-// original corruption, because a regex literal typed as an escape reached disk
-// as raw bytes. The guard has to cover the guard.
-test('Given the rule sources, when they are read as text, then neither contains raw control bytes', () => {
+function sourceFiles(dir, found = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) sourceFiles(full, found);
+    else if (/\.(js|mjs)$/.test(entry.name)) found.push(full);
+  }
+  return found;
+}
+
+// Four files have now carried a control-character class as literal bytes
+// (rules.js, rule-engine.js, knowledge-store.js, player-memory.js), and one of
+// them was silently corrupted into [space-hyphen] by a copy that lost them.
+// That is a repeatedly violated, mechanically checkable invariant, so guard the
+// whole tree rather than the two files that happened to be found first.
+//
+// This test file is included deliberately: writing it reproduced the original
+// corruption, because a regex literal typed as an escape reached disk as raw
+// bytes. The guard has to cover the guard.
+test('Given every source file, when it is read as text, then none contains raw control bytes', () => {
   const targets = [
-    path.join(SRC, 'rules.js'),
-    path.join(SRC, 'rule-engine.js'),
+    ...sourceFiles(path.join(SRC, '..', '..')),
     fileURLToPath(import.meta.url),
   ];
   for (const file of targets) {
     const text = readFileSync(file, 'utf8');
+    // Tab, LF and CR are ordinary text; CR in particular is just CRLF line
+    // endings on this machine and must not be reported as a malformation.
     const offending = [...text].reduce((found, char, index) => {
       const code = char.codePointAt(0);
       const isAllowedWhitespace = code === 9 || code === 10 || code === 13;
