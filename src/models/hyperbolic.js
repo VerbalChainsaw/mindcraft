@@ -1,4 +1,5 @@
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class Hyperbolic {
     static prefix = 'hyperbolic';
@@ -75,8 +76,7 @@ export class Hyperbolic {
                     console.log('Context length exceeded, trying again with a shorter context...');
                     return await this.sendRequest(turns.slice(1), systemMessage, stopSeq);
                 } else {
-                    console.error(err);
-                    completionContent = 'My brain disconnected, try again.';
+                    completionContent = recordProviderFailure('hyperbolic', err);
                 }
             }
 

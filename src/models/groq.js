@@ -1,5 +1,6 @@
 import Groq from 'groq-sdk'
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 // THIS API IS NOT TO BE CONFUSED WITH GROK!
 // Go to grok.js for that. :)
@@ -64,7 +65,7 @@ export class GroqCloudAPI {
             if (err.message.includes("content must be a string")) {
                 res = "Vision is only supported by certain models.";
             } else {
-                res = "My brain disconnected, try again.";
+                res = recordProviderFailure('groq', err);
             }
             console.log(err);
         }

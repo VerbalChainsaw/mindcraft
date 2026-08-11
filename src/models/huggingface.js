@@ -1,6 +1,7 @@
 import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 import { HfInference } from "@huggingface/inference";
+import { recordProviderFailure } from './provider-failure.js';
 
 export class HuggingFace {
   static prefix = 'huggingface';
@@ -46,7 +47,7 @@ export class HuggingFace {
         }
       } catch (err) {
         console.log(err);
-        res = 'My brain disconnected, try again.';
+        res = recordProviderFailure('huggingface', err);
         // Break out immediately; we only retry when handling partial <think> tags.
         break;
       }

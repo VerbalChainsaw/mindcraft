@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,7 +59,7 @@ export class VLLM {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = recordProviderFailure('vllm', err);
             }
         }
         return res;

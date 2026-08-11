@@ -1,5 +1,6 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 // xAI doesn't supply a SDK for their models, but fully supports OpenAI and Anthropic SDKs
 export class Grok {
@@ -48,7 +49,7 @@ export class Grok {
                 res = 'Vision is only supported by certain models.';
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = recordProviderFailure('grok', err);
             }
         }
         // sometimes outputs special token <|separator|>, just replace it

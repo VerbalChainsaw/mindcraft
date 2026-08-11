@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 // llama, mistral
 export class Novita {
@@ -47,7 +48,7 @@ export class Novita {
               return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
           } else {
             console.log(err);
-              res = 'My brain disconnected, try again.';
+              res = recordProviderFailure('novita', err);
           }
       }
       if (res.includes('<think>')) {

@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 
 export class Gemini {
@@ -102,7 +103,10 @@ export class Gemini {
             if (err.message.includes("Image input modality is not enabled for models/")) {
                 res = "Vision is only supported by certain models.";
             } else {
-                res = "An unexpected error occurred, please try again.";
+                // This sits inside the catch, so it is the general failure path
+                // for every Gemini error. It returned prose the router did not
+                // recognise, which meant Gemini had no working failover at all.
+                res = recordProviderFailure('gemini', err);
             }
         }
         return res;

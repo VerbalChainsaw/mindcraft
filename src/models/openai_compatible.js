@@ -2,6 +2,7 @@ import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 import { isCancellation, ModelCancelledError, PendingRequests } from './cancellation.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export const OPENAI_COMPATIBLE_API_KEY_ENVS = Object.freeze([
     'OPENAI_COMPATIBLE_API_KEY',
@@ -111,7 +112,7 @@ export class OpenAICompatible {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = recordProviderFailure('openai_compatible', err);
             }
         } finally {
             this._pending.end(controller);

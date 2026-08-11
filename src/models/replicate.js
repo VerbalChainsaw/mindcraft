@@ -1,6 +1,7 @@
 import Replicate from 'replicate';
 import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 // llama, mistral, gemini
 export class ReplicateAPI {
@@ -80,7 +81,7 @@ export class ReplicateAPI {
 			}
 		} catch (err) {
 			console.log(err);
-			res = 'My brain disconnected, try again.';
+			res = recordProviderFailure('replicate', err);
 		}
 		console.log('Received.');
 		return res;

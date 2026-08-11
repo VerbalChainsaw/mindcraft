@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class OpenRouter {
     static prefix = 'openrouter';
@@ -48,7 +49,7 @@ export class OpenRouter {
         } catch (err) {
             console.error('Error while awaiting response:', err);
             // If the error indicates a context-length problem, we can slice the turns array, etc.
-            res = 'My brain disconnected, try again.';
+            res = recordProviderFailure('openrouter', err);
         }
         return res;
     }

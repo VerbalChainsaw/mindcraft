@@ -10,6 +10,7 @@
 // own once it recovers.
 
 import { isCancellation } from './cancellation.js';
+import { isProviderFailureText } from './provider-failure.js';
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000;
@@ -33,7 +34,11 @@ export function isTransportFailure(error) {
 export function isFailedResponse(response) {
   if (typeof response !== 'string') return false;
   const trimmed = response.trim();
-  return trimmed === '' || /brain disconnected/i.test(trimmed);
+  // Exact match, not a substring. The previous /brain disconnected/i test would
+  // also fire on a legitimate reply that merely used the phrase -- a player
+  // asking the bot what "my brain disconnected" means would have had the real
+  // answer thrown away and the question re-asked of another provider.
+  return trimmed === '' || isProviderFailureText(trimmed);
 }
 
 function labelFor(profile, index) {

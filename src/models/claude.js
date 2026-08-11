@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class Claude {
     static prefix = 'anthropic';
@@ -43,15 +44,17 @@ export class Claude {
             if (textContent) {
                 res = textContent.text;
             } else {
-                console.warn('No text content found in the response.');
-                res = 'No response from Claude.';
+                // A response with no text block is a failed generation, but it
+                // used to return prose the router did not recognise, so Claude
+                // never failed over and the player got this line as the answer.
+                res = recordProviderFailure('claude', new Error('Response contained no text content.'));
             }
         }
         catch (err) {
             if (err.message.includes("does not support image input")) {
                 res = "Vision is only supported by certain models.";
             } else {
-                res = "My brain disconnected, try again.";
+                res = recordProviderFailure('claude', err);
             }
             console.log(err);
         }

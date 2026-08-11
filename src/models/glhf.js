@@ -1,5 +1,6 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class GLHF {
     static prefix = 'glhf';
@@ -53,8 +54,7 @@ export class GLHF {
                     console.log('Context length exceeded, trying again with shorter context.');
                     return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
                 } else {
-                    console.error(err);
-                    finalRes = 'My brain disconnected, try again.';
+                    finalRes = recordProviderFailure('glhf', err);
                     break;
                 }
             }

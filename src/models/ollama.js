@@ -1,4 +1,5 @@
 import { strictFormat } from '../utils/text.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class Ollama {
     static prefix = 'ollama';
@@ -32,7 +33,9 @@ export class Ollama {
                 if (apiResponse) {
                     res = apiResponse['message']['content'];
                 } else {
-                    res = 'No response data.';
+                    // An empty API response is a failed generation; the old
+                    // prose was invisible to the router's failover check.
+                    res = recordProviderFailure('ollama', new Error('Ollama returned no response data.'));
                 }
             } catch (err) {
                 if (err.message.toLowerCase().includes('context length') && turns.length > 1) {
@@ -40,7 +43,7 @@ export class Ollama {
                     return await this.sendRequest(turns.slice(1), systemMessage);
                 } else {
                     console.log(err);
-                    res = 'My brain disconnected, try again.';
+                    res = recordProviderFailure('ollama', err);
                 }
             }
 

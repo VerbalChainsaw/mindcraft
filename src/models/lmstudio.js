@@ -1,5 +1,6 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
@@ -40,7 +41,7 @@ export class LMStudio {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = recordProviderFailure('lmstudio', err);
             }
         }
         return res;

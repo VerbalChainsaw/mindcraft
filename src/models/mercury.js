@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 export class Mercury {
     static prefix = 'mercury';
@@ -54,7 +55,7 @@ export class Mercury {
                 res = 'Vision is only supported by certain models.';
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = recordProviderFailure('mercury', err);
             }
         }
         return res;

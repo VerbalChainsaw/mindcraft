@@ -2,6 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 import { isCancellation, ModelCancelledError, PendingRequests } from './cancellation.js';
+import { recordProviderFailure } from './provider-failure.js';
 
 // The o-series reasoning models (o1, o3, o4...) are the only ones that need the
 // Responses API. Everything else -- gpt-4o, gpt-4.1, gpt-5* -- is faster and
@@ -126,7 +127,7 @@ export class GPT {
                 res = 'Vision is only supported by certain models.';
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = recordProviderFailure('gpt', err);
             }
         }
         finally {
