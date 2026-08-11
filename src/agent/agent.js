@@ -1947,6 +1947,12 @@ export class Agent {
             await this.flight_recorder?.close?.(msg);
             this.history.add('system', String(msg || 'Killing agent process...').slice(0, 500));
             try { this.bot.chat(code > 1 ? 'Restarting.' : 'Exiting.'); } catch { /* disconnected bot */ }
+            // Let an in-flight summary land before saving, so shutdown does not
+            // persist a memory older than the transcript beside it. Bounded:
+            // a stalled provider must not hold the process open.
+            if (this.history.flush && !(await this.history.flush(2_000))) {
+                console.warn(`[${this.name}] History summary did not settle before exit; memory may lag the transcript.`);
+            }
             this.history.save();
             process.exit(code);
         })();

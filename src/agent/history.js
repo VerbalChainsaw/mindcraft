@@ -94,9 +94,21 @@ export class History {
         this.max_messages = settings.max_messages;
 
         // Number of messages to remove from current history and save into memory
-        this.summary_chunk_size = 5; 
+        this.summary_chunk_size = 5;
         // chunking reduces expensive calls to promptMemSaving and appendFullHistory
         // and improves the quality of the memory summary
+
+        // One serialized maintenance chain per agent. add() is called from ~13
+        // places without being awaited, and the summary prompt is
+        // f(previous memory, chunk) -- it interpolates $MEMORY. Two concurrent
+        // summaries therefore both read the same old memory and the later one
+        // overwrites the earlier, silently discarding a whole chunk of learned
+        // facts. Serializing the splice-and-summarize section makes each
+        // summary observe its predecessor's result.
+        this._maintenance = Promise.resolve();
+        // Last summarization failure, kept so a failed turn is recorded rather
+        // than thrown into a caller that never awaited us.
+        this.lastError = null;
     }
 
     getHistory() { // expects an Examples object
@@ -155,7 +167,7 @@ export class History {
         }
     }
 
-    async add(name, content) {
+    add(name, content) {
         let role = 'assistant';
         if (name === 'system') {
             role = 'system';
@@ -164,15 +176,74 @@ export class History {
             role = 'user';
             content = `${name}: ${content}`;
         }
+        // Pushed synchronously, before any queueing. Several callers do not
+        // await add() and then build the next prompt immediately, so the turn
+        // has to be visible the moment add() returns. Only the overflow
+        // handling below is deferred onto the serialized chain.
         this.turns.push({role, content});
+        return this._queueOverflowDrain();
+    }
 
-        if (this.turns.length >= this.max_messages) {
-            let chunk = this.turns.splice(0, this.summary_chunk_size);
-            while (this.turns.length > 0 && this.turns[0].role === 'assistant')
-                chunk.push(this.turns.shift()); // remove until turns starts with system/user message
+    /**
+     * Chains the next drain after the current one. The chain is advanced on
+     * both settle paths so one failure cannot wedge every later add.
+     */
+    _queueOverflowDrain() {
+        this._maintenance = this._maintenance.then(
+            () => this._drainOverflow(),
+            () => this._drainOverflow(),
+        );
+        return this._maintenance;
+    }
 
-            await this.summarizeMemories(chunk);
-            await this.appendFullHistory(chunk);
+    /**
+     * Deliberately does not reject: most callers never await add(), so throwing
+     * here would surface as an unhandled rejection from an unrelated command or
+     * timeout path. A failed summary is recorded and the chunk's turns have
+     * already been removed, matching the previous behaviour on failure.
+     */
+    async _drainOverflow() {
+        let summarized = false;
+        try {
+            // A loop rather than a single check: while one summary awaits its
+            // model call, further adds can push the backlog past the threshold
+            // again, and each queued drain should leave history bounded.
+            while (this.turns.length >= this.max_messages) {
+                const chunk = this.turns.splice(0, this.summary_chunk_size);
+                while (this.turns.length > 0 && this.turns[0].role === 'assistant')
+                    chunk.push(this.turns.shift()); // remove until turns starts with system/user message
+
+                await this.summarizeMemories(chunk);
+                this.appendFullHistory(chunk);
+                summarized = true;
+            }
+            // Only a drain that actually summarized may clear a recorded
+            // failure. Every add queues a drain, so most of them find nothing
+            // to do -- letting those report success would erase the error a
+            // real failure had just recorded.
+            if (summarized) this.lastError = null;
+        } catch (error) {
+            this.lastError = String(error?.message || error).slice(0, 280);
+            console.error(`Could not summarize ${this.name}'s history: ${this.lastError}`);
+        }
+    }
+
+    /**
+     * Bounded drain for shutdown. Returns true when the chain settled, false
+     * when the caller's budget expired first, so teardown can report an
+     * unflushed tail instead of hanging on a provider call.
+     */
+    async flush(timeoutMs = 2_000) {
+        let timer;
+        const expired = Symbol('history-flush-timeout');
+        const deadline = new Promise((resolve) => {
+            timer = setTimeout(() => resolve(expired), timeoutMs);
+            timer.unref?.();
+        });
+        try {
+            return (await Promise.race([this._maintenance, deadline])) !== expired;
+        } finally {
+            clearTimeout(timer);
         }
     }
 
