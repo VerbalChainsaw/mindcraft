@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { isCancellation, ModelCancelledError, PendingRequests } from './cancellation.js';
 
 // The o-series reasoning models (o1, o3, o4...) are the only ones that need the
 // Responses API. Everything else -- gpt-4o, gpt-4.1, gpt-5* -- is faster and
@@ -36,6 +37,14 @@ export class GPT {
             config.timeout = Math.round(timeoutSeconds * 1000);
 
         this.openai = new OpenAIApi(config);
+        this._pending = new PendingRequests();
+    }
+
+    // Operator Stop reaches this through Prompter and FallbackRouter. Aborting
+    // the HTTP request is what actually stops the spend; without it a stop only
+    // discarded a response that was still being generated and paid for.
+    cancelPending() {
+        return this._pending.cancelAll();
     }
 
     async sendRequest(turns, systemMessage, stop_seq='***') {
@@ -48,6 +57,7 @@ export class GPT {
 
         let res = null;
 
+        const controller = this._pending.begin();
         try {
             console.log('Awaiting openai api response from model', model);
             // Use chat.completions for a custom endpoint and for every standard
@@ -67,12 +77,12 @@ export class GPT {
                 if (model.includes('o1') || model.includes('o3') || model.includes('5')) {
                     delete pack.stop;
                 }
-                let completion = await this.openai.chat.completions.create(pack);
+                let completion = await this.openai.chat.completions.create(pack, { signal: controller.signal });
                 if (completion.choices[0].finish_reason == 'length')
-                    throw new Error('Context length exceeded'); 
+                    throw new Error('Context length exceeded');
                 console.log('Received.');
                 res = completion.choices[0].message.content;
-            } 
+            }
             // otherwise, use responses
             else {
                 let messages = strictFormat(turns);
@@ -85,7 +95,7 @@ export class GPT {
                     instructions: systemMessage,
                     input: messages,
                     ...(this.params || {})
-                });
+                }, { signal: controller.signal });
                 console.log('Received.');
                 res = response.output_text;
                 let stop_seq_index = res.indexOf(stop_seq);
@@ -93,6 +103,10 @@ export class GPT {
             }
         }
         catch (err) {
+            // A cancelled request is not a failed one. Returning the usual
+            // sentinel here would make FallbackRouter penalize this provider and
+            // start the same generation on the next one, so cancellation throws.
+            if (isCancellation(err)) throw new ModelCancelledError();
             if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
@@ -104,10 +118,13 @@ export class GPT {
                 res = 'My brain disconnected, try again.';
             }
         }
+        finally {
+            this._pending.end(controller);
+        }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
@@ -141,7 +158,7 @@ const sendAudioRequest = async (text, model, voice, url) => {
         model: model,
         voice: voice,
         input: text
-    }
+    };
 
     let config = {};
 
@@ -159,9 +176,9 @@ const sendAudioRequest = async (text, model, voice, url) => {
     const buffer = Buffer.from(await mp3.arrayBuffer());
     const base64 = buffer.toString("base64");
     return base64;
-}
+};
 
 export const TTSConfig = {
     sendAudioRequest: sendAudioRequest,
     baseUrl: 'https://api.openai.com/v1',
-}
+};

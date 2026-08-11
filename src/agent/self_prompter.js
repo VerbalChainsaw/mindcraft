@@ -6,6 +6,7 @@ import {
     truncCommandMessage,
 } from './commands/index.js';
 import { waitForBotEvent } from './runtime/interruptible-delay.js';
+import { isCancellation } from '../models/cancellation.js';
 
 const STOPPED = 0
 const ACTIVE = 1
@@ -334,6 +335,15 @@ export class SelfPrompter {
                         used_command = false;
                     }
                 } catch (error) {
+                    // A cancelled generation is this agent being stopped on
+                    // purpose, not a provider failing. Charging it to the error
+                    // budget would let a few Operator Stops push a later,
+                    // healthy goal closer to its pause threshold, and backing
+                    // off would delay a stop that is already in progress.
+                    if (isCancellation(error)) {
+                        console.log('Self-prompting turn cancelled.');
+                        break;
+                    }
                     // A thrown error here is almost always a transient LLM/provider
                     // failure, not a problem with the goal itself. Back off and retry
                     // instead of killing the goal so the bot keeps playing.

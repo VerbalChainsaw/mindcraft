@@ -9,6 +9,8 @@
 // model can cover for a hosted one and the hosted one is picked back up on its
 // own once it recovers.
 
+import { isCancellation } from './cancellation.js';
+
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000;
 
@@ -92,6 +94,12 @@ export class FallbackRouter {
         return response;
       } catch (error) {
         lastError = error;
+        // A deliberate cancellation must stop the whole route, not move to the
+        // next provider. Falling through here would answer Operator Stop by
+        // starting the same generation somewhere else. Checked before the
+        // transport test because some abort messages contain words the
+        // transport pattern matches.
+        if (isCancellation(error)) throw error;
         if (!isTransportFailure(error)) throw error;
         this.penalize(entry);
         this.log?.warn?.(
@@ -108,6 +116,7 @@ export class FallbackRouter {
       try {
         return await entry.model.embed(...args);
       } catch (error) {
+        if (isCancellation(error)) throw error;
         if (!isTransportFailure(error)) throw error;
         this.penalize(entry);
       }

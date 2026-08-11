@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import { isCancellation, ModelCancelledError, PendingRequests } from './cancellation.js';
 
 export class Qwen {
     static prefix = 'qwen';
@@ -23,6 +24,11 @@ export class Qwen {
             config.timeout = Math.round(timeoutSeconds * 1000);
 
         this.openai = new OpenAIApi(config);
+        this._pending = new PendingRequests();
+    }
+
+    cancelPending() {
+        return this._pending.cancelAll();
     }
 
     async sendRequest(turns, systemMessage, stop_seq='***') {
@@ -38,16 +44,19 @@ export class Qwen {
         };
 
         let res = null;
+        const controller = this._pending.begin();
         try {
             console.log('Awaiting Qwen api response...');
             // console.log('Messages:', messages);
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await this.openai.chat.completions.create(pack, { signal: controller.signal });
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');
             res = completion.choices[0].message.content;
         }
         catch (err) {
+            // Cancellation must throw, not return the failure sentinel.
+            if (isCancellation(err)) throw new ModelCancelledError();
             if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
@@ -55,6 +64,9 @@ export class Qwen {
                 console.log(err);
                 res = 'My brain disconnected, try again.';
             }
+        }
+        finally {
+            this._pending.end(controller);
         }
         return res;
     }

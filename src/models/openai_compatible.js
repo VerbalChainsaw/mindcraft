@@ -1,6 +1,7 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
+import { isCancellation, ModelCancelledError, PendingRequests } from './cancellation.js';
 
 export const OPENAI_COMPATIBLE_API_KEY_ENVS = Object.freeze([
     'OPENAI_COMPATIBLE_API_KEY',
@@ -56,6 +57,11 @@ export class OpenAICompatible {
         if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0)
             config.timeout = Math.round(timeoutSeconds * 1000);
         this.openai = createClient(config);
+        this._pending = new PendingRequests();
+    }
+
+    cancelPending() {
+        return this._pending.cancelAll();
     }
 
     async sendRequest(turns, systemMessage, stop_seq = '***') {
@@ -74,14 +80,19 @@ export class OpenAICompatible {
         };
 
         let res = null;
+        const controller = this._pending.begin();
         try {
             console.log('Awaiting openai_compatible api response...');
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await this.openai.chat.completions.create(pack, { signal: controller.signal });
             if (completion.choices[0].finish_reason === 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');
             res = completion.choices[0].message.content;
         } catch (err) {
+            // Cancellation must throw, not return the failure sentinel, or the
+            // router would treat a deliberate stop as a dead provider and
+            // restart the generation elsewhere.
+            if (isCancellation(err)) throw new ModelCancelledError();
             if ((err.message === 'Context length exceeded' || err.code === 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
@@ -89,6 +100,8 @@ export class OpenAICompatible {
                 console.log(err);
                 res = 'My brain disconnected, try again.';
             }
+        } finally {
+            this._pending.end(controller);
         }
         return res;
     }

@@ -17,6 +17,13 @@ const CONTROL_PLANE_FILES = [
   "src/mindcraft/mindserver.js",
   "src/models/_model_map.js",
   "src/models/openai_compatible.js",
+  // These run under Node and use class fields (`static prefix = ...`), which
+  // the browser/ES2021 base scope cannot even parse. Scope membership is about
+  // where the file runs, not which lint lane happens to name it.
+  "src/models/cancellation.js",
+  "src/models/fallback-router.js",
+  "src/models/gpt.js",
+  "src/models/qwen.js",
   "src/process/agent_process.js",
   "src/process/init_agent.js",
   "src/utils/agent-name.js",
