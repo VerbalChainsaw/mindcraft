@@ -42,6 +42,30 @@ The 2026-08-04 expansion used the built `center-geo` scanner interactively again
 
 **These are structural risk hypotheses derived from graph evidence. They are not confirmed defects until reproduced or proven by a focused audit.** Only findings whose concrete code path was subsequently traced appear as confirmed debt below.
 
+### Rescan 2026-08-11 — and two corrections to the provenance above
+
+Re-run with `center-geo` 0.2.0 (installed at `C:/Users/zerop/Development/center-geo`, **not** the `C:/hermes/hermes-agent/apps/center-geo` path the projects registry still reports). Scoped config, `config_hash 46e9b05955851fb9`, graph `scan:5c99865c1d01125a`; 165 files indexed, 0 failed; 2,819 nodes / 27,638 edges, 69% low-confidence. Engines: radial 156, cycle 11, boundary 0, anomaly 215, convergent 145, **path 25**.
+
+- **Correction 1 — the default config indexes the corrupt node_modules backup.** A first pass with default settings saw **955** files and returned five of its top twenty "critical" hypotheses from `node_modules.windows-corrupt-20260806-1856/` (ANGLE C++ preprocessor sources, node-gyp Python). Cause: the default exclude is `**/node_modules/**`, which does not match a directory *named* `node_modules.windows-corrupt-…`, while the default include carries a global `**/*.{cpp,h,py,…}`. Any default-config scan of this repo is poisoned until that directory is removed or explicitly excluded.
+- **Correction 2 — "boundary and path produced zero signals" was a configuration gap, not a clean result.** The 2026-08-04 note above records both engines as silent. They were silent because the default boundary tags are `src/ui/**` and `src/db/**` (which do not exist here) and the path engine only activates when `entry_tags`/`sink_tags` are set. Given real tags for this repo's layers, path produced 25 signals. Do not read the earlier zero as evidence of structural health.
+- **What the hub rankings added: nothing new.** Every top hypothesis ties at rank 1.40 and is built from `high_fan_out` / `fan_in_anomaly` / `convergent_target` on the same hubs already named above (`agent.js`, `prompter.js`, `action_manager.js`, command surface). Ranking still cannot discriminate among them.
+- **What path added: a capability gap, honestly labelled.** All 25 path signals are `unknown_dynamic_handoff` at `pathLength: 1`, concentrated in `src/mindcraft/director.js`, and most resolve to `clearTimeout`/`clearInterval`/`_send`. The graph cannot trace control-plane input through to physical execution, so **no structural claim about that boundary is supported by this scan** either way.
+- **Tool caveat for future readers:** hypothesis *titles* name a file that does not reliably correspond to the `node_id` they carry — the same `node_id` was labelled `prompter.js` in one scan and `agent.js` in another, and `agent.js` appeared under seven distinct ids in one report. Rank hypotheses by the `evidence[].path` anchors on their contributing signals, not by the title. The `radial` engine also self-declares its fan-out threshold of 8 as "a placeholder".
+
+### TD-CYCLE-001 — Verified import cycle across the command and conversation surface
+
+- **Priority/status:** P2, structurally confirmed 2026-08-11, no runtime defect yet attributed to it.
+- **Graph evidence:** `cycle` engine, signal `s:cycle:cycle_detected:scc:7725095a623b3573:f14d4f5ae7e0c77e`, severity high, confidence high, `cycleSize: 6`, `internalEdges: 12`.
+- **Independently verified** by reading the static `import` edges directly, not taken on the scanner's word. Two tight 2-cycles sit inside the component:
+  - `commands/queries.js` ↔ `commands/index.js`
+  - `conversation.js` ↔ `mindserver_proxy.js`
+  - plus the longer loop `commands/index.js` → `commands/actions.js` → `conversation.js` → `commands/index.js`, with `library/full_state.js` bound in via `conversation.js`.
+- **Why this is debt:** ES modules tolerate cycles through hoisting, so this is not currently a crash. It does mean module-initialisation order across the command surface is implicit: a binding read at module scope during load can legitimately be `undefined` depending on which file the loader enters first. That is the same silent-initialisation shape as the defects found on 2026-08-10, and it makes the command surface hard to reason about when adding a new entry point.
+- **Activation gate:** A load-order-dependent failure, an `undefined` import binding at startup, or a new command entry point that must be imported from more than one of these modules. **Do not schedule a dependency-untangling refactor on graph evidence alone.**
+- **Second cycle, lower priority:** `mindcraft.js` ↔ `agent_process.js` ↔ `mindserver.js` (`cycleSize: 3`, medium/high) — the control-plane lifecycle trio.
+- **Heads-up, not scheduled:** the single most severe cycle in the scan is `cycleSize: 11, internalEdges: 21`, entirely **inside `src/agent/runtime/prerequisite-planner.js`** — the file Codex has been actively growing (+335 uncommitted lines as of this scan). Excluded from this record because it is under live edit; worth raising with Codex rather than repairing behind them.
+- **Do not solve by:** a barrel-file or dependency-inversion refactor of the command surface with no observed failure.
+
 ## Current map
 
 | ID | Priority | Status | Boundary | Summary |
