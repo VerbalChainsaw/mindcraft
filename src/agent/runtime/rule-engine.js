@@ -7,9 +7,21 @@ import { describeRule, normalizeRule, RULE_LIMITS, RuleStore } from './rules.js'
 // into the lane that performs it.
 const MAX_FIRES_PER_TICK = 2;
 
+// This was a copy of the helper in rules.js whose literal control bytes were
+// lost in transit, leaving the ASCII class [space-hyphen]. So it stripped
+// hyphens -- which it was never meant to touch -- and passed NUL, ESC and DEL
+// straight through, which is exactly what it was meant to remove. The absent
+// `eslint-disable no-control-regex` was the tell: once the control bytes were
+// gone there was nothing left for that rule to complain about.
+//
+// Not cosmetic. remove() builds its lookup key with this, while normalizeRule()
+// generates ids as `rule-<createdAt>-<sequence>` and default names as
+// `<trigger> -> <action>`. Both contain hyphens, so the key could never equal
+// the id it was derived from and no auto-named rule could be removed.
 function boundedText(value, maximum = 240) {
   return String(value ?? '')
-    .replace(/[ -]/g, ' ')
+    // eslint-disable-next-line no-control-regex -- rule text reaches chat and prompts.
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maximum);
