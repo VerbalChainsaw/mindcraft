@@ -69,7 +69,7 @@ The 2026-08-04 expansion used the built `center-geo` scanner interactively again
 | TD-CAP-002 | P1 | Confirmed contract gap | Capability failure → GoalDirector recovery | Every catalogue-generated failure is marked retryable and omits the target, progress, timing, and blocker identity required for causal replanning. |
 | TD-PHY-001 | P1 | Active, incremental | Deterministic physical execution | `skills.js` concentrates unrelated mechanics, policies, recovery loops, and evidence production in one 13,682-line module. |
 | TD-DEP-001 | P1 | Active migration debt | Owned Minecraft dependency graph | The owned Pathfinder is imported directly while registry Pathfinder remains installed; the root lockfile is explicitly ignored and the installed graph contains a second legacy Mineflayer. |
-| TD-IO-001 | P2 | Conditional on measurement | Durable state persistence | Goal/job persistence performs synchronous `fsync` writes on the agent event loop. |
+| TD-IO-001 | P3 | Measured 2026-08-10, gate NOT met | Durable state persistence | Real cost is 1.8ms on a typical tick and 13.5ms on a heavy one; the stall premise is not supported on this hardware. |
 | TD-PROV-001 | P2 | Repaired 2026-08-10, live probe pending | Provider transport | OpenAI-compatible and Qwen adapters now lift `timeout`/`timeout_seconds` onto the SDK client. |
 | TD-MODEL-001 | — | Closed 2026-08-10 (plumbing) | Model routing/cancellation | Lifecycle now forwards through routers to unique leaf providers across all eight routes. |
 | TD-MODEL-002 | P2 | Repaired 2026-08-10, live stop pending | Provider cancellation capability | The OpenAI-family adapters now abort in-flight requests; cancellation throws a typed error the router refuses to route past. |
@@ -77,7 +77,7 @@ The 2026-08-04 expansion used the built `center-geo` scanner interactively again
 | TD-PROMPT-002 | P2 | Repaired 2026-08-10 | Coding/autonomy generation | `awaiting_coding` now releases in `finally`; both floating `startLoop()` launches route through a guarded sink. |
 | TD-LIFE-001 | P2 | Repaired 2026-08-10, live stop pending | Agent process lifecycle | The child entrypoint now maps one SIGINT/SIGTERM into one bounded `teardownAndExit`. |
 | TD-ACT-001 | — | Closed 2026-08-10 | Action timeout settlement | The timeout callback now sinks its own rejections; injected stop/history failure is covered by a focused check. |
-| TD-MEM-001 | P2 | Confirmed | Landmark memory persistence | Landmark recall is a read API that may synchronously persist mutations. |
+| TD-MEM-001 | P3 | Measured 2026-08-10, largely disproved | Landmark memory persistence | Real stores are 1.1KB (not the 256KB cap) and `save()` already no-ops unless dirty; the design smell remains, the cost does not. |
 | TD-HIST-001 | P2 | Confirmed concurrency gap | Conversation/history mutation | Numerous call sites fire-and-forget async history addition, allowing overlapping summarization and unobserved rejection. |
 | TD-JOB-001 | — | Closed 2026-08-10 | Job deduplication memory | Completed work-order IDs are retained in an insertion-ordered bound of 256. |
 | TD-SWARM-001 | P2 | Confirmed process race | Swarm helper relocation | Relocation reports success without awaiting termination of the old child process. |
@@ -297,7 +297,12 @@ These items are deliberately recorded without scheduling a consolidation project
 - **Why this is debt:** Goal and job state may transition on the same JavaScript event loop that processes Mineflayer packets and arbitration. A durable filesystem flush can pause that loop.
 - **Risk if ignored:** On slower or heavily contended storage, state transitions can create observable movement, packet, or response stalls.
 - **Required evidence:** Measure event-loop delay and write duration during a real persisted goal. Static presence of `fsyncSync` is not proof of a material gameplay stall.
-- **Correct repair shape:** A serialized/coalesced writer with monotonic state ordering, atomic rename, explicit flush/checkpoint semantics, shutdown draining, and surfaced write failure.
+- **Measured 2026-08-10 (`node tools/measure-persistence-cost.mjs`, win32, NVMe C:):** one 2KB persist blocks the loop for a median of **1.03ms**. At the arbiter's ~180ms cadence a typical single-persist tick blocks **1.77ms** (1.0% of wall clock, 3.5% of a 50ms Minecraft tick); a heavy tick modelled as 12 persists blocks **13.5ms** (7.5% of wall clock, 26.9% of a Minecraft tick). A 256KB write costs 3.8ms.
+- **Verdict — the activation gate is NOT met.** The mechanism is real and the arithmetic in the record was right, but the magnitude assumed "tens of ms per write on slow or contended storage." On this machine fsync is ~1ms, so the worst modelled tick costs about a quarter of one Minecraft tick and the typical tick is negligible. **Priority lowered P2 → P3.** Do not migrate the stores to async, debounce the writer, or restructure persistence on this evidence: the map's own warning against changing every store to async indiscriminately applies, and the durability/resumption semantics being protected are worth more than 1.8ms.
+- **Instrument caveat for whoever re-measures:** a synchronous fsync produces no separately-samplable loop lag — it *is* the lag. A `setInterval(1)` probe measures Windows' ~15.6ms timer granularity instead (its idle baseline reads higher than the write cases), and `monitorEventLoopDelay` returns NaN across a purely synchronous block. Both were tried and discarded before the direct measurement above.
+- **Re-open gate:** Re-measure on the target hardware if the bot runs from spinning disk, a network share, or a heavily contended volume, or if a real session shows packet/movement stalls correlated with state transitions. The heavy-tick figure would become material somewhere around a 5-10x slower fsync.
+- **Correct repair shape (if ever re-opened):** A serialized/coalesced writer with monotonic state ordering, atomic rename, explicit flush/checkpoint semantics, shutdown draining, and surfaced write failure.
+- **Considered and rejected as a cheap win:** merging JobDirector's checkpoint persist (`job-director.js:1498-1500`) with its anchor persist (`:1510-1516`). They are separated by an early `continue` at `:1506`, so the checkpoint must commit for declarative steps that never reach the anchor write. Merging would restructure checkpoint durability across that branch to save ~1.1ms. Not worth the resumption risk.
 - **Exit criteria:** Durability/restart tests still pass, shutdown flush is verified, and measured event-loop stalls materially decrease in the real runtime.
 - **Do not solve by:** Removing durability, fire-and-forgetting promises, allowing old state to overwrite new state, or changing every store to async indiscriminately.
 
@@ -425,7 +430,12 @@ These items are deliberately recorded without scheduling a consolidation project
 - **Why this is debt:** A read operation can mutate and synchronously persist the full store from prompt assembly. That hides write latency inside an apparently observational API.
 - **Correct boundary:** Recall may mark invalid entries dirty, but persistence should occur through an explicit serialized/debounced flush or a separately owned mutation path.
 - **Activation gate:** Confirm that recall-driven writes occur materially in active profiles, preferably while measuring TD-IO-001/TD-PROMPT-001.
-- **Exit criteria:** Recall remains self-healing in memory, persistence remains crash-safe, and repeated reads do not repeatedly flush unchanged state.
+- **Measured 2026-08-10 — the premise is substantially overstated.** Two corrections to the evidence this record and the 2026-08-03 audit rest on:
+  1. **Store size.** The 256KB figure is `MAX_STORE_BYTES`, the cap, not observed data. Every real store on disk is **1.1KB or smaller** (`bots/*/landmarks.json`: 1.1, 1.1, 0.8, 0.3, 0.1 KB). The real write costs **1.10ms**, not the 4.29ms a capped store would.
+  2. **Write frequency.** `save()` at `landmark-memory.js:143-144` early-returns unless `this.dirty`. A recall over an unchanged store performs **no write at all**. The audit's "hundreds of sync file writes per minute" assumed every recall flushes; only recalls whose prune/verify actually evicted something do.
+- **Verdict:** The exit criterion "repeated reads do not repeatedly flush unchanged state" is **already satisfied by the existing dirty guard**. What remains is a design smell — a read API that can write — costing ~1.1ms on the rare dirtying recall. **Priority lowered P2 → P3.** The one-line audit fix (drop `save()` from `recall()`) is still defensible on API-shape grounds, but it is not a performance repair and should ride along with other landmark work rather than justify its own change.
+- **Re-open gate:** A profile whose landmark store actually approaches the cap, or a measured prompt-assembly stall attributable to recall.
+- **Exit criteria:** Recall remains self-healing in memory, persistence remains crash-safe, and repeated reads do not repeatedly flush unchanged state. — the third clause already holds.
 
 ### TD-HIST-001 — History mutation and summarization are not serialized
 
@@ -574,7 +584,7 @@ These records are deliberately retained to prevent recurrence of stale recommend
 2. Let the next real player outcome activate TD-CAP-001/TD-CAP-002 and, where necessary, a bounded portion of TD-PHY-001.
 3. Complete TD-DEP-001 only through the already-approved owned-runtime migration gates; never mix dependency ownership changes casually into a gameplay repair.
 4. Schedule small reliability repairs such as TD-PROV-001, TD-MODEL-001, TD-PROMPT-002, TD-LIFE-001, TD-ACT-001, TD-HIST-001, TD-JOB-001, or TD-SWARM-001 as coherent maintenance tranches; do not mix them into unrelated gameplay commits.
-5. Measure before acting on TD-IO-001, TD-PROMPT-001, TD-MEM-001, or TD-ARB-001.
+5. Measure before acting on TD-IO-001, TD-PROMPT-001, TD-MEM-001, or TD-ARB-001. **TD-IO-001 and TD-MEM-001 were measured on 2026-08-10 and both failed their activation gates; they are now P3 and must not be re-promoted without new measurement on the target hardware.** TD-PROMPT-001 and TD-ARB-001 remain unmeasured.
 6. Leave P3 cleanup alone unless it is already inside the active change surface.
 
 This map tracks liabilities. The playable companion roadmap remains authoritative for what gets built next.

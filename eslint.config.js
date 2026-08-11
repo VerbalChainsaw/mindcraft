@@ -29,6 +29,8 @@ const CONTROL_PLANE_FILES = [
   "src/utils/agent-name.js",
   "tools/scenario-lab.mjs",
   "tools/scenario-lab/**/*.mjs",
+  "tools/measure-persistence-cost.mjs",
+  "tools/verify-provider-transport.mjs",
   "tests/control-plane/**/*.js",
 ];
 
