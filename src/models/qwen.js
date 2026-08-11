@@ -11,17 +11,24 @@ export class Qwen {
         // Same client-vs-body split as gpt.js and openai_compatible.js: a
         // `timeout` left in the request body is dropped, so a stalled DashScope
         // stream held the turn for the SDK's 10 minute default.
-        const { timeout, timeout_seconds, ...bodyParams } = params || {};
+        const { timeout, timeout_seconds, max_retries, maxRetries, ...bodyParams } = params || {};
         this.params = bodyParams;
         const timeoutSeconds = Number(timeout ?? timeout_seconds);
+        const configuredRetries = Number(max_retries ?? maxRetries);
 
         let config = {};
 
         config.baseURL = url || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
         config.apiKey = getKey('QWEN_API_KEY');
 
-        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0)
+        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
             config.timeout = Math.round(timeoutSeconds * 1000);
+            // Default SDK retries would triple the configured bound; the router
+            // owns failover. Explicit max_retries still wins.
+            config.maxRetries = 0;
+        }
+        if (Number.isFinite(configuredRetries) && configuredRetries >= 0)
+            config.maxRetries = Math.round(configuredRetries);
 
         this.openai = new OpenAIApi(config);
         this._pending = new PendingRequests();
@@ -55,8 +62,10 @@ export class Qwen {
             res = completion.choices[0].message.content;
         }
         catch (err) {
-            // Cancellation must throw, not return the failure sentinel.
-            if (isCancellation(err)) throw new ModelCancelledError();
+            // Cancellation must throw, not return the failure sentinel. The
+            // signal we own is authoritative; error-shape sniffing alone missed
+            // real SDK aborts.
+            if (controller.signal.aborted || isCancellation(err)) throw new ModelCancelledError();
             if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);

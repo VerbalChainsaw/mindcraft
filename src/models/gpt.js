@@ -20,9 +20,10 @@ export class GPT {
         // being spread into the completion body, where OpenAI rejects it -- which
         // is one way a call fails and the bot reports "my brain disconnected".
         // Lift it onto the client and keep only real generation params for the body.
-        const { timeout, timeout_seconds, ...bodyParams } = params || {};
+        const { timeout, timeout_seconds, max_retries, maxRetries, ...bodyParams } = params || {};
         this.params = bodyParams;
         const timeoutSeconds = Number(timeout ?? timeout_seconds);
+        const configuredRetries = Number(max_retries ?? maxRetries);
 
         let config = {};
         if (url)
@@ -33,8 +34,16 @@ export class GPT {
 
         config.apiKey = getKey('OPENAI_API_KEY');
 
-        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0)
+        if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
             config.timeout = Math.round(timeoutSeconds * 1000);
+            // The SDK retries a timed-out request twice by default, which
+            // silently triples a configured bound (measured: a 3s bound settled
+            // in 10.4s against a black-holed endpoint). FallbackRouter already
+            // owns failover, so SDK retry is redundant here. Explicit wins.
+            config.maxRetries = 0;
+        }
+        if (Number.isFinite(configuredRetries) && configuredRetries >= 0)
+            config.maxRetries = Math.round(configuredRetries);
 
         this.openai = new OpenAIApi(config);
         this._pending = new PendingRequests();
@@ -106,7 +115,9 @@ export class GPT {
             // A cancelled request is not a failed one. Returning the usual
             // sentinel here would make FallbackRouter penalize this provider and
             // start the same generation on the next one, so cancellation throws.
-            if (isCancellation(err)) throw new ModelCancelledError();
+            // The signal we own is authoritative; error-shape sniffing alone
+            // missed real SDK aborts.
+            if (controller.signal.aborted || isCancellation(err)) throw new ModelCancelledError();
             if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);

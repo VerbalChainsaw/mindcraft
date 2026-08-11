@@ -111,18 +111,50 @@ test('Given a settled request, when it completes, then its controller is release
   assert.equal(model.cancelPending(), 0);
 });
 
-test('Given the cancellation predicate, when given each provider family error shape, then all are recognized', () => {
-  const sdkAbort = new Error('Request was aborted.');
-  sdkAbort.name = 'APIUserAbortError';
+// This check originally built the SDK error by hand with `name =
+// 'APIUserAbortError'` and passed, while a live black-holed endpoint proved the
+// predicate missed the real thing: APIUserAbortError extends APIError extends
+// Error and never assigns `this.name`, so the instance name is 'Error' and only
+// the CONSTRUCTOR is named APIUserAbortError. Use the real class, not a
+// hand-built stand-in, so the test cannot re-encode the same wrong assumption.
+test('Given the real SDK abort error, when the predicate inspects it, then it is recognized as cancellation', async () => {
+  const { APIUserAbortError } = await import('openai');
+  const realAbort = new APIUserAbortError();
+
+  assert.equal(realAbort.name, 'Error', 'guards the assumption this test exists to pin');
+  assert.equal(realAbort.constructor.name, 'APIUserAbortError');
+  assert.equal(isCancellation(realAbort), true);
+});
+
+test('Given each provider family error shape, when the predicate inspects them, then only cancellations match', () => {
   const codexCancel = Object.assign(new Error('Codex request was cancelled.'), { code: 'CANCELLED' });
   const domAbort = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
 
   assert.equal(isCancellation(new ModelCancelledError()), true);
-  assert.equal(isCancellation(sdkAbort), true);
   assert.equal(isCancellation(codexCancel), true);
   assert.equal(isCancellation(domAbort), true);
   assert.equal(isCancellation(new Error('rate limit exceeded')), false);
+  assert.equal(isCancellation(new Error('the model aborted its own generation')), false);
   assert.equal(isCancellation(null), false);
+});
+
+test('Given a configured timeout, when the client is built, then SDK retries do not multiply the bound', () => {
+  // A live black-holed endpoint settled a configured 3s bound in 10.4s, because
+  // the SDK retries a timed-out request twice by default.
+  let seen = {};
+  new OpenAICompatible('m', 'https://example.invalid/v1', { timeout_seconds: 3 }, {
+    readKey: () => 'k',
+    createClient: (config) => { seen = config; return { chat: { completions: { create() {} } } }; },
+  });
+  assert.equal(seen.timeout, 3000);
+  assert.equal(seen.maxRetries, 0);
+
+  let explicit = {};
+  new OpenAICompatible('m', 'https://example.invalid/v1', { timeout_seconds: 3, max_retries: 2 }, {
+    readKey: () => 'k',
+    createClient: (config) => { explicit = config; return { chat: { completions: { create() {} } } }; },
+  });
+  assert.equal(explicit.maxRetries, 2, 'an explicit retry count must still win');
 });
 
 test('Given many in-flight requests, when cancelAll runs, then each is aborted once and the set is cleared', () => {

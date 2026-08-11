@@ -29,8 +29,16 @@ export function isCancellation(error) {
     if (error.cancelled === true) return true;
     const code = error.code;
     if (code === MODEL_CANCELLED_CODE || code === 'CANCELLED' || code === 'ABORT_ERR') return true;
-    const name = error.name;
-    return name === 'ModelCancelledError' || name === 'APIUserAbortError' || name === 'AbortError';
+    // The OpenAI SDK's APIUserAbortError extends APIError extends Error and
+    // never assigns `this.name`, so the INSTANCE name is 'Error' even though the
+    // class is called APIUserAbortError. Checking `.name` alone silently missed
+    // every real SDK abort -- a live black-holed endpoint proved it, after a
+    // unit test that built the error by hand had said otherwise. Check the
+    // constructor name too, and fall back to the abort message.
+    const names = [error.name, error.constructor?.name];
+    if (names.includes('ModelCancelledError')) return true;
+    if (names.includes('APIUserAbortError') || names.includes('AbortError')) return true;
+    return /\b(?:request|operation) was aborted\b/i.test(String(error.message || ''));
 }
 
 /**
