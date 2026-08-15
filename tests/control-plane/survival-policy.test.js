@@ -12,6 +12,26 @@ const POLICY = Object.freeze({
   shelter: 'seek',
 });
 
+test('Given critical health and a verified healing potion, survival preempts optional work to heal', () => {
+  const intent = chooseSurvivalIntent({
+    held: false,
+    idle: false,
+    health: 4,
+    hunger: 20,
+    urgentDanger: false,
+    healingConsumables: [
+      { item: 'healing_potion', effect: 'healing', count: 1, potency: 1 },
+    ],
+  }, POLICY);
+
+  assert.deepEqual(intent, {
+    kind: 'heal',
+    item: 'healing_potion',
+    reason: 'critical_health_healing',
+    preempt: true,
+  });
+});
+
 test('Given low hunger and safe food, survival policy chooses the strongest ordinary food without inventing an action result', () => {
   const intent = chooseSurvivalIntent({
     held: false,
@@ -56,7 +76,13 @@ test('Given only an emergency food reserve, noncritical hunger replenishes befor
   });
 });
 
-test('Given critical hunger without safe food, full survival policy actively acquires a safe reserve', () => {
+// Behaviour change 2026-08-15: this case previously asserted `acquire_food`,
+// i.e. forage while carrying edible food. That contributed to the Phantom
+// death, where the bot answered `acquire_food` every tick with four rotten
+// flesh in its inventory. Below the sprint threshold and one event from
+// starvation, eating the desperation food first is strictly better, and the
+// policy can still forage on the next tick.
+test('Given critical hunger and only desperation food, survival eats it instead of foraging', () => {
   const intent = chooseSurvivalIntent({
     held: false,
     idle: true,
@@ -73,8 +99,31 @@ test('Given critical hunger without safe food, full survival policy actively acq
   }, POLICY);
 
   assert.deepEqual(intent, {
+    kind: 'eat',
+    item: 'rotten_flesh',
+    reason: 'critical_hunger',
+  });
+});
+
+test('Given critical hunger and nothing edible at all, full survival policy still acquires one immediate unit', () => {
+  const intent = chooseSurvivalIntent({
+    held: false,
+    idle: true,
+    health: 12,
+    hunger: 4,
+    recentDamage: false,
+    urgentDanger: false,
+    hostiles: [],
+    food: [
+      { name: 'pufferfish', count: 2, foodPoints: 1, saturation: 0.4 },
+    ],
+    timeOfDay: 6000,
+    weather: 'Clear',
+  }, POLICY);
+
+  assert.deepEqual(intent, {
     kind: 'acquire_food',
-    targetFoodPoints: 24,
+    targetFoodPoints: 1,
     reason: 'missing_safe_food',
   });
 });
@@ -121,7 +170,9 @@ test('Given a safe reachable bed at night, full survival policy chooses sleep af
 
   assert.deepEqual(intent, {
     kind: 'sleep',
-    target: { name: 'white_bed', x: 10, y: 64, z: -2, distance: 6 },
+    // The dimension is part of the target so the executor can bind this exact
+    // bed instead of re-searching for the nearest one.
+    target: { name: 'white_bed', x: 10, y: 64, z: -2, distance: 6, dimension: 'overworld' },
     reason: 'safe_night',
   });
 });
@@ -235,4 +286,128 @@ test('Given dangerous weather without a safe shelter, emergency policy emits a b
   }, { ...POLICY, shelter: 'emergency' });
 
   assert.equal(peacefulNight, null);
+});
+
+// Reproduces the 2026-08-15 death exactly. Kevin sat at critical health, sky
+// exposed, for 37m52s and was killed by a Phantom. The hunger branch answered
+// every tick with `acquire_food` because rotten flesh was filtered out and the
+// shelter rungs sat below a branch that always returned.
+const KEVIN_DEATH_STATE = Object.freeze({
+  held: false,
+  idle: true,
+  health: 3,
+  hunger: 12,
+  recentDamage: true,
+  urgentDanger: false,
+  healingConsumables: [],
+  food: [{ name: 'rotten_flesh', count: 4, foodPoints: 4, saturation: 6.4 }],
+  armor: [],
+  timeOfDay: 18000,
+  dimension: 'overworld',
+  difficulty: 'normal',
+  weather: 'Rain',
+  sheltered: false,
+  shelters: [],
+  beds: [],
+});
+
+test('Given critical health and an admitted local shelter fixture, survival seals in place instead of foraging forever', () => {
+  const intent = chooseSurvivalIntent({
+    ...KEVIN_DEATH_STATE,
+    canShelterInPlace: true,
+  }, POLICY);
+
+  assert.equal(intent.kind, 'shelter_in_place');
+  assert.equal(intent.reason, 'critical_health_exposed');
+});
+
+test('Given critical exposure and a complete safe route, survival uses routed cover before destructive local shelter', () => {
+  const intent = chooseSurvivalIntent({
+    ...KEVIN_DEATH_STATE,
+    canShelterInPlace: true,
+    shelters: [{
+      name: 'covered_space',
+      x: 4,
+      y: 64,
+      z: 2,
+      distance: 5,
+      reachable: true,
+      safe: true,
+      pathStatus: 'success',
+    }],
+  }, POLICY);
+
+  assert.deepEqual(intent, {
+    kind: 'seek_shelter',
+    target: {
+      name: 'covered_space',
+      x: 4,
+      y: 64,
+      z: 2,
+      distance: 5,
+    },
+    reason: 'critical_health_exposed',
+  });
+});
+
+test('Given Kevin death state without a physical shelter receipt, survival eats carried emergency food instead of inventing terrain authority', () => {
+  const intent = chooseSurvivalIntent(KEVIN_DEATH_STATE, POLICY);
+
+  assert.deepEqual(intent, {
+    kind: 'eat',
+    item: 'rotten_flesh',
+    reason: 'critical_hunger',
+  });
+});
+
+test('Given shelter policy disabled, an otherwise feasible shaft is not authorized', () => {
+  const intent = chooseSurvivalIntent({
+    ...KEVIN_DEATH_STATE,
+    canShelterInPlace: true,
+  }, { ...POLICY, shelter: 'off' });
+
+  assert.deepEqual(intent, {
+    kind: 'eat',
+    item: 'rotten_flesh',
+    reason: 'critical_hunger',
+  });
+});
+
+test('Given the same critical state under cover, survival stops sheltering and eats its emergency food', () => {
+  const intent = chooseSurvivalIntent(
+    { ...KEVIN_DEATH_STATE, sheltered: true },
+    POLICY,
+  );
+
+  assert.deepEqual(intent, {
+    kind: 'eat',
+    item: 'rotten_flesh',
+    reason: 'critical_hunger',
+  });
+});
+
+test('Given an ordinary safe food beside a desperation food, critical survival still prefers the safe one', () => {
+  const intent = chooseSurvivalIntent({
+    ...KEVIN_DEATH_STATE,
+    sheltered: true,
+    food: [
+      { name: 'rotten_flesh', count: 4, foodPoints: 4, saturation: 6.4 },
+      { name: 'melon_slice', count: 1, foodPoints: 2, saturation: 1.2 },
+    ],
+  }, POLICY);
+
+  assert.equal(intent.kind, 'eat');
+  assert.equal(intent.item, 'melon_slice');
+});
+
+test('Given noncritical hunger, desperation food stays rejected exactly as before', () => {
+  const intent = chooseSurvivalIntent({
+    ...KEVIN_DEATH_STATE,
+    health: 20,
+    hunger: 12,
+    recentDamage: false,
+    sheltered: true,
+  }, POLICY);
+
+  assert.notEqual(intent?.kind, 'eat');
 });

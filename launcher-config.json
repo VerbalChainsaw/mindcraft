@@ -1,9 +1,9 @@
 {
-  "mindserver_port": 8080,
+  "mindserver_port": 8081,
   "mindserver_host_public": false,
   "auto_open_ui": false,
   "auto_start": true,
-  "port_scan_start": 8080,
+  "port_scan_start": 8081,
   "port_scan_max": 20,
   "profiles": [
     "./profiles/local-quickstart.json"

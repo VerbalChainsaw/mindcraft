@@ -1,9 +1,14 @@
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
+import { isPreemption } from './action-result.js';
 import { createWorkOrder } from './work-order.js';
 import { createBuilderShelterOrder } from './jobs/builder-plan.js';
+import { createAccessRepairWorkOrder } from './access-repair.js';
+import { miningOutputName } from './jobs/miner-plan.js';
+import { logInventoryCount } from './jobs/lumberjack-plan.js';
 import {
   createItemGoalContract,
   inventoryCountForGoalTarget,
+  normalizeGoalContract,
   resolveItemGoalTarget,
 } from './goal-contract.js';
 import {
@@ -23,6 +28,7 @@ import { familyFoodPoints } from './item-family.js';
 const DISPATCH_COOLDOWN_MS = 750;
 const REJECTED_COOLDOWN_MS = 5_000;
 const MAX_ENTRY_ATTEMPTS = 2;
+const MAX_ENTRY_PREEMPTIONS = 24;
 const MAX_INVENTORY_RECONCILIATIONS = 12;
 const WAITABLE_DIRECT_OUTCOMES = new Set(['skill_not_sleep_time']);
 const LEGACY_REARMABLE_SLEEP_OUTCOMES = new Set([
@@ -34,6 +40,7 @@ const JOB_ROLE_FOR_KIND = Object.freeze({
   harvest: 'lumberjack',
   stockpile: 'builder',
   shelter: 'builder',
+  repair_access: 'builder',
   explore: 'miner',
   scout: 'scout',
 });
@@ -52,6 +59,47 @@ function boundedText(value, maximum = 240) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maximum);
+}
+
+function isResumableSafetyPreemption(result) {
+  return isPreemption(result)
+    && /^(?:action_)?interrupted$/.test(String(result?.code || ''));
+}
+
+function inventoryItemCount(bot, name) {
+  return (bot?.inventory?.slots || []).reduce((total, item) => (
+    item?.name === name ? total + Math.max(0, Number(item.count) || 0) : total
+  ), 0);
+}
+
+function encodeBaselineInventory(entries) {
+  return Array.isArray(entries) && entries.length > 0
+    ? entries.map(item => `${item.name}:${item.count}`).join('|')
+    : 'none';
+}
+
+function acquisitionRetryCheckpoint(entry, goal) {
+  const route = goal?.checkpoint?.miningReturnRoute;
+  const index = Number(goal?.checkpoint?.miningReturnIndex);
+  if (
+    entry?.kind !== 'acquire'
+    || entry.completion !== 'inventory'
+    || !Array.isArray(route)
+    || route.length < 1
+    || !Number.isFinite(index)
+    || index < 0
+  ) return null;
+  return {
+    baselineInventory: entry.acquisitionCheckpoint?.baselineInventory
+      ?? goal.checkpoint?.baselineInventory,
+    targetInventory: entry.acquisitionCheckpoint?.targetInventory
+      ?? goal.checkpoint?.targetInventory,
+    miningReturnRoute: route,
+    miningReturnIndex: index,
+    ...(goal.checkpoint.miningReturnDimension
+      ? { miningReturnDimension: goal.checkpoint.miningReturnDimension }
+      : {}),
+  };
 }
 
 function inferredLegacyDependency(previous, entry) {
@@ -307,17 +355,12 @@ export class AgendaDirector {
   }
 
   /**
-   * Append several validated steps as one durable queue mutation.
-   *
-   * Model-compiled plans must not start with a valid first step and discover
-   * afterward that a later step was malformed. Stage the complete bounded
-   * list, then publish and persist it once. The Agenda still only sequences;
-   * GoalDirector, JobDirector, and ActionManager retain physical ownership.
+   * Normalize a complete bounded plan without mutating Agenda state. Natural
+   * player plans use this receipt before surrendering the currently owned
+   * action; addMany repeats the same deterministic gate immediately before its
+   * one durable commit.
    */
-  addMany(rawEntries, {
-    replaceUnfinished = false,
-    reason = 'Superseded by a new player plan.',
-  } = {}) {
+  stageMany(rawEntries, { replaceUnfinished = false } = {}) {
     if (!Array.isArray(rawEntries) || rawEntries.length < 1) {
       return { accepted: false, code: 'invalid_agenda_plan', detail: 'An agenda plan needs at least one typed step.' };
     }
@@ -332,12 +375,28 @@ export class AgendaDirector {
     const staged = [];
     let stagedSequence = this.sequence;
     let previous = replacing ? null : this.entries.at(-1) || null;
+    let previousStaged = null;
     try {
       for (const raw of rawEntries) {
         stagedSequence += 1;
-        const inferred = inferredLegacyDependency(previous, raw);
+        const dependsOnPrevious = raw?.dependsOnPrevious === true;
+        if (dependsOnPrevious && !previousStaged) {
+          return {
+            accepted: false,
+            code: 'invalid_agenda_dependency',
+            detail: 'A plan-local dependency needs an earlier step in the same plan.',
+          };
+        }
+        const linked = dependsOnPrevious
+          ? {
+            ...raw,
+            dependsOnEntryId: previousStaged.id,
+            dependencyPolicy: raw.dependencyPolicy || 'requires_success',
+          }
+          : raw;
+        const inferred = inferredLegacyDependency(previous, linked);
         const entry = normalizeAgendaEntry(
-          { ...raw, ...inferred, id: '', createdAt: this.now() },
+          { ...linked, ...inferred, id: '', createdAt: this.now() },
           { now: this.now, sequence: stagedSequence },
         );
         if (
@@ -348,10 +407,53 @@ export class AgendaDirector {
         }
         staged.push(entry);
         previous = entry;
+        previousStaged = entry;
       }
     } catch (error) {
       return { accepted: false, code: 'invalid_agenda_entry', detail: boundedText(error?.message || error) };
     }
+
+    return {
+      accepted: true,
+      replacing,
+      liveEntries,
+      staged,
+      stagedSequence,
+    };
+  }
+
+  validateMany(rawEntries, options = {}) {
+    const staged = this.stageMany(rawEntries, options);
+    if (staged.accepted !== true) return staged;
+    return {
+      accepted: true,
+      entries: staged.staged.map(entry => ({
+        id: entry.id,
+        description: describeAgendaEntry(entry),
+      })),
+    };
+  }
+
+  /**
+   * Append several validated steps as one durable queue mutation.
+   *
+   * Model-compiled plans must not start with a valid first step and discover
+   * afterward that a later step was malformed. Stage the complete bounded
+   * list, then publish and persist it once. The Agenda still only sequences;
+   * GoalDirector, JobDirector, and ActionManager retain physical ownership.
+   */
+  addMany(rawEntries, {
+    replaceUnfinished = false,
+    reason = 'Superseded by a new player plan.',
+  } = {}) {
+    const prepared = this.stageMany(rawEntries, { replaceUnfinished });
+    if (prepared.accepted !== true) return prepared;
+    const {
+      replacing,
+      liveEntries,
+      staged,
+      stagedSequence,
+    } = prepared;
 
     this.sequence = stagedSequence;
     let replaced = 0;
@@ -408,9 +510,103 @@ export class AgendaDirector {
     return { accepted: true, ...added };
   }
 
+  /**
+   * Death replaces the body that owned carried inventory. If the first
+   * unfinished step depends directly on a completed inventory acquisition,
+   * that historical completion is no longer execution authority. Re-arm the
+   * exact prerequisite and censor any callback from the dead body's direct
+   * action before ordinary Agenda dispatch can resume.
+   */
+  reconcileDeath() {
+    const dependent = this.activeEntry() || this.pending()[0] || null;
+    const prerequisite = dependent?.dependsOnEntryId
+      && dependent.dependencyPolicy === 'requires_success'
+      ? this.entries.find(entry => entry.id === dependent.dependsOnEntryId) || null
+      : null;
+    if (
+      !prerequisite
+      || prerequisite.kind !== 'acquire'
+      || prerequisite.completion !== 'inventory'
+      || prerequisite.state !== 'complete'
+    ) {
+      return Object.freeze({
+        reconciled: false,
+        code: 'agenda_death_no_inventory_revalidation',
+      });
+    }
+
+    this.directDispatchGeneration += 1;
+    this.dispatching = false;
+    const code = 'agenda_death_inventory_revalidation_required';
+    this.entries = this.entries.map(entry => {
+      if (entry.id === prerequisite.id) {
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'pending',
+          startedAt: null,
+          finishedAt: null,
+          executorId: '',
+          evidence: {
+            code,
+            detail: 'Death invalidated current-body inventory custody; revalidating this prerequisite before dependent work.',
+            retryable: true,
+          },
+        });
+      }
+      if (entry.id === dependent.id) {
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'pending',
+          startedAt: null,
+          finishedAt: null,
+          executorId: '',
+          evidence: {
+            code: 'agenda_dependency_revalidation_pending',
+            detail: 'Waiting for the death-invalidated inventory prerequisite to be verified again.',
+            retryable: true,
+          },
+        });
+      }
+      return entry;
+    });
+
+    const persisted = this.store?.save(this.entries) === true && !this.store?.lastError;
+    if (!persisted) {
+      // Keep the in-memory queue fail-closed. Without the atomic store write, a
+      // restart could restore the stale completion and authorize the dependent.
+      this.nextEligibleAt = Number.POSITIVE_INFINITY;
+      this.setStatus(
+        'failed',
+        'agenda_death_revalidation_persist_failed',
+        this.store?.lastError || 'The death revalidation could not be saved durably.',
+        prerequisite.id,
+      );
+      return Object.freeze({
+        reconciled: false,
+        code: 'agenda_death_revalidation_persist_failed',
+        prerequisiteId: prerequisite.id,
+        dependentId: dependent.id,
+      });
+    }
+
+    this.nextEligibleAt = Math.max(this.nextEligibleAt, this.now() + REJECTED_COOLDOWN_MS);
+    this.setStatus(
+      'recovering',
+      code,
+      `Revalidating ${describeAgendaEntry(prerequisite)} before ${describeAgendaEntry(dependent)} after death.`,
+      prerequisite.id,
+    );
+    return Object.freeze({
+      reconciled: true,
+      code,
+      prerequisiteId: prerequisite.id,
+      dependentId: dependent.id,
+    });
+  }
+
   clear(reason = 'Cleared by the player.') {
     const cleared = this.entries.filter(entry => !isTerminalAgendaState(entry.state)).length;
-    if (!cleared) return { cleared: 0 };
+    if (!cleared) return { cleared: 0, persisted: true };
     const active = this.activeEntry();
     if (active) {
       try { this.agent.goal_director?.cancel?.(reason); } catch { /* executor may be absent */ }
@@ -429,9 +625,22 @@ export class AgendaDirector {
             evidence: { code: 'agenda_cleared', detail: reason },
           })
     ));
-    this.persist();
+    const persisted = this.store?.save(this.entries) === true && !this.store?.lastError;
+    if (!persisted) {
+      // Cancellation may be trusted only after the atomic Agenda write. Keep
+      // the in-memory entries terminal and report failure so the caller can
+      // retain Operator Hold; a restart may still restore the old queue, but
+      // it cannot regain physical authority while that Hold remains durable.
+      this.nextEligibleAt = Number.POSITIVE_INFINITY;
+      this.setStatus(
+        'failed',
+        'agenda_clear_persist_failed',
+        this.store?.lastError || 'The Agenda cancellation could not be saved durably.',
+      );
+      return { cleared, persisted: false };
+    }
     this.setStatus('cancelled', 'agenda_cleared', reason);
-    return { cleared };
+    return { cleared, persisted: true };
   }
 
   skipCurrent(reason = 'Skipped by the player.') {
@@ -681,6 +890,9 @@ export class AgendaDirector {
         };
       }
       const succeeded = last?.phase === 'complete';
+      const retryCheckpoint = !succeeded
+        ? acquisitionRetryCheckpoint(entry, last)
+        : null;
       if (entry.kind === 'inventory_checklist' && succeeded) {
         return {
           state: 'recheck',
@@ -692,8 +904,14 @@ export class AgendaDirector {
         state: succeeded ? 'complete' : 'failed',
         code: last?.evidence?.code || 'goal_ended',
         detail: last?.evidence?.detail || '',
-        retryable: last?.evidence?.retryable !== false,
+        // GoalDirector already owns the goal's complete bounded recovery
+        // budget. Agenda may continue it only when the correlated terminal
+        // receipt explicitly grants retry authority (for example, a durable
+        // acquisition checkpoint after material progress). Absence is unknown,
+        // never permission to clone the goal with a fresh ID and budget.
+        retryable: last?.evidence?.retryable === true,
         completionBlocked: last?.evidence?.completionBlocked === true,
+        ...(retryCheckpoint ? { acquisitionCheckpoint: retryCheckpoint } : {}),
       };
     }
     if (entry.executor === 'job') {
@@ -850,11 +1068,53 @@ export class AgendaDirector {
         };
       }
     }
+    if (result?.phase === 'succeeded' && entry?.kind === 'inspect_container') {
+      const skill = result?.evidence?.skill;
+      const expected = entry.containerConstraint;
+      const observed = skill?.target;
+      const exactTarget = skill?.kind === 'chest_view'
+        && skill?.outcome === 'viewed'
+        && observed?.name === expected?.name
+        && observed?.x === expected?.position?.x
+        && observed?.y === expected?.position?.y
+        && observed?.z === expected?.position?.z;
+      const manifest = Array.isArray(skill?.manifest)
+        ? skill.manifest
+          .slice(0, 54)
+          .map(item => ({
+            name: String(item?.name || '').trim().toLowerCase(),
+            count: Math.floor(Number(item?.count) || 0),
+          }))
+          .filter(item => /^[a-z0-9_]{1,64}$/.test(item.name) && item.count > 0 && item.count <= 3456)
+        : null;
+      if (!exactTarget || !manifest || manifest.length !== skill.manifest.length) {
+        return {
+          state: 'failed',
+          code: 'container_observation_receipt_invalid',
+          detail: 'The container opened, but its exact identity or bounded contents receipt was not verified.',
+          retryable: false,
+        };
+      }
+      const report = manifest.length === 0
+        ? `The selected ${expected.name.replace(/_/g, ' ')} is empty.`
+        : `The selected ${expected.name.replace(/_/g, ' ')} contains: ${manifest.map(item => `${item.count} ${item.name.replace(/_/g, ' ')}`).join(', ')}.`;
+      return {
+        state: 'complete',
+        code: result.code || 'skill_viewed',
+        detail: result.detail || '',
+        report: boundedText(report, 1_200),
+        retryable: false,
+      };
+    }
     return {
       state: result?.phase === 'succeeded' ? 'complete' : 'failed',
       code: result?.code || 'action_ended',
       detail: result?.detail || '',
       retryable: result?.retryable === true,
+      // Stop, death, and owner replacement are censored too, but they do not
+      // authorize automatic continuation. Only the shared structured code for
+      // a higher-priority lane borrowing ActionManager is resumable here.
+      preempted: isResumableSafetyPreemption(result),
     };
   }
 
@@ -944,6 +1204,20 @@ export class AgendaDirector {
     return true;
   }
 
+  applyTerminalDisposition(entry) {
+    const appliesTerminalHold = Boolean(
+      entry.terminalDisposition === 'hold_position'
+      && entry.terminalDispositionApplied !== true
+    );
+    if (appliesTerminalHold) {
+      this.agent.holdPosition?.(
+        `companion wait requested by ${entry.requester || 'player'}`,
+        { preserveDurableWork: true },
+      );
+    }
+    return appliesTerminalHold;
+  }
+
   commitSettlement(active, settled, { dependentEntryId = '', bindingConstraint = null } = {}) {
     if (settled.state === 'waiting') {
       this.entries = this.entries.map(entry => (
@@ -968,14 +1242,76 @@ export class AgendaDirector {
       this.nextEligibleAt = this.now() + REJECTED_COOLDOWN_MS;
       return { settled: true, state: 'waiting', retryable: true, code: settled.code };
     }
-    const attempts = active.attempts + 1;
+    if (settled.preempted === true && active.preemptions < MAX_ENTRY_PREEMPTIONS) {
+      const preemptions = active.preemptions + 1;
+      this.entries = this.entries.map(entry => (
+        entry.id === active.id
+          ? normalizeAgendaEntry({
+              ...entry,
+              state: 'pending',
+              startedAt: null,
+              executorId: '',
+              preemptions,
+              evidence: {
+                code: 'preempted',
+                detail: settled.detail || 'A higher-priority safety action took ownership; the player obligation is unchanged.',
+                retryable: true,
+              },
+            })
+          : entry
+      ));
+      this.persist();
+      this.setStatus(
+        'recovering',
+        'preempted',
+        `${describeAgendaEntry(active)}: resuming after higher-priority safety action (${preemptions}/${MAX_ENTRY_PREEMPTIONS}).`,
+        active.id,
+      );
+      const interruption = boundedText(settled.detail, 160);
+      const preemptionMessage = `I had to pause ${describeAgendaEntry(active)} for a higher-priority safety response${interruption ? `: ${interruption}` : '.'} It is still queued and will resume when that response settles (${preemptions}/${MAX_ENTRY_PREEMPTIONS}).`;
+      void Promise.resolve(this.agent.openChat?.(preemptionMessage))
+        .catch(() => { /* chat is best effort */ });
+      this.nextEligibleAt = this.now() + REJECTED_COOLDOWN_MS;
+      return { settled: true, state: 'preempted', retryable: true, code: 'preempted' };
+    }
+    const preemptionExhausted = settled.preempted === true;
+    if (preemptionExhausted) {
+      settled = {
+        state: 'failed',
+        code: 'agenda_preemption_exhausted',
+        detail: `The player obligation was interrupted by ${MAX_ENTRY_PREEMPTIONS + 1} consecutive higher-priority actions without verified progress.`,
+        retryable: false,
+      };
+    }
+    const attempts = active.attempts + (preemptionExhausted ? 0 : 1);
     const retryable = settled.state === 'failed'
-      && settled.retryable !== false
+      && settled.retryable === true
       && attempts < MAX_ENTRY_ATTEMPTS;
     const assignmentPatch = settled.assignmentState ? { assignmentState: settled.assignmentState } : {};
+    const appliesTerminalHold = settled.state === 'complete'
+      && this.applyTerminalDisposition(active);
     const activePatch = retryable
-      ? { state: 'pending', startedAt: null, executorId: '', attempts, evidence: settled, ...assignmentPatch }
-      : { state: settled.state, finishedAt: this.now(), attempts, evidence: settled, ...assignmentPatch };
+      ? {
+          state: 'pending',
+          startedAt: null,
+          executorId: '',
+          attempts,
+          preemptions: 0,
+          evidence: settled,
+          ...assignmentPatch,
+          ...(settled.acquisitionCheckpoint
+            ? { acquisitionCheckpoint: settled.acquisitionCheckpoint }
+            : {}),
+        }
+      : {
+          state: settled.state,
+          finishedAt: this.now(),
+          attempts,
+          preemptions: 0,
+          evidence: settled,
+          ...assignmentPatch,
+          ...(appliesTerminalHold ? { terminalDispositionApplied: true } : {}),
+        };
     // Persist the terminal step and its dependent exact-workstation handoff in
     // one store write. A restart can therefore never observe arrival complete
     // while the following smelt remains free to select a different furnace.
@@ -1034,8 +1370,35 @@ export class AgendaDirector {
       `${describeAgendaEntry(active)}: ${settled.state === 'complete' ? 'done' : settled.detail || settled.code}`,
     );
     this.nextEligibleAt = this.now() + (settled.state === 'complete' ? DISPATCH_COOLDOWN_MS : REJECTED_COOLDOWN_MS);
-    if (settled.state === 'complete') {
-      void Promise.resolve(this.agent.openChat?.(`Agenda step done: ${describeAgendaEntry(active)}.`))
+    if (retryable) {
+      const blocker = settled.code === 'skill_died'
+        ? 'I died before the step completed.'
+        : `Blocker: ${settled.detail || settled.code}.`;
+      const retryMessage = `I did not finish ${describeAgendaEntry(active)}. ${blocker} It remains queued for one bounded retry after the world settles (${attempts}/${MAX_ENTRY_ATTEMPTS}).`;
+      void Promise.resolve(this.agent.openChat?.(retryMessage))
+        .catch(() => { /* chat is best effort */ });
+    } else if (settled.state === 'complete') {
+      const ordinaryCompletion = appliesTerminalHold
+        ? `Agenda step done: ${describeAgendaEntry(active)}. I'll wait here until you give me another order.`
+        : `Agenda step done: ${describeAgendaEntry(active)}.`;
+      const completionMessage = settled.report
+        ? `${settled.report} ${ordinaryCompletion}`
+        : ordinaryCompletion;
+      void Promise.resolve(this.agent.openChat?.(completionMessage))
+        .catch(() => { /* chat is best effort */ });
+    } else if (settled.state === 'failed' && !retryable) {
+      const authorizedContinuations = this.pending().length;
+      if (authorizedContinuations === 0) {
+        this.agent.holdPosition?.(
+          'agenda terminal fallback awaiting player direction',
+          { preserveDurableWork: true },
+        );
+      }
+      const consequence = authorizedContinuations > 0
+        ? `I did not retry without new evidence. I am continuing ${authorizedContinuations} already-authorized remaining step${authorizedContinuations === 1 ? '' : 's'}.`
+        : 'I did not retry without new evidence. I am holding position.';
+      const failureMessage = `I could not complete ${describeAgendaEntry(active)}. Blocker: ${settled.detail || settled.code} ${consequence}`;
+      void Promise.resolve(this.agent.openChat?.(failureMessage))
         .catch(() => { /* chat is best effort */ });
     }
     return { settled: true, state: settled.state, retryable, code: settled.code };
@@ -1084,21 +1447,53 @@ export class AgendaDirector {
       if (!target || target.acquisitionKind === 'unsupported') {
         return { accepted: false, code: 'unsupported_target', detail: `${entry.target} has no deterministic acquisition path.` };
       }
+      let dispatchEntry = entry;
+      if (
+        entry.kind === 'acquire'
+        && entry.completion === 'inventory'
+        && !entry.acquisitionCheckpoint
+      ) {
+        const baselineInventory = inventoryCountForGoalTarget(this.agent.bot, target);
+        const targetInventory = entry.quantityMode === 'minimum'
+          ? entry.quantity
+          : baselineInventory + entry.quantity;
+        this.replace(entry.id, {
+          acquisitionCheckpoint: { baselineInventory, targetInventory },
+        });
+        if (this.store?.lastError) {
+          return {
+            accepted: false,
+            code: 'agenda_quantity_checkpoint_persist_failed',
+            detail: this.store.lastError,
+          };
+        }
+        dispatchEntry = this.entries.find(candidate => candidate.id === entry.id) || entry;
+      }
       const requester = entry.requester || entry.recipient || this.agent.name;
       let goal;
       try {
-        const baselineInventory = inventoryCountForGoalTarget(this.agent.bot, target);
+        const baselineInventory = dispatchEntry.acquisitionCheckpoint?.baselineInventory
+          ?? inventoryCountForGoalTarget(this.agent.bot, target);
         goal = createItemGoalContract({
-          kind: entry.kind,
+          kind: dispatchEntry.kind,
           requester,
           target,
-          quantity: entry.quantity,
-          quantityMode: entry.quantityMode || 'additional',
-          destinationPlayer: entry.kind === 'deliver' ? entry.recipient : null,
-          request: describeAgendaEntry(entry),
+          quantity: dispatchEntry.quantity,
+          quantityMode: dispatchEntry.quantityMode || 'additional',
+          destinationPlayer: dispatchEntry.kind === 'deliver' ? dispatchEntry.recipient : null,
+          request: describeAgendaEntry(dispatchEntry),
           baselineInventory,
-          completion: entry.completion || (entry.kind === 'deliver' ? 'delivery' : 'inventory'),
+          completion: dispatchEntry.completion || (dispatchEntry.kind === 'deliver' ? 'delivery' : 'inventory'),
         });
+        if (dispatchEntry.acquisitionCheckpoint?.miningReturnRoute?.length > 0) {
+          goal = normalizeGoalContract({
+            ...goal,
+            checkpoint: {
+              ...goal.checkpoint,
+              ...dispatchEntry.acquisitionCheckpoint,
+            },
+          });
+        }
       } catch (error) {
         return { accepted: false, code: 'invalid_goal', detail: boundedText(error?.message || error) };
       }
@@ -1125,7 +1520,18 @@ export class AgendaDirector {
             z: Math.floor(position.z) - 1,
             requester: entry.requester || 'player',
           });
+        } else if (entry.kind === 'repair_access') {
+          order = createAccessRepairWorkOrder(entry);
         } else {
+          const miningBaseline = entry.kind === 'mine'
+            ? inventoryItemCount(this.agent.bot, miningOutputName(entry.target))
+            : 0;
+          const harvestBaseline = entry.kind === 'harvest'
+            ? logInventoryCount(this.agent.bot?.inventory?.slots || [], entry.target)
+            : 0;
+          const workQuota = entry.kind === 'mine'
+            ? miningBaseline + entry.quantity
+            : entry.quantity;
           order = createWorkOrder({
             role: JOB_ROLE_FOR_KIND[entry.kind],
             kind: JOB_ORDER_KIND[entry.kind],
@@ -1139,7 +1545,19 @@ export class AgendaDirector {
                   z: entry.z,
                 }
               : { name: entry.target },
-            quota: entry.quantity,
+            quota: workQuota,
+            ...(entry.kind === 'mine' ? {
+              checkpoint: {
+                baselineInventory: miningBaseline,
+                targetInventory: workQuota,
+              },
+            } : {}),
+            ...(entry.kind === 'harvest' ? {
+              checkpoint: {
+                baselineInventory: harvestBaseline,
+                targetInventory: harvestBaseline + entry.quantity,
+              },
+            } : {}),
             ...(entry.kind === 'scout' ? {
               constraints: { maxDistance: entry.radius },
               maxAttempts: 8,
@@ -1179,8 +1597,14 @@ export class AgendaDirector {
     // Every interpolated value has passed `normalizeAgendaEntry`: coordinates are
     // numbers, names match the canonical pattern. No stored text is executed.
     const DIRECT_COMMANDS = {
+      pickup_item: () => `!pickupItem(${JSON.stringify(entry.target)}, ${entry.quantity}, 12, ${entry.acquisitionCheckpoint.baselineInventory})`,
+      consume_item: () => `!consume(${JSON.stringify(entry.target)})`,
+      equip_item: () => `!equip(${JSON.stringify(entry.target)})`,
       visit: () => `!goToCoordinates(${entry.x}, ${entry.y}, ${entry.z}, 2)`,
-      craft: () => `!craftRecipe("${entry.target}", ${entry.quantity})`,
+      verify_access: () => `!goToCoordinates(${entry.x}, ${entry.y}, ${entry.z}, 0.75)`,
+      craft: () => entry.workstationConstraint
+        ? `!craftRecipe("${entry.target}", ${entry.quantity}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
+        : `!craftRecipe("${entry.target}", ${entry.quantity})`,
       smelt: () => entry.workstationConstraint
         ? `!smeltItem("${entry.target}", ${entry.quantity}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
         : `!smeltItem("${entry.target}", ${entry.quantity})`,
@@ -1188,7 +1612,12 @@ export class AgendaDirector {
       follow_until: () => `!followPlayerUntilNearBlock("${entry.recipient}", "${entry.target}", ${entry.radius})`,
       farm_visit: () => '!goToFarm',
       maintain_farm: () => '!maintainFarm',
+      recover_death: () => '!recoverDeathItems',
+      inspect_container: () => `!viewChestAt(${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`,
       prepare_food: () => `!prepareFood(${entry.quantity}, 64, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)}, ${entry.baselineFoodPoints})`,
+      catch_fish: () => `!fish(${entry.quantity}, ${JSON.stringify(encodeBaselineInventory(entry.baselineInventory))})`,
+      cook_fish: () => `!cookCaughtFish(${entry.quantity}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)}, ${JSON.stringify(encodeBaselineInventory(entry.baselineInventory))}, ${JSON.stringify(encodeBaselineInventory(entry.baselineOutputInventory))})`,
+      deliver_family: () => `!giveFamilyToPlayer(${JSON.stringify(entry.target)}, ${JSON.stringify(entry.recipient)}, ${entry.quantity}, ${JSON.stringify(encodeBaselineInventory(entry.baselineInventory))})`,
       deposit: () => entry.containerConstraint
         ? `!putInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`
         : `!putInChest("${entry.target}", ${entry.quantity})`,
@@ -1199,9 +1628,7 @@ export class AgendaDirector {
         return `!storeInventoryPlanAt(${JSON.stringify(encoded)}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)})`;
       },
       deposit_family: () => {
-        const baselineManifest = entry.baselineInventory.length > 0
-          ? entry.baselineInventory.map(item => `${item.name}:${item.count}`).join('|')
-          : 'none';
+        const baselineManifest = encodeBaselineInventory(entry.baselineInventory);
         return `!putFamilyInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)}, ${JSON.stringify(baselineManifest)})`;
       },
       settle_livestock: () => `!settleLivestockAtPen(${JSON.stringify(entry.target)}, ${entry.quantity}, ${entry.breedingPairs}, ${entry.x}, ${entry.y}, ${entry.z}, ${entry.penConstraint.gate.x}, ${entry.penConstraint.gate.y}, ${entry.penConstraint.gate.z}, ${entry.penConstraint.inside.x}, ${entry.penConstraint.inside.y}, ${entry.penConstraint.inside.z}, ${entry.penConstraint.outside.x}, ${entry.penConstraint.outside.y}, ${entry.penConstraint.outside.z}, ${entry.penConstraint.bounds.minX}, ${entry.penConstraint.bounds.maxX}, ${entry.penConstraint.bounds.minZ}, ${entry.penConstraint.bounds.maxZ}, ${entry.penConstraint.bounds.y}, ${JSON.stringify(entry.penConstraint.dimension)}, ${entry.penConstraint.baselineAnimals})`,
@@ -1395,14 +1822,19 @@ export class AgendaDirector {
       }
       if (checklist.unmet.length === 0) {
         const detail = `Verified ${checklist.counts.length} final inventory floor${checklist.counts.length === 1 ? '' : 's'} from current Minecraft state.`;
+        const appliesTerminalHold = this.applyTerminalDisposition(next);
         this.replace(next.id, {
           state: 'complete',
           finishedAt: this.now(),
           evidence: { code: 'inventory_checklist_verified', detail },
+          ...(appliesTerminalHold ? { terminalDispositionApplied: true } : {}),
         });
         this.nextEligibleAt = this.now() + DISPATCH_COOLDOWN_MS;
         this.setStatus('succeeded', 'inventory_checklist_verified', detail, next.id);
-        void Promise.resolve(this.agent.openChat?.(`Agenda step done: ${describeAgendaEntry(next)}.`))
+        const completionMessage = appliesTerminalHold
+          ? `Agenda step done: ${describeAgendaEntry(next)}. I'll wait here until you give me another order.`
+          : `Agenda step done: ${describeAgendaEntry(next)}.`;
+        void Promise.resolve(this.agent.openChat?.(completionMessage))
           .catch(() => { /* chat is best effort */ });
         return;
       }
@@ -1487,5 +1919,12 @@ export class AgendaDirector {
     }
     this.replace(next.id, { state: 'active', startedAt: this.now(), executorId: outcome.executorId || '' });
     this.setStatus('acting', 'agenda_step_started', `Starting: ${describeAgendaEntry(next)}.`, next.id);
+    if (next.preemptions > 0 || next.attempts > 0) {
+      const resumeMessage = next.preemptions > 0
+        ? `The safety response settled. I am resuming ${describeAgendaEntry(next)} now (${next.preemptions}/${MAX_ENTRY_PREEMPTIONS} safety interruption${next.preemptions === 1 ? '' : 's'} so far).`
+        : `The world has settled. I am retrying ${describeAgendaEntry(next)} now (${next.attempts + 1}/${MAX_ENTRY_ATTEMPTS}).`;
+      void Promise.resolve(this.agent.openChat?.(resumeMessage))
+        .catch(() => { /* chat is best effort */ });
+    }
   }
 }

@@ -107,13 +107,32 @@ function potionComponent(item) {
   return fromArray && typeof fromArray === 'object' ? fromArray : null;
 }
 
-export function potionIdentity(item) {
+// Modern protocol items carry a numeric vanilla potion registry id instead of
+// the resource name. minecraft-data/prismarine-registry 1.21.11 does not expose
+// that built-in registry, so keep only the live-verified identities that drive
+// bodily safety here. Unknown ids remain unknown rather than being guessed.
+const VANILLA_POTION_IDENTITY_BY_VERSION = Object.freeze({
+  '1.21.11': Object.freeze({
+    24: 'healing',
+    25: 'strong_healing',
+  }),
+});
+
+export function potionIdentity(item, minecraftVersion = '') {
   const legacy = item?.nbt?.value?.Potion?.value;
   if (typeof legacy === 'string' && legacy) return legacy.replace(/^minecraft:/, '');
   const component = potionComponent(item);
-  if (Number.isInteger(component?.potionId)) return `registry:${component.potionId}`;
+  if (Number.isInteger(component?.potionId)) {
+    return VANILLA_POTION_IDENTITY_BY_VERSION[String(minecraftVersion)]?.[component.potionId]
+      || `registry:${component.potionId}`;
+  }
   if (typeof component?.potion === 'string') return component.potion.replace(/^minecraft:/, '');
   return null;
+}
+
+export function isDrinkableHealingPotion(item, minecraftVersion = '') {
+  if (item?.name !== 'potion') return false;
+  return ['healing', 'strong_healing'].includes(potionIdentity(item, minecraftVersion));
 }
 
 export function isWaterPotion(item) {

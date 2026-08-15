@@ -46,6 +46,24 @@ test('Given factual behavior data, normalization returns a bounded immutable eve
   });
   assert.equal(goalEvent.evidence.goalId, 'goal-1');
   assert.equal(goalEvent.evidence.procedureId, 'procedure-1');
+
+  const deathEvent = normalizeBehaviorEvent({
+    id: 'kevin-death-1',
+    type: 'self.died',
+    actor: 'Kevin',
+    target: { name: 'death', x: 12, y: 64, z: -4 },
+    evidence: {
+      amount: 7,
+      code: 'death_recorded',
+      phase: 'stored',
+    },
+    salience: 5,
+  });
+  assert.deepEqual(deathEvent.evidence, {
+    code: 'death_recorded',
+    phase: 'stored',
+    amount: 7,
+  });
 });
 
 test('Given unknown types or unsafe raw metadata, normalization rejects rather than leaking prose or secrets', () => {

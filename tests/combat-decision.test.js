@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { chooseTacticalCombatDecision } from '../src/agent/runtime/combat-decision.js';
+import {
+  chooseTacticalCombatDecision,
+  reconcileTacticalRetreatHealth,
+} from '../src/agent/runtime/combat-decision.js';
 
 const ready = Object.freeze({
   melee: true,
@@ -68,7 +71,7 @@ test('even an armed bot retreats from a creeper already inside fuse range', () =
 
   assert.equal(decision.response, 'retreat');
   assert.equal(decision.reason, 'immediate_explosive_threat');
-  assert.equal(decision.selected.desiredRange, 10);
+  assert.equal(decision.selected.desiredRange, 24);
 });
 
 test('critical health overrides equipment and selects retreat', () => {
@@ -80,9 +83,62 @@ test('critical health overrides equipment and selects retreat', () => {
 
   assert.equal(decision.response, 'retreat');
   assert.equal(decision.reason, 'critical_health');
+  assert.equal(decision.selected.desiredRange, 24);
 });
 
-test('a creeper without a ranged option selects a ten-block disengagement', () => {
+test('a self-preservation objective forces disengagement while useful health remains', () => {
+  const decision = chooseTacticalCombatDecision({
+    health: 13,
+    objective: 'disengage',
+    equipment: ready,
+    hostiles: [{ id: 50, name: 'zombie', distance: 2, disposition: 'combat_safe' }],
+  });
+
+  assert.equal(decision.response, 'retreat');
+  assert.equal(decision.reason, 'self_preservation_disengage');
+  assert.equal(decision.selected.desiredRange, 24);
+  assert.equal(decision.selected.fallbackResponse, 'melee');
+});
+
+test('retreat reconciliation rejects spacing success that worsens critical health', () => {
+  assert.deepEqual(reconcileTacticalRetreatHealth(14, 1), {
+    verified: false,
+    outcome: 'retreat_health_deteriorated',
+    healthBefore: 14,
+    healthAfter: 1,
+  });
+  assert.equal(reconcileTacticalRetreatHealth(10, 9).verified, true);
+  assert.equal(reconcileTacticalRetreatHealth(7, 6).verified, false);
+  assert.equal(reconcileTacticalRetreatHealth(7, 7).verified, true);
+});
+
+test('a blocked retreat may fall back only against an immediate ordinary melee threat', () => {
+  const unarmed = { melee: false, shield: false, bow: false, arrows: false };
+  const closeZombie = chooseTacticalCombatDecision({
+    health: 9,
+    equipment: unarmed,
+    hostiles: [{ id: 30, name: 'zombie', distance: 0.7, disposition: 'combat_safe' }],
+  });
+  assert.equal(closeZombie.response, 'retreat');
+  assert.equal(closeZombie.selected.fallbackResponse, 'melee');
+  assert.equal(closeZombie.selected.fallbackReason, 'retreat_blocked_immediate_melee');
+
+  const distantZombie = chooseTacticalCombatDecision({
+    health: 9,
+    equipment: unarmed,
+    hostiles: [{ id: 31, name: 'zombie', distance: 4, disposition: 'combat_safe' }],
+  });
+  assert.equal(distantZombie.selected.fallbackResponse, undefined);
+
+  const closeCreeper = chooseTacticalCombatDecision({
+    health: 7,
+    equipment: ready,
+    hostiles: [{ id: 32, name: 'creeper', distance: 2, disposition: 'combat_safe' }],
+  });
+  assert.equal(closeCreeper.selected.fallbackResponse, undefined);
+});
+
+test('a creeper without a ranged option clears the full pursuit envelope', () => {
   const decision = chooseTacticalCombatDecision({
     health: 20,
     equipment: { melee: true, shield: true, bow: false, arrows: false },
@@ -91,7 +147,7 @@ test('a creeper without a ranged option selects a ten-block disengagement', () =
 
   assert.equal(decision.response, 'retreat');
   assert.equal(decision.reason, 'explosive_without_ranged_option');
-  assert.equal(decision.selected.desiredRange, 10);
+  assert.equal(decision.selected.desiredRange, 24);
 });
 
 test('an avoid-only hostile is never selected for autonomous attack', () => {

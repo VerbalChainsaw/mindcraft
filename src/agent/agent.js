@@ -7,7 +7,7 @@ import { initBot } from '../utils/mcdata.js';
 import { containsCommand, commandAssignsPersistentGoal, commandAssignsPersistentJob, commandExists, commandTakesManualAutonomy, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
-import { MemoryBank } from './memory_bank.js';
+import { MemoryBank, hasPendingDeathRecovery } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
@@ -18,10 +18,16 @@ import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { resolveBlockedActions } from './command-policy.js';
-import { addressesAgent } from './chat-address.js';
+import { addressesAgent, stripLeadingAgentAddress } from './chat-address.js';
 import { resolvePlayerDirective, routeCompoundToolGoal } from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
-import { classifyDisposition, parsePlayerAgenda } from './player-agenda.js';
+import {
+    compilePlayerIntentLedger,
+    detectMaterialPlayerClarification,
+    parsePlayerAgenda,
+    resolveMaterialPlayerClarification,
+    resolvePlayerPlanDisposition,
+} from './player-agenda.js';
 import { normalizeRuntimeBehavior } from './runtime/behavior-config.js';
 import { JobDirector } from './runtime/job-director.js';
 import { GoalDirector } from './runtime/goal-director.js';
@@ -33,6 +39,7 @@ import * as mc from '../utils/mcdata.js';
 import { CompanionContext } from './runtime/companion-context.js';
 import { HomeStateStore } from './runtime/home-state-store.js';
 import { OperatorControlStateStore } from './runtime/operator-control-state.js';
+import { CompanionDirectiveStateStore } from './runtime/companion-directive-state.js';
 import { LandmarkMemory } from './runtime/landmark-memory.js';
 import { PlayerMemory } from './runtime/player-memory.js';
 import { KnowledgeStore } from './runtime/knowledge-store.js';
@@ -43,6 +50,7 @@ import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 import { BehaviorFlightRecorder, isTelemetryBookmarkMessage } from './runtime/behavior-flight-recorder.js';
 import { signalInterrupt } from './runtime/interruptible-delay.js';
 import { minecraftWeather } from './runtime/weather-state.js';
+import { observeReceivedDamageSource } from './runtime/combat-attribution.js';
 
 const HOLD_SAFE_COMMANDS = new Set([
     '!stop',
@@ -60,16 +68,19 @@ const HOLD_SAFE_COMMANDS = new Set([
     '!squadRadio',
     '!cancelJob',
     '!cancelGoal',
+    '!clearAgenda',
     '!rememberHere',
     '!forgetRememberedPlace',
 ]);
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
+const HELD_WORK_RESUME_COMMANDS = new Set(['!resumeStructureJob']);
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
 const PLAYER_ITEM_PLAN_COMMANDS = new Set(['!queueItemPlan']);
 const PLAYER_STORAGE_PLAN_COMMANDS = new Set(['!queueStoragePlan']);
 const MAX_CONSTRUCTION_COMPILATION_TURNS = 6;
 const MAX_ITEM_PLAN_COMPILATION_TURNS = 3;
 const MAX_INGAME_CHAT_CHARS = 240;
+const CHAT_SEGMENT_PREFIX_RESERVE = 12;
 const MIN_INGAME_CHAT_INTERVAL_MS = 450;
 // One bounded entity read at roughly 7Hz. Cheap enough to run continuously and
 // the only way an already-loaded hostile closing the distance becomes an edge.
@@ -135,14 +146,47 @@ export function correlatedAgendaPlanSubmissionAccepted({
     );
 }
 
-function boundedChatText(message) {
+export function boundedChatSegments(message) {
     const normalized = String(message || '')
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
         .replace(/[\r\n]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    if (normalized.length <= MAX_INGAME_CHAT_CHARS) return normalized;
-    return `${normalized.slice(0, MAX_INGAME_CHAT_CHARS - 3).trimEnd()}...`;
+    if (!normalized) return [];
+    if (normalized.length <= MAX_INGAME_CHAT_CHARS) return [normalized];
+
+    const contentLimit = MAX_INGAME_CHAT_CHARS - CHAT_SEGMENT_PREFIX_RESERVE;
+    const parts = [];
+    let remaining = normalized;
+    while (remaining.length > contentLimit) {
+        const window = remaining.slice(0, contentLimit + 1);
+        const sentenceBoundary = Math.max(
+            window.lastIndexOf('. '),
+            window.lastIndexOf('! '),
+            window.lastIndexOf('? '),
+        );
+        const wordBoundary = window.lastIndexOf(' ');
+        const boundary = sentenceBoundary >= Math.floor(contentLimit * 0.55)
+            ? sentenceBoundary + 1
+            : wordBoundary >= Math.floor(contentLimit * 0.55)
+                ? wordBoundary
+                : contentLimit;
+        parts.push(remaining.slice(0, boundary).trim());
+        remaining = remaining.slice(boundary).trim();
+    }
+    if (remaining) parts.push(remaining);
+
+    return parts.map((part, index) => `(${index + 1}/${parts.length}) ${part}`);
+}
+
+export function modelCommandAwaitsPlayerConfirmation(response, commandName = containsCommand(response)) {
+    if (!commandName) return false;
+    const text = String(response || '');
+    const commandIndex = text.indexOf(commandName);
+    if (commandIndex < 0) return false;
+    const proposal = text.slice(0, commandIndex).trim();
+    if (!proposal.endsWith('?')) return false;
+    return /(?:\bshould\s+i\b|\bshall\s+i\b|\bmay\s+i\b|\bcan\s+i\b|\bwould\s+you\s+like\s+me\s+to\b|\bdo\s+you\s+want\s+me\s+to\b|\bwant\s+me\s+to\b|\bis\s+it\s+okay\s+if\s+i\b)/i.test(proposal);
 }
 
 function commandReleasesOperatorHold(commandName) {
@@ -157,6 +201,8 @@ function inventorySnapshot(bot) {
     }
     return counts;
 }
+
+export { hasPendingDeathRecovery };
 
 function identityMatchKeys(identity) {
     const value = String(identity || '');
@@ -256,6 +302,7 @@ export class Agent {
         this._playerPositionLookup = null;
         this._playerPositionLookupGeneration = 0;
         this._requestPlayerPosition = requestPlayerPosition;
+        this.pending_player_clarification = null;
 
         const nameCheck = validateNameFormat(settings?.profile?.name);
         if (!nameCheck.success) {
@@ -282,6 +329,10 @@ export class Agent {
         
         this.history = new History(this);
         this.operator_control = new OperatorControlStateStore(this.name);
+        this.companion_directive_state = new CompanionDirectiveStateStore(this.name);
+        if (this.companion_directive_state.lastError) {
+            console.warn(`[companion] Standing directive was not restored: ${this.companion_directive_state.lastError}`);
+        }
         this.coder = new Coder(this);
         this.npc = new NPCContoller(this);
         this.memory_bank = new MemoryBank(this.name);
@@ -333,6 +384,7 @@ export class Agent {
         this.bot.traversalPolicy = this.runtime?.traversal || 'preserve';
         this.companion_context = new CompanionContext(this, {
             onReappeared: () => this.behavior_arbiter?.requestDirectiveResume?.(),
+            directiveState: this.companion_directive_state,
         });
         emitStartupMilestone('mineflayer_created');
         this.job_director = new JobDirector(this);
@@ -469,6 +521,10 @@ export class Agent {
               
                 const startupDialogue = await this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
+                this.companion_context?.reconcileLoadedPlayer?.({
+                    lineOfSight: null,
+                    dimension: this.bot.game?.dimension,
+                });
                 this.flight_recorder?.recordRuntimeEvent?.('runtime.started', {
                     loadMemory: load_mem === true,
                     lifecycleRestart: init_message === 'Agent process restarted.',
@@ -728,6 +784,14 @@ export class Agent {
 
     resumeCompanionDirective() {
         if (this._runtimeStopped || this.isOperatorHeld() || !this.isIdle()) return false;
+        // Death replaces the body and drops the inventory that supported the
+        // standing directive. Reappearing beside a loaded companion is not new
+        // authority to abandon that pending recovery and walk away from the
+        // drop site. A fresh player command may still replace the old order.
+        const directive = this.companion_context?.snapshot?.();
+        if (hasPendingDeathRecovery(this.memory_bank, {
+            after: directive?.directiveAuthorizedAt,
+        })) return false;
         const command = this.companion_context?.resumeCommand?.();
         if (!command) return false;
         this.self_prompter?.interruptForManualCommand?.();
@@ -763,6 +827,7 @@ export class Agent {
 
     releaseOperatorHold(reason = 'explicit command') {
         if (!this.operator_hold) return false;
+        this.behavior_arbiter?.releaseHeldSurfaceStance?.('operator_hold_released');
         this.operator_hold_generation += 1;
         this.operator_hold = false;
         this.operator_hold_reason = String(reason || 'explicit command').slice(0, 160);
@@ -775,8 +840,54 @@ export class Agent {
         return true;
     }
 
+    claimFreshPlayerActionAuthority(commandName, reason = 'player command') {
+        if (!commandReleasesOperatorHold(commandName)) {
+            return Object.freeze({ ready: true, released: false });
+        }
+        if (!this.isOperatorHeld()) {
+            return Object.freeze({ ready: true, released: false });
+        }
+
+        const stoppedByPlayer = /operator stop/i.test(this.operator_hold_reason || '');
+        const explicitlyResumingHeldWork = HELD_WORK_RESUME_COMMANDS.has(commandName);
+        if (stoppedByPlayer && !explicitlyResumingHeldWork) {
+            const director = this.agenda_director;
+            const hasUnfinishedAgenda = director?.hasUnfinished?.() === true
+                || Number(director?.snapshot?.().remaining) > 0;
+            if (hasUnfinishedAgenda) {
+                const clearing = director?.clear?.('Superseded by a fresh direct player action.');
+                if (clearing?.persisted !== true) {
+                    return Object.freeze({
+                        ready: false,
+                        released: false,
+                        code: 'fresh_player_authority_persist_failed',
+                        detail: 'I could not durably cancel the paused plan, so I am still holding position and did not start the new action.',
+                    });
+                }
+            }
+        }
+
+        return Object.freeze({
+            ready: true,
+            released: this.releaseOperatorHold(reason),
+        });
+    }
+
     isCurrentOperatorHold(generation) {
         return this.operator_hold === true && this.operator_hold_generation === generation;
+    }
+
+    releaseFailedConstructionCompilationHold(deferredAssignment, settlement) {
+        if (
+            deferredAssignment?.kind !== 'construction'
+            || settlement?.settled !== true
+            || settlement.state !== 'failed'
+            || settlement.retryable !== false
+            || !Number.isInteger(deferredAssignment.holdGeneration)
+            || !this.isCurrentOperatorHold(deferredAssignment.holdGeneration)
+            || this.agenda_director?.hasUnfinished?.() !== true
+        ) return false;
+        return this.releaseOperatorHold('construction compilation settled with agenda continuation');
     }
 
     async takePersistentJobControl() {
@@ -802,6 +913,7 @@ export class Agent {
         this.last_action_result = result || null;
         this.behavior_arbiter?.recordOutcome?.(result);
         this.flight_recorder?.recordActionResult?.(result);
+        this.survival_director?.observeActionResult?.(result);
         // A terminal result is an edge, not durable state: the next automatic
         // action can replace it before a debounced/heartbeat sample is sent.
         // Flush it immediately so observers can correlate the exact action ID.
@@ -849,6 +961,7 @@ export class Agent {
         const player = String(source || '').replace(/[^A-Za-z0-9_. -]/g, '_').slice(0, 64);
         const code = String(commandName || '').replace(/^!/, '').replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
         if (!player || !code) return;
+        this.survival_director?.observePlayerOrder?.(player, code);
         this.publishBehaviorEvent({
             type: 'player.order',
             target: { name: player },
@@ -894,25 +1007,66 @@ export class Agent {
      * single-directive path below. Model-compiled construction is the exception
      * because its typed barrier owns the player's required-function contract.
      */
-    async dispatchPlayerAgenda(source, canonicalPlayer, message, requesterPosition = null) {
+    async dispatchPlayerAgenda(source, canonicalPlayer, message, requesterPosition = null, {
+        historyMessage = message,
+    } = {}) {
         const director = this.agenda_director;
-        if (!director?.add) return false;
+        if (!director?.addMany || !director?.validateMany) return false;
         const plan = parsePlayerAgenda(canonicalPlayer || source, message, {
             role: this.runtime?.role,
             bot: this.bot,
             requesterPosition,
             memoryBank: this.memory_bank,
+            homeState: this.home_state,
         });
         if (!plan) return false;
         if (plan.rejection) {
-            await this.history.add(source, message);
+            await this.history.add(source, historyMessage);
             await this.history.add(this.name, plan.rejection);
             this.history.save();
             this.routeResponse(source, plan.rejection);
             return true;
         }
+        const intentLedger = compilePlayerIntentLedger(canonicalPlayer || source, message, plan);
+        if (intentLedger.status !== 'complete') {
+            const unresolved = intentLedger.unresolved.slice(0, 3);
+            const response = unresolved.length > 0
+                ? `I did not start only part of that request. I could not bind ${unresolved.map(segment => `"${segment}"`).join(' or ')} to safe typed work; please restate that choice or clause.`
+                : 'I did not start that request because its complete typed effect list could not be proved.';
+            await this.history.add(source, historyMessage);
+            await this.history.add(this.name, response);
+            this.history.save();
+            this.publishBehaviorEvent?.({
+                type: 'player.intent_rejected',
+                target: { name: intentLedger.requester },
+                evidence: {
+                    code: intentLedger.code,
+                    effectCount: intentLedger.effects.length,
+                    unresolvedCount: intentLedger.unresolved.length,
+                    issues: intentLedger.issues,
+                },
+                salience: 3,
+            });
+            this.routeResponse(source, response);
+            return true;
+        }
         const agendaBusy = (director.snapshot?.().remaining || 0) > 0;
+        // Stop deliberately preserves durable work so it can be resumed, but a
+        // later player plan is fresh authority, not permission to replay the
+        // held queue first. While an agenda is actively running, ordinary
+        // additions still append. A construction compiler also holds the body
+        // while its exact durable barrier is pending; a continuation received
+        // in that interval must append behind the barrier rather than mistake
+        // the internal hold for a dormant player-stopped queue. Explicit
+        // interrupt disposition still clears either state below.
+        const compilingConstruction = Boolean(director.activeConstructionIntent?.());
+        const effectiveDisposition = resolvePlayerPlanDisposition(message, {
+            agendaBusy,
+            operatorHeld: this.isOperatorHeld?.() === true,
+            compilingConstruction,
+        });
         const compilesConstruction = plan.steps.some(step => step.requiresModelAssignment === true);
+        const durableRendezvous = plan.steps.length === 1 && plan.steps[0]?.entry?.kind === 'goto';
         // Only intercept a real chain, an explicit interrupt, or an append onto
         // work already queued. Anything else stays on the single-command path.
         if (
@@ -920,16 +1074,48 @@ export class Agent {
             && plan.disposition !== 'interrupt'
             && !agendaBusy
             && !compilesConstruction
+            && !durableRendezvous
         ) return false;
 
-        await this.history.add(source, message);
+        const entries = plan.steps.map(step => step.dependency
+            ? {
+                ...step.entry,
+                dependsOnPrevious: true,
+                dependencyPolicy: step.dependency.policy,
+                bindingRequest: step.dependency.bindingRequest,
+            }
+            : step.entry);
+        const agendaAdmission = director.validateMany(entries, {
+            replaceUnfinished: effectiveDisposition === 'interrupt',
+        });
+        if (agendaAdmission.accepted !== true) {
+            const response = `I did not start that request because its complete effect list was rejected: ${agendaAdmission.detail || agendaAdmission.code}.`;
+            await this.history.add(source, historyMessage);
+            await this.history.add(this.name, response);
+            this.history.save();
+            this.publishBehaviorEvent?.({
+                type: 'player.intent_rejected',
+                target: { name: intentLedger.requester },
+                evidence: {
+                    code: agendaAdmission.code || 'agenda_plan_rejected',
+                    effectCount: intentLedger.effects.length,
+                    unresolvedCount: 0,
+                },
+                salience: 3,
+            });
+            this.routeResponse(source, response);
+            return true;
+        }
+
+        await this.history.add(source, historyMessage);
 
         // A fresh plan (or an explicit interrupt) must free the body from any
         // standing directive or in-flight solo work so the agenda can claim the
         // next behavior tick. An append onto a running agenda leaves the current
         // step alone and simply extends the queue.
-        const takeover = plan.disposition === 'interrupt' || !agendaBusy;
+        const takeover = effectiveDisposition === 'interrupt' || !agendaBusy;
         if (takeover) {
+            this.prompter?.cancelPendingModelGeneration?.();
             if (!compilesConstruction) this.releaseOperatorHold('player agenda');
             this.actions.cancelResume();
             this.goal_director?.releaseProtectedCompletion?.('Released by a later player agenda.');
@@ -955,43 +1141,38 @@ export class Agent {
                 return true;
             }
         }
-        if (plan.disposition === 'interrupt') {
-            // Clear only after physical handoff succeeds. A new request must
-            // never erase durable work and then discover the old action still
-            // owns the body.
-            director.clear('Superseded by a new player plan.');
-        }
-
-        const queued = [];
-        const rejected = [];
+        const installed = director.addMany(entries, {
+            replaceUnfinished: effectiveDisposition === 'interrupt',
+            reason: 'Superseded by a new player plan.',
+        });
+        const queued = installed.accepted === true
+            ? installed.entries.map(entry => entry.description)
+            : [];
+        const rejected = installed.accepted === true
+            ? []
+            : [`complete plan (${installed.detail || installed.code || 'rejected'})`];
         let deferredConstruction = null;
-        let previousQueuedEntryId = '';
-        for (const step of plan.steps) {
-            if (step.dependency && !previousQueuedEntryId) {
-                rejected.push(`${step.segment} (required predecessor was not queued)`);
-                continue;
+        if (installed.accepted === true) {
+            const deferredIndex = plan.steps.findIndex(step => step.requiresModelAssignment === true);
+            if (deferredIndex >= 0) {
+                deferredConstruction = {
+                    entryId: installed.entries[deferredIndex].id,
+                    segment: plan.steps[deferredIndex].segment,
+                    modelInstruction: plan.steps[deferredIndex].modelInstruction || '',
+                };
             }
-            const entry = step.dependency
-                ? {
-                    ...step.entry,
-                    dependsOnEntryId: previousQueuedEntryId,
-                    dependencyPolicy: step.dependency.policy,
-                    bindingRequest: step.dependency.bindingRequest,
-                }
-                : step.entry;
-            const result = director.add(entry);
-            if (result?.accepted) {
-                queued.push(result.description || step.segment);
-                previousQueuedEntryId = result.id;
-                if (step.requiresModelAssignment === true) {
-                    deferredConstruction = {
-                        entryId: result.id,
-                        segment: step.segment,
-                        modelInstruction: step.modelInstruction || '',
-                    };
-                }
-            }
-            else rejected.push(`${step.segment} (${result?.detail || result?.code || 'rejected'})`);
+            this.publishBehaviorEvent?.({
+                type: 'player.intent_installed',
+                target: { name: intentLedger.requester },
+                evidence: {
+                    code: intentLedger.code,
+                    effectCount: intentLedger.effects.length,
+                    participantCount: intentLedger.participants.length,
+                    preservationConstraintCount: intentLedger.preservationConstraints.length,
+                    entryIds: installed.entries.map(entry => entry.id),
+                },
+                salience: 2,
+            });
         }
 
         let response;
@@ -1001,10 +1182,10 @@ export class Agent {
             // Claim the next behavior tick immediately rather than waiting out
             // whatever cadence the previously selected lane had scheduled.
             this.behavior_arbiter?.wake?.('player_plan_queued');
-            response = plan.disposition === 'interrupt'
+            response = effectiveDisposition === 'interrupt'
                 ? `Okay, new plan — ${queued.join(', then ')}.`
                 : `Queued ${queued.length} step${queued.length === 1 ? '' : 's'}: ${queued.join(', then ')}.`;
-            const skipped = [...rejected, ...plan.unresolved.map(item => item.segment)];
+            const skipped = rejected;
             if (skipped.length) response += ` (Not queued: ${skipped.join('; ')}.)`;
         }
         await this.history.add(this.name, response);
@@ -1047,6 +1228,7 @@ export class Agent {
             message = routeCompoundToolGoal(source, message);
             const user_command_name = containsCommand(message);
                 if (user_command_name) {
+                    this.pending_player_clarification = null;
                     if (!commandExists(user_command_name)) {
                     this.routeResponse(source, `Command ${user_command_name.substring(1)} is unavailable for this bot profile.`);
                     return false;
@@ -1059,7 +1241,11 @@ export class Agent {
                     this.history.add(source, message);
                     }
                     if (commandReleasesOperatorHold(user_command_name)) {
-                        this.releaseOperatorHold('player command');
+                        const authority = this.claimFreshPlayerActionAuthority(user_command_name, 'player command');
+                        if (!authority.ready) {
+                            this.routeResponse(source, authority.detail);
+                            return true;
+                        }
                     }
                     if (commandTakesManualAutonomy(user_command_name)) {
                         this.actions.cancelResume();
@@ -1107,6 +1293,78 @@ export class Agent {
                     );
                 },
             });
+            const deterministicMessage = stripLeadingAgentAddress(message, this.name);
+            const clarificationContext = { bot: this.bot };
+            if (this.pending_player_clarification) {
+                const resolution = resolveMaterialPlayerClarification(
+                    this.pending_player_clarification,
+                    canonicalPlayer || source,
+                    deterministicMessage,
+                    clarificationContext,
+                );
+                if (resolution.state === 'resolved') {
+                    const pending = this.pending_player_clarification;
+                    this.pending_player_clarification = null;
+                    this.publishBehaviorEvent?.({
+                        type: 'player.clarification_resolved',
+                        target: { name: resolution.recipient },
+                        evidence: {
+                            code: 'clarified_delivery_recipient',
+                            item: pending.target,
+                            quantity: pending.quantity,
+                        },
+                        salience: 3,
+                    });
+                    const dispatched = await this.dispatchPlayerAgenda(
+                        source,
+                        canonicalPlayer,
+                        resolution.message,
+                        companionResolution?.entity?.position || null,
+                        { historyMessage: message },
+                    );
+                    if (dispatched === true) return true;
+                    this.holdPosition?.('clarified player intent could not be queued', { preserveDurableWork: true });
+                    const response = 'I understood the answer but could not bind it to a safe typed action, so I am still holding position.';
+                    await this.history.add(this.name, response);
+                    this.history.save();
+                    this.routeResponse(source, response);
+                    return true;
+                }
+                if (resolution.state === 'reask') {
+                    await this.history.add(source, message);
+                    await this.history.add(this.name, resolution.question);
+                    this.history.save();
+                    this.routeResponse(source, resolution.question);
+                    return true;
+                }
+                if (resolution.state === 'expired' || resolution.state === 'new_request') {
+                    this.pending_player_clarification = null;
+                }
+            }
+            const clarification = detectMaterialPlayerClarification(
+                canonicalPlayer || source,
+                deterministicMessage,
+                clarificationContext,
+            );
+            if (clarification) {
+                this.pending_player_clarification = clarification;
+                this.holdPosition?.('player clarification pending', { preserveDurableWork: true });
+                await this.history.add(source, message);
+                await this.history.add(this.name, clarification.question);
+                this.history.save();
+                this.publishBehaviorEvent?.({
+                    type: 'player.clarification_requested',
+                    target: { name: clarification.target },
+                    evidence: {
+                        code: 'material_delivery_recipient_ambiguous',
+                        quantity: clarification.quantity,
+                        candidateCount: clarification.candidates.length,
+                    },
+                    salience: 3,
+                });
+                this.routeResponse(source, clarification.question);
+                return true;
+            }
             // A multi-step plan ("get 5 logs then build a shelter") is routed
             // deterministically into the Agenda queue before the single-directive
             // path, so serial plans never need a model round trip. A lone task
@@ -1114,7 +1372,7 @@ export class Agent {
             const agendaDispatch = await this.dispatchPlayerAgenda(
                 source,
                 canonicalPlayer,
-                message,
+                deterministicMessage,
                 companionResolution?.entity?.position || null,
             );
             if (agendaDispatch === true) {
@@ -1133,15 +1391,30 @@ export class Agent {
                     deferToModel: true,
                     modelInstruction: queuedConstruction.modelInstruction,
                 }
-                : resolvePlayerDirective(canonicalPlayer || source, message, {
+                : resolvePlayerDirective(canonicalPlayer || source, deterministicMessage, {
                     role: this.runtime?.role,
                     bot: this.bot,
                     memoryBank: this.memory_bank,
+                    homeState: this.home_state,
                 });
+            if (directive?.constructionSiteError) {
+                await this.history.add(source, message);
+                await this.history.add(this.name, directive.response);
+                this.history.save();
+                this.routeResponse(source, directive.response);
+                return true;
+            }
             if (directive?.deferToModel === true) {
                 const assignmentKind = ['item_plan', 'storage_plan'].includes(directive.assignmentKind)
                     ? directive.assignmentKind
                     : 'construction';
+                const deferredAgendaDisposition = ['item_plan', 'storage_plan'].includes(assignmentKind)
+                    ? resolvePlayerPlanDisposition(message, {
+                        agendaBusy: (this.agenda_director?.snapshot?.().remaining || 0) > 0,
+                        operatorHeld: this.isOperatorHeld?.() === true,
+                        compilingConstruction: Boolean(this.agenda_director?.activeConstructionIntent?.()),
+                    })
+                    : 'append';
                 // Blueprint/item-plan compilation is cognition, not physical ownership.
                 // Retain an existing Stop while the model works; the eventual
                 // validated construction command releases it at the same
@@ -1164,9 +1437,7 @@ export class Agent {
                     kind: assignmentKind,
                     holdGeneration: this.operator_hold_generation,
                     agendaEntryId: queuedConstruction?.entryId || null,
-                    agendaDisposition: ['item_plan', 'storage_plan'].includes(assignmentKind)
-                        ? classifyDisposition(message)
-                        : 'append',
+                    agendaDisposition: deferredAgendaDisposition,
                     lastFailureSignature: '',
                     repeatedFailures: 0,
                 };
@@ -1202,7 +1473,11 @@ export class Agent {
                     ? commandAssignsPersistentGoal(directiveCommand)
                     : false;
                 if (directiveCommand && commandReleasesOperatorHold(directiveCommand)) {
-                    this.releaseOperatorHold('player directive');
+                    const authority = this.claimFreshPlayerActionAuthority(directiveCommand, 'player directive');
+                    if (!authority.ready) {
+                        this.routeResponse(source, authority.detail);
+                        return true;
+                    }
                 }
                 if (directiveCommand && commandTakesManualAutonomy(directiveCommand)) {
                     this.actions.cancelResume();
@@ -1240,11 +1515,12 @@ export class Agent {
             }
             // A persisted Stop holds the body, not the player's ability to
             // issue the next unfamiliar order. Permit cognition to interpret
-            // this one action-eligible utterance against the exact current Hold
-            // generation. Physical ownership remains held until a validated
-            // action command crosses the normal release boundary below. A newer
-            // Stop changes the generation and interrupts the prompt.
-            if (playerSpeechAuthority === 'action_eligible' && this.isOperatorHeld()) {
+            // this one action-eligible or response-only utterance against the
+            // exact current Hold generation. Physical ownership remains held
+            // until a validated action command crosses the normal release
+            // boundary below. A newer Stop changes the generation and interrupts
+            // the prompt.
+            if (['action_eligible', 'response_only'].includes(playerSpeechAuthority) && this.isOperatorHeld()) {
                 authorizedModelHoldGeneration = this.operator_hold_generation;
             }
         }
@@ -1299,6 +1575,16 @@ export class Agent {
                 let command_name = containsCommand(res);
 
             if (command_name) { // contains query or command
+                if (modelCommandAwaitsPlayerConfirmation(res, command_name)) {
+                    const proposal = res.substring(0, res.indexOf(command_name)).trim();
+                    await this.history.add(this.name, proposal);
+                    await this.history.add(
+                        'system',
+                        `No command was executed: ${command_name} was presented as a proposal awaiting player confirmation.`,
+                    );
+                    this.routeResponse(source, proposal);
+                    break;
+                }
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
 
@@ -1319,11 +1605,11 @@ export class Agent {
                     continue;
                 }
 
-                if (playerSpeechAuthority === 'conversation_only') {
+                if (playerSpeechAuthority !== 'action_eligible') {
                     const conversationalPrefix = res.substring(0, res.indexOf(command_name)).trim();
                     await this.history.add(
                         'system',
-                        'No command was executed because the player described their own intended action rather than assigning work to the bot.',
+                        'No command was executed because the player message did not grant the bot physical-action authority.',
                     );
                     this.routeResponse(source, conversationalPrefix || 'Understood. I will leave that work to you.');
                     break;
@@ -1339,7 +1625,11 @@ export class Agent {
                 if (!self_prompt && !from_other_bot) {
                     const assignsTypedGoal = commandAssignsPersistentGoal(command_name);
                     if (!deferredModelAssignment && commandReleasesOperatorHold(command_name)) {
-                        this.releaseOperatorHold('player command');
+                        const authority = this.claimFreshPlayerActionAuthority(command_name, 'player command');
+                        if (!authority.ready) {
+                            this.routeResponse(source, authority.detail);
+                            return true;
+                        }
                     }
                     if (commandTakesManualAutonomy(command_name)) {
                         this.actions.cancelResume();
@@ -1527,15 +1817,20 @@ export class Agent {
                 const detail = interrupted
                     ? `${compiledLabel} compilation was interrupted before a correlated durable assignment was accepted.`
                     : `${compiledLabel} compilation ended without a correlated durable assignment.`;
+                let constructionSettlement = null;
                 if (!compilingItemPlan && !compilingStoragePlan && deferredModelAssignment.agendaEntryId) {
-                    this.agenda_director?.failConstructionAssignment?.(
+                    constructionSettlement = this.agenda_director?.failConstructionAssignment?.(
                         deferredModelAssignment.agendaEntryId,
                         assignmentState,
                         code,
                         detail,
                     );
                 }
-                if (!this.isOperatorHeld()) {
+                const releasedForAgendaContinuation = this.releaseFailedConstructionCompilationHold?.(
+                    deferredModelAssignment,
+                    constructionSettlement,
+                ) === true;
+                if (!this.isOperatorHeld() && !releasedForAgendaContinuation) {
                     this.holdPosition(compilingItemPlan
                         ? 'item plan assignment did not settle'
                         : compilingStoragePlan
@@ -1591,28 +1886,30 @@ export class Agent {
             } catch (error) {
                 console.warn(`[dialogue] Translation failed; sending original text: ${String(error?.message || error).slice(0, 240)}`);
             }
-            const outgoing = boundedChatText(String(translated || '').trim());
-            if (!outgoing) return false;
-
-            const waitMs = Math.max(0, MIN_INGAME_CHAT_INTERVAL_MS - (Date.now() - this._lastChatSentAt));
-            if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
-            this._lastChatSentAt = Date.now();
+            const outgoingSegments = boundedChatSegments(String(translated || '').trim());
+            if (outgoingSegments.length === 0) return false;
 
             let delivered = false;
-            if (settings.only_chat_with.length > 0) {
-                for (const username of settings.only_chat_with) {
-                    try {
-                        this.bot.whisper(username, outgoing);
-                        delivered = true;
-                    } catch (error) {
-                        console.warn(`[dialogue] Whisper to ${username} failed: ${String(error?.message || error).slice(0, 240)}`);
+            if (settings.only_chat_with.length === 0 && settings.speak) {
+                void Promise.resolve()
+                    .then(() => speak(toTranslate, this.prompter.profile.speak_model, { priority }))
+                    .catch(error => console.warn(`[dialogue] Speech output failed: ${String(error?.message || error).slice(0, 240)}`));
+            }
+            for (const outgoing of outgoingSegments) {
+                const waitMs = Math.max(0, MIN_INGAME_CHAT_INTERVAL_MS - (Date.now() - this._lastChatSentAt));
+                if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
+                this._lastChatSentAt = Date.now();
+
+                if (settings.only_chat_with.length > 0) {
+                    for (const username of settings.only_chat_with) {
+                        try {
+                            this.bot.whisper(username, outgoing);
+                            delivered = true;
+                        } catch (error) {
+                            console.warn(`[dialogue] Whisper to ${username} failed: ${String(error?.message || error).slice(0, 240)}`);
+                        }
                     }
-                }
-            } else {
-                if (settings.speak) {
-                    void Promise.resolve()
-                        .then(() => speak(toTranslate, this.prompter.profile.speak_model, { priority }))
-                        .catch(error => console.warn(`[dialogue] Speech output failed: ${String(error?.message || error).slice(0, 240)}`));
+                    continue;
                 }
                 if (settings.chat_ingame) {
                     try {
@@ -1717,6 +2014,7 @@ export class Agent {
         let prev_health = this.bot.health;
         this.bot.lastDamageTime = 0;
         this.bot.lastDamageTaken = 0;
+        this.bot.lastDamageSource = null;
         this.bot.on('health', () => {
             if (this.bot.health < prev_health) {
                 this.bot.lastDamageTime = Date.now();
@@ -1746,21 +2044,48 @@ export class Agent {
             }
         });
         this.bot.on('death', () => {
+            // Damage proximity authorizes command-mode self-defense only while
+            // it belongs to the current living body. Mineflayer can retain the
+            // old hostile for a few ticks while Paper replaces the player
+            // entity on respawn; carrying this edge across death can start a
+            // new engagement against a stale entity generation.
+            this.bot.lastDamageTime = 0;
+            this.bot.lastDamageTaken = 0;
+            this.bot.lastDamageSource = null;
             const position = this.bot.entity?.position;
             const dimension = this.bot.game?.dimension;
             const observedInventory = inventorySnapshot(this.bot);
             const inventory = Object.keys(observedInventory).length > 0
                 ? observedInventory
                 : { ...this._lastAliveInventorySnapshot };
-            if (position) {
-                this.memory_bank.rememberDeath(position, dimension, inventory);
-            }
+            const recoverableItems = Object.values(inventory)
+                .reduce((total, count) => total + count, 0);
+            const deathPersistence = position
+                ? this.memory_bank.recordDeath(position, dimension, inventory)
+                : Object.freeze({
+                    stored: false,
+                    code: 'death_position_missing',
+                    record: null,
+                });
+            this.goal_director?.reconcileDeath?.({
+                position,
+                dimension,
+                recoverableItems,
+                deathRecord: deathPersistence.record,
+                deathPersistenceCode: deathPersistence.code,
+            });
+            this.agenda_director?.reconcileDeath?.({
+                position,
+                dimension,
+            });
+            this.survival_director?.reconcileDeath?.();
             this.publishBehaviorEvent({
                 type: 'self.died',
                 target: position ? { name: 'death', x: position.x, y: position.y, z: position.z } : { name: 'death' },
                 evidence: {
-                    dimension,
-                    recoverableItems: Object.values(inventory).reduce((total, count) => total + count, 0),
+                    amount: recoverableItems,
+                    code: deathPersistence.code,
+                    phase: deathPersistence.stored === true ? 'stored' : 'not_stored',
                 },
                 salience: 5,
             });
@@ -1825,6 +2150,15 @@ export class Agent {
             });
         });
         this.bot.on('entityHurt', (entity, source) => {
+            const receipt = observeReceivedDamageSource(this.bot, entity, source, {
+                requester: this.companion_context?.snapshot?.().canonicalUsername || '',
+                isHostile: candidate => mc.isHostile(candidate),
+            });
+            if (receipt.matchesSelf) {
+                this.bot.lastDamageSource = receipt;
+                this.survival_director?.observeDamageSource?.(receipt);
+                this.behavior_arbiter?.wake?.('self_damage_source_observed');
+            }
             this.environment_observer?.observeEntityHurt?.(entity, source);
         });
         this.bot.on('entityDead', entity => {

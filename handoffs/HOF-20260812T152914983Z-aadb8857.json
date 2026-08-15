@@ -1,0 +1,506 @@
+{
+  "entries": [
+    {
+      "generation": 0,
+      "key": "checkout",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2 on recovery/iron-pickaxe-20260803 at 2b7fc3d1ee9b733d17142e296823e3d3d51a1cf5, ahead 11 with extensive shared dirty WIP"
+    },
+    {
+      "generation": 0,
+      "key": "ownership",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "CURRENT names Codex as writer and runtime owner; no second runtime or coding agent is authorized"
+    },
+    {
+      "generation": 0,
+      "key": "managed-runtime",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "control PID 1910, Paper 1.21.11 PID 2181 on 127.0.0.1:25579, sole in-game IronSuiteProof PID 191069, Geyser/Floodgate ready"
+    },
+    {
+      "generation": 0,
+      "key": "operator-state",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "Operator Hold is false and DadPlayer is disconnected"
+    },
+    {
+      "generation": 0,
+      "key": "broad-request",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "catch three fish, cook them using the existing bound furnace, deliver the cooked fish to DadPlayer, then wait beside him"
+    },
+    {
+      "generation": 1,
+      "key": "agenda-state",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "the fishing-rod entry failed as goal_attempts_exhausted and all three dependent breakfast steps failed as agenda_dependency_failed; no ordinary Agenda work remains active"
+    },
+    {
+      "generation": 1,
+      "key": "goal-state",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "goal-9f0234d3-3c46-4e94-9f7e-5d3c8b6e4be2 failed at attempt 4/4 after a fifty-item death; one String had been obtained but no fishing rod was completed"
+    },
+    {
+      "generation": 1,
+      "key": "world-state",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "Paper observed IronSuiteProof at the verified distinct region 8141.44,63,7937.42 with health 6 and hunger 17; the nearest loaded hostile was about 23.8 blocks away and twelve blocks below"
+    },
+    {
+      "generation": 1,
+      "key": "inventory-state",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "IronSuiteProof is empty after the Zombie death"
+    },
+    {
+      "generation": 1,
+      "key": "last-verified",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "explicit moveAway relocated the bot 32.23 blocks from 8109,62,7941 to a supported distinct dry region at 8141,63,7937"
+    },
+    {
+      "generation": 1,
+      "key": "telemetry",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "flight-2026-08-12T14-45-44-710Z-191069-000.jsonl through suffix 002 are healthy through twenty-six records with zero drops, empty queue, and no error"
+    },
+    {
+      "generation": 1,
+      "key": "death-recovery",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "newest identity 1786547852087 durably records fifty carried items at 8159.40,62,8016.60; the only direct recovery request was censored by mortal survival and the manifest remains unsettled"
+    },
+    {
+      "generation": 0,
+      "key": "critical-closeout-defect",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "after no food and DadPlayer offline at health 3, the bot waited roughly thirteen minutes in the remote hostile region until a Zombie killed it; survival now waits recovery_food_sources_exhausted after one safe relocation"
+    },
+    {
+      "generation": 0,
+      "key": "self-defense-defect",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "live telemetry proved thirty-five skill_unreachable retreats over 93.278 seconds against unchanged Pillager/body evidence before death"
+    },
+    {
+      "generation": 0,
+      "key": "self-defense-repair",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "src/agent/modes.js now holds a bounded mode-local failed-retreat receipt and requires changed hostile generation, body stance, hostile stance, health, or dimension before redispatch"
+    },
+    {
+      "generation": 0,
+      "key": "focused-verification",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "the exact lifecycle regression, parsing, diff checking, and independent Codeplan arithmetic pass; ActionManager, Pathfinder, and tactical mechanics remain unchanged"
+    },
+    {
+      "generation": 0,
+      "key": "self-defense-live-acceptance",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "unsure",
+      "text": "the repaired failed-retreat latch is loaded in PID 191069 but has not yet encountered an equivalent natural live failure"
+    },
+    {
+      "generation": 0,
+      "key": "wtf.retry-storm",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:02:25.758Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "a sensible companion attempts one truthful retreat and waits for changed evidence instead of issuing thirty-five identical actions from one block"
+    },
+    {
+      "generation": 1,
+      "key": "wtf.restart-exposure",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "a latest-death recovery request from the empty respawn was immediately preempted by Creeper and Skeleton danger before any recovery receipt; establish a survivable departure state before long recovery travel"
+    },
+    {
+      "generation": 1,
+      "key": "next-step",
+      "provenance": {
+        "kind": "repo",
+        "observedAt": "2026-08-12T15:29:13.538Z",
+        "sourceRef": "repo:/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2/CONTEXT.md"
+      },
+      "scope": [],
+      "state": "fact",
+      "text": "repair only the critical-survival no-food and offline-requester closeout with an existing safe relocation or home-anchor mechanism, stabilize the body, run newest-death recovery once, then replay the unchanged fishing breakfast"
+    }
+  ],
+  "evidence": [],
+  "format": "neutral-software-handoff/v3",
+  "goal": "complete the live fishing-breakfast companion request truthfully while observing gameplay quality and repairing only the first material shared blocker",
+  "id": "HOF-20260812T152914983Z-aadb8857",
+  "integrity": {
+    "algorithm": "sha256",
+    "canonicalization": "utf16-code-unit-v1",
+    "createdAt": "2026-08-12T15:29:14.983Z",
+    "digest": "9f50702d5568b24f6c914cdc1acb27f1e0d5b35d7a754936482d1ba3656cf4b3",
+    "redaction": {
+      "categories": [],
+      "count": 0
+    },
+    "schemaVersion": 3
+  },
+  "nextMove": "Trace only SurvivalDirector recovery_food_sources_exhausted after its single offline-requester return attempt; bind the smallest existing safe relocation or home-anchor closeout, stabilize the body, run newest-death recovery once, then replay the unchanged fishing breakfast.",
+  "predecessor": "HOF-20260812T150227167Z-fe0a374d",
+  "project": {
+    "branch": "recovery/iron-pickaxe-20260803",
+    "changedPaths": [
+      ".claude/",
+      ".codeplan/",
+      "CONTEXT.md",
+      "GENTS.md",
+      "docs/FUTURE-FEATURES.md",
+      "docs/MASTER-PROJECT-PLAN.md",
+      "docs/PLAYER-COMPLETENESS-ROADMAP.md",
+      "docs/architecture/SHARED-CONTRACT-SPINE.md",
+      "docs/architecture/machine-brain-v2/AUDIT-FINDINGS.md",
+      "docs/architecture/machine-brain-v2/README.md",
+      "docs/coordination/CURRENT.md",
+      "docs/plans/2026-08-03-hybrid-companion-forward-plan.md",
+      "docs/plans/2026-08-10-strategic-reasoning-rollout.md",
+      "docs/plans/2026-08-11-family-companion-simulation.md",
+      "docs/plans/2026-08-11-landmark-relative-construction-codeplan.md",
+      "docs/plans/2026-08-11-opposite-side-landmark-layout-codeplan.md",
+      "docs/plans/2026-08-11-picnic-seat-fixture-codeplan.md",
+      "docs/research/2026-08-03-hybrid-goal-recovery-milestone.md",
+      "handoffs/",
+      "packages/minecraft-runtime/mineflayer-pathfinder/index.d.ts",
+      "packages/minecraft-runtime/mineflayer-pathfinder/lib/goals.js",
+      "packages/minecraft-runtime/mineflayer-pathfinder/lib/movements.js",
+      "src/agent/action_manager.js",
+      "src/agent/agent.js",
+      "src/agent/chat-address.js",
+      "src/agent/commands/actions.js",
+      "src/agent/commands/index.js",
+      "src/agent/library/full_state.js",
+      "src/agent/library/skills.js",
+      "src/agent/memory_bank.js",
+      "src/agent/modes.js",
+      "src/agent/player-agenda.js",
+      "src/agent/player-directives.js",
+      "src/agent/player-speech-authority.js",
+      "src/agent/runtime/action-result.js",
+      "src/agent/runtime/agenda-director.js",
+      "src/agent/runtime/agenda.js",
+      "src/agent/runtime/behavior-arbiter.js",
+      "src/agent/runtime/behavior-director.js",
+      "src/agent/runtime/behavior-flight-recorder.js",
+      "src/agent/runtime/brewing-plan.js",
+      "src/agent/runtime/capability-catalogue.js",
+      "src/agent/runtime/combat-attribution.js",
+      "src/agent/runtime/combat-decision.js",
+      "src/agent/runtime/decision-trace.js",
+      "src/agent/runtime/goal-contract.js",
+      "src/agent/runtime/goal-director.js",
+      "src/agent/runtime/interaction-stance.js",
+      "src/agent/runtime/item-family.js",
+      "src/agent/runtime/jobs/lumberjack-plan.js",
+      "src/agent/runtime/jobs/miner-plan.js",
+      "src/agent/runtime/jobs/structure-design.js",
+      "src/agent/runtime/jobs/structure-site-selector.js",
+      "src/agent/runtime/personal-memory.js",
+      "src/agent/runtime/prerequisite-planner.js",
+      "src/agent/runtime/procedure-store.js",
+      "src/agent/runtime/strategic-branch-qualification.js",
+      "src/agent/runtime/survival-director.js",
+      "src/agent/runtime/survival-policy.js",
+      "src/agent/runtime/work-order.js",
+      "src/mindcraft/managed-minecraft-server.js",
+      "src/models/prompter.js",
+      "src/utils/entity-harvest-semantics.js",
+      "tests/brewing-plan.test.js",
+      "tests/collection-target-safety.test.js",
+      "tests/combat-attribution.test.js",
+      "tests/combat-decision.test.js",
+      "tests/control-plane/agent-agenda-dispatch.test.js",
+      "tests/control-plane/agent-lifecycle.test.js",
+      "tests/control-plane/behavior-arbiter-trace.test.js",
+      "tests/control-plane/behavior-flight-recorder.test.js",
+      "tests/control-plane/builder-placement.test.js",
+      "tests/control-plane/builder-plan.test.js",
+      "tests/control-plane/companion-context.test.js",
+      "tests/control-plane/fishing-breakfast.test.js",
+      "tests/control-plane/food-semantics.test.js",
+      "tests/control-plane/goal-director-recovery-budget.test.js",
+      "tests/control-plane/interaction-stance-contract.test.js",
+      "tests/control-plane/lumberjack-plan.test.js",
+      "tests/control-plane/managed-minecraft-server.test.js",
+      "tests/control-plane/miner-plan.test.js",
+      "tests/control-plane/model-lifecycle.test.js",
+      "tests/control-plane/phase0-command-parser.test.js",
+      "tests/control-plane/player-agenda.test.js",
+      "tests/control-plane/player-directives-routing.test.js",
+      "tests/control-plane/self-preservation-healing.test.js",
+      "tests/control-plane/strategic-branch-qualification.test.js",
+      "tests/control-plane/survival-director.test.js",
+      "tests/control-plane/survival-eating.test.js",
+      "tests/control-plane/survival-policy.test.js",
+      "tests/control-plane/survival-sleep.test.js",
+      "tests/control-plane/work-order.test.js",
+      "tests/critical-runtime-output.test.js",
+      "tests/death-memory.test.js",
+      "tests/delivery-spacing.test.js",
+      "tests/mining-corridor-geometry.test.js",
+      "tests/pathfinder-climb-contract.test.js",
+      "tests/pathfinder-retreat-contract.test.js",
+      "tests/perception-plan-learning.test.js",
+      "tests/structure-site-selector.test.js"
+    ],
+    "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+    "gitRoot": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+    "head": "2b7fc3d1ee9b733d17142e296823e3d3d51a1cf5",
+    "worktreeState": "dirty"
+  },
+  "recentTail": {
+    "items": [],
+    "truncated": false
+  },
+  "rules": [
+    "load AGENTS.md, docs/coordination/CURRENT.md, docs/architecture/SHARED-CONTRACT-SPINE.md, and the mindcraft-minecraft-development skill before gameplay work",
+    "use managed Paper and the sole existing IronSuiteProof runtime as authoritative physical evidence",
+    "preserve every unrelated dirty path and keep the active branch and shared working state intact",
+    "continue the same broad natural request through rod, three fish, exact-furnace cooking, Dad delivery, and terminal hold",
+    "keep Mineflayer and mature plugins responsible for movement, combat, inventory, crafting, fishing, and interaction mechanics",
+    "diagnose the first unproven selection, feasibility, planning, execution, reconciliation, or verified-outcome boundary",
+    "record exact player-visible WTF behavior with location, simpler sensible behavior, and likely owner",
+    "freeze accepted mechanics and defer unrelated or third-class findings under the campaign governor",
+    "update docs/coordination/CURRENT.md at each bounded checkpoint with runtime, last physical result, blocker, WTF, and next action",
+    "leave Paper and the sole bot running when the safe unattended campaign still has useful work"
+  ],
+  "source": {
+    "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+    "metadata": {
+      "managedBy": "external-session"
+    },
+    "provider": "codex",
+    "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+    "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+  },
+  "work": {
+    "commands": [],
+    "errors": [],
+    "files": [
+      ".claude/",
+      ".codeplan/",
+      "CONTEXT.md",
+      "GENTS.md",
+      "docs/FUTURE-FEATURES.md",
+      "docs/MASTER-PROJECT-PLAN.md",
+      "docs/PLAYER-COMPLETENESS-ROADMAP.md",
+      "docs/architecture/SHARED-CONTRACT-SPINE.md",
+      "docs/architecture/machine-brain-v2/AUDIT-FINDINGS.md",
+      "docs/architecture/machine-brain-v2/README.md",
+      "docs/coordination/CURRENT.md",
+      "docs/plans/2026-08-03-hybrid-companion-forward-plan.md",
+      "docs/plans/2026-08-10-strategic-reasoning-rollout.md",
+      "docs/plans/2026-08-11-family-companion-simulation.md",
+      "docs/plans/2026-08-11-landmark-relative-construction-codeplan.md",
+      "docs/plans/2026-08-11-opposite-side-landmark-layout-codeplan.md",
+      "docs/plans/2026-08-11-picnic-seat-fixture-codeplan.md",
+      "docs/research/2026-08-03-hybrid-goal-recovery-milestone.md",
+      "handoffs/",
+      "packages/minecraft-runtime/mineflayer-pathfinder/index.d.ts",
+      "packages/minecraft-runtime/mineflayer-pathfinder/lib/goals.js",
+      "packages/minecraft-runtime/mineflayer-pathfinder/lib/movements.js",
+      "src/agent/action_manager.js",
+      "src/agent/agent.js",
+      "src/agent/chat-address.js",
+      "src/agent/commands/actions.js",
+      "src/agent/commands/index.js",
+      "src/agent/library/full_state.js",
+      "src/agent/library/skills.js",
+      "src/agent/memory_bank.js",
+      "src/agent/modes.js",
+      "src/agent/player-agenda.js",
+      "src/agent/player-directives.js",
+      "src/agent/player-speech-authority.js",
+      "src/agent/runtime/action-result.js",
+      "src/agent/runtime/agenda-director.js",
+      "src/agent/runtime/agenda.js",
+      "src/agent/runtime/behavior-arbiter.js",
+      "src/agent/runtime/behavior-director.js",
+      "src/agent/runtime/behavior-flight-recorder.js",
+      "src/agent/runtime/brewing-plan.js",
+      "src/agent/runtime/capability-catalogue.js",
+      "src/agent/runtime/combat-attribution.js",
+      "src/agent/runtime/combat-decision.js",
+      "src/agent/runtime/decision-trace.js",
+      "src/agent/runtime/goal-contract.js",
+      "src/agent/runtime/goal-director.js",
+      "src/agent/runtime/interaction-stance.js",
+      "src/agent/runtime/item-family.js",
+      "src/agent/runtime/jobs/lumberjack-plan.js",
+      "src/agent/runtime/jobs/miner-plan.js",
+      "src/agent/runtime/jobs/structure-design.js",
+      "src/agent/runtime/jobs/structure-site-selector.js",
+      "src/agent/runtime/personal-memory.js",
+      "src/agent/runtime/prerequisite-planner.js",
+      "src/agent/runtime/procedure-store.js",
+      "src/agent/runtime/strategic-branch-qualification.js",
+      "src/agent/runtime/survival-director.js",
+      "src/agent/runtime/survival-policy.js",
+      "src/agent/runtime/work-order.js",
+      "src/mindcraft/managed-minecraft-server.js",
+      "src/models/prompter.js",
+      "src/utils/entity-harvest-semantics.js",
+      "tests/brewing-plan.test.js",
+      "tests/collection-target-safety.test.js",
+      "tests/combat-attribution.test.js",
+      "tests/combat-decision.test.js",
+      "tests/control-plane/agent-agenda-dispatch.test.js",
+      "tests/control-plane/agent-lifecycle.test.js",
+      "tests/control-plane/behavior-arbiter-trace.test.js",
+      "tests/control-plane/behavior-flight-recorder.test.js",
+      "tests/control-plane/builder-placement.test.js",
+      "tests/control-plane/builder-plan.test.js",
+      "tests/control-plane/companion-context.test.js",
+      "tests/control-plane/fishing-breakfast.test.js",
+      "tests/control-plane/food-semantics.test.js",
+      "tests/control-plane/goal-director-recovery-budget.test.js",
+      "tests/control-plane/interaction-stance-contract.test.js",
+      "tests/control-plane/lumberjack-plan.test.js",
+      "tests/control-plane/managed-minecraft-server.test.js",
+      "tests/control-plane/miner-plan.test.js",
+      "tests/control-plane/model-lifecycle.test.js",
+      "tests/control-plane/phase0-command-parser.test.js",
+      "tests/control-plane/player-agenda.test.js",
+      "tests/control-plane/player-directives-routing.test.js",
+      "tests/control-plane/self-preservation-healing.test.js",
+      "tests/control-plane/strategic-branch-qualification.test.js",
+      "tests/control-plane/survival-director.test.js",
+      "tests/control-plane/survival-eating.test.js",
+      "tests/control-plane/survival-policy.test.js",
+      "tests/control-plane/survival-sleep.test.js",
+      "tests/control-plane/work-order.test.js",
+      "tests/critical-runtime-output.test.js",
+      "tests/death-memory.test.js",
+      "tests/delivery-spacing.test.js",
+      "tests/mining-corridor-geometry.test.js",
+      "tests/pathfinder-climb-contract.test.js",
+      "tests/pathfinder-retreat-contract.test.js",
+      "tests/perception-plan-learning.test.js",
+      "tests/structure-site-selector.test.js"
+    ],
+    "ids": [],
+    "items": [],
+    "symbols": [],
+    "tests": [],
+    "urls": []
+  }
+}

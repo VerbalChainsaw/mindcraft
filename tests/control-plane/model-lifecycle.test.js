@@ -81,12 +81,14 @@ test('Given specialists chained to a routed chat model, when the agent stops, th
   prompter.memory_model = routerOf([memoryLeaf, chatRoute]);
   prompter.triage_model = chatRoute;
   prompter.autonomy_model = chatRoute;
+  prompter.most_recent_msg_time = 100;
 
   // When
   const cancelled = prompter.cancelPendingModelGeneration();
 
   // Then
   assert.equal(cancelled, 4, 'one cancellation per unique provider');
+  assert.ok(prompter.most_recent_msg_time > 100, 'cancellation invalidates the active prompt epoch');
   assert.deepEqual(
     counters.cancel.slice().sort(),
     ['chat-primary', 'chat-secondary', 'memory', 'reasoning'],

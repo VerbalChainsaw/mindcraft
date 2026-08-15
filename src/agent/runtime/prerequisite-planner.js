@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+
 import * as mc from '../../utils/mcdata.js';
+import { strategicFrontierFingerprint } from './strategic-branch-qualification.js';
 import {
   entityHarvestAlternativeSearchCost,
   entityMatchesHarvestSource,
@@ -21,6 +24,8 @@ const DEFAULT_MAX_DEPTH = 24;
 // that legitimate graph while still bounding pathological registries tightly.
 const DEFAULT_MAX_NODES = 1024;
 const DEFAULT_MAX_ACTIONS = 64;
+const DEFAULT_FRONTIER_SEARCHES = 64;
+const MAX_COMPLETION_IDENTITY_LENGTH = 2_048;
 const PLANNER_PROXIMITY_RANGE = 16;
 const TOOL_TIER = Object.freeze({
   wooden: 1,
@@ -1289,7 +1294,7 @@ function planFromEntityHarvestSource(bot, context, target, amount, trail) {
       // Mobile sources are much sparser than block resources. Give the
       // deterministic entity-search primitive enough bounded terrain to cover
       // several loaded regions without changing block-collection policy.
-      range: Math.max(192, context.range),
+      range: Math.max(Number(source.searchRange) || 192, context.range),
       allowAlternative: context.allowEntityAlternatives,
       expectedIncrease: amount,
     }, {
@@ -1556,6 +1561,336 @@ function publicAction(action) {
     learningKey: action.learningKey,
     learnedPreference: action.learnedPreference,
   };
+}
+
+function strictCompletionIdentity(value) {
+  if (typeof value !== 'string') return null;
+  const identity = value.trim();
+  if (
+    !identity
+    || identity !== value
+    || identity.length > MAX_COMPLETION_IDENTITY_LENGTH
+    || [...identity].some(character => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127;
+    })
+  ) return null;
+  return identity;
+}
+
+function completionProducingAction(plan) {
+  const target = canonicalName(plan?.target);
+  const actions = plan?.actions || [];
+  for (let index = actions.length - 1; index >= 0; index -= 1) {
+    const action = actions[index];
+    if (
+      canonicalName(action?.expectedName) === target
+      || canonicalName(action?.target) === target
+    ) return action;
+  }
+  return actions.at(-1) || null;
+}
+
+function rootDecisionKey(plan) {
+  return String(completionProducingAction(plan)?.learningKey || '').slice(0, 160) || null;
+}
+
+function materialRootMethodKey(plan) {
+  const target = canonicalName(plan?.target);
+  const action = completionProducingAction(plan);
+  const learningKey = rootDecisionKey(plan);
+  const capabilityId = String(action?.capability?.id || '').slice(0, 80) || null;
+  if (/^collect:[^>]+->[a-z0-9_]+$/.test(learningKey || '')) {
+    return `collect:*->${target}`;
+  }
+  const entityHarvest = /^harvest:([^:>]+):[^>]+->[a-z0-9_]+$/.exec(learningKey || '');
+  if (entityHarvest) return `harvest:${entityHarvest[1]}:*->${target}`;
+  if (/^harvest:[^>]+->[a-z0-9_]+$/.test(learningKey || '')) {
+    return `harvest:*->${target}`;
+  }
+  return learningKey || `${capabilityId || 'unknown'}->${target}`;
+}
+
+function plannerMethodDescriptor(plan) {
+  const action = completionProducingAction(plan);
+  return Object.freeze([
+    'planner-completion-method-v1',
+    String(action?.capability?.id || '').slice(0, 80) || null,
+    materialRootMethodKey(plan),
+    canonicalName(plan?.target) || null,
+  ]);
+}
+
+function plannerMethodId(plan) {
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify(['planner-whole-goal-method-v1', plannerMethodDescriptor(plan)]))
+    .digest('hex');
+  return `planner_method:v1:${fingerprint}`;
+}
+
+function canonicalPlannerEvidence(value, seen = new WeakSet()) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'object') return null;
+  if (seen.has(value)) throw new TypeError('Planner proof evidence must be acyclic.');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map(entry => canonicalPlannerEvidence(entry, seen));
+    }
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map(key => [key, canonicalPlannerEvidence(value[key], seen)]),
+    );
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function plannerProofFingerprint(plan) {
+  const proof = canonicalPlannerEvidence({
+    status: plan?.status || null,
+    code: plan?.code || null,
+    target: canonicalName(plan?.target) || null,
+    quantity: Number.isFinite(plan?.quantity) ? plan.quantity : null,
+    actions: Array.isArray(plan?.actions) ? plan.actions : [],
+  });
+  return createHash('sha256')
+    .update(JSON.stringify(['planner-feasibility-proof-v2', proof]))
+    .digest('hex');
+}
+
+function immutableFrontierCandidate(plan, completionIdentity) {
+  const decisionKeys = Object.freeze([rootDecisionKey(plan)].filter(Boolean));
+  const capabilityIds = (plan.actions || [])
+    .map(action => String(action?.capability?.id || '').slice(0, 80))
+    .filter(Boolean);
+  return Object.freeze({
+    methodId: plannerMethodId(plan),
+    completionIdentity,
+    feasible: true,
+    proof: Object.freeze({
+      plannerStatus: plan.status,
+      plannerCode: plan.code,
+      actionCount: (plan.actions || []).length,
+      exploredNodes: Number.isFinite(plan.exploredNodes) ? plan.exploredNodes : null,
+      planFingerprint: plannerProofFingerprint(plan),
+      rootMethodKey: materialRootMethodKey(plan),
+      decisionKeys,
+      capabilityIds: Object.freeze(capabilityIds),
+    }),
+  });
+}
+
+function immutableFrontier(fields) {
+  const frontierFingerprint = strategicFrontierFingerprint({
+    completionIdentity: fields.completionIdentity,
+    enumerationComplete: fields.enumerationComplete,
+    candidates: fields.candidates || [],
+    rankingStatus: fields.rankingStatus,
+    selectedMethodId: fields.selectedMethodId,
+  });
+  return Object.freeze({
+    schemaVersion: 2,
+    enumerationScope: 'planner_whole_goal_methods_v1',
+    ...fields,
+    frontierFingerprint,
+    candidates: Object.freeze(fields.candidates || []),
+    blockerCodes: Object.freeze(fields.blockerCodes || []),
+  });
+}
+
+function frontierFailure(completionIdentity, reasonCode, {
+  queryCount = 0,
+  blockerCodes = [],
+} = {}) {
+  return immutableFrontier({
+    status: 'incomplete',
+    reasonCode,
+    enumerationComplete: false,
+    completionIdentity,
+    rankingStatus: 'unknown',
+    selectedMethodId: null,
+    candidateCount: 0,
+    queryCount,
+    candidates: [],
+    blockerCodes,
+  });
+}
+
+/**
+ * Enumerate the bounded set of materially actionable whole-goal plans exposed
+ * by the prerequisite planner without introducing a second planner.
+ *
+ * Each candidate is the result of an independent successful planner call.
+ * Alternative plans are discovered by excluding the planner action that
+ * produces the requested completion item and asking the same planner to solve
+ * the unchanged goal again. Prerequisite-only variants remain proof details,
+ * not fake whole-goal methods. Queue exhaustion proves this bounded,
+ * planner-visible frontier complete. Search or causal-planner budget
+ * exhaustion fails closed.
+ */
+export function buildPrerequisiteMethodFrontier(bot, {
+  completionIdentity,
+  frontierMaxSearches = DEFAULT_FRONTIER_SEARCHES,
+  ...planOptions
+} = {}) {
+  const identity = strictCompletionIdentity(completionIdentity);
+  if (!identity) return frontierFailure(null, 'completion_identity_invalid');
+
+  const searchLimit = boundedInteger(
+    frontierMaxSearches,
+    DEFAULT_FRONTIER_SEARCHES,
+    1,
+    DEFAULT_FRONTIER_SEARCHES,
+  );
+  const baseExcluded = new Set((Array.isArray(planOptions.excludedMethods)
+    ? planOptions.excludedMethods
+    : [])
+    .filter(value => typeof value === 'string')
+    .map(value => value.trim().slice(0, 160))
+    .filter(Boolean));
+  const queue = [];
+  const queued = new Set();
+  const explored = new Set();
+  const candidates = new Map();
+  const blockerCodes = new Set();
+  let selectedMethodId = null;
+  let budgetFailure = null;
+  let contractFailure = null;
+  let completionAlreadySatisfied = false;
+
+  const enqueue = excluded => {
+    const values = [...excluded].sort();
+    const key = JSON.stringify(values);
+    if (queued.has(key) || explored.has(key)) return;
+    queued.add(key);
+    queue.push({ key, values });
+  };
+  enqueue(baseExcluded);
+
+  let queryCount = 0;
+  while (queue.length > 0 && queryCount < searchLimit) {
+    const state = queue.shift();
+    queued.delete(state.key);
+    explored.add(state.key);
+    queryCount += 1;
+    let plan = null;
+    try {
+      plan = buildPrerequisitePlan(bot, {
+        ...planOptions,
+        excludedMethods: state.values,
+      });
+    } catch {
+      blockerCodes.add('planner_runtime_error');
+      contractFailure = 'planner_runtime_error';
+      break;
+    }
+
+    if (plan.status === 'ready' && plan.nextStep) {
+      const candidate = immutableFrontierCandidate(plan, identity);
+      if (!selectedMethodId) selectedMethodId = candidate.methodId;
+      if (!candidates.has(candidate.methodId)) candidates.set(candidate.methodId, candidate);
+      for (const decisionKey of candidate.proof.decisionKeys) {
+        if (state.values.includes(decisionKey)) continue;
+        enqueue(new Set([...state.values, decisionKey]));
+      }
+      continue;
+    }
+
+    if (plan.status === 'ready') {
+      blockerCodes.add('planner_ready_without_next_step');
+      contractFailure = 'planner_contract_invalid';
+      break;
+    }
+    if (plan.status === 'complete') {
+      completionAlreadySatisfied = true;
+      break;
+    }
+    if (plan.status !== 'blocked') {
+      blockerCodes.add('planner_status_invalid');
+      contractFailure = 'planner_contract_invalid';
+      break;
+    }
+    blockerCodes.add(String(plan.code || 'planner_blocked').slice(0, 80));
+    if (/^planner_(?:action|depth|node)_budget$/.test(String(plan.code || ''))) {
+      budgetFailure = plan.code;
+      break;
+    }
+  }
+
+  const orderedCandidates = [...candidates.values()]
+    .sort((left, right) => left.methodId.localeCompare(right.methodId));
+  if (completionAlreadySatisfied) {
+    return immutableFrontier({
+      status: 'not_applicable',
+      reasonCode: 'completion_already_satisfied',
+      enumerationComplete: false,
+      completionIdentity: identity,
+      rankingStatus: 'unknown',
+      selectedMethodId: null,
+      candidateCount: 0,
+      queryCount,
+      candidates: [],
+      blockerCodes: [],
+    });
+  }
+  if (contractFailure) {
+    return immutableFrontier({
+      status: 'incomplete',
+      reasonCode: contractFailure,
+      enumerationComplete: false,
+      completionIdentity: identity,
+      rankingStatus: 'unknown',
+      selectedMethodId: null,
+      candidateCount: orderedCandidates.length,
+      queryCount,
+      candidates: orderedCandidates,
+      blockerCodes: [...blockerCodes].sort(),
+    });
+  }
+  if (budgetFailure) {
+    return immutableFrontier({
+      status: 'incomplete',
+      reasonCode: 'planner_budget_exhausted',
+      enumerationComplete: false,
+      completionIdentity: identity,
+      rankingStatus: 'unknown',
+      selectedMethodId: null,
+      candidateCount: orderedCandidates.length,
+      queryCount,
+      candidates: orderedCandidates,
+      blockerCodes: [...blockerCodes].sort(),
+    });
+  }
+  if (queue.length > 0) {
+    return immutableFrontier({
+      status: 'incomplete',
+      reasonCode: 'frontier_search_budget_exhausted',
+      enumerationComplete: false,
+      completionIdentity: identity,
+      rankingStatus: 'unknown',
+      selectedMethodId: null,
+      candidateCount: orderedCandidates.length,
+      queryCount,
+      candidates: orderedCandidates,
+      blockerCodes: [...blockerCodes].sort(),
+    });
+  }
+  return immutableFrontier({
+    status: 'complete',
+    reasonCode: 'planner_frontier_complete',
+    enumerationComplete: true,
+    completionIdentity: identity,
+    rankingStatus: orderedCandidates.length > 0 ? 'resolved' : 'unknown',
+    selectedMethodId,
+    candidateCount: orderedCandidates.length,
+    queryCount,
+    candidates: orderedCandidates,
+    blockerCodes: [...blockerCodes].sort(),
+  });
 }
 
 export function buildPrerequisitePlan(bot, {

@@ -1,11 +1,8 @@
-const UNSAFE_FOODS = new Set([
-  'chicken',
-  'poisonous_potato',
-  'pufferfish',
-  'rotten_flesh',
-  'spider_eye',
-  'suspicious_stew',
-]);
+import {
+  EMERGENCY_FOOD_TIER_A,
+  EMERGENCY_FOOD_TIER_B,
+  UNSAFE_FOOD_ITEMS,
+} from './item-family.js';
 
 const TACTICAL_FOODS = new Set([
   'enchanted_golden_apple',
@@ -15,6 +12,15 @@ const TACTICAL_FOODS = new Set([
 
 function numeric(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
+}
+
+// 0 is an ordinary safe food, 1 inflicts Hunger only, 2 inflicts Poison, which
+// cannot reduce health below 1 HP. Anything still unsafe at critical need —
+// pufferfish, suspicious stew — stays at 0 here and remains filtered out.
+function emergencyFoodTier(name) {
+  if (EMERGENCY_FOOD_TIER_A.has(name)) return 1;
+  if (EMERGENCY_FOOD_TIER_B.has(name)) return 2;
+  return 0;
 }
 
 /**
@@ -36,7 +42,7 @@ export function rankFoodCandidates(items = [], situation = {}, policy = {}) {
       && typeof item.name === 'string'
       && numeric(item.count) > 0
       && numeric(item.foodPoints) > 0
-      && !UNSAFE_FOODS.has(item.name)
+      && (!UNSAFE_FOOD_ITEMS.has(item.name) || (critical && emergencyFoodTier(item.name) > 0))
       && (critical || !TACTICAL_FOODS.has(item.name))
     ))
     .map((item) => ({
@@ -44,9 +50,14 @@ export function rankFoodCandidates(items = [], situation = {}, policy = {}) {
       count: numeric(item.count),
       foodPoints: numeric(item.foodPoints),
       saturation: numeric(item.saturation),
+      emergencyTier: emergencyFoodTier(item.name),
     }))
+    // Tier ordering runs ahead of food points so an ordinary safe food is always
+    // preferred over a desperation food that happens to restore more hunger.
+    // With no emergency candidates every tier is 0 and this sorts as before.
     .sort((left, right) => (
-      right.foodPoints - left.foodPoints
+      left.emergencyTier - right.emergencyTier
+      || right.foodPoints - left.foodPoints
       || right.saturation - left.saturation
       || left.name.localeCompare(right.name)
     ));
@@ -54,11 +65,85 @@ export function rankFoodCandidates(items = [], situation = {}, policy = {}) {
 
 export function chooseSurvivalIntent(situation = {}, policy = {}) {
   if (policy.mode === 'off' || situation.held || situation.urgentDanger) return null;
+  const health = numeric(situation.health, 20);
+  if (health <= 8) {
+    const healing = (Array.isArray(situation.healingConsumables)
+      ? situation.healingConsumables
+      : [])
+      .filter(candidate => candidate?.item === 'healing_potion' && numeric(candidate.count) > 0)
+      .sort((left, right) => (
+        numeric(right.potency) - numeric(left.potency)
+        || String(left.effect || '').localeCompare(String(right.effect || ''))
+      ))[0];
+    if (healing) {
+      return {
+        kind: 'heal',
+        item: healing.item,
+        reason: 'critical_health_healing',
+        ...(situation.idle !== true ? { preempt: true } : {}),
+      };
+    }
+  }
+  // Physical safety outranks sustenance once health is critical, and this must
+  // sit ahead of the hunger branch below: that branch always returns, so while
+  // it ran first an injured, hungry, exposed companion could never reach the
+  // shelter or sleep rungs at all. Sealing in place needs no route, no food and
+  // no weapon, so it stays available exactly when every navigation-shaped
+  // recovery has already failed.
+  // Low health alone is not danger. Bunkering in clear daylight while a player
+  // is walking over with food would be absurd, so this also requires live
+  // evidence that the body is actually exposed to harm.
+  const criticallyExposed = situation.recentDamage === true
+    || (Array.isArray(situation.hostiles) && situation.hostiles.length > 0)
+    || (
+      isNightTime(numeric(situation.timeOfDay, 0))
+      && String(situation.difficulty || '').toLowerCase() !== 'peaceful'
+    );
+  const criticalRoutedShelter = (Array.isArray(situation.shelters) ? situation.shelters : [])
+    .filter(candidate => (
+      candidate?.reachable === true
+      && candidate?.safe === true
+      && ['success', 'already_at_stance'].includes(candidate?.pathStatus)
+    ))
+    .sort((left, right) => numeric(left.distance, Infinity) - numeric(right.distance, Infinity))[0];
+  if (
+    policy.mode === 'full'
+    && policy.shelter !== 'off'
+    && health <= 8
+    && criticallyExposed
+    && situation.sheltered !== true
+  ) {
+    if (criticalRoutedShelter) {
+      return {
+        kind: 'seek_shelter',
+        target: {
+          name: criticalRoutedShelter.name || 'shelter',
+          x: criticalRoutedShelter.x,
+          y: criticalRoutedShelter.y,
+          z: criticalRoutedShelter.z,
+          distance: criticalRoutedShelter.distance,
+        },
+        reason: 'critical_health_exposed',
+        ...(situation.idle !== true ? { preempt: true } : {}),
+      };
+    }
+    // Selection requires a current world/inventory feasibility receipt. A
+    // missing synthetic field is unknown, never permission to mutate terrain.
+    if (situation.canShelterInPlace === true) {
+      return {
+        kind: 'shelter_in_place',
+        reason: 'critical_health_exposed',
+        ...(situation.idle !== true ? { preempt: true } : {}),
+      };
+    }
+    // Continue down the bodily ladder to carried food or another immediate
+    // option; inability to mutate terrain is not permission to wait.
+  }
   const hunger = numeric(situation.hunger, 20);
   if (hunger <= numeric(policy.eatAt, 14)) {
     const candidates = rankFoodCandidates(situation.food, situation, policy);
     const critical = hunger <= numeric(policy.criticalFood, 6)
-      || numeric(situation.health, 20) <= 8;
+    || health <= 8;
     const availableFoodPoints = candidates.reduce(
       (total, candidate) => total + (candidate.count * candidate.foodPoints),
       0,
@@ -93,7 +178,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
     if (policy.mode === 'full') {
       return {
         kind: 'acquire_food',
-        targetFoodPoints: Math.max(24, reserve),
+        targetFoodPoints: critical ? 1 : Math.max(24, reserve),
         reason: 'missing_safe_food',
         ...(critical && situation.idle !== true ? { preempt: true } : {}),
       };
@@ -107,7 +192,7 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
   if (situation.idle !== true) return null;
   if (
     policy.mode === 'full'
-    && numeric(situation.health, 20) <= 14
+    && health <= 14
   ) {
     if (situation.recentDamage === true && situation.sheltered !== true) {
       const recoveryShelter = (Array.isArray(situation.shelters) ? situation.shelters : [])
@@ -138,7 +223,9 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
       }
       return {
         kind: 'acquire_food',
-        targetFoodPoints: Math.max(24, numeric(policy.reserveFoodPoints, 12)),
+        targetFoodPoints: health <= 8
+          ? 1
+          : Math.max(24, numeric(policy.reserveFoodPoints, 12)),
         reason: 'recovery_missing_food',
       };
     }
@@ -190,12 +277,16 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
     if (bed) {
       return {
         kind: 'sleep',
+        // The dimension travels with the target so the executor can bind this
+        // exact bed. A bare `!goToBed` re-searches and takes the nearest one,
+        // which silently substitutes a different bed than the one selected.
         target: {
           name: bed.name,
           x: bed.x,
           y: bed.y,
           z: bed.z,
           distance: bed.distance,
+          dimension: situation.dimension,
         },
         reason: 'safe_night',
       };

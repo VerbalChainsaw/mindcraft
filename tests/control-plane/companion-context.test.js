@@ -7,7 +7,7 @@ import {
   CompanionContext,
   normalizePlayerDistance,
 } from '../../src/agent/runtime/companion-context.js';
-import { RoleDirector } from '../../src/agent/runtime/role-director.js';
+import { RoleDirector, roleIntentActionOwner } from '../../src/agent/runtime/role-director.js';
 import { getModeSuppressionReason } from '../../src/agent/modes.js';
 import { JobDirector } from '../../src/agent/runtime/job-director.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
@@ -26,6 +26,16 @@ function fixture({ now = 1_000, onReappeared = () => {} } = {}) {
   const bot = {
     username: 'MindcraftBot',
     game: { dimension: 'overworld' },
+    entity: {
+      position: {
+        x: 0,
+        y: 64,
+        z: 0,
+        distanceTo(position) {
+          return Math.hypot(position.x - this.x, position.y - this.y, position.z - this.z);
+        },
+      },
+    },
     players: { '.LittleBubby9352': { username: '.LittleBubby9352', entity: human } },
     entities: { 7: human },
   };
@@ -91,6 +101,23 @@ test('command autonomy suppresses invented role work without suppressing context
   assert.equal(context.observeChat('LittleBubby9352').canonical, '.LittleBubby9352');
 });
 
+test('pending death inventory blocks automatic companion role movement', () => {
+  const { agent } = fixture();
+  agent.runtime.autonomy = 'balanced';
+  agent.isIdle = () => true;
+  agent.self_prompter = { isStopped: () => true };
+  agent.memory_bank = {
+    recallDeath: () => ({ inventory: { stone_pickaxe: 1 }, recoveredAt: null }),
+  };
+  const director = new RoleDirector(agent);
+  director.nextAttemptAt = 0;
+
+  director.update();
+
+  assert.equal(director.status.code, 'death_recovery_pending');
+  assert.equal(director.inFlight, false);
+});
+
 test('follow waits after bounded last-seen grace and resumes the same directive on replacement', async () => {
   const resumed = [];
   const { context, bot, clock, human } = fixture({ onReappeared: snapshot => resumed.push(snapshot) });
@@ -110,6 +137,28 @@ test('follow waits after bounded last-seen grace and resumes the same directive 
 
   assert.equal(resumed.length, 1);
   assert.equal(context.resumeCommand(), '!followPlayer(".LittleBubby9352", 3)');
+});
+
+test('a restored explicit companion continuation retains player action ownership', () => {
+  const agent = {
+    runtime: { role: 'builder' },
+    companion_context: {
+      snapshot: () => ({ directive: 'follow' }),
+    },
+  };
+
+  assert.equal(roleIntentActionOwner(agent, { behavior: 'follow' }), 'player');
+  assert.equal(roleIntentActionOwner(agent, { behavior: 'guard' }), 'job');
+  agent.companion_context.snapshot = () => ({ directive: 'guard' });
+  assert.equal(roleIntentActionOwner(agent, { behavior: 'guard' }), 'player');
+  agent.companion_context.snapshot = () => ({ directive: null });
+  assert.equal(roleIntentActionOwner(agent, { behavior: 'follow' }), 'job');
+  agent.runtime.role = 'companion';
+  assert.equal(
+    roleIntentActionOwner(agent, { behavior: 'follow' }),
+    'player',
+    'the first startup follow is companion-bound before !followPlayer persists its directive',
+  );
 });
 
 test('guard protection requires attributed loaded hostile and operator Stop clears all embodiment state', () => {
@@ -135,6 +184,19 @@ test('guard protection requires attributed loaded hostile and operator Stop clea
   assert.equal(context.snapshot().attention, null);
 });
 
+test('distant attributed protection remains remembered without admitting an impossible tactical reflex', () => {
+  const { agent, bot, context, human } = fixture();
+  agent.actions = { currentActionLabel: 'action:guardPlayer' };
+  context.observeChat('LittleBubby9352');
+  context.setDirective('guard', '.LittleBubby9352');
+
+  const distantZombie = { type: 'hostile', name: 'zombie', id: 14, position: { x: 32, y: 64, z: 0 } };
+  bot.entities[14] = distantZombie;
+  assert.equal(context.observeProtectedHurt(human, distantZombie).threatEntityId, 14);
+  assert.equal(context.protectionThreat(), distantZombie);
+  assert.equal(getModeSuppressionReason(agent, { name: 'self_defense' }), 'command_autonomy');
+});
+
 test('command autonomy admits a recently damaging ranged threat at tactical distance', () => {
   const { agent, bot } = fixture();
   const skeleton = { type: 'hostile', name: 'skeleton', id: 13, position: { x: 12, y: 64, z: 0 } };
@@ -151,6 +213,12 @@ test('command autonomy admits a recently damaging ranged threat at tactical dist
   bot.entities[13] = skeleton;
   bot.nearestEntity = predicate => Object.values(bot.entities).find(predicate) || null;
   bot.lastDamageTime = Date.now();
+  bot.lastDamageSource = {
+    matchesSelf: true,
+    kind: 'hostile',
+    observedAt: Date.now(),
+    source: { id: 13, name: 'skeleton', username: null },
+  };
 
   assert.equal(getModeSuppressionReason(agent, { name: 'self_defense' }), null);
 

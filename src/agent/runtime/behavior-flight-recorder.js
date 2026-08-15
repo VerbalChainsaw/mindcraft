@@ -38,6 +38,14 @@ const CRITICAL_ACTION_CODES = new Set([
   'verification_failed',
 ]);
 
+// These receipts intentionally do not count as mechanic failures, but losing
+// them would erase the structured evidence that explains why a durable goal
+// is waiting. Keep them distinct from action.failure in the flight record.
+const OBSERVABLE_NON_METHOD_CODES = new Set([
+  'skill_source_access_pending',
+  'skill_source_spawn_pending',
+]);
+
 const FAILURE_EVENT_TYPES = new Set([
   'goal.changed',
   'job.changed',
@@ -45,6 +53,15 @@ const FAILURE_EVENT_TYPES = new Set([
 ]);
 
 const TERMINAL_FAILURE_PHASES = new Set(['blocked', 'failed']);
+const HIGH_VALUE_SUCCESS_ROUTE_ORIGINS = new Set([
+  'explicit-command',
+  'deterministic-nl',
+  'model-selected',
+  'directive-resume',
+  'agenda-director',
+  'goal-director',
+  'job-director',
+]);
 const STALL_EXCLUDED_STATUS = /(?:cancel|complete|failed|held|preemption|player_(?:absent|ambiguous)|waiting)/;
 const MISSING_TOOL_CODE = /(?:missing_tool|tool_missing|no_usable_tool)/;
 
@@ -116,6 +133,35 @@ export function isHighValueActionFailure(result) {
   if (CRITICAL_ACTION_CODES.has(String(result.code || '').toLowerCase())) return true;
   if (!TERMINAL_FAILURE_PHASES.has(String(result.phase || '').toLowerCase())) return false;
   return classifyMethodOutcome(result) === 'method_failure';
+}
+
+export function isHighValueActionReceipt(result) {
+  if (!result || typeof result !== 'object') return false;
+  if (!TERMINAL_FAILURE_PHASES.has(String(result.phase || '').toLowerCase())) return false;
+  return OBSERVABLE_NON_METHOD_CODES.has(String(result.code || '').toLowerCase());
+}
+
+export function isHighValueActionSuccess(result) {
+  if (!result || typeof result !== 'object' || result.phase !== 'succeeded') return false;
+  const request = result.evidence?.request;
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
+  return typeof request.requestId === 'string'
+    && request.requestId.length > 0
+    && typeof request.selectedSkill === 'string'
+    && request.selectedSkill.length > 0
+    && HIGH_VALUE_SUCCESS_ROUTE_ORIGINS.has(String(request.routeOrigin || '').toLowerCase());
+}
+
+function compactSuccessCanonicalState(state) {
+  const trace = state?.action?.behaviorArbiter?.decisionTrace;
+  if (!trace || typeof trace !== 'object' || Array.isArray(trace)) return false;
+  // DecisionTrace owns its own bounded per-tick history. Repeating that full
+  // history inside every successful action record would evict the beginning of
+  // a long companion session after only a handful of ordinary actions. Keep
+  // its counters/diagnostics and make the omitted history explicit.
+  trace.recent = [];
+  trace.compactedFor = 'action.success';
+  return true;
 }
 
 function potentialLogicFlags(trigger, canonicalState) {
@@ -246,8 +292,10 @@ export class BehaviorFlightRecorder {
     }
   }
 
-  buildRecord(kind, trigger) {
+  buildRecord(kind, trigger, { compactSuccessfulAction = false } = {}) {
     const capture = this.captureCanonicalState();
+    const successStateCompacted = compactSuccessfulAction
+      && compactSuccessCanonicalState(capture.state);
     const record = {
       schemaVersion: SCHEMA_VERSION,
       sequence: ++this.sequence,
@@ -257,7 +305,10 @@ export class BehaviorFlightRecorder {
       logicFlags: potentialLogicFlags(trigger, capture.state),
       canonicalState: capture.state,
       recentDialogue: recentDialogue(this.agent),
-      capture: capture.error,
+      capture: capture.error || (successStateCompacted ? {
+        code: 'canonical_action_trace_compacted',
+        detail: 'Per-tick decision history was omitted from this successful-action record; counters and diagnostics remain available.',
+      } : null),
     };
     let line = `${JSON.stringify(record)}\n`;
     let bytes = Buffer.byteLength(line);
@@ -268,9 +319,9 @@ export class BehaviorFlightRecorder {
     return { line, bytes };
   }
 
-  enqueue(kind, trigger) {
+  enqueue(kind, trigger, options = {}) {
     if (this.closed) return false;
-    const entry = this.buildRecord(kind, trigger);
+    const entry = this.buildRecord(kind, trigger, options);
     if (entry.bytes > this.maxRecordBytes) {
       this.recordsDropped += 1;
       this.lastError = `Telemetry record remained over ${this.maxRecordBytes} bytes after compaction.`;
@@ -332,13 +383,17 @@ export class BehaviorFlightRecorder {
   }
 
   recordActionResult(result) {
-    if (!isHighValueActionFailure(result)) return false;
-    return this.enqueue('action.failure', {
+    const receipt = isHighValueActionReceipt(result);
+    const failure = isHighValueActionFailure(result);
+    const success = !failure && isHighValueActionSuccess(result);
+    if (!receipt && !failure && !success) return false;
+    const kind = receipt ? 'action.receipt' : failure ? 'action.failure' : 'action.success';
+    return this.enqueue(kind, {
       actionResult: {
         ...actionResultToTelemetry(result),
         evidence: boundedClone(result?.evidence),
       },
-    });
+    }, success ? { compactSuccessfulAction: true } : undefined);
   }
 
   recordBehaviorEvent(event) {

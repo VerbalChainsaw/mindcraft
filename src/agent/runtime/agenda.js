@@ -2,7 +2,10 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
-import { normalizeWorkstationConstraint } from './goal-contract.js';
+import {
+  normalizeMiningReturnCheckpoint,
+  normalizeWorkstationConstraint,
+} from './goal-contract.js';
 
 // An agenda is an ordered plan the player states once and the bot works through
 // on its own. Both executors are single-slot — goal_director holds one goal and
@@ -25,6 +28,7 @@ const MAX_INVENTORY_REQUIREMENTS = 12;
 const MAX_STORAGE_REQUIREMENTS = 12;
 const MAX_EXPLORATION_OUTPUTS = 12;
 const MAX_INVENTORY_RECONCILIATIONS = 12;
+const MAX_PREEMPTIONS = 24;
 const MAX_NOTE = 160;
 const ACQUIRE_COMPLETIONS = new Set(['inventory', 'main_hand', 'off_hand']);
 const ACQUIRE_QUANTITY_MODES = new Set(['additional', 'minimum']);
@@ -51,13 +55,22 @@ const CONSTRUCTION_FUNCTIONS = new Set([
   'weather_cover',
 ]);
 const DEPENDENCY_POLICIES = new Set(['requires_success', 'after_settlement']);
+const TERMINAL_DISPOSITIONS = new Set(['hold_position']);
 const BINDING_KINDS = new Set(['world_block', 'structure_fixture']);
 const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
+const ACCESS_REPAIR_KINDS = new Set(['existing_access_surface']);
+const CONSTRUCTION_SITE_KINDS = new Set(['remembered_place', 'remembered_farm', 'remembered_structure']);
+const CONSTRUCTION_SITE_RELATIONS = new Set(['beside', 'near', 'around']);
+const CONSTRUCTION_LAYOUT_ARRANGEMENTS = new Set(['opposite_sides']);
+const CONSTRUCTION_LAYOUT_ORIENTATIONS = new Set(['inward']);
 const SCOUT_FINDINGS = new Set(['cave', 'animal']);
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
+  pickup_item: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  consume_item: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: false }),
+  equip_item: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: false }),
   // A model-compiled inventory plan is one aggregate promise, not a bag of
   // independently terminal item goals. This typed barrier performs no physical
   // work itself. AgendaDirector reads fresh inventory and, when necessary,
@@ -80,6 +93,10 @@ export const AGENDA_KINDS = Object.freeze({
   // typed barrier. AgendaDirector binds it to the exact accepted Builder order
   // id before any dependent step may run.
   construction: Object.freeze({ executor: 'job', needsTarget: false, needsQuantity: false }),
+  // Repairing an already-loaded doorway approach is not permission to select a
+  // new construction site. Persist the exact observed gap and let the ordinary
+  // Builder place it before native Pathfinder verifies the route.
+  repair_access: Object.freeze({ executor: 'job', needsTarget: true, needsQuantity: true }),
   // 'direct' runs a single bounded command the dispatcher builds in code from a
   // validated player name. The command text is never stored or replayed.
   goto: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsRecipient: true }),
@@ -95,6 +112,14 @@ export const AGENDA_KINDS = Object.freeze({
   smelt: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
   farm_visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   maintain_farm: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
+  // Death recovery is a bounded, restart-safe direct mechanic. Persist the
+  // typed intent rather than the command string so it can remain ordered ahead
+  // of a requester return and terminal wait.
+  recover_death: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
+  // Observation is durable work too: retain the exact selected container so a
+  // restart cannot silently inspect a different nearby chest and report it as
+  // the player's requested one.
+  inspect_container: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   deposit: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
   // A storage cleanup is one atomic, restart-safe retained-inventory contract.
   // The model may choose the concrete carried items, but the persisted plan
@@ -105,6 +130,12 @@ export const AGENDA_KINDS = Object.freeze({
   // only that new output in one exact container.
   prepare_food: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: true }),
   deposit_family: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true }),
+  // Fishing breakfast is a durable composition, not one monolithic skill:
+  // acquire the rod through GoalDirector, catch only cookable fish, transform
+  // only the fresh catch at one bound furnace, then deliver only that output.
+  catch_fish: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: true }),
+  cook_fish: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: true }),
+  deliver_family: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true, needsRecipient: true }),
   // One owned livestock action keeps attraction, gate state, breeding, and
   // final enclosure verification inside the same cancellation lease.
   settle_livestock: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true, needsPoint: true, needsPen: true }),
@@ -112,6 +143,7 @@ export const AGENDA_KINDS = Object.freeze({
   // Coordinates are validated numbers, never text, so a patrol step cannot
   // smuggle anything executable through the store.
   visit: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsPoint: true }),
+  verify_access: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsPoint: true }),
 });
 
 const TERMINAL_STATES = new Set(['complete', 'failed', 'cancelled', 'skipped']);
@@ -160,6 +192,39 @@ function finiteInteger(value, fallback, minimum, maximum) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(maximum, Math.max(minimum, Math.floor(number)));
+}
+
+function normalizeAcquisitionCheckpoint(raw, {
+  kind,
+  completion,
+  quantity,
+  quantityMode,
+} = {}) {
+  if (raw == null) return null;
+  if (!['acquire', 'pickup_item'].includes(kind) || completion !== 'inventory') {
+    throw new TypeError('An acquisition checkpoint is only valid for inventory acquisition.');
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('An acquisition checkpoint must be an object.');
+  }
+  const baselineInventory = finiteInteger(raw.baselineInventory, NaN, 0, 100_000);
+  const targetInventory = finiteInteger(raw.targetInventory, NaN, 0, 100_000);
+  const expectedTarget = quantityMode === 'minimum'
+    ? quantity
+    : baselineInventory + quantity;
+  if (
+    !Number.isFinite(baselineInventory)
+    || !Number.isFinite(targetInventory)
+    || expectedTarget > 100_000
+    || targetInventory !== expectedTarget
+  ) {
+    throw new TypeError('An acquisition checkpoint must preserve the entry quantity target.');
+  }
+  return Object.freeze({
+    baselineInventory,
+    targetInventory,
+    ...normalizeMiningReturnCheckpoint(raw),
+  });
 }
 
 function normalizeBindingRequest(raw) {
@@ -230,6 +295,58 @@ function normalizeBindingConstraint(raw) {
     material,
     facing,
     sourceEntryId,
+  });
+}
+
+function normalizeConstructionSiteConstraint(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Construction site constraint must be an object.');
+  }
+  const kind = canonical(raw.kind);
+  const name = canonical(raw.name);
+  const relation = canonical(raw.relation);
+  const dimension = canonical(raw.dimension);
+  const sourceId = boundedText(raw.sourceId, 96);
+  const position = {
+    x: finiteInteger(raw.position?.x, NaN, -30e6, 30e6),
+    y: finiteInteger(raw.position?.y, NaN, -256, 512),
+    z: finiteInteger(raw.position?.z, NaN, -30e6, 30e6),
+  };
+  if (
+    !CONSTRUCTION_SITE_KINDS.has(kind)
+    || !CONSTRUCTION_SITE_RELATIONS.has(relation)
+    || !CANONICAL_NAME.test(name)
+    || !CANONICAL_NAME.test(dimension)
+    || !SAFE_ENTRY_ID.test(sourceId)
+    || Object.values(position).some(value => !Number.isFinite(value))
+  ) throw new TypeError('Construction site constraint identity is invalid.');
+  return Object.freeze({
+    kind,
+    name,
+    relation,
+    position: Object.freeze(position),
+    dimension,
+    radius: finiteInteger(raw.radius, relation === 'near' ? 12 : 8, 4, 16),
+    sourceId,
+  });
+}
+
+function normalizeConstructionLayoutConstraint(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Construction layout constraint must be an object.');
+  }
+  const arrangement = canonical(raw.arrangement);
+  const orientation = canonical(raw.orientation);
+  if (
+    !CONSTRUCTION_LAYOUT_ARRANGEMENTS.has(arrangement)
+    || !CONSTRUCTION_LAYOUT_ORIENTATIONS.has(orientation)
+  ) throw new TypeError('Construction layout constraint is unsupported.');
+  return Object.freeze({
+    arrangement,
+    orientation,
+    clearance: finiteInteger(raw.clearance, 0, 0, 4),
   });
 }
 
@@ -307,9 +424,82 @@ function normalizePenConstraint(raw) {
   });
 }
 
+function normalizeAccessRepairConstraint(raw) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda access repair constraint must be an object.');
+  }
+  const point = (value, label) => {
+    const normalized = {
+      x: finiteInteger(value?.x, NaN, -30e6, 30e6),
+      y: finiteInteger(value?.y, NaN, -256, 512),
+      z: finiteInteger(value?.z, NaN, -30e6, 30e6),
+    };
+    if (Object.values(normalized).some(axis => !Number.isFinite(axis))) {
+      throw new TypeError(`Agenda access repair ${label} needs finite coordinates.`);
+    }
+    return Object.freeze(normalized);
+  };
+  const kind = canonical(raw.kind);
+  const facing = canonical(raw.facing);
+  const dimension = canonical(raw.dimension);
+  const door = point(raw.door, 'door');
+  const interiorStance = point(raw.interiorStance, 'interior stance');
+  const exteriorStance = point(raw.exteriorStance, 'exterior stance');
+  if (
+    !ACCESS_REPAIR_KINDS.has(kind)
+    || !HORIZONTAL_FACINGS.has(facing)
+    || !CANONICAL_NAME.test(dimension)
+    || !Array.isArray(raw.cells)
+    || raw.cells.length < 1
+    || raw.cells.length > 8
+  ) throw new TypeError('Agenda access repair identity is invalid.');
+  const direction = {
+    north: { x: 0, z: -1 },
+    south: { x: 0, z: 1 },
+    east: { x: 1, z: 0 },
+    west: { x: -1, z: 0 },
+  }[facing];
+  const cells = Object.freeze(raw.cells.map((value, index) => {
+    const cell = point(value, `cell ${index + 1}`);
+    const distance = index + 1;
+    if (
+      cell.x !== door.x + (direction.x * distance)
+      || cell.y !== door.y - 1
+      || cell.z !== door.z + (direction.z * distance)
+    ) throw new TypeError('Agenda access repair cells must be one contiguous outward surface chain.');
+    return cell;
+  }));
+  const inwardX = -direction.x;
+  const inwardZ = -direction.z;
+  const lateralX = -direction.z;
+  const lateralZ = direction.x;
+  const interiorDeltaX = interiorStance.x - door.x;
+  const interiorDeltaZ = interiorStance.z - door.z;
+  const interiorForward = (interiorDeltaX * inwardX) + (interiorDeltaZ * inwardZ);
+  const interiorLateral = (interiorDeltaX * lateralX) + (interiorDeltaZ * lateralZ);
+  if (
+    interiorForward !== 1
+    || Math.abs(interiorLateral) > 1
+    || interiorStance.y !== door.y
+    || exteriorStance.x !== door.x + (direction.x * (cells.length + 1))
+    || ![door.y - 1, door.y].includes(exteriorStance.y)
+    || exteriorStance.z !== door.z + (direction.z * (cells.length + 1))
+  ) throw new TypeError('Agenda access repair endpoint stances do not match the selected doorway.');
+  return Object.freeze({
+    kind,
+    door,
+    facing,
+    dimension,
+    cells,
+    interiorStance,
+    exteriorStance,
+  });
+}
+
 function normalizeBaselineInventory(raw) {
   if (!Array.isArray(raw)) {
-    throw new TypeError('An agenda family deposit needs a typed baseline inventory.');
+    throw new TypeError('An agenda family operation needs a typed baseline inventory.');
   }
   const counts = new Map();
   for (const item of raw.slice(0, 36)) {
@@ -434,15 +624,20 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   }
   const state = ENTRY_STATES.has(String(raw.state)) ? String(raw.state) : 'pending';
   const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : now();
+  const quantity = spec.needsQuantity ? finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) : 0;
   const completion = kind === 'deliver'
     ? 'delivery'
+    : kind === 'pickup_item'
+      ? 'inventory'
     : kind === 'acquire'
       ? canonical(raw.completion || 'inventory')
       : '';
   if (kind === 'acquire' && !ACQUIRE_COMPLETIONS.has(completion)) {
     throw new TypeError('Agenda acquire completion must be inventory, main_hand, or off_hand.');
   }
-  const quantityMode = kind === 'acquire'
+  const quantityMode = kind === 'pickup_item'
+    ? 'additional'
+    : kind === 'acquire'
     ? canonical(raw.quantityMode || 'additional')
     : '';
   if (kind === 'acquire' && !ACQUIRE_QUANTITY_MODES.has(quantityMode)) {
@@ -451,27 +646,39 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (kind === 'acquire' && quantityMode === 'minimum' && completion !== 'inventory') {
     throw new TypeError('Minimum quantity mode is only valid for inventory acquisition.');
   }
-  if (kind === 'acquire' && completion !== 'inventory' && finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) !== 1) {
+  if (kind === 'acquire' && completion !== 'inventory' && quantity !== 1) {
     throw new TypeError('An agenda hand-equipment step must request exactly one item.');
   }
-  const rawWorkstation = ['smelt', 'prepare_food'].includes(kind)
+  const acquisitionCheckpoint = normalizeAcquisitionCheckpoint(raw.acquisitionCheckpoint, {
+    kind,
+    completion,
+    quantity,
+    quantityMode,
+  });
+  const rawWorkstation = ['craft', 'smelt', 'prepare_food', 'cook_fish'].includes(kind)
     ? raw.workstationConstraint
     : null;
   const normalizedWorkstation = normalizeWorkstationConstraint(rawWorkstation);
   if (rawWorkstation != null && !normalizedWorkstation) {
     throw new TypeError('An agenda workstation constraint is invalid.');
   }
-  if (kind === 'prepare_food' && !normalizedWorkstation) {
+  if (['prepare_food', 'cook_fish'].includes(kind) && !normalizedWorkstation) {
     throw new TypeError('A food preparation step needs one exact furnace.');
   }
-  const containerConstraint = ['deposit', 'deposit_family', 'storage_plan', 'explore'].includes(kind)
+  const containerConstraint = ['inspect_container', 'deposit', 'deposit_family', 'storage_plan', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
   const penConstraint = kind === 'settle_livestock'
     ? normalizePenConstraint(raw.penConstraint)
     : null;
+  const accessRepairConstraint = kind === 'repair_access'
+    ? normalizeAccessRepairConstraint(raw.accessRepairConstraint)
+    : null;
   if (kind === 'settle_livestock' && !penConstraint) {
     throw new TypeError('A livestock settlement step needs one exact pen.');
+  }
+  if (kind === 'repair_access' && !accessRepairConstraint) {
+    throw new TypeError('An access repair step needs one exact existing doorway gap.');
   }
   if (kind === 'explore' && !containerConstraint && raw.retainResults !== true) {
     throw new TypeError('An exploration step needs one exact home container.');
@@ -491,8 +698,14 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (kind === 'storage_plan' && !containerConstraint) {
     throw new TypeError('A storage plan needs one exact chest or barrel.');
   }
-  const baselineInventory = kind === 'deposit_family'
+  if (kind === 'inspect_container' && !containerConstraint) {
+    throw new TypeError('A container inspection needs one exact chest or barrel.');
+  }
+  const baselineInventory = ['deposit_family', 'catch_fish', 'cook_fish', 'deliver_family'].includes(kind)
     ? normalizeBaselineInventory(raw.baselineInventory)
+    : null;
+  const baselineOutputInventory = kind === 'cook_fish'
+    ? normalizeBaselineInventory(raw.baselineOutputInventory)
     : null;
   const sourceEntryId = boundedText(rawWorkstation?.sourceEntryId, 96);
   if (sourceEntryId && !SAFE_ENTRY_ID.test(sourceEntryId)) {
@@ -533,6 +746,15 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       .map(canonical)
       .filter(value => CONSTRUCTION_FUNCTIONS.has(value)))]
     : [];
+  const constructionSiteConstraint = kind === 'construction'
+    ? normalizeConstructionSiteConstraint(raw.constructionIntent?.siteConstraint)
+    : null;
+  const constructionLayoutConstraint = kind === 'construction'
+    ? normalizeConstructionLayoutConstraint(raw.constructionIntent?.layoutConstraint)
+    : null;
+  if (constructionLayoutConstraint && !constructionSiteConstraint) {
+    throw new TypeError('A construction layout constraint needs one grounded landmark.');
+  }
   const assignmentState = kind === 'construction'
     ? (CONSTRUCTION_ASSIGNMENT_STATES.has(canonical(raw.assignmentState))
       ? canonical(raw.assignmentState)
@@ -566,18 +788,26 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     reconciliationTarget
     && !inventoryRequirements.some(requirement => requirement.target === reconciliationTarget)
   ) throw new TypeError('An inventory checklist correction target must belong to its requirements.');
+  const terminalDisposition = raw.terminalDisposition == null
+    ? ''
+    : canonical(raw.terminalDisposition);
+  if (terminalDisposition && !TERMINAL_DISPOSITIONS.has(terminalDisposition)) {
+    throw new TypeError('Agenda terminal disposition is unsupported.');
+  }
 
   return Object.freeze({
     id: identity,
     kind,
     executor: spec.executor,
     target,
-    quantity: spec.needsQuantity ? finiteInteger(raw.quantity, 1, 1, MAX_QUANTITY) : 0,
+    quantity,
     ...(kind === 'settle_livestock' ? {
       breedingPairs: finiteInteger(raw.breedingPairs, 1, 1, 4),
     } : {}),
     ...(kind === 'acquire' ? { quantityMode } : {}),
+    ...(acquisitionCheckpoint ? { acquisitionCheckpoint } : {}),
     ...(baselineInventory ? { baselineInventory } : {}),
+    ...(baselineOutputInventory ? { baselineOutputInventory } : {}),
     ...(kind === 'prepare_food'
       ? { baselineFoodPoints: finiteInteger(raw.baselineFoodPoints, 0, 0, MAX_QUANTITY) }
       : {}),
@@ -601,12 +831,17 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
       : null,
     ...(containerConstraint ? { containerConstraint } : {}),
     ...(penConstraint ? { penConstraint } : {}),
+    ...(accessRepairConstraint ? { accessRepairConstraint } : {}),
     dependsOnEntryId,
     dependencyPolicy,
     bindingRequest,
     bindingConstraint,
     constructionIntent: kind === 'construction'
-      ? Object.freeze({ requiredFunctions: Object.freeze(requiredFunctions) })
+      ? Object.freeze({
+          requiredFunctions: Object.freeze(requiredFunctions),
+          ...(constructionSiteConstraint ? { siteConstraint: constructionSiteConstraint } : {}),
+          ...(constructionLayoutConstraint ? { layoutConstraint: constructionLayoutConstraint } : {}),
+        })
       : null,
     assignmentState,
     ...(inventoryRequirements ? {
@@ -621,6 +856,10 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     } : {}),
     ...(storageRequirements ? { storageRequirements } : {}),
     note: boundedText(raw.note),
+    ...(terminalDisposition ? {
+      terminalDisposition,
+      terminalDispositionApplied: raw.terminalDispositionApplied === true,
+    } : {}),
     state,
     // Correlates a durable agenda entry with the exact GoalDirector or
     // JobDirector outcome it launched. Older stores do not contain this field;
@@ -631,6 +870,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
     attempts: finiteInteger(raw.attempts, 0, 0, 16),
+    preemptions: finiteInteger(raw.preemptions, 0, 0, MAX_PREEMPTIONS),
     evidence: Object.freeze({
       code: boundedText(raw.evidence?.code, 64),
       detail: boundedText(raw.evidence?.detail, 240),
@@ -652,6 +892,9 @@ export function describeAgendaEntry(entry) {
         ? `ensure at least ${entry.quantity} ${readable}`
         : `get ${entry.quantity} additional ${readable}`
       : `get and equip ${readable} in the ${entry.completion === 'main_hand' ? 'main hand' : 'offhand'}`;
+    case 'pickup_item': return `pick up ${entry.quantity} nearby ${readable}`;
+    case 'consume_item': return `consume the carried ${readable}`;
+    case 'equip_item': return `equip the carried ${readable}`;
     case 'inventory_checklist': return `verify ${entry.inventoryRequirements.length} final inventory floor${entry.inventoryRequirements.length === 1 ? '' : 's'}`;
     case 'deliver': return `deliver ${entry.quantity} ${readable} to ${entry.recipient}`;
     case 'mine': return `mine ${entry.quantity} ${readable}`;
@@ -666,18 +909,25 @@ export function describeAgendaEntry(entry) {
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';
     case 'maintain_farm': return 'harvest and replant the remembered farm';
+    case 'recover_death': return 'recover the recorded death items';
+    case 'inspect_container': return `inspect the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`;
     case 'deposit': return entry.containerConstraint
       ? `put up to ${entry.quantity} ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`
       : `put up to ${entry.quantity} ${readable} in the nearest existing chest`;
     case 'storage_plan': return `store ${entry.storageRequirements.length} authorized inventory group${entry.storageRequirements.length === 1 ? '' : 's'} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`;
     case 'prepare_food': return `prepare ${entry.quantity} additional safe food points at the selected furnace`;
     case 'deposit_family': return `put the newly prepared ${readable} in the selected ${entry.containerConstraint.name.replace(/_/g, ' ')}`;
+    case 'catch_fish': return `catch ${entry.quantity} new cookable fish`;
+    case 'cook_fish': return `cook ${entry.quantity} newly caught fish at the selected furnace`;
+    case 'deliver_family': return `deliver ${entry.quantity} newly prepared ${readable.replace(/ fish$/, '') || readable} fish to ${entry.recipient}`;
     case 'shelter': return 'build a shelter';
     case 'construction': return 'build the requested structure';
+    case 'repair_access': return `repair the selected doorway approach with ${readable}`;
     case 'sleep': return 'go inside and sleep';
     case 'goto': return `go to ${entry.recipient}`;
     case 'follow_until': return `follow ${entry.recipient} until both are near ${readable}`;
     case 'visit': return `patrol to ${entry.x}, ${entry.y}, ${entry.z}`;
+    case 'verify_access': return `verify the repaired doorway route at ${entry.x}, ${entry.y}, ${entry.z}`;
     default: return entry.kind;
   }
 }

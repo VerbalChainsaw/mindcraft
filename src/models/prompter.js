@@ -13,13 +13,20 @@ import { fileURLToPath } from 'url';
 import { createModel, resolveConfiguredModel } from './_model_map.js';
 import { createRoutedModel, FallbackRouter } from './fallback-router.js';
 import { buildPromptMemory } from '../agent/runtime/memory-recall.js';
+import { getFullState } from '../agent/library/full_state.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ACTION_REQUEST_PATTERN = /\b(?:attack|break|brew|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
+const UNSUPPORTED_CAPABILITY_PATTERN = /^\[UNSUPPORTED\]\s+([^\r\n]{1,220})$/i;
 const GAMEPLAY_OPERATING_RULES = [
     'GAMEPLAY OPERATING RULES:',
     'Treat SITUATIONAL_AWARENESS, INVENTORY, command results, and the connected Minecraft registry as authoritative.',
+    'Behave like a competent, considerate Minecraft player: prefer the nearby safe reversible route, preserve useful terrain and family builds, finish what you harvest, clean temporary access blocks, avoid needless holes and scaffolds, and do not waste tools or materials.',
+    'Preserve every named player, item, quantity, custody relation, destination, sequence, and terminal instruction such as "then wait". Never replace an unspecified recipient with the requester, yourself, or another convenient player.',
+    'If identity, custody, destination, destructive world change, safety, or major material/time cost has two materially different plausible meanings, take no action and ask exactly one short concrete question. Emit it as `[CLARIFY] Your question?` with no command. Do not ask about harmless details that have one safe reversible default.',
+    'If the requested action is outside your actual capabilities or permissions, take no substitute action. Emit exactly `[UNSUPPORTED] concise missing capability or permission.` with no command.',
+    'A physical task is complete only when current Minecraft state verifies its whole postcondition, including cleanup, exact custody/destination, and any final wait or return.',
     'Never claim that a carried item is absent or "did not register" when INVENTORY lists it. A current snapshot cannot prove whether an item is newly received; report only the exact carried and nearby-drop evidence.',
     'For an unfamiliar item or block, use !inspectMinecraft with its name; use !getCraftingPlan when a recipe chain is unclear.',
     'For an acquisition or delivery outcome, prefer one typed !requestItemGoal; its causal planner derives and verifies prerequisites one physical step at a time.',
@@ -28,6 +35,192 @@ const GAMEPLAY_OPERATING_RULES = [
     'Use canonical Minecraft names from inspection. Never invent an item, tool requirement, recipe, location, action result, or completed step.',
 ].join('\n');
 const MAX_GENERATION_LOG_CHARS = 2_000;
+const RECENT_ACTION_GROUNDING_MS = 120_000;
+const ACTION_DENIAL_PATTERN = new RegExp([
+    String.raw`\b(?:i|we|it|the bot)?\s*(?:have|has|had)?\s*not\s+(?:begun|started|collected|gathered|cut|chopped|harvested|finished|completed)\b`,
+    String.raw`\b(?:i|we|it|the bot)?\s*(?:haven't|hasn't|hadn't)\s+(?:begun|started|collected|gathered|cut|chopped|harvested|finished|completed)\b`,
+    String.raw`\bno\s+(?:[a-z0-9_-]+\s+){0,3}(?:(?:have|has|had|were|was)\s+)?(?:been\s+)?(?:collected|gathered|cut|chopped|harvested|completed|changed)\b`,
+    String.raw`\b(?:nothing|no work)\s+(?:(?:has|had)\s+)?(?:been\s+)?(?:done|started|completed)\b`,
+].join('|'), 'i');
+const GROUNDING_STOP_WORDS = new Set([
+    'about', 'action', 'after', 'again', 'been', 'before', 'blocks', 'bounded', 'complete',
+    'completed', 'could', 'did', 'does', 'from', 'have', 'into', 'just', 'latest', 'nearby',
+    'output', 'result', 'skill', 'that', 'their', 'there', 'these', 'they', 'this', 'those',
+    'verified', 'were', 'what', 'when', 'where', 'which', 'with', 'would', 'your',
+]);
+const CATEGORICAL_SAFETY_PATTERNS = [
+    /\b(?:we(?:'re| are)|you(?:'re| are)|it(?:'s| is)|here is|this (?:spot|area|place) is)\s+(?:completely\s+|perfectly\s+|currently\s+|still\s+|quite\s+)?safe\b/gi,
+    /\bsafe to (?:stand|stay|wait|pause|remain)\b/gi,
+    /\bcan (?:stand|stay|wait|pause|remain)\b[^.!?\n]{0,32}\bsafely\b/gi,
+];
+
+function escapeRegExp(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function assertsCategoricalSafety(text) {
+    for (const pattern of CATEGORICAL_SAFETY_PATTERNS) {
+        pattern.lastIndex = 0;
+        for (const match of text.matchAll(pattern)) {
+            const prefix = text.slice(Math.max(0, match.index - 56), match.index);
+            const suffix = text.slice(match.index + match[0].length, match.index + match[0].length + 12);
+            if (/^\s+to say\b/i.test(suffix)) continue;
+            if (/(?:\bnot\s+|\b(?:can't|cannot|won't|wouldn't|don't|do not)\s+(?:say|promise|guarantee|confirm)[^.!?\n]{0,20})$/i.test(prefix)) {
+                continue;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+export function conversationGroundingViolation(generation, perception = {}, messages = []) {
+    const text = String(generation || '').trim();
+    if (!text) return null;
+
+    const groundingState = perception?.perception
+        ? perception
+        : { perception };
+    const recentAction = recentActionGrounding(groundingState);
+    const latestPlayerMessage = latestUserContent(messages);
+    if (
+        recentAction?.result?.phase === 'succeeded'
+        && latestPlayerMessage
+        && groundingTermsOverlap(latestPlayerMessage, recentAction.searchText)
+        && ACTION_DENIAL_PATTERN.test(text)
+    ) {
+        const result = recentAction.result;
+        return {
+            code: 'contradicts_recent_action_result',
+            correction: `\nCRITICAL GROUNDING RETRY: The latest relevant structured action receipt is authoritative: phase=${result.phase}; code=${result.code}; detail=${result.detail || result.label || 'no additional detail'}. Do not say this work has not begun, that no progress occurred, or that nothing changed. Answer the player's question from the receipt and current inventory; do not invent unverified cleanup or delivery.`,
+            fallback: groundedActionResultFallback(result),
+        };
+    }
+
+    const activePerception = groundingState.perception || {};
+    const hostiles = Array.isArray(activePerception?.hostiles) ? activePerception.hostiles : [];
+    if (hostiles.length === 0) return null;
+
+    const hostileNames = hostiles
+        .map(hostile => escapeRegExp(hostile?.name))
+        .filter(Boolean);
+    const hostileSubject = ['neither', 'none', 'they', 'them', 'it', 'hostiles?', 'mobs?', ...hostileNames]
+        .join('|');
+    const routeClaim = new RegExp(
+        `\\b(?:${hostileSubject})\\b[^.!?\\n]{0,40}\\b(?:has|have|had|finds?|can(?:not|'t)?|could(?:n't| not)?|will|won't|is able to|is unable to)\\b[^.!?\\n]{0,40}\\b(?:paths?|routes?|ways?|reach(?:es|ed|ing)?|get(?:s|ting)? to)\\b`,
+        'i',
+    );
+    const expressesRouteUncertainty = /\b(?:unclear|unknown|not sure|can't tell|cannot tell|don't know|do not know|no (?:route|path|reachability) proof|can't confirm|cannot confirm)\b/i.test(text);
+    if (routeClaim.test(text) && !expressesRouteUncertainty) {
+        return {
+            code: 'unsupported_hostile_route_claim',
+            correction: '\nCRITICAL GROUNDING RETRY: SITUATIONAL_AWARENESS reports hostile line of sight, distance, direction, and motion; it does not prove whether a hostile has a navigable route. Occluded means out of line of sight only. Do not claim that a hostile can or cannot reach anyone, or that it has or lacks a path. State the observed facts and leave reachability unknown.',
+        };
+    }
+
+    const primary = activePerception?.primaryThreat || hostiles[0] || null;
+    const priority = String(primary?.threatPriority || '').toLowerCase();
+    const motion = String(primary?.motion || '').toLowerCase();
+    const distance = Number(primary?.distance);
+    const materialThreat = (
+        priority === 'high'
+        || priority === 'critical'
+        || (motion === 'approaching' && Number.isFinite(distance) && distance <= 16)
+    );
+    if (!materialThreat || !assertsCategoricalSafety(text)) return null;
+
+    const evidence = [
+        primary?.name || 'hostile',
+        Number.isFinite(distance) ? `${distance} blocks ${primary?.direction || 'away'}` : null,
+        motion || null,
+        priority ? `threat=${priority}` : null,
+        primary?.visible === false ? 'occluded' : primary?.visible === true ? 'visible' : 'visibility unknown',
+    ].filter(Boolean).join(', ');
+    return {
+        code: 'unsupported_hostile_safety_claim',
+        correction: `\nCRITICAL GROUNDING RETRY: Do not promise or categorically declare safety while authoritative perception reports ${evidence}. Report the exact observed threat and uncertainty. Occlusion alone is not route or safety proof.`,
+    };
+}
+
+function latestUserContent(messages = []) {
+    const latest = Array.isArray(messages)
+        ? messages.findLast(message => message?.role === 'user')
+        : null;
+    return String(latest?.content || '').replace(/^[^:]{1,64}:\s*/, '').trim();
+}
+
+function groundingTerms(value) {
+    return new Set(String(value || '')
+        .toLowerCase()
+        .replace(/_/g, ' ')
+        .match(/[a-z0-9-]{4,}/g)
+        ?.filter(term => !GROUNDING_STOP_WORDS.has(term)) || []);
+}
+
+function groundingTermsOverlap(playerText, resultText) {
+    const playerTerms = groundingTerms(playerText);
+    const resultTerms = groundingTerms(resultText);
+    return [...playerTerms].some(term => resultTerms.has(term));
+}
+
+function recentActionGrounding(state = {}) {
+    const result = state?.action?.lastResult;
+    if (!result || typeof result !== 'object') return null;
+    const sampledAt = Number(state?._meta?.sampledAt);
+    const finishedAt = Number(result.finishedAt);
+    if (!Number.isFinite(sampledAt) || !Number.isFinite(finishedAt)) return null;
+    const ageMs = sampledAt - finishedAt;
+    if (ageMs < 0 || ageMs > RECENT_ACTION_GROUNDING_MS) return null;
+    const target = result.target && typeof result.target === 'object'
+        ? Object.values(result.target).filter(value => typeof value === 'string').join(' ')
+        : '';
+    return {
+        result,
+        ageMs,
+        searchText: [result.code, result.label, result.detail, target].filter(Boolean).join(' '),
+    };
+}
+
+export function recentActionGroundingPrompt(state = {}) {
+    const recent = recentActionGrounding(state);
+    if (!recent) return '';
+    const { result, ageMs } = recent;
+    return [
+        'LATEST STRUCTURED ACTION RECEIPT (authoritative evidence about the completed attempt; current snapshots remain authoritative for current state):',
+        `- Age: ${ageMs} ms`,
+        `- Phase/code: ${result.phase}/${result.code || 'unknown'}`,
+        `- Action: ${result.label || 'unknown'}`,
+        result.target?.name ? `- Target: ${result.target.name}` : '',
+        `- Verified detail: ${result.detail || 'no additional detail'}`,
+        '- Do not infer that idle now means this action never started. Do not extend this receipt into unverified delivery, cleanup, or continuing-state claims.',
+    ].filter(Boolean).join('\n');
+}
+
+export function groundedActionResultFallback(result = {}) {
+    const detail = String(result?.detail || result?.label || 'The action completed.')
+        .replace(/^Action output:\s*/i, '')
+        .trim();
+    return `The latest verified result is: ${detail}`;
+}
+
+export function groundedThreatFallback(perception = {}) {
+    const hostiles = Array.isArray(perception?.hostiles) ? perception.hostiles : [];
+    const primary = perception?.primaryThreat || hostiles[0] || null;
+    if (!primary) {
+        return "I don't have enough current threat evidence to promise this spot is safe.";
+    }
+    const distance = Number(primary.distance);
+    const observed = [
+        primary.threatPriority && primary.threatPriority !== 'none'
+            ? `${primary.threatPriority}-threat`
+            : null,
+        primary.name || 'hostile',
+        Number.isFinite(distance) ? `about ${distance} blocks ${primary.direction || 'away'}` : null,
+        primary.motion && primary.motion !== 'unknown' ? primary.motion : null,
+        primary.visible === false ? 'occluded' : primary.visible === true ? 'visible' : 'visibility unknown',
+    ].filter(Boolean).join(', ');
+    return `I can confirm ${observed}. Occlusion only proves line of sight; I have no route proof, so I can't promise this spot is safe.`;
+}
 
 function boundedGenerationLog(value) {
     const text = String(value ?? '');
@@ -52,6 +245,11 @@ export function latestMessageRequestsAction(messages) {
     if (!latest?.content) return false;
     const content = latest.content.replace(/^[^:]{1,64}:\s*/, '').trim();
     if (/^(?:how|what|where|when|why)\b/i.test(content)) return false;
+    // Subject-led appearance statements use "look" as a linking verb, not an
+    // instruction to aim the bot's camera. Treating praise such as "You look
+    // awesome" as an action forced command-only retries and a gameplay-error
+    // fallback instead of an ordinary companion response.
+    if (/^(?:you|it|that|this)\s+look(?:s|ed)?\b/i.test(content)) return false;
     const laterTurns = messages.slice(latestUserIndex + 1);
     const commandIndex = laterTurns.findIndex(message =>
         message.role === 'assistant' && containsCommand(message.content)
@@ -65,6 +263,24 @@ export function latestMessageRequestsAction(messages) {
         if (hasActionOutcome) return false;
     }
     return ACTION_REQUEST_PATTERN.test(content);
+}
+
+export function clarificationQuestionFromGeneration(generation) {
+    const text = String(generation || '').trim();
+    if (containsCommand(text)) return null;
+    const match = /^\[CLARIFY\]\s+([^\r\n]{1,200})$/i.exec(text);
+    if (!match) return null;
+    const question = match[1].trim();
+    if (!question.endsWith('?') || (question.match(/\?/g) || []).length !== 1) return null;
+    return question;
+}
+
+export function unsupportedCapabilityFromGeneration(generation) {
+    const text = String(generation || '').trim();
+    if (containsCommand(text)) return null;
+    const match = UNSUPPORTED_CAPABILITY_PATTERN.exec(text);
+    if (!match) return null;
+    return match[1].trim();
 }
 
 export class Prompter {
@@ -305,6 +521,13 @@ export class Prompter {
     }
 
     cancelPendingModelGeneration() {
+        // Deterministic player work (Stop, Agenda, direct directives) does not
+        // start another promptConvo call, so provider cancellation alone would
+        // leave the old turn's generation epoch valid. If a provider settles
+        // late—or retries after cancellation—that stale turn could still issue
+        // a physical command behind newer player authority.
+        const previous = Number(this.most_recent_msg_time) || 0;
+        this.most_recent_msg_time = Math.max(Date.now(), previous + 1);
         let cancelled = 0;
         for (const model of this._allModelLeaves()) {
             cancelled += Number(model.cancelPending?.() || 0);
@@ -439,6 +662,7 @@ export class Prompter {
         const turnStartedAt = current_msg_time;
         const requiresActionCommand = latestMessageRequestsAction(messages);
         let actionCorrection = '';
+        let groundingFallback = '';
 
         const maxTurns = this.agent.runtime?.limits?.maxPromptTurns ?? 3;
         for (let i = 0; i < maxTurns; i++) { // retry only within this profile's budget
@@ -450,6 +674,9 @@ export class Prompter {
             const promptBuildStartedAt = Date.now();
             let prompt = this.profile.conversing;
             prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
+            const groundingState = getFullState(this.agent);
+            const actionGrounding = recentActionGroundingPrompt(groundingState);
+            if (actionGrounding) prompt += `\n${actionGrounding}`;
             prompt += actionCorrection;
             const promptBuiltAt = Date.now();
             let generation;
@@ -507,18 +734,49 @@ export class Prompter {
                 generation = afterThink;
             }
 
-            if (requiresActionCommand && !containsCommand(generation)) {
-                console.warn('LLM described or answered an action request without a command. Trying again...');
-                actionCorrection = '\nCRITICAL RETRY: The latest player message requests a physical gameplay action. Your previous attempt did not execute anything. Respond with a valid !command, or briefly state the exact missing capability. Do not promise, narrate, roleplay, or claim the action happened.';
+            const currentGroundingState = getFullState(this.agent);
+            const perception = currentGroundingState?.perception;
+            const groundingViolation = conversationGroundingViolation(
+                generation,
+                currentGroundingState,
+                messages,
+            );
+            if (groundingViolation) {
+                console.warn(`LLM response violated ${groundingViolation.code}. Trying again...`);
+                actionCorrection = groundingViolation.correction;
+                groundingFallback = groundingViolation.fallback || groundedThreatFallback(perception);
                 continue;
             }
 
-            return generation;
+            const clarificationQuestion = clarificationQuestionFromGeneration(generation);
+            const unsupportedCapability = unsupportedCapabilityFromGeneration(generation);
+            if (requiresActionCommand && unsupportedCapability) {
+                this.performance.conversation = {
+                    ...this.performance.conversation,
+                    outcome: 'unsupported',
+                };
+                return unsupportedCapability;
+            }
+            if (requiresActionCommand && !containsCommand(generation)) {
+                if (clarificationQuestion) {
+                    this.performance.conversation = {
+                        ...this.performance.conversation,
+                        outcome: 'clarification',
+                    };
+                    return clarificationQuestion;
+                }
+                console.warn('LLM described or answered an action request without a command. Trying again...');
+                actionCorrection = '\nCRITICAL RETRY: The latest player message requests an action. Respond with a valid !command only when that command fulfills the request. If the request is outside your capabilities or permissions, respond exactly `[UNSUPPORTED] concise missing capability or permission.` with no command. Do not choose unrelated substitute work, promise, narrate, roleplay, or claim the action happened.';
+                continue;
+            }
+
+            return clarificationQuestion || generation;
         }
 
         if (requiresActionCommand) {
             return 'I could not map that request to a safe gameplay command. Ask me to inspect with !awareness or use a specific available command.';
         }
+        if (groundingFallback) return groundingFallback;
         return '';
     }
 

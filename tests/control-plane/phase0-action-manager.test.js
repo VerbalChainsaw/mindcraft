@@ -90,6 +90,49 @@ test('a resumable player action queues behind a critical reflex without stealing
   assert.equal(followRuns, 1);
 });
 
+test('a finite player action waits behind a critical reflex and settles exactly once afterward', async () => {
+  const agent = createHarness();
+  const wakes = [];
+  let runs = 0;
+  agent.behavior_arbiter = {
+    wake(reason) { wakes.push(reason); },
+  };
+  agent.actions.executing = true;
+  agent.actions.currentActionOwner = 'reflex';
+  agent.actions.currentActionLabel = 'mode:self_preservation';
+
+  const deferred = await agent.actions.runWithRequestContext({
+    requestId: 'dad-regroup-1',
+    routeOrigin: 'deterministic-nl',
+    selectedSkill: '!goToPlayer',
+    args: ['DadPlayer', 2],
+    requestedAt: 100,
+  }, () => agent.actions.runAction('action:goToPlayer', async () => {
+    runs += 1;
+    return true;
+  }, { owner: 'player', timeout: -1 }));
+
+  assert.equal(deferred.success, true);
+  assert.equal(deferred.deferred, true);
+  assert.equal(runs, 0);
+  assert.equal(agent.actions.hasDeferredPlayerAction(), true);
+  assert.deepEqual(wakes, ['deferred_player_action_registered']);
+  assert.equal(agent.actions.currentActionLabel, 'mode:self_preservation');
+
+  agent.actions.executing = false;
+  agent.actions.currentActionOwner = '';
+  agent.actions.currentActionLabel = '';
+  const resumed = await agent.actions.resumeDeferredPlayerAction();
+
+  assert.equal(resumed.result.phase, 'succeeded');
+  assert.equal(resumed.result.evidence.request.requestId, 'dad-regroup-1');
+  assert.equal(runs, 1);
+  assert.equal(agent.actions.hasDeferredPlayerAction(), false);
+  const secondResume = await agent.actions.resumeDeferredPlayerAction();
+  assert.equal(secondResume.success, false);
+  assert.equal(runs, 1);
+});
+
 test('Phase 0 action exceptions retain the original Error and stack', async () => {
   const agent = createHarness();
   const lifecycle = captureLifecycle(agent);

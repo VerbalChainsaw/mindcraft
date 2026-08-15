@@ -1,3 +1,5 @@
+import { normalizeInteractionStanceReceipt } from './interaction-stance.js';
+
 const MAX_DETAIL_LENGTH = 1_200;
 const ACTION_PHASES = new Set(['succeeded', 'requested', 'failed', 'blocked', 'interrupted', 'cancelled']);
 
@@ -93,6 +95,11 @@ const CENSORED_OUTCOME_CODES = new Set([
   'stop_requested',
 ]);
 
+const NON_METHOD_FAILURE_CODES = new Set([
+  'skill_source_access_pending',
+  'skill_source_spawn_pending',
+]);
+
 const TARGET_LOCAL_FAILURE_CODE = /(?:action_deadline|collect_blocked|goal_not_reached|no_path|no_safe_stance|not_broken|not_collected|path_stalled|path_timeout|stance_unverified|target_unloaded|timeout|unreachable)/;
 
 function concreteFailureTarget(value, fallbackKind = 'action', fallbackOutcome = 'unknown') {
@@ -166,6 +173,7 @@ export function classifyMethodOutcome(result) {
     || phase === 'cancelled'
     || isPreemption(result)
     || CENSORED_OUTCOME_CODES.has(code)
+    || NON_METHOD_FAILURE_CODES.has(code)
   ) return 'censored';
   return 'method_failure';
 }
@@ -191,6 +199,9 @@ export function actionResultToTelemetry(result) {
   const phase = ACTION_PHASES.has(result.phase)
     ? result.phase
     : 'failed';
+  const interactionStance = normalizeInteractionStanceReceipt(
+    result.evidence?.skill?.interactionStance,
+  );
   return {
     actionId: typeof result.actionId === 'string' ? result.actionId.slice(0, 80) : null,
     phase,
@@ -204,5 +215,6 @@ export function actionResultToTelemetry(result) {
       : null,
     startedAt: Number.isFinite(result.startedAt) ? result.startedAt : null,
     finishedAt: Number.isFinite(result.finishedAt) ? result.finishedAt : null,
+    ...(interactionStance ? { interactionStance } : {}),
   };
 }

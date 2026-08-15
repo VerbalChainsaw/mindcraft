@@ -1,5 +1,7 @@
-import { parseItemGoalRequest } from './runtime/goal-contract.js';
+import Vec3 from 'vec3';
+
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
+import { parseItemGoalRequest } from './runtime/goal-contract.js';
 
 function commandString(value) {
     return JSON.stringify(String(value || ''));
@@ -36,10 +38,223 @@ function recalledUserPlaceLabel(context, value) {
         : null;
 }
 
+const CONSTRUCTION_SITE_RELATION = /\b(beside|near|next to|alongside|adjacent to|around)\s+(?:(?:the|our|my|your)\s+)?([a-z][a-z0-9 _-]{1,40}?)(?=\s*(?:[,.;]|$|\b(?:one|with|while|without|keep|keeping|do not|don't|dont|then|and then)\b))/;
+const NON_LANDMARK_REFERENCES = new Set([
+    'me',
+    'us',
+    'you',
+    'it',
+    'this',
+    'that',
+    'here',
+    'there',
+    'the_bot',
+    'bot',
+]);
+
+function constructionDimension(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^minecraft:/, '')
+        .replace(/^the_nether$/, 'nether')
+        .replace(/^the_end$/, 'end')
+        .replace(/[^a-z0-9_]/g, '')
+        .slice(0, 32);
+}
+
+function constructionSiteRelation(message) {
+    const match = CONSTRUCTION_SITE_RELATION.exec(String(message || '').toLowerCase());
+    if (!match) return null;
+    const name = namedPlaceLabel(match[2]);
+    if (!name || NON_LANDMARK_REFERENCES.has(name)) return null;
+    const relation = match[1] === 'near'
+        ? 'near'
+        : match[1] === 'around'
+            ? 'around'
+            : 'beside';
+    return { name, relation };
+}
+
+function finiteConstructionPosition(value) {
+    const position = {
+        x: Math.floor(Number(value?.x)),
+        y: Math.floor(Number(value?.y)),
+        z: Math.floor(Number(value?.z)),
+    };
+    return Object.values(position).every(Number.isFinite) ? position : null;
+}
+
+function rememberedStructureMatchesReference(order, reference) {
+    if (
+        order?.phase !== 'complete'
+        || !order?.target
+        || !Array.isArray(order?.blueprint?.cells)
+        || order.blueprint.cells.length === 0
+    ) return false;
+    const words = String(reference?.name || '').split('_').filter(word => word.length > 1);
+    const identity = String(order.blueprint.id || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_')
+        .split('_')
+        .filter(Boolean);
+    if (words.length < 2 || !words.every(word => identity.includes(word))) return false;
+    const bot = reference.bot;
+    if (typeof bot?.blockAt !== 'function') return false;
+    try {
+        return order.blueprint.cells.every(cell => {
+            const block = bot.blockAt(new Vec3(
+                order.target.x + cell.x,
+                order.target.y + cell.y,
+                order.target.z + cell.z,
+            ));
+            return block?.name === cell.material;
+        });
+    } catch {
+        return false;
+    }
+}
+
+function constructionSiteConstraint(message, context = {}) {
+    const reference = constructionSiteRelation(message);
+    if (!reference) return { reference: null, constraint: null };
+    const currentDimension = constructionDimension(context.bot?.game?.dimension);
+    const rememberedHome = context.homeState?.snapshot?.() || {};
+    const rememberedPlace = context.memoryBank?.recallUserPlaceDetails?.(reference.name);
+    const rememberedPosition = finiteConstructionPosition(rememberedPlace);
+    const rememberedDimension = constructionDimension(rememberedPlace?.dimension);
+    if (rememberedPosition && rememberedDimension) {
+        return {
+            reference,
+            constraint: {
+                kind: 'remembered_place',
+                name: reference.name,
+                relation: reference.relation,
+                position: rememberedPosition,
+                dimension: rememberedDimension,
+                radius: reference.relation === 'near' ? 12 : 8,
+                sourceId: reference.name,
+            },
+        };
+    }
+
+    const farmPosition = finiteConstructionPosition(rememberedHome.farm?.water);
+    const farmDimension = constructionDimension(rememberedHome.farm?.dimension);
+    if (reference.name === 'farm' && farmPosition && farmDimension) {
+        return {
+            reference,
+            constraint: {
+                kind: 'remembered_farm',
+                name: reference.name,
+                relation: reference.relation,
+                position: farmPosition,
+                dimension: farmDimension,
+                radius: reference.relation === 'near' ? 12 : 8,
+                sourceId: 'home_state_farm',
+            },
+        };
+    }
+
+    const order = rememberedHome.structureOrder;
+    if (
+        currentDimension
+        && rememberedStructureMatchesReference(order, { ...reference, bot: context.bot })
+    ) {
+        const width = Math.max(1, Number(order.blueprint.width) || 1);
+        const depth = Math.max(1, Number(order.blueprint.depth) || 1);
+        return {
+            reference,
+            constraint: {
+                kind: 'remembered_structure',
+                name: reference.name,
+                relation: reference.relation,
+                position: {
+                    x: Math.floor(order.target.x + ((width - 1) / 2)),
+                    y: Math.floor(order.target.y),
+                    z: Math.floor(order.target.z + ((depth - 1) / 2)),
+                },
+                dimension: currentDimension,
+                radius: reference.relation === 'near' ? 12 : 8,
+                sourceId: String(order.id || '').slice(0, 96),
+            },
+        };
+    }
+    return { reference, constraint: null };
+}
+
+function constructionLayoutConstraint(message, siteConstraint) {
+    if (!siteConstraint) return null;
+    const text = String(message || '').toLowerCase();
+    const oppositeSides = /\b(?:one on each side|on opposite sides|one (?:seat|chair|bench) (?:on|at) (?:either|each) side)\b/.test(text);
+    const inward = /\b(?:facing|face|faced) inward\b|\bfacing each other\b/.test(text);
+    if (!oppositeSides || !inward) return null;
+    return {
+        arrangement: 'opposite_sides',
+        orientation: 'inward',
+        clearance: /\b(?:walking|walk|access) ring clear\b/.test(text) ? 1 : 0,
+    };
+}
+
+const SMALL_SPOKEN_COUNTS = Object.freeze({
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+});
+
+const TENS_SPOKEN_COUNTS = Object.freeze({
+    twenty: 20,
+    thirty: 30,
+    forty: 40,
+    fifty: 50,
+    sixty: 60,
+    seventy: 70,
+    eighty: 80,
+    ninety: 90,
+});
+
 function requestedCount(text, fallback) {
-    const match = text.match(/\b(\d{1,4})\b/);
-    if (!match) return fallback;
-    return Math.max(1, Math.min(2304, Number.parseInt(match[1], 10)));
+    const numeric = /\b(\d{1,4})\b/.exec(text);
+    let candidate = numeric
+        ? { index: numeric.index, value: Number.parseInt(numeric[1], 10) }
+        : null;
+    const words = [...String(text).toLowerCase().matchAll(/\b[a-z]+\b/g)];
+    for (let index = 0; index < words.length; index += 1) {
+        const [word] = words[index];
+        const small = SMALL_SPOKEN_COUNTS[word];
+        const tens = TENS_SPOKEN_COUNTS[word];
+        if (small) {
+            const spoken = { index: words[index].index, value: small };
+            if (!candidate || spoken.index < candidate.index) candidate = spoken;
+            break;
+        }
+        if (tens) {
+            const next = SMALL_SPOKEN_COUNTS[words[index + 1]?.[0]] || 0;
+            const spoken = {
+                index: words[index].index,
+                value: tens + (next < 10 ? next : 0),
+            };
+            if (!candidate || spoken.index < candidate.index) candidate = spoken;
+            break;
+        }
+    }
+    if (!candidate) return fallback;
+    return Math.max(1, Math.min(2304, candidate.value));
 }
 
 const MINING_RESOURCES = Object.freeze([
@@ -170,6 +385,22 @@ function dimension(text, words) {
 // blueprint, never a stream of individual model-owned placement commands.
 const CONSTRUCTION_VERB = /\b(?:build|construct|make|put up|set up|establish|erect|raise|assemble|lay out)\b/;
 
+// Preservation clauses can name both a construction verb and a structure
+// without granting construction authority: "do not damage any build" and
+// "without changing the base" are constraints on another action. Remove only
+// those bounded clauses before evaluating construction intent; a later
+// explicit ", then build ..." clause remains actionable.
+function constructionAuthorizationText(message) {
+    return String(message || '').replace(
+        /\b(?:do not|don't|dont|never|without)\b[\s\S]*?(?=(?:[.;]|,\s*(?:and\s+)?then\b)|$)/g,
+        ' ',
+    );
+}
+
+export function hasAuthorizedConstructionVerb(message) {
+    return CONSTRUCTION_VERB.test(constructionAuthorizationText(message));
+}
+
 function parseCoordinates(text) {
     const matches = text.match(/-?\d+(?:\.\d+)?/g);
     if (!matches || matches.length < 3) return null;
@@ -179,7 +410,7 @@ function parseCoordinates(text) {
 }
 
 export function constructionRequiredFunctions(message) {
-    const normalized = String(message || '').toLowerCase();
+    const normalized = constructionAuthorizationText(String(message || '').toLowerCase());
     const constructionVerb = CONSTRUCTION_VERB.exec(normalized);
     const constructionClause = constructionVerb
         ? normalized.slice(constructionVerb.index)
@@ -208,7 +439,7 @@ export function constructionRequiredFunctions(message) {
 
 function describesMultiBlockConstruction(text, requiredFunctions = []) {
     if (requiredFunctions.length > 0) return true;
-    return /\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|cabin|shack|lodge|tower|watchtower|lookout|bridge|walkway|catwalk|wall|barrier|rampart|pen|paddock|corral|enclosure|platform|deck|floor|pillar|column|post|stairs|staircase|steps|roof|road|path|dock|pier|tunnel|loop|track|railway|windmill|mill|machine|contraption|statue|monument|gazebo|barn|workshop|worksite|workspace|work area)\b/.test(text);
+    return /\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|cabin|shack|lodge|tower|watchtower|lookout|bridge|walkway|catwalk|wall|barrier|rampart|pen|paddock|corral|enclosure|platform|deck|floor|pillar|column|post|stairs|staircase|steps|seat|seats|bench|benches|chair|chairs|furniture|roof|road|path|dock|pier|tunnel|loop|track|railway|windmill|mill|machine|contraption|statue|monument|gazebo|barn|workshop|worksite|workspace|work area)\b/.test(text);
 }
 
 function describesModelSelectedItemPlan(text) {
@@ -221,7 +452,7 @@ function describesModelSelectedItemPlan(text) {
         || growsInventory;
     const namesASet = /\b(?:supplies|resources|materials|provisions|gear|equipment|tools|items)\b/.test(text);
     const delegatesSelection = /\b(?:sensible|basic|essential|starter|useful|whatever|whichever|what you need|you need|needed)\b/.test(text);
-    const explicitlyBuilds = new RegExp(`${CONSTRUCTION_VERB.source}.{0,80}\\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|tower|bridge|wall|pen|platform|roof|dock|barn|workshop|worksite|workspace|work area)\\b`).test(text);
+    const explicitlyBuilds = new RegExp(`${CONSTRUCTION_VERB.source}.{0,80}\\b(?:structure|building|base|camp|shelter|house|hut|outpost|room|tower|bridge|wall|pen|platform|roof|dock|barn|workshop|worksite|workspace|work area)\\b`).test(constructionAuthorizationText(text));
     // Safety qualifiers commonly name nearby structures ("without damaging
     // the outpost"). They do not change the object of "build supplies up".
     if (growsInventory && namesASet) return true;
@@ -243,6 +474,7 @@ function describesModelSelectedStoragePlan(text) {
 }
 
 export function resolvePlayerDirective(playerName, message, context = {}) {
+    const rawText = String(message || '').trim().replace(/[.!?]+$/g, '');
     const text = normalizedMessage(message);
     if (!playerName || !text || text.includes('!')) return null;
 
@@ -257,7 +489,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
             releasesHold: false,
         };
     }
-    if (classifyPlayerSpeechAuthority(message) === 'conversation_only') return null;
+    if (classifyPlayerSpeechAuthority(message) !== 'action_eligible') return null;
 
     if (/^(?:please\s+)?(?:do not|don't|dont)\s+follow\s+me\b/.test(text)) {
         return {
@@ -284,10 +516,32 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/^(?:please\s+)?(?:come|walk|move|get|return|head)(?:\s+back)?\s+(?:here|to me|over here)\b/.test(text)) {
+    if (/^(?:please\s+)?(?:come|walk|move|get|return|head)(?:\s+back)?\s+(?:here|to (?:me|us)|over here)\b/.test(text)) {
         return {
             command: `!goToPlayer(${commandString(playerName)}, 2)`,
             response: 'I will come to you now.',
+            releasesHold: true,
+        };
+    }
+
+    // Deictic gaze commands must bind "me" to the canonical speaker before
+    // dialogue history can leak a previous player's identity into the turn.
+    if (/^(?:(?:simon says|please|now)\s*,?\s*)*(?:look|face)\s+(?:right\s+)?at\s+me(?:\s+(?:now|please))?$/.test(text)) {
+        return {
+            command: `!lookAtPlayer(${commandString(playerName)}, "at")`,
+            response: 'Looking at you now.',
+            releasesHold: true,
+        };
+    }
+
+    const namedReturn = /^(?:please\s+)?(?:come|return|head)(?:\s+back)?\s+home\s+to\s+([._a-z0-9]{1,32})\b/i.exec(rawText);
+    if (namedReturn) {
+        const requestedTarget = /^(?:me|us)$/i.test(namedReturn[1])
+            ? playerName
+            : namedReturn[1];
+        return {
+            command: `!goToPlayer(${commandString(requestedTarget)}, 2)`,
+            response: `I will go to ${requestedTarget} now.`,
             releasesHold: true,
         };
     }
@@ -304,11 +558,11 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/^(?:please\s+)?(?:stay|stay here|wait here|do not move|don't move|dont move)\b/.test(text)) {
+    if (/^(?:please\s+)?(?:stay|stay here|wait|wait here|do not move|don't move|dont move)\b/.test(text)) {
         return {
-            command: '!stay(-1)',
-            response: 'Staying here until you give me another order.',
-            releasesHold: true,
+            command: '!stop',
+            response: 'Staying here under hold until you give me another order.',
+            releasesHold: false,
         };
     }
 
@@ -325,8 +579,17 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // model round trip. These are discrete one-shot actions (not agenda kinds),
     // so they run on the single-directive fast path.
 
+    if (/\b(?:give us (?:a little |some )?(?:space|room)|give (?:both|all) of us (?:some )?(?:space|room)|make (?:some )?(?:space|room) for us|step back(?:\s+\w+){0,5}\s+from us)\b/.test(text)) {
+        const distance = clampInt(requestedCount(text, 5), 1, 64, 5);
+        return {
+            command: `!moveAway(${distance}, false, ${commandString(playerName)})`,
+            response: `Backing away from the group about ${distance} block${distance === 1 ? '' : 's'}.`,
+            releasesHold: true,
+        };
+    }
+
     if (/\b(?:move away|back off|back up|step back|give me (?:some )?(?:space|room)|get away from me|make some room)\b/.test(text)) {
-        const distance = clampInt(firstNumber(text, 5), 1, 64, 5);
+        const distance = clampInt(requestedCount(text, 5), 1, 64, 5);
         return {
             command: `!moveAway(${distance})`,
             response: `Backing off about ${distance} block${distance === 1 ? '' : 's'}.`,
@@ -334,7 +597,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/\b(?:go to (?:bed|sleep)|get to bed|get some sleep|time for bed|lie down|sleep now|go (?:in|inside) and sleep|sleep inside)\b/.test(text)) {
+    if (/\b(?:go (?:to )?(?:bed|sleep)|get to bed|get some sleep|time for bed|lie down|sleep now|go (?:in|inside) and sleep|sleep inside)\b/.test(text)) {
         return {
             command: '!goToBed',
             response: 'Finding the nearest bed to sleep.',
@@ -407,6 +670,23 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // --- Items, containers, and gear ----------------------------------------
     // These verbs are unambiguous, so they resolve before the broader
     // acquisition parsing further down ever sees the message.
+
+    const relationalPlacement = /^(?:please\s+)?(?:set|place|put)\s+(.+?)\s+(beside|near|next to|by|alongside|adjacent to)\s+(me|us|here|the family)\b/.exec(text);
+    if (relationalPlacement) {
+        const item = canonicalItem(relationalPlacement[1], context.bot);
+        if (item) {
+            const shared = relationalPlacement[3] === 'us'
+                || relationalPlacement[3] === 'the family'
+                || /\b(?:everyone|all (?:of )?us|all three)\b/.test(text);
+            return {
+                command: `!place(${commandString(playerName)}, ${commandString(item)}, 1, ${shared})`,
+                response: shared
+                    ? `Placing my ${item.replaceAll('_', ' ')} at a supported site the nearby family can share.`
+                    : `Placing my ${item.replaceAll('_', ' ')} at a supported site near you.`,
+                releasesHold: true,
+            };
+        }
+    }
 
     if (describesModelSelectedStoragePlan(text)) {
         const shouldReturn = /\b(?:return|come back|head back|go back)\b/.test(text);
@@ -488,7 +768,11 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         }
     }
 
-    const equipped = objectOf(text, 'equip|wield|put on|wear|hold');
+    const equipped = objectOf(
+        text,
+        'equip|wield|put on|wear|hold',
+        'i|we|you|that|which|from|for|please|now',
+    );
     const compoundEquipmentAcquisition = /\b(?:make|craft|prepare|get|build)\b/.test(text)
         && /\b(?:equip|wield|hold)\b/.test(text);
     if (equipped && !compoundEquipmentAcquisition) {
@@ -519,7 +803,11 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
 
     const rideable = ['horse', 'boat', 'minecart', 'pig', 'strider', 'camel', 'donkey', 'mule']
         .find(name => new RegExp(`\\b${name}s?\\b`).test(text));
-    if (rideable && /\b(?:get on|ride|mount|hop on|climb on)\b/.test(text)) {
+    const requestsMount = rideable && (
+        /\b(?:get on|hop on|climb on)\b/.test(text)
+        || new RegExp(`\\b(?:ride|mount)\\s+(?:(?:the|this|that|a|an|our|my|your)\\s+)?${rideable}s?\\b`).test(text)
+    );
+    if (requestsMount) {
         return {
             command: `!mountEntity("${rideable}", 32)`,
             response: `Looking for a ${rideable} to ride.`,
@@ -611,7 +899,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
         };
     }
 
-    if (/\b(?:clear|cancel|scrap|forget|wipe|drop)\s+(?:your |the |my )?(?:whole |entire |rest of (?:your|the) )?(?:plan|agenda|queue|todo list|task list|everything)\b/.test(text)) {
+    if (/\b(?:clear|cancel|scrap|forget|wipe|drop)\s+(?:your |the |my )?(?:whole |entire )?(?:(?:rest|remainder) of (?:your|the|my) )?(?:old |previous |remaining |current )?(?:plan|agenda|queue|todo list|task list|everything)\b/.test(text)) {
         return {
             command: '!clearAgenda',
             response: 'Clearing my whole plan.',
@@ -748,7 +1036,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // "shelter", "hut", or "house", which the survival shelter job already owns.
 
     const requiredFunctions = constructionRequiredFunctions(text);
-    if (CONSTRUCTION_VERB.test(text)) {
+    if (hasAuthorizedConstructionVerb(text)) {
         const material = structureMaterial(text);
         const tall = dimension(text, 'tall|high') ?? dimension(text, 'blocks?\\s+up');
         const wide = dimension(text, 'wide|across');
@@ -797,7 +1085,15 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
             const direct = design('pillar', `@pillar ${clampInt(tall ?? 6, 1, 24, 6)}`, 'a pillar');
             if (direct) return direct;
         }
-        if (/\b(?:stairs|staircase|steps)\b/.test(text)) {
+        // “Spruce stairs as picnic seats” names a block palette for custom
+        // furniture, not permission to replace the request with a six-block
+        // traversal staircase. Leave furniture to the complete construction
+        // compiler while retaining the deterministic @stairs route for actual
+        // stairs, steps, and staircases.
+        if (
+            /\b(?:stairs|staircase|steps)\b/.test(text)
+            && !/\b(?:seat|seats|bench|benches|chair|chairs|furniture)\b/.test(text)
+        ) {
             const direct = design('stairs', `@stairs ${clampInt(tall ?? 6, 1, 16, 6)}`, 'a staircase');
             if (direct) return direct;
         }
@@ -820,19 +1116,34 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     // the model, whose !designStructure command persists one bounded blueprint.
     // Shelter remains on its dedicated survival-building route below.
     if (
-        CONSTRUCTION_VERB.test(text)
+        hasAuthorizedConstructionVerb(text)
         && !/\b(?:shelter|hut|small house|safe house)\b/.test(text)
         && describesMultiBlockConstruction(text, requiredFunctions)
     ) {
+        const site = constructionSiteConstraint(text, context);
+        const layout = constructionLayoutConstraint(text, site.constraint);
         const requiredFunctionContract = requiredFunctions.length > 0
             ? `The validator requires the completed blueprint to produce these functions: ${requiredFunctions.join(', ')}. Function names are metadata, never DSL arguments. `
             : '';
+        const siteContract = site.constraint
+            ? `The physical site is already durably bound ${site.constraint.relation} ${site.constraint.name.replaceAll('_', ' ')}; do not replace that landmark with the requester, the bot, or an invented coordinate. `
+            : '';
+        const layoutContract = layout
+            ? 'The physical binder owns the grounded opposite-side translation. Design exactly two lowest-course stair fixtures facing inward; do not invent landmark coordinates or fill the space between them. '
+            : '';
         return {
             command: null,
-            response: '',
+            response: site.reference && !site.constraint
+                ? `I cannot identify the named place ${site.reference.name.replaceAll('_', ' ')} from verified memory, so I will not build at a guessed site.`
+                : '',
             releasesHold: true,
             deferToModel: true,
-            modelInstruction: `This is one player-authorized multi-block construction outcome. ${requiredFunctionContract}Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. Start from a provided @template when it already supplies a requested function, then add only the missing functions. Every required function must be physically represented in the final blueprint: access uses put door, gate, or ladder; crafting uses put crafting; interior_light uses put torch; smelting uses put furnace; storage uses put chest; rest uses put bed; weather_cover uses roof; containment uses a closed fence or wall boundary with gated access; enclosure uses a closed wall boundary. Function names are validation metadata and must not be passed as DSL arguments. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. Fixtures must use put, never block. Fixture facing, when supplied, must be north, south, east, or west. Put ground fixtures above solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace the roof or required support with a fixture. Use !designStructure material "auto" with lock_material false when the player did not name a structural material; Builder will bind one feasible safe material for the entire required quantity. Set lock_material true only if the player explicitly named the structural material. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.`,
+            constructionSiteConstraint: site.constraint,
+            constructionLayoutConstraint: layout,
+            constructionSiteError: site.reference && !site.constraint
+                ? 'construction_landmark_unresolved'
+                : '',
+            modelInstruction: `This is one player-authorized multi-block construction outcome. ${siteContract}${layoutContract}${requiredFunctionContract}Compile the complete bounded blueprint before acquiring materials. Return one complete !buildStructure or !designStructure command in the first response; do not mention a command name in prose before the executable command. The !designStructure design argument must use its exact compact DSL contract; descriptive prose is invalid. Start from a provided @template when it already supplies a requested function, then add only the missing functions. Every required function must be physically represented in the final blueprint: access uses put door, gate, or ladder; crafting uses put crafting; interior_light uses put torch; smelting uses put furnace; storage uses put chest; rest uses put bed; weather_cover uses roof; containment uses a closed fence or wall boundary with gated access; enclosure uses a closed wall boundary. Function names are validation metadata and must not be passed as DSL arguments. For a habitable building, prefer room or explicitly provide slab + shell + roof because shell contains walls only. Fixtures must use put, never block or bracketed block-state syntax. An exact stair item is a one-block fixture and requires this exact form: put X Y Z spruce_stairs north|south|east|west. Use nonnegative local coordinates from 0 through 31; translate a symmetric layout instead of writing negative coordinates. Fixture facing, when supplied, must be north, south, east, or west. Put ordinary ground fixtures above solid floor; a ground stair may be at y=0 because site selection proves its natural support. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture. A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor. Never replace the roof or required support with a fixture. A named exact fixture material such as spruce_stairs does not make the outer structural material "spruce"; for a fixture-only design use !designStructure material "auto" with lock_material false and put the exact item in the fixture operation. Otherwise use material "auto" with lock_material false when the player did not name a structural full-block material, and lock a connected-registry full-block material only when the player explicitly named it. The persistent Builder will derive and acquire every blueprint material, place supported cells, and verify the finished world state. Do not issue search, inventory, gathering, crafting, or individual placement commands first.`,
         };
     }
 
@@ -897,7 +1208,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
 
     if (/^(?:please\s+)?(?:eat|have something to eat|feed yourself)\b/.test(text)) {
         return {
-            command: '!consume("")',
+            command: '!consume("best_food")',
             response: 'I will eat the best safe food I am carrying.',
             releasesHold: true,
         };
@@ -976,7 +1287,7 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     if (/\b(?:harvest|collect|gather|chop|get)\b.{0,32}\b(?:wood|logs?|trees?)\b/.test(text)) {
         const quota = requestedCount(text, 32);
         return {
-            command: `!assignHarvestJob("logs", ${quota})`,
+            command: `!assignHarvestJob("logs", ${quota}, ${commandString(playerName)})`,
             response: 'I will run a checkpointed timber job, replant when safe, and deliver it by policy.',
             releasesHold: true,
         };

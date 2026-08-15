@@ -1,8 +1,10 @@
 import * as skills from '../library/skills.js';
+import Vec3 from 'vec3';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 import { requestBotSpawn, sendSquadRadio, serverProxy } from '../mindserver_proxy.js';
 import { actionResultToMessage } from '../runtime/action-result.js';
+import { requesterTerrainCollectionExclusion } from '../runtime/collection-candidate-selector.js';
 import {
     createWorkOrder,
     resumeFailedWorkOrder,
@@ -25,7 +27,10 @@ import {
     createDesignedStructureOrder,
     designLanguageHelp,
 } from '../runtime/jobs/structure-design.js';
-import { selectConstructionSites } from '../runtime/jobs/structure-site-selector.js';
+import {
+    selectConstructionSites,
+    selectOppositeLandmarkLayoutSites,
+} from '../runtime/jobs/structure-site-selector.js';
 import { bindStructureAccessoryMaterials } from '../runtime/jobs/structure-material-binder.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
@@ -35,8 +40,10 @@ import {
     inventoryCountForGoalTarget,
     resolveItemGoalTarget,
 } from '../runtime/goal-contract.js';
+import { logInventoryCount } from '../runtime/jobs/lumberjack-plan.js';
 import { buildPrerequisitePlan } from '../runtime/prerequisite-planner.js';
 import { mayBindExactWorkstation } from './workstation-command-policy.js';
+import { createAccessRepairWorkOrder, selectExistingAccessRepair } from '../runtime/access-repair.js';
 
 
 const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
@@ -180,11 +187,22 @@ queueOrderedItemPlan.manualAutonomyTakeover = true;
 const STORAGE_CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel']);
 
 function currentStorageContainerConstraint(bot) {
-    if (typeof bot?.findBlock !== 'function') return null;
-    const block = bot.findBlock({
-        matching: candidate => STORAGE_CONTAINER_NAMES.has(candidate?.name),
+    if (
+        typeof bot?.findBlocks !== 'function'
+        || typeof bot?.blockAt !== 'function'
+    ) return null;
+    const storageTypeIds = [...STORAGE_CONTAINER_NAMES]
+        .map(name => bot.registry?.blocksByName?.[name]?.id)
+        .filter(Number.isInteger);
+    if (storageTypeIds.length === 0) return null;
+    const positions = bot.findBlocks({
+        matching: storageTypeIds,
         maxDistance: 32,
+        count: 64,
     });
+    const block = positions
+        .map(position => bot.blockAt(position, false))
+        .find(candidate => skills.isStorageContainerInteractionFeasible(bot, candidate));
     const dimension = String(bot?.game?.dimension || '')
         .trim()
         .toLowerCase()
@@ -320,6 +338,13 @@ export function collectionExclusionsForAgent(agent, requestedName = null) {
     if (worksite) exclusions.push(worksite);
     const protectedRegion = workOrderProtectedRegionExclusion(agent?.job_director?.activeOrder);
     if (protectedRegion) exclusions.push(protectedRegion);
+    const requesterName = agent?.goal_director?.activeGoal?.requester
+        || agent?.job_director?.activeOrder?.requester;
+    const requesterPosition = requesterName
+        ? agent?.bot?.players?.[requesterName]?.entity?.position
+        : null;
+    const requesterArea = requesterTerrainCollectionExclusion(requestedName, requesterPosition);
+    if (requesterArea) exclusions.push(requesterArea);
     return exclusions;
 }
 
@@ -464,29 +489,72 @@ function submitRememberedStructure(agent, order, {
 }
 
 function bindSafeConstructionOrder(agent, order, origin) {
-    const selection = selectConstructionSites(agent.bot, order.blueprint, {
-        origin,
-        isNaturalTerrain: block => skills.isClearableWorksiteBlock(agent.bot, block),
+    const constructionIntent = agent.agenda_director
+        ?.activeConstructionIntent?.()
+        ?.constructionIntent || null;
+    const siteConstraint = constructionIntent?.siteConstraint || null;
+    const layoutConstraint = constructionIntent?.layoutConstraint || null;
+    const currentDimension = canonicalDimension(agent.bot?.game?.dimension);
+    const constrainedDimension = canonicalDimension(siteConstraint?.dimension);
+    if (siteConstraint && (!currentDimension || currentDimension !== constrainedDimension)) {
+        throw new TypeError(
+            `The named construction landmark ${siteConstraint.name.replaceAll('_', ' ')} is in ${constrainedDimension || 'an unknown dimension'}, not the bot's current dimension.`,
+        );
+    }
+    const isNaturalTerrain = block => skills.isClearableWorksiteBlock(agent.bot, block);
+    const relational = layoutConstraint?.arrangement === 'opposite_sides';
+    const selection = relational
+        ? selectOppositeLandmarkLayoutSites(agent.bot, order.blueprint, {
+            landmark: siteConstraint.position,
+            clearance: layoutConstraint.clearance,
+            isNaturalTerrain,
+        })
+        : selectConstructionSites(agent.bot, order.blueprint, {
+            origin: siteConstraint?.position || origin,
+            ...(siteConstraint ? { radius: siteConstraint.radius } : {}),
+            isNaturalTerrain,
+        });
+    const directions = {
+        north: { x: 0, y: 0, z: -1 },
+        south: { x: 0, y: 0, z: 1 },
+        east: { x: 1, y: 0, z: 0 },
+        west: { x: -1, y: 0, z: 0 },
+    };
+    const probed = selection.sites.map(site => {
+        if (!relational) {
+            return { site, routes: [skills.probeSafeNavigationStances(agent.bot, site.stances)] };
+        }
+        const routes = site.blueprint.fixtures.map(fixture => {
+            const anchor = new Vec3(
+                site.origin.x + fixture.anchor.x,
+                site.origin.y + fixture.anchor.y,
+                site.origin.z + fixture.anchor.z,
+            );
+            const stances = skills.fixtureOrientationStances(agent.bot, anchor, directions[fixture.facing]);
+            return skills.probeSafeNavigationStances(agent.bot, stances);
+        });
+        return { site, routes };
     });
-    const probed = selection.sites.map(site => ({
-        site,
-        route: skills.probeSafeNavigationStances(agent.bot, site.stances),
-    }));
-    const selected = probed.find(candidate => candidate.route.reachable);
+    const selected = probed.find(candidate => candidate.routes.every(route => route.reachable));
     const site = selected?.site;
     if (!site) {
         const routeSummary = probed.length > 0
             ? ` Native Pathfinder rejected ${probed.length} geometrically safe candidate(s): ${probed
-                .map(candidate => candidate.route.status)
+                .flatMap(candidate => candidate.routes.map(route => route.status))
                 .slice(0, 4)
                 .join(', ')}.`
             : '';
         throw new TypeError(
-            `No clear, naturally supported, non-destructively reachable construction footprint is loaded near the bot after checking ${selection.inspected} bounded candidates.${routeSummary}`,
+            relational
+                ? `No clear, supported, natively reachable opposite-side fixture layout is loaded around ${siteConstraint.name.replaceAll('_', ' ')} after checking ${selection.inspected} bounded axes (${selection.code}).${routeSummary}`
+                : siteConstraint
+                ? `No clear, naturally supported, non-destructively reachable construction footprint is loaded ${siteConstraint.relation} ${siteConstraint.name.replaceAll('_', ' ')} after checking ${selection.inspected} bounded candidates.${routeSummary}`
+                : `No clear, naturally supported, non-destructively reachable construction footprint is loaded near the bot after checking ${selection.inspected} bounded candidates.${routeSummary}`,
         );
     }
     return createWorkOrder({
         ...order,
+        blueprint: site.blueprint || order.blueprint,
         target: {
             ...order.target,
             x: site.origin.x,
@@ -763,12 +831,14 @@ export const actionsList = [
         description: 'Go to the given player.',
         params: {
             'player_name': {type: 'string', description: 'The name of the player to go to.'},
-            'closeness': {type: 'float', description: 'How close to get to the player.', domain: [0, Infinity]}
+            'closeness': {type: 'float', description: 'How close to get to the player.', domain: [0, Infinity]},
+            'dry_only': {type: 'boolean', description: 'Require a complete Pathfinder route that does not enter water.', optional: true, default: false},
         },
-        perform: runAsAction(async (agent, player_name, closeness) => {
+        perform: runAsAction(async (agent, player_name, closeness, dry_only = false) => {
             setCompanionDirective(agent, null, player_name);
             return await skills.goToPlayer(agent.bot, player_name, closeness, {
                 locatePlayerPosition: name => agent.locatePlayerPosition(name),
+                dryOnly: dry_only === true,
             });
         })
     },
@@ -825,10 +895,13 @@ export const actionsList = [
             'x': {type: 'float', description: 'The x coordinate.', domain: [-Infinity, Infinity]},
             'y': {type: 'float', description: 'The y coordinate.', domain: [-64, 320]},
             'z': {type: 'float', description: 'The z coordinate.', domain: [-Infinity, Infinity]},
-            'closeness': {type: 'float', description: 'How close to get to the location.', domain: [0, Infinity]}
+            'closeness': {type: 'float', description: 'How close to get to the location.', domain: [0, Infinity]},
+            'dry_only': {type: 'boolean', description: 'Require a complete Pathfinder route that does not enter water.', optional: true, default: false},
         },
-        perform: runAsAction(async (agent, x, y, z, closeness) => {
-            return await skills.goToPosition(agent.bot, x, y, z, closeness);
+        perform: runAsAction(async (agent, x, y, z, closeness, dry_only = false) => {
+            return await skills.goToPosition(agent.bot, x, y, z, closeness, {
+                dryOnly: dry_only === true,
+            });
         })
     },
     {
@@ -981,14 +1054,18 @@ export const actionsList = [
     },
     {
         name: '!moveAway',
-        description: 'Move away from the current location; deterministic recovery may require a verified different loaded region after local relocation fails.',
+        description: 'Move away from the current location. When group_requester is supplied, also increase spacing from that exact requester and every nearby loaded human player. Deterministic recovery may require a verified different loaded region after local relocation fails.',
         params: {
             'distance': { type: 'float', description: 'The distance to move away.', domain: [0, Infinity] },
             'meaningful_region': { type: 'boolean', description: 'Bind a physically distinct safe loaded region instead of another local displacement.', optional: true, default: false },
+            'group_requester': { type: 'string', description: 'Optional exact player who asked the bot to give the nearby human group room.', optional: true, default: '' },
         },
-        perform: runAsAction(async (agent, distance, meaningful_region = false) => {
+        perform: runAsAction(async (agent, distance, meaningful_region = false, group_requester = '') => {
             return await skills.moveAway(agent.bot, distance, {
                 meaningfulRegion: meaningful_region === true,
+                groupRequester: String(group_requester || ''),
+                knownBotNames: agent.getKnownAgentNames?.() || convoManager.getInGameAgents(),
+                isBotIdentity: identity => convoManager.isOtherAgent(identity),
             });
         }, false, RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
@@ -1076,13 +1153,22 @@ export const actionsList = [
     },
     {
         name: '!recoverDeathItems',
-        description: 'Return to the recorded death site in the same dimension, collect the recorded dropped inventory, and verify the recovered item counts.',
-        params: {},
-        perform: runAsAction(async (agent) => {
-            const death = agent.memory_bank.recallDeath();
+        description: 'Return to the newest pending death site in the same dimension, collect its recorded dropped inventory, and verify the recovered item counts. Internal callers may bind one exact persisted death identity.',
+        params: {
+            'recorded_at': { type: 'int', description: 'Optional exact persisted death identity; omitted player and Agenda commands prioritize the newest time-sensitive death.', domain: [1, Number.MAX_SAFE_INTEGER, '[]'], optional: true },
+        },
+        perform: runAsAction(async (agent, recorded_at = null) => {
+            const requestedIdentity = Number(recorded_at);
+            const hasExactIdentity = Number.isSafeInteger(requestedIdentity) && requestedIdentity > 0;
+            const death = hasExactIdentity
+                ? agent.memory_bank.recallDeath(requestedIdentity)
+                : agent.memory_bank.recallLatestDeath();
             const recovered = await skills.recoverDeathItems(agent.bot, death);
             if (recovered) {
-                agent.memory_bank.markDeathRecovered(agent.bot.lastActionEvidence);
+                agent.memory_bank.markDeathRecovered(
+                    agent.bot.lastActionEvidence,
+                    death?.recordedAt || requestedIdentity,
+                );
             }
             return recovered;
         }, false, 10)
@@ -1103,18 +1189,19 @@ export const actionsList = [
         name: '!giveFamilyToPlayer',
         description: 'Deliver a verified quantity across every carried item type in a useful family, such as mixed logs, to a player.',
         params: {
-            'family': { type: 'string', description: 'Supported family: logs, planks, food, ores, or building_blocks.' },
+            'family': { type: 'string', description: 'Supported family: logs, planks, food, raw_fish, cooked_fish, ores, or building_blocks.' },
             'player_name': { type: 'string', description: 'The player who should receive the items.' },
             'num': { type: 'int', description: 'Maximum total family items to deliver.', domain: [1, 2304] },
+            'baseline_manifest': { type: 'string', description: 'Optional machine-generated item:count baseline; only carried family output above it is delivered.', optional: true, default: '' },
         },
-        perform: runAsAction(async (agent, family, player_name, num) => {
-            return await skills.giveFamilyToPlayer(agent.bot, family, player_name, num);
+        perform: runAsAction(async (agent, family, player_name, num, baseline_manifest = '') => {
+            return await skills.giveFamilyToPlayer(agent.bot, family, player_name, num, baseline_manifest);
         })
     },
     {
         name: '!consume',
-        description: 'Eat/drink the given item.',
-        params: {'item_name': { type: 'ItemName', description: 'The name of the item to consume.' }},
+        description: 'Eat/drink the given item, select the best safe carried food, or select a verified drinkable healing potion by semantic identity.',
+        params: {'item_name': { type: 'ConsumableName', description: 'A Minecraft item name or the semantic selector best_food or healing_potion.' }},
         perform: runAsAction(async (agent, item_name) => {
             return await skills.consume(agent.bot, item_name);
         })
@@ -1238,6 +1325,19 @@ export const actionsList = [
         })
     },
     {
+        name: '!viewChestAt',
+        description: 'Open and report the contents of one exact assigned chest or barrel without changing its inventory.',
+        params: {
+            'x': { type: 'float', description: 'Assigned container x coordinate.' },
+            'y': { type: 'float', description: 'Assigned container y coordinate.' },
+            'z': { type: 'float', description: 'Assigned container z coordinate.' },
+            'dimension': { type: 'string', description: 'Assigned dimension.' },
+        },
+        perform: runAsAction(async (agent, x, y, z, dimension) => {
+            return await skills.viewChest(agent.bot, { x, y, z, dimension });
+        })
+    },
+    {
         name: '!discard',
         description: 'Discard the given item from the inventory.',
         params: {
@@ -1291,6 +1391,19 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, range) => {
             return await skills.pickupUsefulItems(agent.bot, range);
+        })
+    },
+    {
+        name: '!pickupItem',
+        description: 'Pick up an exact nearby dropped item and verify the requested inventory increase.',
+        params: {
+            'item_name': { type: 'ItemName', description: 'Exact canonical dropped item name.' },
+            'quantity': { type: 'int', description: 'Required inventory increase.', domain: [1, 64] },
+            'range': { type: 'int', description: 'Maximum pickup radius.', domain: [4, 32] },
+            'baseline_inventory': { type: 'int', description: 'Inventory count observed when the player request was accepted.', domain: [0, 2304] },
+        },
+        perform: runAsAction(async (agent, item_name, quantity, range, baseline_inventory) => {
+            return await skills.pickupItem(agent.bot, item_name, quantity, range, baseline_inventory);
         })
     },
     {
@@ -1370,7 +1483,7 @@ export const actionsList = [
         name: '!prepareFood',
         description: 'Secure a safe food reserve by crafting carried ingredients, harvesting and replanting mature crops, cooking raw food, and sustainably hunting adult animals when needed.',
         params: {
-            'target_food_points': { type: 'int', description: 'Safe carried food points to secure.', domain: [6, 160, '[]'] },
+            'target_food_points': { type: 'int', description: 'Safe carried food points to secure; one point requests a bounded immediately edible emergency supply.', domain: [1, 160, '[]'] },
             'range': { type: 'int', description: 'Maximum crop, animal, and resource search radius.', domain: [16, 128, '[]'] },
             'workstation_x': { type: 'float', description: 'Optional exact furnace X coordinate.', optional: true },
             'workstation_y': { type: 'float', description: 'Optional exact furnace Y coordinate.', optional: true },
@@ -1578,17 +1691,34 @@ export const actionsList = [
         description: 'Assign this Lumberjack a persistent, resumable tree quota with tool preparation, safe collection, replanting, and delivery.',
         params: {
             'log': { type: 'string', description: 'Canonical log type such as oak_log, spruce_log, or the family name logs.' },
-            'quota': { type: 'int', description: 'Verified log quota.', domain: [1, 2304, '[]'] },
+            'quota': { type: 'int', description: 'Number of new logs to gather after this order is accepted; pre-existing carried logs do not count.', domain: [1, 2304, '[]'] },
+            'requester': { type: 'string', description: 'Exact canonical player who requested the harvest.', optional: true, default: '' },
         },
-        perform: persistentJobCommand(async function (agent, log, quota) {
+        perform: persistentJobCommand(async function (agent, log, quota, requester = '') {
             try {
+                const targetName = String(log || '').trim().toLowerCase();
+                const companion = agent.companion_context?.snapshot?.() || {};
+                const boundRequester = String(
+                    requester
+                    || companion.canonicalUsername
+                    || companion.requestedName
+                    || 'player',
+                ).trim();
+                const baselineInventory = logInventoryCount(
+                    agent.bot?.inventory?.items?.() || [],
+                    targetName,
+                );
                 const order = createWorkOrder({
                     role: 'lumberjack',
                     kind: 'harvest',
                     source: 'player',
-                    requester: 'player',
-                    target: { name: String(log || '').trim().toLowerCase() },
+                    requester: boundRequester,
+                    target: { name: targetName },
                     quota,
+                    checkpoint: {
+                        baselineInventory,
+                        targetInventory: baselineInventory + quota,
+                    },
                 });
                 return submitRoleOrder(agent, 'lumberjack', order);
             } catch (error) {
@@ -1668,6 +1798,35 @@ export const actionsList = [
         }),
     },
     {
+        name: '!repairAccess',
+        description: 'Repair the exact unsupported surface gap leading to the nearest loaded existing doorway. This preserves the existing door/building and delegates the bounded placements to Builder.',
+        params: {
+            'material': { type: 'BlockName', description: 'Carried full support block authorized for the exact gap cells.' },
+        },
+        perform: persistentJobCommand(function (agent, material) {
+            try {
+                const selected = selectExistingAccessRepair(
+                    agent.bot,
+                    `repair the gap at the existing door using ${String(material || '')}`,
+                    agent.bot?.entity?.position,
+                );
+                if (!selected || selected.rejection) {
+                    return `Access repair was not accepted: ${selected?.rejection || 'no loaded existing access gap was selected'}`;
+                }
+                const order = createAccessRepairWorkOrder({
+                    kind: 'repair_access',
+                    requester: 'player',
+                    target: selected.material,
+                    quantity: selected.constraint.cells.length,
+                    accessRepairConstraint: selected.constraint,
+                });
+                return submitRememberedStructure(agent, order);
+            } catch (error) {
+                return `Access repair work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+            }
+        }),
+    },
+    {
         name: '!assignConstructionJob',
         description: 'Build or repair one operator-approved bounded platform, bridge, wall, column, or room through the persistent verified Builder work-order path.',
         params: {
@@ -1740,7 +1899,7 @@ export const actionsList = [
     {
         name: '!designStructure',
         description: `Compile and persist one complete bounded multi-block arrangement that is NOT in the known list - a spiral tower, a bridge with railings, a machine layout, a track, or anything else a player describes. Call this BEFORE gathering or placing anything: the Builder derives and acquires every blueprint material through the shared prerequisite planner, then places and verifies the supported cells. Write the shape yourself as design data; never micromanage its materials or individual placements. ${designLanguageHelp()}`,
-        compactDescription: 'Persist a complete validated blueprint before gathering. DESIGN MUST BE THIS DSL, NEVER PROSE. Separate steps with ;. Templates: @tower W H; @hut W D; @wall L H; @bridge L; @platform W D; @pen W D; @pillar H; @stairs H; @room W D H. @pen supplies containment/access and a floor-center support for fixtures. Ops: box X Y Z W H D [M]; shell X Y Z W H D [M]; room X Y Z W H D [M]; slab X Y Z W D [M]; ring X Y Z W D [M]; line X1 Y1 Z1 X2 Y2 Z2 [M]; block X Y Z MATERIAL; roof X Y Z W D flat|gable|pyramid [M]; carve X Y Z W H D; put X Y Z door|glass|torch|chest|ladder|fence|gate|crafting|furnace|bed [FACING]. Fixtures MUST use put, never block. Coordinates are relative, 0..31. SUPPORT: a room floor at y=0 supports ground fixtures at y=1. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires a wall. A door occupies its anchor plus the block directly above; leave both clear. A bed occupies its anchor plus one block in its facing direction; keep both over clear supported floor. Use material "auto" and lock_material false unless the player named it.',
+        compactDescription: 'Persist a validated blueprint before gathering. DESIGN MUST BE THIS DSL, NEVER PROSE. Separate steps with ;. Templates: @tower W H; @hut W D; @wall L H; @bridge L; @platform W D; @pen W D; @pillar H; @stairs H; @room W D H. @pen supplies containment/access and a floor-center support. Ops: box|shell|room X Y Z W H D [M]; slab|ring X Y Z W D [M]; line X1 Y1 Z1 X2 Y2 Z2 [M]; block X Y Z MATERIAL; roof X Y Z W D flat|gable|pyramid [M]; carve X Y Z W H D; put X Y Z door|glass|torch|chest|ladder|fence|gate|crafting|furnace|bed [FACING]; put X Y Z EXACT_STAIRS FACING. Fixtures MUST use put, never block or bracketed states. Coordinates are relative, 0..31; translate symmetric layouts so every coordinate is nonnegative. SUPPORT: a room floor at y=0 supports fixtures at y=1; a ground stair at y=0 uses natural terrain. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires a wall. A bed occupies its anchor plus one block in its facing direction; keep both supported and clear. A door occupies its anchor plus the block above. Use material "auto" and lock_material false unless the player named it.',
         params: {
             'name': { type: 'string', description: 'Short name for the building, such as watchtower or barn.' },
             'material': { type: 'string', description: 'Use auto unless the player named a material; otherwise use one canonical full support block. Fixtures are chosen automatically.' },
@@ -2050,13 +2209,13 @@ export const actionsList = [
     },
     {
         name: '!placeFixtureAt',
-        description: 'Place one prevalidated logical door or bed fixture at an exact blueprint anchor and verify every occupied Minecraft block and facing state.',
+        description: 'Place one prevalidated logical door, bed, or stair fixture at an exact blueprint anchor and verify every occupied Minecraft block and facing state.',
         params: {
-            'type': { type: 'BlockOrItemName', description: 'The exact door or bed item.' },
+            'type': { type: 'BlockOrItemName', description: 'The exact door, bed, or stair item.' },
             'x': { type: 'float', description: 'The validated anchor X coordinate.' },
             'y': { type: 'float', description: 'The validated anchor Y coordinate.' },
             'z': { type: 'float', description: 'The validated anchor Z coordinate.' },
-            'kind': { type: 'string', description: 'Logical fixture kind: door or bed.' },
+            'kind': { type: 'string', description: 'Logical fixture kind: door, bed, or stair.' },
             'facing': { type: 'string', description: 'Persisted horizontal facing.' },
         },
         perform: runAsAction(async (agent, type, x, y, z, kind, facing) => {
@@ -2085,7 +2244,7 @@ export const actionsList = [
     },
     {
         name: '!harvestEntityDrop',
-        description: 'Harvest a verified renewable entity drop with its registered mechanic, using bounded native navigation and exact inventory verification.',
+        description: 'Harvest a verified entity drop with its registered shear or combat mechanic, using bounded native navigation and exact inventory verification.',
         params: {
             'source': { type: 'string', description: 'Registered source entity type.' },
             'output': { type: 'ItemName', description: 'Exact expected inventory item.' },
@@ -2093,9 +2252,19 @@ export const actionsList = [
             'count': { type: 'int', description: 'Minimum inventory increase to collect.', domain: [1, 64, '[]'] },
             'range': { type: 'int', description: 'Bounded source-search radius.', domain: [16, 512, '[]'] },
             'allow_alternative': { type: 'boolean', description: 'Allow the owning planner to bind a physically observed material-family alternative.', optional: true, default: false },
+            'target_entity_id': { type: 'int', description: 'Optional exact loaded entity identity selected by deterministic retry judgment.', domain: [1, 2147483647, '[]'], optional: true },
         },
-        perform: runAsAction(async (agent, source, output, method, count, range, allow_alternative=false) => {
-            return await skills.harvestEntityDrop(agent.bot, source, output, method, count, range, allow_alternative);
+        perform: runAsAction(async (agent, source, output, method, count, range, allow_alternative=false, target_entity_id=null) => {
+            return await skills.harvestEntityDrop(
+                agent.bot,
+                source,
+                output,
+                method,
+                count,
+                range,
+                allow_alternative,
+                target_entity_id,
+            );
         }, false, 10)
     },
     {
@@ -2150,6 +2319,13 @@ export const actionsList = [
         description: 'Go to the nearest bed and sleep.',
         perform: runAsAction(async (agent) => {
             return await skills.goToBed(agent.bot);
+        })
+    },
+    {
+        name: '!shelterInPlace',
+        description: 'Emergency only: after proving a natural three-block shaft and one carried opaque building block, dig down and seal the pocket overhead. Needs no route, food, or weapon.',
+        perform: runAsAction(async (agent) => {
+            return await skills.shelterInPlace(agent.bot);
         })
     },
     {
@@ -2381,11 +2557,46 @@ export const actionsList = [
     },
     {
         name: '!fish',
-        description: 'Fish in nearby water until the requested number of catches is verified.',
-        params: {'count': { type: 'int', description: 'How many catches to verify.', domain: [1, 64] }},
-        perform: runAsAction(async (agent, count) => {
-            return await skills.fishForItems(agent.bot, count);
+        description: 'Fish in nearby water until the requested number of newly caught cookable cod or salmon is verified.',
+        params: {
+            'count': { type: 'int', description: 'How many cookable fish to verify.', domain: [1, 64] },
+            'baseline_manifest': { type: 'string', description: 'Optional machine-generated raw-fish item:count baseline.', optional: true, default: '' },
+        },
+        perform: runAsAction(async (agent, count, baseline_manifest = '') => {
+            return await skills.fishForItems(agent.bot, count, { baselineManifest: baseline_manifest });
         })
+    },
+    {
+        name: '!cookCaughtFish',
+        description: 'Cook only the newly caught cod or salmon above a durable baseline in one exact existing furnace.',
+        params: {
+            'count': { type: 'int', description: 'How many newly caught fish to cook.', domain: [1, 64] },
+            'x': { type: 'float', description: 'Assigned furnace x coordinate.' },
+            'y': { type: 'float', description: 'Assigned furnace y coordinate.' },
+            'z': { type: 'float', description: 'Assigned furnace z coordinate.' },
+            'dimension': { type: 'string', description: 'Assigned furnace dimension.' },
+            'baseline_raw_manifest': { type: 'string', description: 'Machine-generated raw-fish item:count baseline.' },
+            'baseline_cooked_manifest': { type: 'string', description: 'Machine-generated cooked-fish item:count baseline.' },
+        },
+        perform: runAsAction((
+            agent,
+            count,
+            x,
+            y,
+            z,
+            dimension,
+            baseline_raw_manifest,
+            baseline_cooked_manifest,
+        ) => skills.cookCaughtFish(
+            agent.bot,
+            count,
+            x,
+            y,
+            z,
+            dimension,
+            baseline_raw_manifest,
+            baseline_cooked_manifest,
+        )),
     },
     {
         name: '!enchantItem',
@@ -2680,14 +2891,15 @@ export const actionsList = [
     },
     {
         name: '!place',
-        description: 'Place a small bounded quantity of carried torches or blocks on safe nearby ground around the named player.',
+        description: 'Place a small bounded quantity of carried torches or blocks on safe nearby ground around the named player. Set shared true only when the player explicitly asks for a site usable by the nearby group.',
         params: {
             'player_name': { type: 'string', description: 'Name of the player to place near.' },
             'block_type': { type: 'BlockOrItemName', description: 'Canonical block or placeable item name, such as torch.' },
             'quantity': { type: 'int', description: 'Number to place.', domain: [1, 17] },
+            'shared': { type: 'boolean', description: 'Require one supported site within the shared reach envelope of the named player and nearby loaded players.', optional: true, default: false },
         },
-        perform: runAsAction(async (agent, player_name, block_type, quantity) => {
-            return await skills.placeNearPlayer(agent.bot, player_name, block_type, quantity);
+        perform: runAsAction(async (agent, player_name, block_type, quantity, shared) => {
+            return await skills.placeNearPlayer(agent.bot, player_name, block_type, quantity, { shared });
         })
     },
 ];

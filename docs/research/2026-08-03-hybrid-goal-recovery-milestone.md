@@ -80,3 +80,21 @@ The focused regressions protecting these rules are:
 Future architecture work must begin with one real compound gameplay request, reproduce the first functional blocker, repair the smallest existing seam, and prove the result in a disposable live world. New frameworks, schedulers, contracts, or harnesses require a demonstrated gameplay ceiling that cannot be repaired locally.
 
 The next work is not a new engine. It is the next useful vertical slice on this proven hybrid path.
+
+## 2026-08-10 strategic qualification addendum
+
+The BQ0-BQ2 qualification work extends this milestone without changing its
+architecture decision. The deterministic prerequisite planner still owns
+feasible plans, GoalDirector still owns truthful terminal classification, and
+ActionManager remains the sole physical executor. BQ0/BQ1 only emit
+fail-closed shadow evidence about the planner frontier.
+
+In the first ordinary-play BQ2 observation, `Bring me one netherite pickaxe.`
+produced a complete zero-method frontier and terminated as
+`unsupported_acquisition_leaf` / `capability_gap` with no physical attempt and
+no model call. That truthful result confirms the hybrid boundary: an absent
+capability is not permission to invent strategy authority. H1 remains gated
+unless later ordinary play exposes a repeatable unresolved frontier of at
+least two materially distinct feasible methods for the same completion
+contract. The detailed receipt is preserved in
+[the strategic reasoning rollout](../plans/2026-08-10-strategic-reasoning-rollout.md).

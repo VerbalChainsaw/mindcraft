@@ -6,6 +6,7 @@ import {
   isClearableWorksiteBlock,
   isNaturalFillBlock,
   placeBlock,
+  selectPlayerRelativePlacementSites,
   selectRedundantExcavationDebrisStack,
 } from '../../src/agent/library/skills.js';
 import Vec3 from 'vec3';
@@ -43,6 +44,37 @@ test('oriented fixtures use a reachable orientation ray down a raised worksite s
     fixtureOrientationStances(bot, anchor, { x: 0, y: 0, z: 1 }),
     [lowerStance],
   );
+});
+
+test('shared player placement selects supported serviceable ground for the loaded family', () => {
+  const dad = { id: 1, type: 'player', username: 'DadPlayer', position: new Vec3(0.5, 68, 0.5) };
+  const kid = { id: 2, type: 'player', username: 'KidPlayer', position: new Vec3(3.5, 68, 0.5) };
+  const self = { id: 3, type: 'player', username: 'IronSuiteProof', position: new Vec3(0.5, 68, 8.5) };
+  const bot = {
+    username: 'IronSuiteProof',
+    entity: self,
+    players: {
+      DadPlayer: { username: 'DadPlayer', entity: dad },
+      KidPlayer: { username: 'KidPlayer', entity: kid },
+      IronSuiteProof: { username: 'IronSuiteProof', entity: self },
+    },
+    entities: { 1: dad, 2: kid, 3: self },
+    blockAt(position) {
+      if (position.y === 67) return { name: 'grass_block', boundingBox: 'block', position };
+      return { name: 'air', boundingBox: 'empty', position };
+    },
+  };
+
+  const selection = selectPlayerRelativePlacementSites(bot, 'DadPlayer', { shared: true });
+
+  assert.equal(selection.code, 'sites_found');
+  assert.deepEqual(selection.participants, ['DadPlayer', 'KidPlayer']);
+  assert.ok(selection.sites.length > 0);
+  assert.ok(selection.sites[0].maxParticipantDistance <= 6);
+  assert.ok(selection.sites[0].serviceStanceCount >= 2);
+  assert.notDeepEqual(selection.sites[0].position, self.position.floored());
+  assert.ok(Object.isFrozen(selection));
+  assert.ok(Object.isFrozen(selection.sites));
 });
 
 test('Given a blueprint cell occupied by an unrelated block, strict placement refuses to break it', async () => {
@@ -89,6 +121,14 @@ test('strict placement uses the shared replaceable-cell contract', async () => {
         return { name: placed ? 'stone' : 'vine', boundingBox: placed ? 'block' : 'empty', position };
       }
       if (position.equals(target.offset(0, -1, 0))) {
+        return {
+          name: 'stone',
+          boundingBox: 'block',
+          position,
+          shapes: [[0, 0, 0, 1, 1, 1]],
+        };
+      }
+      if (position.equals(new Vec3(1, 63, 4))) {
         return {
           name: 'stone',
           boundingBox: 'block',

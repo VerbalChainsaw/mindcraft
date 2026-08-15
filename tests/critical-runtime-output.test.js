@@ -27,10 +27,21 @@ import {
   parsePlayerListAfterLatestCommand,
   validatePreflightPayloads,
 } from '../tools/verify-behavior-runtime.mjs';
+import {
+  createFixtureAdmissionReceipt,
+  FixtureAdmissionError,
+  fixtureCheckStatus,
+  reconcileAdvisorySetupAcknowledgement,
+  requireFixtureAdmission,
+} from '../tools/validation/fixture-admission.mjs';
 import { OwnedLocalServices } from '../src/mindcraft/owned-local-services.js';
 import { terminateOwnedProcessTree } from '../src/mindcraft/process-tree.js';
 import { stopMindcraftRuntime } from '../src/mindcraft/stack-shutdown.js';
 import {
+  attemptLocalNavigationEscape,
+  goToPlayer,
+  localNavigationEscapeStances,
+  probeSafeNavigationGoal,
   probeSafeRoundTripNavigationStances,
   ResponsiveFollowGoal,
 } from '../src/agent/library/skills.js';
@@ -162,6 +173,216 @@ test('a cave stance is bindable only when native Pathfinder proves the return ro
   assert.equal(accepted.returnStatus, 'success');
 });
 
+test('local navigation recovery offers supported nearby stances without inventing a descent', () => {
+  const origin = new Vec3(0, 64, 0);
+  const bot = {
+    entity: { position: origin.clone() },
+    blockAt(position) {
+      if (position.y === 63) {
+        return { name: 'stone', boundingBox: 'block', position: position.clone() };
+      }
+      return { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+  };
+
+  const stances = localNavigationEscapeStances(bot, origin);
+  assert.ok(stances.length > 0);
+  assert.ok(stances.every(stance => stance.y === origin.y));
+  assert.ok(stances.every(stance => Math.hypot(stance.x, stance.z) >= 1));
+  assert.ok(stances.every(stance => Math.hypot(stance.x, stance.z) <= 4));
+});
+
+test('local navigation recovery does not execute a stance with no native return route', async () => {
+  const registry = minecraftData('1.21.11');
+  const origin = new Vec3(0, 64, 0);
+  let executions = 0;
+  const bot = {
+    registry,
+    traversalPolicy: 'preserve',
+    interrupt_code: false,
+    entity: { position: origin.clone(), isInLava: false },
+    inventory: { items: () => [] },
+    blockAt(position) {
+      if (position.y === 63) {
+        return { name: 'stone', boundingBox: 'block', position: position.clone() };
+      }
+      return { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    pathfinder: {
+      thinkTimeout: 500,
+      tickTimeout: 40,
+      getPathTo() {
+        return { status: 'success', path: [new Vec3(1, 64, 0)] };
+      },
+      getPathFromTo() {
+        return (function * noReturnRoute() {
+          yield { result: { status: 'noPath', path: [] } };
+        }());
+      },
+      goto() {
+        executions += 1;
+        return Promise.resolve();
+      },
+    },
+  };
+
+  const outcome = await attemptLocalNavigationEscape(bot);
+  assert.equal(outcome.success, false);
+  assert.equal(outcome.outcome, 'return_route_unreachable');
+  assert.equal(executions, 0);
+  assert.deepEqual(bot.entity.position, origin);
+});
+
+test('planned navigation distinguishes a missing complete route before execution', () => {
+  const origin = new Vec3(0, 64, 0);
+  const bot = {
+    entity: { position: origin.clone() },
+    blockAt(position) {
+      return position.y === 63
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    pathfinder: {
+      getPathTo() {
+        return { status: 'noPath', path: [new Vec3(1, 63, 0)] };
+      },
+    },
+  };
+  const route = probeSafeNavigationGoal(
+    bot,
+    { isEnd: () => false, heuristic: () => 1 },
+    500,
+    {},
+  );
+
+  assert.deepEqual(route, {
+    reachable: false,
+    status: 'noPath',
+    pathLength: 1,
+  });
+  assert.deepEqual(bot.entity.position, origin);
+});
+
+test('planned navigation continues native Pathfinder partial compute slices to a terminal route', () => {
+  const origin = new Vec3(0, 64, 0);
+  let slices = 0;
+  const bot = {
+    entity: { position: origin.clone() },
+    blockAt(position) {
+      return position.y === 63
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    pathfinder: {
+      tickTimeout: 40,
+      getPathFromTo() {
+        return (function * completeRoute() {
+          slices += 1;
+          yield { result: { status: 'partial', path: [new Vec3(1, 64, 0)] } };
+          slices += 1;
+          yield {
+            result: {
+              status: 'success',
+              path: [new Vec3(1, 64, 0), new Vec3(2, 64, 0)],
+            },
+          };
+        }());
+      },
+    },
+  };
+
+  const route = probeSafeNavigationGoal(
+    bot,
+    { isEnd: () => false, heuristic: () => 1 },
+    500,
+    {},
+  );
+
+  assert.deepEqual(route, {
+    reachable: true,
+    status: 'success',
+    pathLength: 2,
+  });
+  assert.equal(slices, 2);
+  assert.deepEqual(bot.entity.position, origin);
+});
+
+test('player navigation rejects the bot itself as a target instead of reporting success', async () => {
+  const bot = { username: 'IronSuiteProof', output: '' };
+  const reached = await goToPlayer(bot, 'IronSuiteProof', 2);
+
+  assert.equal(reached, false);
+  assert.equal(bot.lastActionEvidence.outcome, 'invalid_self_target');
+  assert.match(bot.output, /identifies this bot, not the requesting player/);
+});
+
+test('player navigation plans against its verified one-block settlement envelope', async () => {
+  const registry = minecraftData('1.21.11');
+  const dad = {
+    id: 2,
+    type: 'player',
+    username: 'DadPlayer',
+    position: new Vec3(0.5, 69, 0.5),
+  };
+  const terminalNode = new Vec3(1, 66, 0);
+  const terminalPosition = new Vec3(1.5, 66, 0.5);
+  let planned = false;
+  const bot = new EventEmitter();
+  Object.assign(bot, {
+    username: 'IronSuiteProof',
+    output: '',
+    registry,
+    traversalPolicy: 'preserve',
+    interrupt_code: false,
+    players: { DadPlayer: { username: 'DadPlayer', entity: dad } },
+    entities: { 2: dad },
+    modes: { isOn: () => false },
+    inventory: { items: () => [] },
+    entity: {
+      position: new Vec3(4.5, 66, 0.5),
+      isInLava: false,
+      isInWater: false,
+      onGround: true,
+      effects: {},
+    },
+    blockAt(position) {
+      return position.y <= 65
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    clearControlStates() {},
+  });
+  bot.pathfinder = {
+    tickTimeout: 40,
+    getPathFromTo(_movements, _start, goal) {
+      planned = goal.isEnd(terminalNode);
+      return (function * plannedRoute() {
+        yield {
+          result: {
+            status: planned ? 'success' : 'noPath',
+            path: planned ? [terminalNode.clone()] : [],
+          },
+        };
+      }());
+    },
+    setMovements() {},
+    setGoal() {},
+    getLastStuckState: () => null,
+    goto() {
+      bot.entity.position = terminalPosition.clone();
+      return Promise.resolve();
+    },
+  };
+
+  const reached = await goToPlayer(bot, 'DadPlayer', 3);
+
+  assert.equal(planned, true);
+  assert.equal(reached, true);
+  assert.equal(bot.lastActionEvidence.outcome, 'arrived');
+  assert.ok(bot.lastActionEvidence.distance > 3);
+  assert.ok(bot.lastActionEvidence.distance <= 4);
+});
+
 test('Follow remains active when the player is dry but the nearby bot stance is still water', () => {
   const blocks = new Map();
   const put = (x, y, z, name, boundingBox) => {
@@ -253,6 +474,113 @@ test('runtime verifier preflight requires reachable Minecraft and a registered s
       agents: [{ ...stoppedAgent, state: 'running', in_game: true }],
     }, 'CriticalBot'),
     /must be stopped/,
+  );
+});
+
+test('fixture admission produces a bounded immutable receipt for confirmed preconditions', () => {
+  const receipt = createFixtureAdmissionReceipt({
+    id: 'family-workshop',
+    observedAt: 1234,
+    request: { message: '!stay(1)', maximumLength: 256, singleAuthorityUnit: true },
+    checks: [
+      {
+        id: 'native_route_complete',
+        status: fixtureCheckStatus(true),
+        code: 'route_complete',
+        detail: 'Native Pathfinder returned success.',
+        source: 'Pathfinder',
+        observed: 'status=success pathLength=17',
+      },
+      {
+        id: 'interaction_stance_supported',
+        status: 'confirmed',
+        source: 'interaction stance contract',
+      },
+      {
+        id: 'optional_weather_note',
+        status: 'unknown',
+        required: false,
+      },
+    ],
+  });
+
+  assert.equal(receipt.outcome, 'admitted');
+  assert.equal(receipt.admitted, true);
+  assert.deepEqual(receipt.failedCheckIds, []);
+  assert.deepEqual(receipt.unknownCheckIds, []);
+  assert.equal(requireFixtureAdmission(receipt), receipt);
+  assert.equal(Object.isFrozen(receipt), true);
+  assert.equal(Object.isFrozen(receipt.checks), true);
+  assert.equal(Object.isFrozen(receipt.checks[0]), true);
+  assert.throws(() => receipt.checks.push({}), TypeError);
+});
+
+test('fixture admission fails closed with exact invalid check identifiers', () => {
+  const receipt = createFixtureAdmissionReceipt({
+    id: 'blocked-workshop',
+    request: { message: 'x'.repeat(257), maximumLength: 256, singleAuthorityUnit: true },
+    checks: [
+      {
+        id: 'native_route_complete',
+        status: 'failed',
+        code: 'path_not_found',
+        source: 'Pathfinder',
+      },
+    ],
+  });
+
+  assert.equal(receipt.outcome, 'fixture_invalid');
+  assert.equal(receipt.admitted, false);
+  assert.deepEqual(receipt.failedCheckIds, ['native_route_complete', 'request.within_limit']);
+  assert.throws(
+    () => requireFixtureAdmission(receipt),
+    error => error instanceof FixtureAdmissionError
+      && error.code === 'fixture_invalid'
+      && error.receipt === receipt,
+  );
+});
+
+test('fixture admission preserves missing required evidence as unknown', () => {
+  const receipt = createFixtureAdmissionReceipt({
+    id: 'unknown-custody',
+    request: { message: '!stay(1)', maximumLength: 256, singleAuthorityUnit: true },
+    checks: [
+      {
+        id: 'exact_item_custody',
+        status: fixtureCheckStatus(undefined),
+        source: 'inventory snapshot',
+      },
+    ],
+  });
+
+  assert.equal(fixtureCheckStatus(false), 'failed');
+  assert.equal(receipt.outcome, 'fixture_unknown');
+  assert.deepEqual(receipt.unknownCheckIds, ['exact_item_custody']);
+  assert.throws(() => requireFixtureAdmission(receipt), /exact_item_custody/);
+});
+
+test('setup acknowledgement reconciliation trusts authoritative readiness without hiding terminal setup failure', () => {
+  assert.deepEqual(
+    reconcileAdvisorySetupAcknowledgement(null, true),
+    {
+      status: 'confirmed',
+      code: 'setup_authoritatively_reconciled',
+      acknowledgement: 'missing',
+      authoritativeState: 'confirmed',
+    },
+  );
+  assert.deepEqual(
+    reconcileAdvisorySetupAcknowledgement({ success: false }, undefined),
+    {
+      status: 'failed',
+      code: 'setup_explicitly_rejected',
+      acknowledgement: 'rejected',
+      authoritativeState: 'unknown',
+    },
+  );
+  assert.equal(
+    reconcileAdvisorySetupAcknowledgement(null, undefined).status,
+    'unknown',
   );
 });
 

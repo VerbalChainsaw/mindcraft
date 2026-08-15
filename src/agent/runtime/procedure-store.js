@@ -13,6 +13,7 @@ const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_COMMANDS = new Set([
   '!collectWoodInRange',
   '!collectBlocksInRange',
+  '!harvestEntityDrop',
   '!harvestMatureCrop',
   '!prepareMaterial',
   '!prepareTool',

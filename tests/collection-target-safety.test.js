@@ -6,8 +6,12 @@ import {
     assessTreeScaffoldDescentStep,
     assessMiningSurfaceDisturbance,
     assessStableMiningCollectionTarget,
+    authorizeTemporaryTreeScaffoldItems,
     findStableMiningCollectionCandidates,
     isLocalNavigationFoliage,
+    protectedMiningReturnGeometry,
+    reclaimSupportingTreeScaffolds,
+    settleTreeTransactionOnTerrain,
     treeScaffoldPositionAuthorized,
     treeSettlementStances,
 } from '../src/agent/library/skills.js';
@@ -48,6 +52,19 @@ function fixture({ supported }) {
     };
 }
 
+test('preserved mining return geometry reserves support, body, and head cells from later collection', () => {
+    const protectedCells = protectedMiningReturnGeometry([
+        { x: 8062, y: -1, z: 7919 },
+        { x: 8061, y: -2, z: 7919 },
+    ]);
+
+    assert.equal(protectedCells.has('8062:-2:7919'), true);
+    assert.equal(protectedCells.has('8062:-1:7919'), true);
+    assert.equal(protectedCells.has('8062:0:7919'), true);
+    assert.equal(protectedCells.has('8062:-3:7919'), false);
+    assert.equal(protectedCells.has('8063:-2:7919'), false);
+});
+
 test('tree scaffolding is authorized only inside voxels from the exact bound component', () => {
     const tree = {
         logs: [
@@ -60,6 +77,31 @@ test('tree scaffolding is authorized only inside voxels from the exact bound com
     assert.equal(treeScaffoldPositionAuthorized(tree, new Vec3(8, 65, 3)), true);
     assert.equal(treeScaffoldPositionAuthorized(tree, new Vec3(9, 65, 3)), false);
     assert.equal(treeScaffoldPositionAuthorized(tree, new Vec3(8, 67, 3)), false);
+});
+
+test('whole-tree movement can reuse collected logs as reversible scaffold material', () => {
+    const movements = { scafoldingBlocks: [1, 2] };
+    const bot = {
+        registry: {
+            itemsByName: {
+                spruce_log: { id: 37 },
+                oak_log: { id: 38 },
+            },
+        },
+    };
+
+    assert.equal(
+        authorizeTemporaryTreeScaffoldItems(
+            bot,
+            movements,
+            new Set(['spruce_log', 'oak_log', 'missing_log']),
+        ),
+        movements,
+    );
+    assert.deepEqual(movements.scafoldingBlocks, [1, 2, 37, 38]);
+
+    authorizeTemporaryTreeScaffoldItems(bot, movements, new Set(['spruce_log']));
+    assert.deepEqual(movements.scafoldingBlocks, [1, 2, 37, 38]);
 });
 
 test('tree settlement steps onto natural terrain instead of accepting its owned pillar', () => {
@@ -88,6 +130,35 @@ test('tree settlement steps onto natural terrain instead of accepting its owned 
 
     assert.ok(stances.some(position => position.equals(new Vec3(9, 64, 3))));
     assert.ok(stances.every(position => !position.equals(new Vec3(8, 67, 3))));
+});
+
+test('tree settlement trusts an uncancelled verified terrain stance after navigation recovery', async () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const base = new Vec3(8, 66, 3);
+    put(block('grass_block', 9, 63, 3));
+    const bot = {
+        interrupt_code: false,
+        entity: { position: new Vec3(8.5, 67, 3.5) },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+
+    const result = await settleTreeTransactionOnTerrain(
+        bot,
+        { base, logs: [block('spruce_log', 8, 66, 3)] },
+        [],
+        async () => {
+            bot.entity.position = new Vec3(9.5, 64, 3.5);
+            return false;
+        },
+    );
+
+    assert.equal(result.settled, true);
+    assert.equal(result.outcome, 'tree_terrain_settled');
+    assert.ok(result.target.equals(new Vec3(9, 64, 3)));
 });
 
 test('tree scaffold teardown descends through exact owned support before natural terrain', () => {
@@ -120,6 +191,114 @@ test('tree scaffold teardown descends through exact owned support before natural
     const unsafe = assessTreeScaffoldDescentStep(bot, scaffolds);
     assert.equal(unsafe.ok, false);
     assert.equal(unsafe.outcome, 'tree_scaffold_landing_unsafe');
+});
+
+test('tree scaffold teardown settles each one-block landing before breaking the next support', async () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const upper = block('dirt', 8, 66, 3);
+    const lower = block('dirt', 8, 65, 3);
+    put(upper);
+    put(lower);
+    put(block('grass_block', 8, 64, 3));
+    const bot = {
+        interrupt_code: false,
+        entity: { position: new Vec3(8.5, 67, 3.5) },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+    const scaffolds = [
+        { position: upper.position, itemName: 'dirt' },
+        { position: lower.position, itemName: 'dirt' },
+    ];
+    const breaks = [];
+    const settlements = [];
+
+    const result = await reclaimSupportingTreeScaffolds(bot, scaffolds, {
+        async breakScaffold(_bot, x, y, z) {
+            breaks.push(new Vec3(x, y, z));
+            blocks.delete(`${x}:${y}:${z}`);
+            bot.entity.position = new Vec3(x + 0.5, y, z + 0.5);
+            return true;
+        },
+        async settleStandingCell() {
+            const feet = bot.entity.position.floored();
+            settlements.push(feet.clone());
+            return feet;
+        },
+    });
+
+    assert.equal(result.complete, true);
+    assert.equal(result.reclaimed, 2);
+    assert.deepEqual(breaks.map(position => position.y), [66, 65]);
+    assert.deepEqual(settlements.map(position => position.y), [66, 65]);
+});
+
+test('tree settlement waits for the physical landing after navigation resolves', async () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const base = new Vec3(8, 66, 3);
+    put(block('grass_block', 9, 63, 3));
+    const bot = {
+        interrupt_code: false,
+        entity: { position: new Vec3(8.5, 67, 3.5) },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+
+    const result = await settleTreeTransactionOnTerrain(
+        bot,
+        { base, logs: [block('spruce_log', 8, 66, 3)] },
+        [],
+        async () => {
+            setTimeout(() => {
+                bot.entity.position = new Vec3(9.5, 64, 3.5);
+            }, 50);
+            return true;
+        },
+    );
+
+    assert.equal(result.settled, true);
+    assert.equal(result.outcome, 'tree_terrain_settled');
+    assert.ok(result.target.equals(new Vec3(9, 64, 3)));
+});
+
+test('tree settlement refreshes a legal terrain stance after the candidate snapshot changes', async () => {
+    const blocks = new Map();
+    const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);
+    const remove = position => blocks.delete(`${position.x}:${position.y}:${position.z}`);
+    const base = new Vec3(8, 66, 3);
+    const finalFeet = new Vec3(9, 64, 3);
+    put(block('grass_block', 8, 63, 4));
+    put(block('grass_block', 9, 63, 3));
+    put(block('spruce_leaves', 9, 64, 3));
+    const bot = {
+        interrupt_code: false,
+        entity: { position: new Vec3(8.5, 67, 3.5) },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+
+    const result = await settleTreeTransactionOnTerrain(
+        bot,
+        { base, logs: [block('spruce_log', 8, 66, 3)] },
+        [],
+        async () => {
+            remove(finalFeet);
+            bot.entity.position = new Vec3(9.5, 64, 3.5);
+            return false;
+        },
+    );
+
+    assert.equal(result.settled, true);
+    assert.equal(result.outcome, 'tree_terrain_settled');
+    assert.ok(result.target.equals(finalFeet));
 });
 
 test('mining allows a compact entrance but rejects a visible surface trench before excavation', () => {

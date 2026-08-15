@@ -27,12 +27,30 @@ import { companionContextFor, normalizePlayerDistance } from '../runtime/compani
 import {
     bindRejectedCollectionTarget,
     rankCollectionCandidates,
+    rankWholeTreeCandidates,
 } from '../runtime/collection-candidate-selector.js';
-import { chooseTacticalCombatDecision } from '../runtime/combat-decision.js';
-import { observeCombatDamage } from '../runtime/combat-attribution.js';
+import {
+    chooseTacticalCombatDecision,
+    reconcileTacticalRetreatHealth,
+} from '../runtime/combat-decision.js';
+import {
+    confirmBotAttributedCombatDeath,
+    observeCombatDamage,
+} from '../runtime/combat-attribution.js';
 import { chooseExplorationRoute } from '../runtime/exploration-route.js';
 import { selectFarmSites, selectRememberedFarmStances } from '../runtime/farm-site-selector.js';
 import { interruptibleDelay } from '../runtime/interruptible-delay.js';
+import { isNightTime } from '../runtime/survival-policy.js';
+import {
+    createInteractionStanceReceipt,
+    INTERACTION_STANCE_FAILURE_STAGES,
+    interactionStanceConfirmed,
+    interactionStanceFailure,
+    interactionStancePostconditionFailed,
+    interactionStanceReady,
+    interactionStanceRejected,
+    normalizeInteractionStanceReceipt,
+} from '../runtime/interaction-stance.js';
 import {
     bindCarriedPlankRecipe,
     carriedPlankCount,
@@ -53,7 +71,9 @@ import {
     selectBoundedMiningProgressStances,
 } from '../runtime/mining-corridor-planner.js';
 import {
+    isDrinkableHealingPotion,
     isWaterPotion,
+    potionIdentity,
     potionFingerprint,
     resolveBrewingPlan,
 } from '../runtime/brewing-plan.js';
@@ -84,6 +104,11 @@ const MAX_PVP_ENGAGEMENT_MS = 30_000;
 const MAX_BOT_OUTPUT_CHARS = 2_048;
 const MOVE_AWAY_HISTORY_TTL_MS = 10 * 60_000;
 const MOVE_AWAY_HISTORY_LIMIT = 4;
+const COURTESY_GROUP_HORIZONTAL_RADIUS = 8;
+const COURTESY_GROUP_VERTICAL_RADIUS = 3;
+const COURTESY_GROUP_MAX_PARTICIPANTS = 8;
+const COURTESY_GROUP_GRID_GAIN = 2;
+const COURTESY_GROUP_VERIFIED_GAIN = 0.25;
 const MEANINGFUL_RELOCATION_VERTICAL_DROP = 8;
 const MEANINGFUL_RELOCATION_SCAN_RADIUS = 64;
 const MEANINGFUL_RELOCATION_MAX_CANDIDATES = 32;
@@ -93,6 +118,12 @@ const ATTACK_CONFIRM_TIMEOUT_MS = 900;
 const ATTACK_INTERRUPT_POLL_MS = 50;
 const MAX_TACTICAL_COMBAT_STEPS = 24;
 const TACTICAL_COMBAT_RANGE = 16;
+// A deliberate hostile harvest is optional work, so a loaded entity is not
+// automatically a sensible target. Keep pursuit local to the current gameplay
+// level; otherwise Mineflayer can legitimately route toward a spider in a
+// distant cave and turn a trivial prerequisite into an unreturnable expedition.
+const DELIBERATE_HOSTILE_PURSUIT_RANGE = 24;
+const DELIBERATE_HOSTILE_VERTICAL_RANGE = 6;
 const TACTICAL_BOW_CHARGE_MS = 900;
 const TACTICAL_SHOT_CONFIRM_MS = 1_500;
 const TABLE_DROP_SEARCH_RADIUS = 4;
@@ -124,14 +155,16 @@ const NAVIGATION_RECOVERY_STALL_TIMEOUT_MS = 1_500;
 const NAVIGATION_PROGRESS_DISTANCE = 0.75;
 const NAVIGATION_GOAL_PROGRESS_DELTA = 0.25;
 const NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS = 4_000;
+const SUPPORTED_STANCE_STABILITY_MS = 150;
 const NAVIGATION_RECOVERY_DISTANCE = 1;
 const NAVIGATION_RECOVERY_RADIUS = 4;
 const MAX_NAVIGATION_RECOVERY_ATTEMPTS = 1;
 const GROUND_SETTLE_TIMEOUT_MS = 800;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
-const SHALLOW_WATER_SHORE_SCAN_RADIUS = 32;
+const SHALLOW_WATER_SHORE_SCAN_RADIUS = 48;
 const DROWNING_RECOVERY_OXYGEN = 20;
 const DROWNING_FINAL_ASCENT_RESERVE_MS = 2_000;
+const DROWNING_SHORE_ATTEMPT_TIMEOUT_MS = 10_000;
 const DELIVERY_MIN_DROP_DISTANCE = 1.6;
 const DELIVERY_MAX_DROP_DISTANCE = 3.25;
 const DELIVERY_MAX_DROP_AXIS_OFFSET = 0.65;
@@ -230,8 +263,25 @@ function followTargetRequiresDrySettlement(bot, entity) {
     );
 }
 
-export function isCompatibleFollowSettlementStance(bot, entity, node) {
-    if (!followTargetRequiresDrySettlement(bot, entity)) return true;
+export function syncFollowSurfaceAscent(bot, {
+    botInLiquid = false,
+    playerDryAndSupported = false,
+    active = false,
+} = {}) {
+    const shouldMaintain = botInLiquid && playerDryAndSupported;
+    if (shouldMaintain) {
+        // Pathfinder continues to own horizontal locomotion and the route. This
+        // one native Mineflayer input prevents a shoreline-bound follow from
+        // repeatedly diving below the breathing line while that route executes.
+        // Refresh it every sample because Pathfinder also updates controls.
+        bot.setControlState('jump', true);
+        return true;
+    }
+    if (active) bot.setControlState('jump', false);
+    return false;
+}
+
+export function isDrySupportedStandingStance(bot, node) {
     if (!node || typeof bot?.blockAt !== 'function') return false;
     const position = new Vec3(
         Math.floor(node.x),
@@ -245,6 +295,11 @@ export function isCompatibleFollowSettlementStance(bot, entity, node) {
         && !isLiquidGameplayBlock(feet)
         && isTraversableShoreSupport(support)
     );
+}
+
+export function isCompatibleFollowSettlementStance(bot, entity, node) {
+    return !followTargetRequiresDrySettlement(bot, entity)
+        || isDrySupportedStandingStance(bot, node);
 }
 
 export class ResponsiveFollowGoal extends pf.goals.GoalFollow {
@@ -512,6 +567,15 @@ function safeFoodPoints(bot) {
     }, 0);
 }
 
+function immediatelyEdibleFoodPoints(bot) {
+    const foods = bot.registry?.foodsByName || {};
+    return bot.inventory.items().reduce((total, item) => {
+        const food = foods[item.name];
+        if (!food || UNSAFE_FOOD_ITEMS.has(item.name)) return total;
+        return total + (Math.max(0, Number(item.count) || 0) * Math.max(0, Number(food.foodPoints) || 0));
+    }, 0);
+}
+
 function cropAge(block) {
     try {
         const age = Number(block?.getProperties?.()?.age);
@@ -770,6 +834,20 @@ function directlyUsableWorkstation(bot, block, range = 4.5) {
     }
 }
 
+/**
+ * Project-owned feasibility for containers before Pathfinder or Mineflayer
+ * owns an attempt. Barrels do not animate into the block above them. Chests
+ * and trapped chests do, and Paper correctly rejects activation when a
+ * colliding block occupies that lid space.
+ */
+export function isStorageContainerInteractionFeasible(bot, block) {
+    if (!block?.position || !EXPLORATION_CONTAINER_BLOCKS.includes(block.name)) return false;
+    if (block.name === 'barrel') return true;
+    if (typeof bot?.blockAt !== 'function') return false;
+    const above = bot.blockAt(block.position.offset(0, 1, 0));
+    return Boolean(above) && above.boundingBox === 'empty';
+}
+
 async function bindExistingWorkstation(bot, itemName, range = 64, navigate = null, exactTarget = null) {
     if (exactTarget?.position) {
         const expectedDimension = normalizedDimension(exactTarget.dimension);
@@ -801,12 +879,34 @@ async function bindExistingWorkstation(bot, itemName, range = 64, navigate = nul
             };
         }
         if (observed?.name === itemName && directlyUsableWorkstation(bot, observed)) {
-            return { block: observed, outcome: 'ready', position, exact: true };
+            return {
+                block: observed,
+                outcome: 'ready',
+                position,
+                exact: true,
+                interactionStance: interactionStanceReady({
+                    kind: 'workstation',
+                    target: { name: itemName, ...position },
+                    code: 'already_at_stance',
+                    candidateCount: 1,
+                    selectedStance: observedSupportedStandingCell(bot),
+                    pathStatus: 'already_at_stance',
+                }),
+            };
         }
 
-        const approached = typeof navigate === 'function'
-            ? await navigate(bot, position.x, position.y, position.z, 2)
-            : await goToGoal(bot, new pf.goals.GoalNear(position.x, position.y, position.z, 2));
+        const goal = new pf.goals.GoalLookAtBlock(position, bot.world, {
+            reach: 4.5,
+            entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+        });
+        const interactionStance = await reachInteractionStance(bot, {
+            kind: 'workstation',
+            target: { name: itemName, ...position },
+            goal,
+            navigateGoal: typeof navigate === 'function'
+                ? async () => await navigate(bot, position.x, position.y, position.z, 2)
+                : goToGoal,
+        });
         if (bot.interrupt_code) return { block: null, outcome: 'interrupted', position, exact: true };
         observed = bot.blockAt(position);
         if (observed?.name !== itemName) {
@@ -818,25 +918,9 @@ async function bindExistingWorkstation(bot, itemName, range = 64, navigate = nul
                 exact: true,
             };
         }
-        if (!approached) {
-            return { block: null, outcome: 'unreachable', position, exact: true };
-        }
-        const settled = directlyUsableWorkstation(bot, observed)
-            || await goToGoal(bot, new pf.goals.GoalLookAtBlock(position, bot.world, { reach: 4 }));
-        if (bot.interrupt_code) return { block: null, outcome: 'interrupted', position, exact: true };
-        const verified = bot.blockAt(position);
-        if (verified?.name !== itemName) {
-            return {
-                block: null,
-                outcome: 'target_changed',
-                position,
-                observed: verified?.name || 'unloaded',
-                exact: true,
-            };
-        }
-        return settled
-            ? { block: verified, outcome: 'ready', position, exact: true }
-            : { block: null, outcome: 'unreachable', position, exact: true };
+        return interactionStance.status === 'ready'
+            ? { block: observed, outcome: 'ready', position, exact: true, interactionStance }
+            : { block: null, outcome: 'unreachable', position, exact: true, interactionStance };
     }
 
     let block = null;
@@ -849,15 +933,33 @@ async function bindExistingWorkstation(bot, itemName, range = 64, navigate = nul
 
     const position = block.position.clone();
     if (directlyUsableWorkstation(bot, block)) {
-        return { block, outcome: 'ready', position };
+        return {
+            block,
+            outcome: 'ready',
+            position,
+            interactionStance: interactionStanceReady({
+                kind: 'workstation',
+                target: { name: itemName, ...position },
+                code: 'already_at_stance',
+                candidateCount: 1,
+                selectedStance: observedSupportedStandingCell(bot),
+                pathStatus: 'already_at_stance',
+            }),
+        };
     }
 
-    const reached = typeof navigate === 'function'
-        ? await navigate(bot, position.x, position.y, position.z, 2)
-        : await goToGoal(
-            bot,
-            new pf.goals.GoalLookAtBlock(position, bot.world, { reach: 4 }),
-        );
+    const goal = new pf.goals.GoalLookAtBlock(position, bot.world, {
+        reach: 4.5,
+        entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+    });
+    const interactionStance = await reachInteractionStance(bot, {
+        kind: 'workstation',
+        target: { name: itemName, ...position },
+        goal,
+        navigateGoal: typeof navigate === 'function'
+            ? async () => await navigate(bot, position.x, position.y, position.z, 2)
+            : goToGoal,
+    });
     if (bot.interrupt_code) return { block: null, outcome: 'interrupted', position };
 
     const observed = bot.blockAt(position);
@@ -874,10 +976,10 @@ async function bindExistingWorkstation(bot, itemName, range = 64, navigate = nul
     // a neighboring table or wall edge can occlude the block center while an
     // exposed face remains reachable. The real open/craft call below is the
     // final physical verification of that native stance.
-    if (!reached) {
-        return { block: null, outcome: 'unreachable', position };
+    if (interactionStance.status !== 'ready') {
+        return { block: null, outcome: 'unreachable', position, interactionStance };
     }
-    return { block: observed, outcome: 'ready', position };
+    return { block: observed, outcome: 'ready', position, interactionStance };
 }
 
 async function recoverLocalWorkstation(bot, temporaryWorkstation) {
@@ -1201,21 +1303,52 @@ async function approachContainerBlock(bot, selected) {
     if (!selected?.position) return { block: null, outcome: 'container_not_found' };
     const position = selected.position.clone();
     const expectedName = selected.name;
-    const reached = await goToGoal(
-        bot,
-        new pf.goals.GoalLookAtBlock(position, bot.world, {
-            reach: 4,
-            entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
-        }),
-    );
-    if (bot.interrupt_code) return { block: null, outcome: 'interrupted' };
+    const target = { name: expectedName || 'container', ...position };
+    if (!isStorageContainerInteractionFeasible(bot, selected)) {
+        return {
+            block: null,
+            outcome: 'container_activation_blocked',
+            observed: bot.blockAt(position.offset(0, 1, 0))?.name || 'unloaded',
+            interactionStance: interactionStanceFailure(
+                INTERACTION_STANCE_FAILURE_STAGES.NO_LEGAL_STANCE,
+                {
+                    kind: 'container',
+                    target,
+                    code: 'container_activation_blocked',
+                    candidateCount: 0,
+                },
+            ),
+        };
+    }
+    const goal = new pf.goals.GoalLookAtBlock(position, bot.world, {
+        reach: 4.5,
+        entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+    });
+    const interactionStance = directlyUsableWorkstation(bot, selected)
+        ? interactionStanceReady({
+            kind: 'container',
+            target,
+            code: 'already_at_stance',
+            candidateCount: 1,
+            selectedStance: observedSupportedStandingCell(bot),
+            pathStatus: 'already_at_stance',
+        })
+        : await reachInteractionStance(bot, { kind: 'container', target, goal });
+    if (bot.interrupt_code || interactionStance.status === 'interrupted') {
+        return { block: null, outcome: 'interrupted', interactionStance };
+    }
     const observed = bot.blockAt(position);
     if (observed?.name !== expectedName || !EXPLORATION_CONTAINER_BLOCKS.includes(observed?.name)) {
-        return { block: null, outcome: 'container_changed', observed: observed?.name || 'unloaded' };
+        return {
+            block: null,
+            outcome: 'container_changed',
+            observed: observed?.name || 'unloaded',
+            interactionStance,
+        };
     }
-    return reached
-        ? { block: observed, outcome: 'ready' }
-        : { block: null, outcome: 'chest_unreachable' };
+    return interactionStance.status === 'ready'
+        ? { block: observed, outcome: 'ready', interactionStance }
+        : { block: null, outcome: 'chest_unreachable', interactionStance };
 }
 
 async function loadAssignedContainerBlock(bot, exactPosition) {
@@ -1367,6 +1500,44 @@ function safeMovements(bot) {
     return guardExecutableDiagonalCorners(movements);
 }
 
+export function configureDryRouteMovements(movements, bot) {
+    if (!movements || typeof movements !== 'object') return movements;
+    const waterType = bot?.registry?.blocksByName?.water?.id;
+    if (Number.isFinite(waterType)) movements.blocksToAvoid?.add?.(waterType);
+    movements.infiniteLiquidDropdownDistance = false;
+    return movements;
+}
+
+function dryRouteMovements(bot) {
+    return configureDryRouteMovements(safeMovements(bot), bot);
+}
+
+/**
+ * Combat pursuit is a temporary safety reflex, not permission to consume a
+ * one-way traversal edge. Keep mineflayer-pvp and Pathfinder in full control
+ * of locomotion, but restrict the Movements instance they already accept to
+ * standing-cell transitions Kevin can ordinarily reverse after the threat is
+ * gone. This is intentionally stricter than general survival-safe movement:
+ * a four-block survivable drop can still strand the companion below a player.
+ */
+export function configureReturnableCombatMovements(movements) {
+    if (!movements || typeof movements !== 'object') return movements;
+    movements.canDig = false;
+    movements.canPlaceBlocks = false;
+    movements.allow1by1towers = false;
+    movements.allowParkour = false;
+    movements.maxDropDown = Math.min(
+        Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+        1,
+    );
+    movements.infiniteLiquidDropdownDistance = false;
+    return movements;
+}
+
+function returnableCombatMovements(bot) {
+    return configureReturnableCombatMovements(safeMovements(bot));
+}
+
 export function guardExecutableDiagonalCorners(movements) {
     if (!movements || typeof movements.getBlock !== 'function'
         || typeof movements.getMoveDiagonal !== 'function') {
@@ -1401,7 +1572,7 @@ export function guardExecutableDiagonalCorners(movements) {
  * Site selectors use this before persisting a target; actual locomotion uses
  * goToGoal with the same safeMovements policy.
  */
-export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
+export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000, movements = null) {
     const positions = (Array.isArray(stances) ? stances : [])
         .filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
         .map(position => new Vec3(
@@ -1409,7 +1580,11 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
             Math.floor(position.y),
             Math.floor(position.z),
         ));
-    if (positions.length === 0 || !bot?.pathfinder?.getPathTo || !bot?.entity?.position) {
+    if (
+        positions.length === 0
+        || (!bot?.pathfinder?.getPathFromTo && !bot?.pathfinder?.getPathTo)
+        || !bot?.entity?.position
+    ) {
         return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
     }
     const goal = new pf.goals.GoalCompositeAny(
@@ -1425,19 +1600,18 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
         };
     }
     try {
-        const result = bot.pathfinder.getPathTo(
-            safeMovements(bot),
+        const result = probeSafeNavigationFrom(
+            bot,
+            bot.entity.position,
             goal,
             Math.max(100, Math.min(5_000, Math.floor(Number(timeoutMs) || 2_000))),
+            movements,
         );
-        const terminal = Array.isArray(result?.path) ? result.path.at(-1) : null;
         return {
-            reachable: result?.status === 'success',
-            status: result?.status || 'unknown',
-            pathLength: Array.isArray(result?.path) ? result.path.length : 0,
-            terminalPosition: terminal && result?.status === 'success'
-                ? { x: Math.floor(terminal.x), y: Math.floor(terminal.y), z: Math.floor(terminal.z) }
-                : null,
+            reachable: result.reachable,
+            status: result.status,
+            pathLength: result.pathLength,
+            terminalPosition: result.terminalPosition || null,
         };
     } catch (error) {
         return {
@@ -1449,32 +1623,267 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000) {
     }
 }
 
-function probeSafeNavigationFrom(bot, start, goal, timeoutMs) {
-    if (!bot?.pathfinder?.getPathFromTo || !start || !goal) {
+/**
+ * Read-only proof that native Pathfinder has a complete route to a goal.
+ * Callers use this only where partial physical progress would violate a
+ * returnability contract; Pathfinder remains the sole route planner/executor.
+ */
+export function probeSafeNavigationGoal(bot, goal, timeoutMs = 5_000, movements = null) {
+    if (
+        !goal
+        || (!bot?.pathfinder?.getPathFromTo && !bot?.pathfinder?.getPathTo)
+        || !bot?.entity?.position
+    ) {
         return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
     }
-    const boundedTimeoutMs = Math.max(40, Math.min(2_000, Math.floor(Number(timeoutMs) || 500)));
+    if (navigationGoalSatisfied(bot, goal)) {
+        return { reachable: true, status: 'already_at_goal', pathLength: 0 };
+    }
+    try {
+        const result = probeSafeNavigationFrom(
+            bot,
+            bot.entity.position,
+            goal,
+            Math.max(100, Math.min(10_000, Math.floor(Number(timeoutMs) || 5_000))),
+            movements,
+        );
+        return {
+            reachable: result.reachable,
+            status: result.status,
+            pathLength: result.pathLength,
+        };
+    } catch (error) {
+        return {
+            reachable: false,
+            status: 'route_probe_error',
+            pathLength: 0,
+            error: String(error?.message || error).slice(0, 160),
+        };
+    }
+}
+
+/**
+ * Enumerate loaded, supported body cells which satisfy the native interaction
+ * goal. This is project-owned site legality; it does not predict a route.
+ */
+export function interactionStandingStances(bot, target, goal, radius = 5) {
+    if (!target || typeof goal?.isEnd !== 'function' || !bot?.blockAt) return [];
+    const origin = bot.entity?.position;
+    const boundedRadius = Math.max(1, Math.min(6, Math.floor(Number(radius) || 5)));
+    const candidates = [];
+    for (let y = target.y - 3; y <= target.y + 3; y += 1) {
+        for (let x = target.x - boundedRadius; x <= target.x + boundedRadius; x += 1) {
+            for (let z = target.z - boundedRadius; z <= target.z + boundedRadius; z += 1) {
+                const stance = new Vec3(x, y, z);
+                if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
+                if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                if (!isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)))) continue;
+                if (!goal.isEnd(stance)) continue;
+                candidates.push(stance);
+            }
+        }
+    }
+    candidates.sort((left, right) => (
+        (origin?.distanceTo?.(left) ?? Number.POSITIVE_INFINITY)
+        - (origin?.distanceTo?.(right) ?? Number.POSITIVE_INFINITY)
+        || left.y - right.y
+        || left.x - right.x
+        || left.z - right.z
+    ));
+    return candidates.slice(0, 96);
+}
+
+/**
+ * Mineflayer's bed primitive applies a directional feet-position envelope
+ * before it sends the interaction. Generic visible-face reach is broader than
+ * that envelope, especially below raised beds, so bed route candidates must
+ * satisfy the package precondition before they can be called legal stances.
+ */
+export function isBedSleepStandingStance(bot, bedBlock, stance) {
+    if (
+        !bedBlock?.position
+        || !stance
+        || typeof bot?.parseBedMetadata !== 'function'
+        || typeof bot?.blockAt !== 'function'
+    ) return false;
+
+    const isBed = block => typeof bot.isABed === 'function'
+        ? bot.isABed(block)
+        : Boolean(block?.name?.endsWith('_bed'));
+    let metadata;
+    try {
+        metadata = bot.parseBedMetadata(bedBlock);
+    } catch {
+        return false;
+    }
+    if (!metadata?.headOffset || !Number.isInteger(metadata.facing)) return false;
+
+    let headPoint = bedBlock.position;
+    if (!metadata.part) {
+        const head = bot.blockAt(bedBlock.position.plus(metadata.headOffset));
+        if (isBed(head)) {
+            headPoint = head.position;
+        } else {
+            const opposite = bot.blockAt(bedBlock.position.plus(metadata.headOffset.scaled(-1)));
+            if (!isBed(opposite)) return false;
+        }
+    }
+
+    // Keep this package adapter aligned with Mineflayer's bed click envelope:
+    // [south, west, north, east], extended one block opposite the bed facing.
+    const clickRange = [2, -3, -3, 2];
+    const oppositeCardinal = (metadata.facing + 2) % clickRange.length;
+    clickRange[oppositeCardinal] += clickRange[oppositeCardinal] < 0 ? -1 : 1;
+    const minimum = headPoint.offset(clickRange[1], -2, clickRange[2]);
+    const maximum = headPoint.offset(clickRange[3], 2, clickRange[0]);
+    const feet = {
+        x: Math.floor(stance.x),
+        y: Math.floor(stance.y),
+        z: Math.floor(stance.z),
+    };
+    return feet.x >= minimum.x && feet.x <= maximum.x
+        && feet.y >= minimum.y && feet.y <= maximum.y
+        && feet.z >= minimum.z && feet.z <= maximum.z;
+}
+
+/**
+ * Execute the shared four-boundary interaction-stance contract. Pathfinder
+ * owns both route probing and movement; the caller owns the subsequent
+ * Mineflayer interaction and its world-state confirmation.
+ */
+export async function reachInteractionStance(bot, {
+    kind,
+    target,
+    goal,
+    candidates = null,
+    probeTimeoutMs = 2_000,
+    probeStances = probeSafeNavigationStances,
+    navigateGoal = goToGoal,
+    navigationOptions = undefined,
+} = {}) {
+    const legalStances = Array.isArray(candidates)
+        ? candidates.filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
+        : interactionStandingStances(bot, target, goal);
+    const common = { kind, target, candidateCount: legalStances.length };
+    if (legalStances.length === 0) {
+        return interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.NO_LEGAL_STANCE, {
+            ...common,
+            code: 'no_legal_stance',
+        });
+    }
+
+    const current = bot.entity?.position?.floored?.();
+    const alreadyAtLegalStance = current
+        && legalStances.some(position => (
+            Math.floor(position.x) === current.x
+            && Math.floor(position.y) === current.y
+            && Math.floor(position.z) === current.z
+        ))
+        && navigationGoalSatisfied(bot, goal);
+    if (alreadyAtLegalStance) {
+        return interactionStanceReady({
+            ...common,
+            code: 'already_at_stance',
+            selectedStance: current,
+            pathStatus: 'already_at_stance',
+            pathLength: 0,
+        });
+    }
+
+    const route = probeStances(bot, legalStances, probeTimeoutMs);
+    const selected = route.reachable ? route.terminalPosition || legalStances[0] : null;
+    const routeDetail = {
+        ...common,
+        pathStatus: route.status,
+        pathLength: route.pathLength,
+        selectedStance: selected,
+    };
+    if (!route.reachable) {
+        return interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.PATH_NOT_FOUND, {
+            ...routeDetail,
+            code: route.status || 'path_not_found',
+        });
+    }
+
+    const executionGoal = new pf.goals.GoalBlock(
+        Math.floor(selected.x),
+        Math.floor(selected.y),
+        Math.floor(selected.z),
+    );
+    const reached = await navigateGoal(bot, executionGoal, navigationOptions);
+    if (bot.interrupt_code || actionCancellationSignal()?.aborted) {
+        return createInteractionStanceReceipt({
+            ...routeDetail,
+            status: 'interrupted',
+            code: 'interrupted',
+        });
+    }
+    if (
+        !reached
+        || !navigationGoalSatisfied(bot, executionGoal)
+        || !navigationGoalSatisfied(bot, goal)
+    ) {
+        return interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.PATH_EXECUTION_FAILED, {
+            ...routeDetail,
+            code: bot.lastActionEvidence?.outcome || 'path_execution_failed',
+            selectedStance: observedSupportedStandingCell(bot) || route.terminalPosition,
+        });
+    }
+    return interactionStanceReady({
+        ...routeDetail,
+        code: 'stance_reached',
+        selectedStance: observedSupportedStandingCell(bot) || route.terminalPosition,
+    });
+}
+
+function rejectedInteractionStance(receipt, code) {
+    return interactionStanceRejected(receipt, code);
+}
+
+function confirmedInteractionStance(receipt, code = 'interaction_confirmed', detail = {}) {
+    return interactionStanceConfirmed(receipt, { ...detail, code });
+}
+
+function evidenceWithInteractionStance(evidence, receipt) {
+    const interactionStance = normalizeInteractionStanceReceipt(receipt);
+    return interactionStance ? { ...evidence, interactionStance } : evidence;
+}
+
+function probeSafeNavigationFrom(bot, start, goal, timeoutMs, movements = null) {
+    if (
+        (!bot?.pathfinder?.getPathFromTo && !bot?.pathfinder?.getPathTo)
+        || !start
+        || !goal
+    ) {
+        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+    }
+    const boundedTimeoutMs = Math.max(40, Math.min(10_000, Math.floor(Number(timeoutMs) || 500)));
     const deadlineAt = Date.now() + boundedTimeoutMs;
     let result = null;
     try {
-        const generator = bot.pathfinder.getPathFromTo(
-            safeMovements(bot),
-            start,
-            goal,
-            {
-                timeout: boundedTimeoutMs,
-                tickTimeout: Math.max(
-                    1,
-                    Math.min(boundedTimeoutMs, Number(bot.pathfinder.tickTimeout) || 40),
-                ),
-                searchRadius: -1,
-            },
-        );
-        while (Date.now() <= deadlineAt) {
-            const next = generator.next();
-            if (next.done) break;
-            result = next.value?.result || null;
-            if (result?.status !== 'partial') break;
+        const routeMovements = movements || safeMovements(bot);
+        if (bot.pathfinder.getPathFromTo) {
+            const generator = bot.pathfinder.getPathFromTo(
+                routeMovements,
+                start,
+                goal,
+                {
+                    timeout: boundedTimeoutMs,
+                    tickTimeout: Math.max(
+                        1,
+                        Math.min(boundedTimeoutMs, Number(bot.pathfinder.tickTimeout) || 40),
+                    ),
+                    searchRadius: -1,
+                },
+            );
+            while (Date.now() <= deadlineAt) {
+                const next = generator.next();
+                if (next.done) break;
+                result = next.value?.result || null;
+                if (result?.status !== 'partial') break;
+            }
+        } else {
+            result = bot.pathfinder.getPathTo(routeMovements, goal, boundedTimeoutMs);
         }
     } catch (error) {
         return {
@@ -1484,10 +1893,14 @@ function probeSafeNavigationFrom(bot, start, goal, timeoutMs) {
             error: String(error?.message || error).slice(0, 160),
         };
     }
+    const terminal = Array.isArray(result?.path) ? result.path.at(-1) : null;
     return {
         reachable: result?.status === 'success',
         status: result?.status || 'unknown',
         pathLength: Array.isArray(result?.path) ? result.path.length : 0,
+        terminalPosition: terminal && result?.status === 'success'
+            ? { x: Math.floor(terminal.x), y: Math.floor(terminal.y), z: Math.floor(terminal.z) }
+            : null,
     };
 }
 
@@ -1501,6 +1914,7 @@ export function probeSafeRoundTripNavigationStances(
     stances,
     home,
     timeoutMs = 2_000,
+    movements = null,
 ) {
     const candidates = (Array.isArray(stances) ? stances : [])
         .filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
@@ -1524,7 +1938,7 @@ export function probeSafeRoundTripNavigationStances(
     let checked = 0;
     while (remainingCandidates.length > 0 && checked < 8 && Date.now() < deadlineAt) {
         const remainingMs = Math.max(40, deadlineAt - Date.now());
-        lastInbound = probeSafeNavigationStances(bot, remainingCandidates, remainingMs);
+        lastInbound = probeSafeNavigationStances(bot, remainingCandidates, remainingMs, movements);
         if (!lastInbound.reachable || !lastInbound.terminalPosition) break;
 
         const selected = new Vec3(
@@ -1543,6 +1957,7 @@ export function probeSafeRoundTripNavigationStances(
             selected,
             returnGoal,
             Math.min(500, Math.max(40, deadlineAt - Date.now())),
+            movements,
         );
         checked += 1;
         if (lastReturn.reachable) {
@@ -1637,6 +2052,44 @@ function localNavigationRecoveryMovements(bot, origin) {
         && isLocalNavigationFoliage(bot, candidate, origin)
     );
     return { movements, foliageCount };
+}
+
+/**
+ * Loaded supported cells which can serve as a bounded local navigation reset.
+ * A one-block descent is legal only when native Pathfinder can also prove the
+ * reverse edge; deeper cells are never escape candidates because an ordinary
+ * sidestep must not turn a ledge into an irreversible cave descent.
+ */
+export function localNavigationEscapeStances(bot, origin = bot?.entity?.position?.floored?.()) {
+    if (!origin || !bot?.blockAt) return [];
+    const candidates = [];
+    for (let dx = -NAVIGATION_RECOVERY_RADIUS; dx <= NAVIGATION_RECOVERY_RADIUS; dx += 1) {
+        for (let dz = -NAVIGATION_RECOVERY_RADIUS; dz <= NAVIGATION_RECOVERY_RADIUS; dz += 1) {
+            const horizontalDistance = Math.hypot(dx, dz);
+            if (
+                horizontalDistance < NAVIGATION_RECOVERY_DISTANCE
+                || horizontalDistance > NAVIGATION_RECOVERY_RADIUS
+            ) continue;
+            for (const dy of [0, 1, -1, 2]) {
+                const stance = origin.offset(dx, dy, dz);
+                if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
+                if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                if (!isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)))) continue;
+                candidates.push(stance);
+                break;
+            }
+        }
+    }
+    return candidates.sort((left, right) => {
+        const leftDy = left.y - origin.y;
+        const rightDy = right.y - origin.y;
+        return Math.abs(leftDy) - Math.abs(rightDy)
+            || Number(leftDy < 0) - Number(rightDy < 0)
+            || Math.hypot(left.x - origin.x, left.z - origin.z)
+                - Math.hypot(right.x - origin.x, right.z - origin.z)
+            || left.x - right.x
+            || left.z - right.z;
+    }).slice(0, 96);
 }
 
 function survivableDropDistance(bot) {
@@ -1751,6 +2204,38 @@ export function observedSupportedStandingCell(bot) {
     if (!floored) return null;
     return [floored, floored.offset(0, 1, 0)]
         .find(candidate => physicallyOccupiesStandingCell(bot, candidate)) || null;
+}
+
+export async function waitForStableSupportedStandingCell(
+    bot,
+    timeoutMs = GROUND_SETTLE_TIMEOUT_MS,
+    stabilityMs = SUPPORTED_STANCE_STABILITY_MS,
+) {
+    let candidateKey = null;
+    let candidateSince = 0;
+    let settled = null;
+    await waitForWorldCondition(bot, () => {
+        const candidate = observedSupportedStandingCell(bot);
+        if (!candidate) {
+            candidateKey = null;
+            candidateSince = 0;
+            settled = null;
+            return false;
+        }
+        const key = miningCellKey(candidate);
+        if (key !== candidateKey) {
+            candidateKey = key;
+            candidateSince = Date.now();
+            settled = candidate;
+            return false;
+        }
+        settled = candidate;
+        return Date.now() - candidateSince >= Math.max(0, Number(stabilityMs) || 0);
+    }, timeoutMs, 25);
+    return settled && miningCellKey(settled) === candidateKey
+        && observedSupportedStandingCell(bot)?.equals?.(settled)
+        ? settled
+        : null;
 }
 
 function occupiedOpenSurfaceStandingCell(bot) {
@@ -2540,9 +3025,38 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
     const requestedCrafts = Math.floor(Number(num));
     let temporaryTable = null;
     let finalEvidence = null;
+    let workstationInteractionStance = null;
+    let workstationInteractionAttempted = false;
+    let workstationInteractionAcknowledged = false;
     const finish = (success, evidence, message) => {
-        finalEvidence = evidence;
-        setActionEvidence(bot, evidence);
+        const receipt = workstationInteractionStance
+            ? success
+                ? confirmedInteractionStance(workstationInteractionStance, 'craft_confirmed', {
+                    functionalPostcondition: {
+                        status: 'confirmed',
+                        code: 'crafted_output_confirmed',
+                        target: evidence.target,
+                        expectedCount: evidence.expectedOutputCount,
+                        observedCount: evidence.outputCount,
+                    },
+                })
+                : workstationInteractionAcknowledged
+                    ? interactionStancePostconditionFailed(workstationInteractionStance, {
+                        code: evidence.outcome || 'craft_output_unconfirmed',
+                        functionalPostcondition: {
+                            status: 'failed',
+                            code: evidence.outcome || 'craft_output_unconfirmed',
+                            target: evidence.target,
+                            expectedCount: evidence.expectedOutputCount,
+                            observedCount: Math.max(0, Number(evidence.afterCount) - Number(evidence.beforeCount)),
+                        },
+                    })
+                : workstationInteractionAttempted && evidence.outcome !== 'interrupted'
+                    ? rejectedInteractionStance(workstationInteractionStance, evidence.outcome)
+                    : workstationInteractionStance
+            : null;
+        finalEvidence = evidenceWithInteractionStance(evidence, receipt);
+        setActionEvidence(bot, finalEvidence);
         if (message) log(bot, message);
         return success;
     };
@@ -2597,6 +3111,7 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
                 null,
                 exactWorkstation,
             );
+            workstationInteractionStance = tableBinding.interactionStance || null;
             if (tableBinding.outcome === 'interrupted') {
                 return finish(false, { kind: 'craft', outcome: 'interrupted', target, retryable: false }, 'Crafting was interrupted while approaching the crafting table.');
             }
@@ -2665,6 +3180,19 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             return finish(false, { kind: 'craft', outcome: 'recipe_unavailable', target, retryable: true }, `No usable recipe for ${itemName} is available here.`);
         }
 
+        const preflight = craftingSafetyBlocker(bot);
+        if (preflight) {
+            return finish(false, {
+                kind: 'craft',
+                outcome: preflight.code,
+                target,
+                threat: preflight.threat || null,
+                retryable: preflight.code !== 'interrupted',
+            }, preflight.code === 'interrupted'
+                ? `Crafting ${itemName} was interrupted before Minecraft inventory interaction began.`
+                : `Cannot safely craft ${itemName}: ${preflight.threat.name} is ${preflight.threat.distance} blocks away.`);
+        }
+
         const recipe = recipes[0];
         const inventory = world.getInventoryCounts(bot);
         const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe);
@@ -2730,8 +3258,33 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
 
         const beforeCount = inventoryCount(bot, itemName);
         try {
+            const finalSafety = craftingSafetyBlocker(bot);
+            if (finalSafety) {
+                return finish(false, {
+                    kind: 'craft',
+                    outcome: finalSafety.code,
+                    target,
+                    threat: finalSafety.threat || null,
+                    retryable: finalSafety.code !== 'interrupted',
+                }, finalSafety.code === 'interrupted'
+                    ? `Crafting ${itemName} was interrupted before Minecraft inventory interaction began.`
+                    : `Cannot safely craft ${itemName}: ${finalSafety.threat.name} is ${finalSafety.threat.distance} blocks away.`);
+            }
+            workstationInteractionAttempted = Boolean(craftingTable);
             if (isPlankFamilyRecipe(recipe)) {
                 for (let attempt = 0; attempt < craftAttempts; attempt += 1) {
+                    const attemptSafety = craftingSafetyBlocker(bot);
+                    if (attemptSafety) {
+                        return finish(false, {
+                            kind: 'craft',
+                            outcome: attemptSafety.code,
+                            target,
+                            threat: attemptSafety.threat || null,
+                            retryable: attemptSafety.code !== 'interrupted',
+                        }, attemptSafety.code === 'interrupted'
+                            ? `Crafting ${itemName} was interrupted before the next recipe attempt.`
+                            : `Cannot safely continue crafting ${itemName}: ${attemptSafety.threat.name} is ${attemptSafety.threat.distance} blocks away.`);
+                    }
                     const rebound = mixedPlankRecipe(Boolean(craftingTable));
                     if (!rebound) throw new Error('mixed plank recipe no longer has enough carried planks');
                     await bot.craft(rebound, 1, craftingTable);
@@ -2739,13 +3292,14 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             } else {
                 await bot.craft(recipe, craftAttempts, craftingTable);
             }
+            workstationInteractionAcknowledged = Boolean(craftingTable);
         } catch (error) {
             return finish(false, { kind: 'craft', outcome: 'craft_blocked', target, error: error.message, retryable: true }, `Could not craft ${itemName}: ${error.message}.`);
         }
         const afterCount = inventoryCount(bot, itemName);
         const outputCount = afterCount - beforeCount;
         if (outputCount < 1) {
-            return finish(false, { kind: 'craft', outcome: 'not_crafted', target, beforeCount, afterCount, retryable: true }, `Minecraft did not confirm a new ${itemName} in inventory after crafting.`);
+            return finish(false, { kind: 'craft', outcome: 'not_crafted', target, beforeCount, afterCount, expectedOutputCount, retryable: true }, `Minecraft did not confirm a new ${itemName} in inventory after crafting.`);
         }
 
         try {
@@ -2759,6 +3313,7 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             target,
             requestedCrafts,
             craftAttempts,
+            expectedOutputCount,
             outputCount,
             ...(isPlankFamilyRecipe(recipe) ? { ingredientFamily: 'planks' } : {}),
             workstation: exactWorkstation,
@@ -2792,6 +3347,29 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             else setActionEvidence(bot, { kind: 'craft', outcome: 'cleanup_only', cleanup, retryable: cleanup.retryable });
         }
     }
+}
+
+export function craftingSafetyBlocker(bot, range=6) {
+    if (bot?.interrupt_code || actionCancellationSignal()?.aborted) {
+        return Object.freeze({ code: 'interrupted', threat: null });
+    }
+    const origin = bot?.entity?.position;
+    if (!origin) return null;
+    const requestedRange = Math.max(2, Math.min(12, Number(range) || 6));
+    const hostile = bot.nearestEntity?.(entity => (
+        entity?.position
+        && mc.isHostile(entity)
+        && origin.distanceTo(entity.position) <= requestedRange
+    ));
+    if (!hostile?.position) return null;
+    return Object.freeze({
+        code: 'hostile_nearby',
+        threat: Object.freeze({
+            id: Number.isFinite(Number(hostile.id)) ? Number(hostile.id) : null,
+            name: String(hostile.name || hostile.username || 'hostile').slice(0, 64),
+            distance: Math.round(origin.distanceTo(hostile.position) * 10) / 10,
+        }),
+    });
 }
 
 function toolDurability(bot, item) {
@@ -3115,6 +3693,14 @@ function materialInventoryCount(bot, material) {
     return inventoryCount(bot, material);
 }
 
+export function toolPreparationPlankFloor(bot, toolName) {
+    const spec = TOOL_PREPARATION_SPECS[String(toolName || '').trim()];
+    if (spec?.material !== 'planks') return 0;
+    const stickPlanks = inventoryCount(bot, 'stick') < 2 ? 2 : 0;
+    const tablePlanks = inventoryCount(bot, 'crafting_table') < 1 ? 4 : 0;
+    return spec.materialCount + stickPlanks + tablePlanks;
+}
+
 export async function prepareTool(bot, toolName, collectionExclusions=null) {
     const normalizedTool = String(toolName || '').trim();
     const spec = TOOL_PREPARATION_SPECS[normalizedTool];
@@ -3366,9 +3952,12 @@ export async function prepareTool(bot, toolName, collectionExclusions=null) {
         return inventoryCount(bot, 'diamond') >= minimum;
     };
 
-    if (!await ensureCraftingKit() || interrupt()) return false;
     const materialReady = spec.material === 'planks'
-        ? await ensurePlanks(spec.materialCount)
+        // Reserve the final tool material before making a missing stick/table
+        // kit. Preparing the table first and then recursively reassessing the
+        // kit could spend the only carried planks on another table and report
+        // the registry's first (oak) recipe despite equivalent Spruce stock.
+        ? await ensurePlanks(toolPreparationPlankFloor(bot, normalizedTool))
         : spec.material === 'cobblestone'
             ? await ensureCobblestone(spec.materialCount)
             : spec.material === 'iron_ingot'
@@ -3380,6 +3969,11 @@ export async function prepareTool(bot, toolName, collectionExclusions=null) {
     // Prerequisite pickaxes consume sticks while gathering higher-tier
     // materials, so re-establish the final tool's crafting kit afterward.
     if (!await ensureCraftingKit() || interrupt()) return false;
+    if (
+        spec.material === 'planks'
+        && plankInventoryCount(bot) < spec.materialCount
+        && (!await ensurePlanks(spec.materialCount) || interrupt())
+    ) return false;
     if (!await craftRecipe(bot, normalizedTool, 1) || interrupt()) return false;
     return await equipPreparedTool();
 }
@@ -3501,12 +4095,20 @@ export async function prepareMaterial(bot, materialName, num=1, range=64, collec
 }
 
 export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorkstation=null, baselineFoodPoints=null) {
-    const requestedPoints = Math.max(6, Math.min(160, Math.floor(Number(targetFoodPoints) || 24)));
+    const requestedPoints = Math.max(1, Math.min(160, Math.floor(Number(targetFoodPoints) || 24)));
     const searchRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
-    const beforePoints = safeFoodPoints(bot);
     const hasDurableBaseline = baselineFoodPoints !== null
         && baselineFoodPoints !== undefined
         && Number.isFinite(Number(baselineFoodPoints));
+    // A one-point request without a bound furnace is SurvivalDirector's
+    // immediate bodily acquisition. Safe raw beef, pork, mutton, rabbit, cod,
+    // and salmon are valid for that purpose; durable reserve and explicit
+    // workstation requests still require their cooked form.
+    const immediateSupply = requestedPoints === 1 && !hasDurableBaseline && !exactWorkstation;
+    const availableFoodPoints = () => immediateSupply
+        ? immediatelyEdibleFoodPoints(bot)
+        : safeFoodPoints(bot);
+    const beforePoints = availableFoodPoints();
     const durableBaseline = hasDurableBaseline
         ? Math.max(0, Math.min(2304, Math.floor(Number(baselineFoodPoints))))
         : null;
@@ -3520,6 +4122,8 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
         animalsHunted: 0,
         itemsCooked: 0,
         breadCrafted: 0,
+        huntingDeferredReason: null,
+        foodPointPolicy: immediateSupply ? 'immediate_edible' : 'durable_reserve',
     };
     const target = {
         name: 'safe_food',
@@ -3545,7 +4149,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     };
     const finish = async (success, outcome, detail = {}) => {
         await restoreHeldItem();
-        const afterPoints = safeFoodPoints(bot);
+        const afterPoints = availableFoodPoints();
         setActionEvidence(bot, {
             kind: 'food_prepare',
             outcome,
@@ -3567,9 +4171,9 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     };
     const craftAvailableBread = async () => {
         const wheat = inventoryCount(bot, 'wheat');
-        if (wheat < 3 || safeFoodPoints(bot) >= targetPoints) return true;
+        if (wheat < 3 || availableFoodPoints() >= targetPoints) return true;
         const breadPoints = Math.max(1, Number(bot.registry?.foodsByName?.bread?.foodPoints) || 5);
-        const needed = Math.max(1, Math.ceil((targetPoints - safeFoodPoints(bot)) / breadPoints));
+        const needed = Math.max(1, Math.ceil((targetPoints - availableFoodPoints()) / breadPoints));
         const crafts = Math.min(Math.floor(wheat / 3), needed);
         if (crafts < 1) return true;
         const before = inventoryCount(bot, 'bread');
@@ -3623,27 +4227,27 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
         0,
     );
     const cookCarriedFood = async (bootstrap) => {
-        if (carriedCookableCount() < 1 || safeFoodPoints(bot) >= targetPoints) return true;
+        if (carriedCookableCount() < 1 || availableFoodPoints() >= targetPoints) return true;
         if (bootstrap) {
             if (!await ensureCookingStation()) return false;
         } else if ((!exactWorkstation && !world.getNearestBlock(bot, 'furnace', 16)) || !mc.getSmeltingFuel(bot)) {
             return false;
         }
         for (const { input, output } of carriedCookableFood()) {
-            if (interrupted() || safeFoodPoints(bot) >= targetPoints) break;
+            if (interrupted() || availableFoodPoints() >= targetPoints) break;
             const available = inventoryCount(bot, input);
             if (available < 1) continue;
             const outputPoints = Math.max(1, Number(bot.registry?.foodsByName?.[output]?.foodPoints) || 1);
             const amount = Math.min(
                 available,
-                Math.max(1, Math.ceil((targetPoints - safeFoodPoints(bot)) / outputPoints)),
+                Math.max(1, Math.ceil((targetPoints - availableFoodPoints()) / outputPoints)),
             );
             const before = inventoryCount(bot, output);
             if (await smeltItem(bot, input, amount, exactWorkstation)) {
                 progress.itemsCooked += Math.max(0, inventoryCount(bot, output) - before);
             }
         }
-        return safeFoodPoints(bot) >= targetPoints;
+        return availableFoodPoints() >= targetPoints;
     };
     const harvestMatureCrops = async () => {
         let crops = [];
@@ -3658,7 +4262,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
             return;
         }
         for (const crop of crops) {
-            if (interrupted() || safeFoodPoints(bot) >= targetPoints || nearbyHostile()) break;
+            if (interrupted() || availableFoodPoints() >= targetPoints || nearbyHostile()) break;
             const current = bot.blockAt(crop.position);
             if (!matureFoodCrop(current)) continue;
             const spec = mc.matureCropHarvestForBlock(current.name);
@@ -3700,8 +4304,20 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
         0,
     );
     const huntFoodAnimals = async () => {
+        const health = Number(bot.health);
+        if (!Number.isFinite(health) || health < 12) {
+            progress.huntingDeferredReason = Number.isFinite(health)
+                ? 'critical_health'
+                : 'health_unknown';
+            return;
+        }
+        if (nearbyHostile()) {
+            progress.huntingDeferredReason = 'nearby_hostile';
+            return;
+        }
         if (
-            !bestInventoryTool(bot, 'sword')
+            !immediateSupply
+            && !bestInventoryTool(bot, 'sword')
             && !bestInventoryTool(bot, 'axe')
             && !interrupted()
         ) {
@@ -3710,7 +4326,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
         for (let attempt = 0; attempt < 6; attempt += 1) {
             if (
                 interrupted()
-                || safeFoodPoints(bot) + potentialCookedFoodPoints() >= targetPoints
+                || availableFoodPoints() + potentialCookedFoodPoints() >= targetPoints
                 || nearbyHostile()
                 || Number(bot.health) < 12
             ) break;
@@ -3725,7 +4341,7 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
                 return counts;
             }, {});
             const sustainable = candidates.find(entity => populations[entity.name] >= 3);
-            const animal = sustainable || (safeFoodPoints(bot) === 0 ? candidates[0] : null);
+            const animal = sustainable || (availableFoodPoints() === 0 ? candidates[0] : null);
             if (!animal) break;
             if (!await attackEntity(bot, animal, true)) break;
             progress.animalsHunted += 1;
@@ -3736,25 +4352,25 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
 
     await craftAvailableBread();
-    if (safeFoodPoints(bot) >= targetPoints) return await finish(true, 'prepared', { retryable: false });
+    if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
     await cookCarriedFood(false);
-    if (safeFoodPoints(bot) >= targetPoints) return await finish(true, 'prepared', { retryable: false });
+    if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
     await harvestMatureCrops();
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
     await craftAvailableBread();
-    if (safeFoodPoints(bot) >= targetPoints) return await finish(true, 'prepared', { retryable: false });
+    if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
     if (carriedCookableCount() > 0) await cookCarriedFood(true);
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
-    if (safeFoodPoints(bot) >= targetPoints) return await finish(true, 'prepared', { retryable: false });
+    if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
     await huntFoodAnimals();
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
     if (carriedCookableCount() > 0) await cookCarriedFood(true);
-    if (safeFoodPoints(bot) >= targetPoints) return await finish(true, 'prepared', { retryable: false });
+    if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
-    const afterPoints = safeFoodPoints(bot);
+    const afterPoints = availableFoodPoints();
     return await finish(false, afterPoints > beforePoints ? 'partial_supply' : 'no_food_sources', {
         availableFoodPoints: afterPoints,
     });
@@ -3811,8 +4427,17 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
     let temporaryFurnace = null;
     let worldFurnaceRouteFailed = false;
     let reclaimedOutput = null;
+    let workstationInteractionStance = null;
+    let workstationInteractionAttempted = false;
     const finish = (success, outcome, detail = {}) => {
-        finalEvidence = {
+        const receipt = workstationInteractionStance
+            ? success
+                ? confirmedInteractionStance(workstationInteractionStance, 'smelt_confirmed')
+                : workstationInteractionAttempted && outcome !== 'interrupted'
+                    ? rejectedInteractionStance(workstationInteractionStance, outcome)
+                    : workstationInteractionStance
+            : null;
+        finalEvidence = evidenceWithInteractionStance({
             kind: 'smelt',
             outcome,
             target,
@@ -3822,7 +4447,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             ...(reclaimedOutput ? { reclaimedOutput } : {}),
             retryable: !success,
             ...detail,
-        };
+        }, receipt);
         setActionEvidence(bot, finalEvidence);
         return success;
     };
@@ -3838,6 +4463,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
 
     try {
         const furnaceBinding = await bindExistingWorkstation(bot, 'furnace', 64, null, exactWorkstation);
+        workstationInteractionStance = furnaceBinding.interactionStance || null;
         if (furnaceBinding.outcome === 'interrupted') {
             return finish(false, 'interrupted', { retryable: false });
         }
@@ -3885,6 +4511,14 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
                 return finish(false, 'furnace_not_confirmed');
             }
             temporaryFurnace.position = furnaceBlock.position.clone();
+            workstationInteractionStance = interactionStanceReady({
+                kind: 'workstation',
+                target: { name: 'furnace', ...furnaceBlock.position },
+                code: 'local_workstation_ready',
+                candidateCount: 1,
+                selectedStance: observedSupportedStandingCell(bot),
+                pathStatus: 'local_placement',
+            });
         }
         if (!furnaceBlock) {
             log(bot, worldFurnaceRouteFailed
@@ -3936,6 +4570,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
 
         bot.modes.pause('unstuck');
         await bot.lookAt(furnaceBlock.position);
+        workstationInteractionAttempted = true;
         furnace = await bot.openFurnace(furnaceBlock);
         const existingInput = furnace.inputItem();
         if (existingInput && existingInput.type !== mc.getItemId(itemName) && existingInput.count > 0) {
@@ -4384,7 +5019,12 @@ export async function clearNearestFurnace(bot) {
             : furnaceBinding.outcome === 'not_found'
                 ? 'not_found'
                 : 'unreachable';
-        setActionEvidence(bot, { kind: 'furnace', outcome, target, retryable: outcome !== 'interrupted' });
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'furnace',
+            outcome,
+            target,
+            retryable: outcome !== 'interrupted',
+        }, furnaceBinding.interactionStance));
         log(bot, outcome === 'not_found'
             ? 'No furnace nearby to clear.'
             : outcome === 'interrupted'
@@ -4402,21 +5042,42 @@ export async function clearNearestFurnace(bot) {
         if (furnace.fuelItem()) removed.push(await furnace.takeFuel());
         const remaining = [furnace.outputItem(), furnace.inputItem(), furnace.fuelItem()].filter(Boolean);
         if (remaining.length > 0) {
-            setActionEvidence(bot, { kind: 'furnace', outcome: 'clear_unverified', target, remaining: remaining.length, retryable: true });
+            setActionEvidence(bot, {
+                kind: 'furnace',
+                outcome: 'clear_unverified',
+                target,
+                remaining: remaining.length,
+                retryable: true,
+                interactionStance: confirmedInteractionStance(furnaceBinding.interactionStance, 'furnace_open_confirmed'),
+            });
             log(bot, 'The furnace still contains items after the clear attempt.');
             return false;
         }
         const received = removed
             .filter(Boolean)
             .map(item => ({ name: item.name, count: item.count }));
-        setActionEvidence(bot, { kind: 'furnace', outcome: 'cleared', target, received, retryable: false });
+        setActionEvidence(bot, {
+            kind: 'furnace',
+            outcome: 'cleared',
+            target,
+            received,
+            retryable: false,
+            interactionStance: confirmedInteractionStance(furnaceBinding.interactionStance, 'furnace_clear_confirmed'),
+        });
         log(bot, received.length > 0
             ? `Cleared furnace and received ${received.map(item => `${item.count} ${item.name}`).join(', ')}.`
             : 'Furnace was already empty.');
         return true;
     } catch (error) {
         const message = String(error?.message || error).slice(0, 240);
-        setActionEvidence(bot, { kind: 'furnace', outcome: 'clear_blocked', target, error: message, retryable: true });
+        setActionEvidence(bot, {
+            kind: 'furnace',
+            outcome: 'clear_blocked',
+            target,
+            error: message,
+            retryable: true,
+            interactionStance: rejectedInteractionStance(furnaceBinding.interactionStance, 'furnace_open_rejected'),
+        });
         log(bot, `Could not clear the furnace: ${message}.`);
         return false;
     } finally {
@@ -4448,6 +5109,114 @@ function combatEquipmentSnapshot(bot) {
         bow: names.has('bow'),
         arrows: (inventoryCount(bot, 'arrow') + inventoryCount(bot, 'spectral_arrow')) > 0,
     };
+}
+
+/**
+ * Deliberate hostile harvesting is optional work, not emergency self-defense.
+ * Require a durable melee option before the capability is allowed to create
+ * the engagement; the prerequisite planner can then satisfy the exact missing
+ * item through the normal causal inventory path.
+ */
+export function deliberateEntityHarvestCombatRequirement(bot, source) {
+    if (source?.method !== 'kill') return null;
+    if (combatEquipmentSnapshot(bot).melee) return null;
+    return Object.freeze({
+        name: 'wooden_sword',
+        minimumUsableDurability: 8,
+    });
+}
+
+/**
+ * Optional harvesting may bind one hostile target, but it must not manufacture
+ * a multi-hostile engagement. This is project-owned admission policy; the
+ * installed combat and Pathfinder packages continue to own physical response.
+ */
+export function deliberateEntityHarvestCombatEnvironment(
+    bot,
+    targetEntityId,
+    range=TACTICAL_COMBAT_RANGE,
+) {
+    const requestedRange = Math.max(4, Math.min(32, Math.floor(Number(range) || TACTICAL_COMBAT_RANGE)));
+    const origin = bot?.entity?.position;
+    if (!origin) {
+        return Object.freeze({
+            ready: false,
+            code: 'combat_environment_unknown',
+            range: requestedRange,
+            threats: Object.freeze([]),
+        });
+    }
+    const threats = Object.values(bot?.entities || {})
+        .filter(entity => (
+            entity?.position
+            && mc.isHostile(entity)
+            && Number(entity.id) !== Number(targetEntityId)
+            && Math.abs(Number(entity.position.y) - Number(origin.y)) <= DELIBERATE_HOSTILE_VERTICAL_RANGE
+        ))
+        .map(entity => ({
+            id: Number(entity.id),
+            name: String(entity.name || 'hostile').slice(0, 64),
+            distance: Math.round(origin.distanceTo(entity.position) * 10) / 10,
+            disposition: mc.getThreatDisposition(entity),
+        }))
+        .filter(threat => Number.isFinite(threat.id) && threat.distance <= requestedRange)
+        .sort((left, right) => left.distance - right.distance || left.id - right.id)
+        .slice(0, 4)
+        .map(threat => Object.freeze(threat));
+    return Object.freeze({
+        ready: threats.length === 0,
+        code: threats.length === 0 ? 'combat_environment_ready' : 'combat_environment_unsafe',
+        range: requestedRange,
+        threats: Object.freeze(threats),
+    });
+}
+
+/**
+ * A deliberate hostile harvest is not complete merely because its drop reached
+ * inventory. Before ordinary work can resume, prove that every loaded hostile
+ * has left the same tactical envelope. Physical retreat remains delegated to
+ * the existing Pathfinder-backed avoidance mechanic.
+ */
+export async function deliberateEntityHarvestCombatCloseout(
+    bot,
+    range=TACTICAL_COMBAT_RANGE,
+    retreat=avoidEnemies,
+) {
+    const before = deliberateEntityHarvestCombatEnvironment(bot, null, range);
+    if (before.ready) {
+        return Object.freeze({
+            ready: true,
+            code: 'combat_environment_cleared',
+            range: before.range,
+            before,
+            retreat: null,
+            after: before,
+        });
+    }
+
+    const retreated = await retreat(bot, before.range);
+    const retreatEvidence = bot?.lastActionEvidence;
+    const after = deliberateEntityHarvestCombatEnvironment(bot, null, before.range);
+    const ready = retreated === true && after.ready;
+    return Object.freeze({
+        ready,
+        code: bot?.interrupt_code
+            ? 'combat_environment_closeout_interrupted'
+            : ready
+                ? 'combat_environment_cleared'
+                : 'combat_environment_not_cleared',
+        range: before.range,
+        before,
+        retreat: retreatEvidence && typeof retreatEvidence === 'object'
+            ? Object.freeze({
+                kind: String(retreatEvidence.kind || '').slice(0, 48),
+                outcome: String(retreatEvidence.outcome || '').slice(0, 64),
+                attempts: Math.max(0, Math.min(8, Math.floor(Number(retreatEvidence.attempts) || 0))),
+                retryable: retreatEvidence.retryable === true,
+            })
+            : null,
+        after,
+    });
 }
 
 function tacticalCombatSnapshot(bot, range, attributedEntityId=null) {
@@ -4550,7 +5319,6 @@ function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_
         let timeout = null;
         let interruptPoll = null;
         let lastUncreditedDamage = null;
-        const targetId = entity?.id;
         const cleanup = () => {
             if (timeout) clearTimeout(timeout);
             if (interruptPoll) clearInterval(interruptPoll);
@@ -4567,7 +5335,7 @@ function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_
             resolve(result);
         };
         const onEntityHurt = (hurtEntity, source) => {
-            const observation = observeCombatDamage(bot, targetId, hurtEntity, source);
+            const observation = observeCombatDamage(bot, entity, hurtEntity, source);
             if (!observation.matchesTarget) return;
             if (observation.confirmsBotHit) {
                 finish({ confirmed: true, outcome: 'ranged_hit_attributed', attribution: observation });
@@ -4576,7 +5344,7 @@ function performVerifiedRangedShot(bot, entity, timeoutMs=TACTICAL_SHOT_CONFIRM_
             lastUncreditedDamage = observation;
         };
         const onEntityDead = deadEntity => {
-            if (deadEntity?.id === targetId) {
+            if (deadEntity === entity) {
                 finish({
                     confirmed: false,
                     outcome: lastUncreditedDamage?.attribution === 'foreign'
@@ -4649,8 +5417,9 @@ async function fireTacticalBow(bot, entity, desiredRange) {
     return await performVerifiedRangedShot(bot, entity);
 }
 
-export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, attributedEntityId=null) {
+export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, attributedEntityId=null, options={}) {
     const requestedRange = Math.max(4, Math.min(32, Math.floor(Number(range) || TACTICAL_COMBAT_RANGE)));
+    const objective = options?.objective === 'disengage' ? 'disengage' : 'resolve';
     const startedHealth = Math.max(0, Number(bot.health) || 0);
     const decisions = [];
     let verifiedHits = 0;
@@ -4663,6 +5432,7 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
         const evidence = {
             kind: 'tactical_combat',
             outcome,
+            objective,
             target: lastTarget,
             considered: decisions.at(-1)?.considered || 0,
             decisions,
@@ -4684,7 +5454,10 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
     bot.modes.pause('cowardice');
     try {
         while (!bot.interrupt_code && steps < MAX_TACTICAL_COMBAT_STEPS && (Number(bot.health) || 0) > 0) {
-            const snapshot = tacticalCombatSnapshot(bot, requestedRange, attributedEntityId);
+            const snapshot = {
+                ...tacticalCombatSnapshot(bot, requestedRange, attributedEntityId),
+                objective,
+            };
             const decision = chooseTacticalCombatDecision(snapshot);
             if (!decision.selected) {
                 log(bot, verifiedHits > 0
@@ -4695,49 +5468,86 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
 
             const selected = decision.selected;
             const entity = bot.entities?.[selected.id];
+            let response = decision.response;
             lastTarget = { name: selected.name, id: selected.id };
             decisions.push({
                 target: lastTarget,
-                response: decision.response,
+                response,
                 reason: decision.reason,
                 distance: Math.round(selected.distance * 10) / 10,
                 considered: decision.considered,
             });
-            log(bot, `Tactical choice: ${decision.response} against ${selected.name} (${decision.reason}).`);
+            log(bot, `Tactical choice: ${response} against ${selected.name} (${decision.reason}).`);
             if (!entity?.position) {
                 steps += 1;
                 continue;
             }
 
-            if (decision.response === 'retreat') {
+            if (response === 'retreat') {
                 const before = bot.entity.position.distanceTo(entity.position);
                 const retreated = await moveAwayFromEntity(bot, entity, selected.desiredRange);
                 const after = entity.position
                     ? bot.entity.position.distanceTo(entity.position)
                     : selected.desiredRange;
                 if (!retreated || after <= before + 0.5) {
-                    log(bot, `Could not establish safer spacing from ${selected.name}.`);
-                    return finish(false, bot.lastActionEvidence?.outcome || 'retreat_blocked', {
-                        steps,
+                    const retreatOutcome = bot.lastActionEvidence?.outcome || 'retreat_blocked';
+                    const liveEntity = bot.entities?.[selected.id];
+                    if (
+                        selected.fallbackResponse === 'melee'
+                        && liveEntity?.position
+                        && (Number(bot.health) || 0) > 0
+                    ) {
+                        Object.assign(decisions.at(-1), {
+                            retreatOutcome,
+                            retreatDistanceBefore: before,
+                            retreatDistanceAfter: after,
+                            fallbackResponse: selected.fallbackResponse,
+                            fallbackReason: selected.fallbackReason,
+                        });
+                        response = selected.fallbackResponse;
+                        log(
+                            bot,
+                            `No retreat route increased spacing from ${selected.name}; using package-owned defensive melee as the last physically available response.`,
+                        );
+                    } else {
+                        log(bot, `Could not establish safer spacing from ${selected.name}.`);
+                        return finish(false, retreatOutcome, {
+                            steps,
+                            retreatDistanceBefore: before,
+                            retreatDistanceAfter: after,
+                        });
+                    }
+                } else {
+                    retreats += 1;
+                    const finishedHealth = Math.max(0, Number(bot.health) || 0);
+                    const healthReceipt = reconcileTacticalRetreatHealth(startedHealth, finishedHealth);
+                    if (!healthReceipt.verified) {
+                        log(
+                            bot,
+                            `Retreat increased spacing from ${selected.name}, but health deteriorated from ${startedHealth} to ${finishedHealth}.`,
+                        );
+                        return finish(false, healthReceipt.outcome, {
+                            steps: steps + 1,
+                            retreatDistanceBefore: before,
+                            retreatDistanceAfter: after,
+                            healthReconciliation: healthReceipt,
+                        });
+                    }
+                    log(bot, `Retreated from ${selected.name}; spacing increased from ${before.toFixed(1)} to ${after.toFixed(1)} blocks.`);
+                    return finish(true, 'retreated', {
+                        steps: steps + 1,
                         retreatDistanceBefore: before,
                         retreatDistanceAfter: after,
                     });
                 }
-                retreats += 1;
-                log(bot, `Retreated from ${selected.name}; spacing increased from ${before.toFixed(1)} to ${after.toFixed(1)} blocks.`);
-                return finish(true, 'retreated', {
-                    steps: steps + 1,
-                    retreatDistanceBefore: before,
-                    retreatDistanceAfter: after,
-                });
             }
 
             let attack = null;
-            if (decision.response === 'ranged') {
+            if (response === 'ranged') {
                 attack = await fireTacticalBow(bot, entity, selected.desiredRange);
                 if (attack.confirmed) rangedShots += 1;
             } else {
-                if (decision.response === 'shield_melee') {
+                if (response === 'shield_melee') {
                     if (!await equipCombatShield(bot)) {
                         return finish(false, 'shield_equipment_failed', { steps });
                     }
@@ -4772,7 +5582,7 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
                     await waitCombatWindow(bot, 150);
                     continue;
                 }
-                log(bot, `Tactical ${decision.response} against ${selected.name} was not verified (${attack.outcome}).`);
+                log(bot, `Tactical ${response} against ${selected.name} was not verified (${attack.outcome}).`);
                 return finish(false, attack.outcome || 'attack_unverified', { steps });
             }
             verifiedHits += Math.max(1, Number(attack.evidence?.botAttributedHits) || 0);
@@ -4802,7 +5612,6 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
         let timeout = null;
         let interruptPoll = null;
         let lastUncreditedDamage = null;
-        const targetId = entity?.id;
 
         const cleanup = () => {
             if (timeout) clearTimeout(timeout);
@@ -4817,7 +5626,7 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
             resolve(result);
         };
         const onEntityHurt = (hurtEntity, source) => {
-            const observation = observeCombatDamage(bot, targetId, hurtEntity, source);
+            const observation = observeCombatDamage(bot, entity, hurtEntity, source);
             if (!observation.matchesTarget) return;
             if (observation.confirmsBotHit) {
                 finish({ confirmed: true, outcome: 'hit_attributed', attribution: observation });
@@ -4826,7 +5635,7 @@ function performVerifiedMeleeHit(bot, entity, timeoutMs=ATTACK_CONFIRM_TIMEOUT_M
             lastUncreditedDamage = observation;
         };
         const onEntityDead = deadEntity => {
-            if (deadEntity?.id === targetId) {
+            if (deadEntity === entity) {
                 finish({
                     confirmed: false,
                     outcome: lastUncreditedDamage?.attribution === 'foreign'
@@ -4885,11 +5694,63 @@ export async function attackNearest(bot, mobType, kill=true) {
     return false;
 }
 
+export function deliberateEntityHarvestTargetQualification(bot, source, entity) {
+    const origin = bot?.entity?.position;
+    const position = entity?.position;
+    if (!origin?.distanceTo || !position || !entityMatchesHarvestSource(entity, source)) {
+        return Object.freeze({
+            qualified: false,
+            code: 'target_observation_invalid',
+            distance: null,
+            verticalDelta: null,
+        });
+    }
+    const distance = Math.round(origin.distanceTo(position) * 10) / 10;
+    const verticalDelta = Math.round(Math.abs(Number(position.y) - Number(origin.y)) * 10) / 10;
+    if (source?.method !== 'kill') {
+        return Object.freeze({
+            qualified: true,
+            code: 'non_hostile_harvest_target',
+            distance,
+            verticalDelta,
+        });
+    }
+    if (verticalDelta > DELIBERATE_HOSTILE_VERTICAL_RANGE) {
+        return Object.freeze({
+            qualified: false,
+            code: 'target_outside_deliberate_vertical_range',
+            distance,
+            verticalDelta,
+            maximumDistance: DELIBERATE_HOSTILE_PURSUIT_RANGE,
+            maximumVerticalDelta: DELIBERATE_HOSTILE_VERTICAL_RANGE,
+        });
+    }
+    if (distance > DELIBERATE_HOSTILE_PURSUIT_RANGE) {
+        return Object.freeze({
+            qualified: false,
+            code: 'target_outside_deliberate_pursuit_range',
+            distance,
+            verticalDelta,
+            maximumDistance: DELIBERATE_HOSTILE_PURSUIT_RANGE,
+            maximumVerticalDelta: DELIBERATE_HOSTILE_VERTICAL_RANGE,
+        });
+    }
+    return Object.freeze({
+        qualified: true,
+        code: 'deliberate_hostile_target_local',
+        distance,
+        verticalDelta,
+        maximumDistance: DELIBERATE_HOSTILE_PURSUIT_RANGE,
+        maximumVerticalDelta: DELIBERATE_HOSTILE_VERTICAL_RANGE,
+    });
+}
+
 function loadedEntityHarvestCandidates(bot, source) {
     const origin = bot.entity?.position;
     return Object.values(bot.entities || {})
         .filter(entity => entityMatchesHarvestSource(entity, source))
         .filter(entity => entity.position && origin)
+        .filter(entity => deliberateEntityHarvestTargetQualification(bot, source, entity).qualified)
         .sort((left, right) => (
             origin.distanceTo(left.position) - origin.distanceTo(right.position)
             || left.id - right.id
@@ -4923,13 +5784,65 @@ function createEntityHarvestSearch(origin, range) {
         attempts: 0,
         relocations: 0,
         distanceMoved: 0,
+        spawnWaits: 0,
+        spawnWaitMs: 0,
         lastMovementOutcome: null,
     };
 }
 
 const MAX_ENTITY_HARVEST_RELOCATIONS_PER_ACTION = 1;
+const ENTITY_HARVEST_SPAWN_SETTLE_MS = 10_000;
 
-async function relocateEntityHarvestSearch(bot, sourceName, search) {
+export function shouldWaitForEntityHarvestSpawn(bot, source) {
+    if (
+        source?.method !== 'kill'
+        || source?.entity !== 'spider'
+        || !isNightTime(bot?.time?.timeOfDay)
+    ) return false;
+    return loadedEntityHarvestCandidates(bot, source).length === 0;
+}
+
+export function shouldRelocateEntityHarvestSearch(bot, source) {
+    // Daylight clears the natural surface spawn window. If a previously loaded
+    // spider disappears or proves non-local, do not march to an arbitrary X/Z
+    // waypoint (whose GoalXZ may be satisfied deep underground). Return to the
+    // durable temporal gate and wait at the companion's current stance.
+    if (
+        source?.method === 'kill'
+        && source?.entity === 'spider'
+        && source?.output === 'string'
+        && !isNightTime(bot?.time?.timeOfDay)
+    ) return false;
+    return true;
+}
+
+async function waitForEntityHarvestSpawnSettlement(bot, source, search, location) {
+    if (!shouldWaitForEntityHarvestSpawn(bot, source)) return false;
+    const waitMs = Math.min(
+        ENTITY_HARVEST_SPAWN_SETTLE_MS,
+        remainingActionTimeMs(ENTITY_HARVEST_SPAWN_SETTLE_MS),
+    );
+    if (waitMs <= 0) return false;
+    const waitStartedAt = Date.now();
+    search.spawnWaits += 1;
+    log(
+        bot,
+        `No loaded ${source.entity} is harvestable ${location}; waiting up to `
+        + `${Math.round(waitMs / 1000)} seconds for hostile spawning before rescanning.`,
+    );
+    const observed = await waitForWorldCondition(
+        bot,
+        () => loadedEntityHarvestCandidates(bot, source).length > 0,
+        waitMs,
+        100,
+    );
+    search.spawnWaitMs += Date.now() - waitStartedAt;
+    return observed;
+}
+
+async function relocateEntityHarvestSearch(bot, source, search) {
+    if (!shouldRelocateEntityHarvestSearch(bot, source)) return false;
+    const sourceName = source.entity;
     while (
         !bot.interrupt_code
         && remainingActionTimeMs() > 0
@@ -4957,6 +5870,7 @@ async function relocateEntityHarvestSearch(bot, sourceName, search) {
         if (!reached || moved < MIN_COLLECTION_RESCAN_PROGRESS) continue;
         search.relocations += 1;
         await interruptibleDelay(bot, 350);
+        await waitForEntityHarvestSpawnSettlement(bot, source, search, 'in this valid night search region');
         log(bot, `Reached a distinct entity-search region after ${moved.toFixed(1)} blocks; rescanning.`);
         return true;
     }
@@ -4984,9 +5898,12 @@ async function collectEntityHarvestDrops(bot, outputName, range) {
  * search is bounded and uses normal native navigation; the action succeeds
  * only when the requested inventory effect is physically observed.
  */
-export async function harvestEntityDrop(bot, sourceName, outputName, method='shear', count=1, range=64, allowAlternative=false) {
+export async function harvestEntityDrop(bot, sourceName, outputName, method='shear', count=1, range=64, allowAlternative=false, targetEntityId=null) {
     const requested = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
     const boundedRange = Math.max(16, Math.min(512, Math.floor(Number(range) || 64)));
+    const requestedTargetEntityId = Number.isInteger(Number(targetEntityId)) && Number(targetEntityId) > 0
+        ? Math.floor(Number(targetEntityId))
+        : null;
     const source = entityHarvestSources(bot.registry, outputName)
         .find(candidate => candidate.entity === sourceName && candidate.method === method);
     if (!source) {
@@ -5000,6 +5917,22 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
         return false;
     }
 
+    const combatRequirement = deliberateEntityHarvestCombatRequirement(bot, source);
+    if (combatRequirement) {
+        setActionEvidence(bot, {
+            kind: 'entity_harvest',
+            outcome: 'combat_preparation_required',
+            target: { source: sourceName, output: outputName, method },
+            toolRequirement: combatRequirement,
+            retryable: true,
+        });
+        log(
+            bot,
+            `Cannot deliberately hunt ${sourceName} barehanded; prepare a usable ${combatRequirement.name} first.`,
+        );
+        return false;
+    }
+
     const startedAt = Date.now();
     const initialCount = inventoryCount(bot, outputName);
     const desiredCount = initialCount + requested;
@@ -5008,6 +5941,15 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
     const attempted = new Set();
     const search = createEntityHarvestSearch(origin, boundedRange);
     let observedAlternative = null;
+    let deliberateCombatResolved = false;
+
+    // Let the first qualified night region settle before asking Pathfinder to
+    // relocate. If neither local spawning nor the one bounded region probe can
+    // produce new evidence, the action returns a temporal receipt instead of
+    // looking like a failed harvest method that GoalDirector should repeat.
+    if (requestedTargetEntityId === null) {
+        await waitForEntityHarvestSpawnSettlement(bot, source, search, 'at the current night stance');
+    }
 
     let lastReachedPosition = origin.clone();
     searchLoop: while (!bot.interrupt_code && remainingActionTimeMs() > 0) {
@@ -5029,9 +5971,39 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
                 log(bot, `Collected ${currentCount - initialCount} ${outputName} by ${method}ing ${sourceName}.`);
                 return true;
             }
-            const candidate = loadedEntityHarvestCandidates(bot, source)
-                .find(entity => !attempted.has(entity.id));
+            const candidates = loadedEntityHarvestCandidates(bot, source);
+            const candidate = requestedTargetEntityId === null
+                ? candidates.find(entity => !attempted.has(entity.id))
+                : candidates.find(entity => (
+                    entity.id === requestedTargetEntityId
+                    && !attempted.has(entity.id)
+                ));
             if (!candidate) {
+                if (requestedTargetEntityId !== null) {
+                    if (attempted.has(requestedTargetEntityId)) break searchLoop;
+                    setActionEvidence(bot, {
+                        kind: 'entity_harvest',
+                        outcome: 'source_access_pending',
+                        target: {
+                            source: sourceName,
+                            output: outputName,
+                            method,
+                            entityId: requestedTargetEntityId,
+                        },
+                        targetIdentity: {
+                            stage: 'physical_address_stale',
+                            requestedEntityId: requestedTargetEntityId,
+                            observed: 'missing_or_unqualified',
+                        },
+                        elapsedMs: Date.now() - startedAt,
+                        retryable: true,
+                    });
+                    log(
+                        bot,
+                        `The selected ${sourceName} is no longer loaded and qualified; waiting for fresh target evidence instead of choosing another entity.`,
+                    );
+                    return false;
+                }
                 const alternative = Object.values(bot.entities || {})
                     .map(entity => ({ entity, output: entityHarvestOutput(entity, method) }))
                     .filter(entry => entry.output && entry.output !== outputName && entry.entity?.position)
@@ -5065,6 +6037,30 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
                 break;
             }
             attempted.add(candidate.id);
+            const targetQualification = deliberateEntityHarvestTargetQualification(bot, source, candidate);
+
+            if (source.method === 'kill') {
+                const pursuitEnvironment = deliberateEntityHarvestCombatEnvironment(
+                    bot,
+                    candidate.id,
+                    Math.max(8, Math.min(16, boundedRange)),
+                );
+                if (!pursuitEnvironment.ready) {
+                    setActionEvidence(bot, {
+                        kind: 'entity_harvest',
+                        outcome: pursuitEnvironment.code,
+                        target: { source: sourceName, output: outputName, method, entityId: candidate.id },
+                        targetQualification,
+                        combatEnvironment: pursuitEnvironment,
+                        retryable: true,
+                    });
+                    const nearest = pursuitEnvironment.threats[0];
+                    log(bot, nearest
+                        ? `Will not pursue an optional ${sourceName} while ${nearest.name} is ${nearest.distance} blocks away.`
+                        : `Will not pursue an optional ${sourceName} without a verified combat environment.`);
+                    return false;
+                }
+            }
 
             if (source.requiredItem && !await equip(bot, source.requiredItem, 'hand')) {
                 setActionEvidence(bot, {
@@ -5079,10 +6075,47 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
             // Pathfinder pursue the live entity so ordinary walking, jumping,
             // and replanning remain valid while the animal moves.
             const reached = await goToGoal(bot, new pf.goals.GoalFollow(candidate, 2.5));
+            const movementEvidence = bot.lastActionEvidence;
             const live = bot.entities?.[candidate.id];
             const interactionDistance = live?.position
                 ? bot.entity.position.distanceTo(live.position)
                 : Number.POSITIVE_INFINITY;
+            if (
+                (!reached || interactionDistance > 4.5)
+                && entityMatchesHarvestSource(live, source)
+                && live?.position
+            ) {
+                const movementOutcome = String(movementEvidence?.outcome || 'goal_not_reached');
+                const stage = ['path_not_found', 'unreachable'].includes(movementOutcome)
+                    ? 'path_not_found'
+                    : 'path_execution_failed';
+                setActionEvidence(bot, {
+                    kind: 'entity_harvest',
+                    outcome: 'source_access_pending',
+                    target: { source: sourceName, output: outputName, method, entityId: live.id },
+                    targetQualification,
+                    sourceAccess: {
+                        source: sourceName,
+                        entityId: live.id,
+                        position: {
+                            x: live.position.x,
+                            y: live.position.y,
+                            z: live.position.z,
+                        },
+                        stage,
+                        movementOutcome,
+                        observedAt: Date.now(),
+                    },
+                    movement: movementEvidence?.kind === 'movement'
+                        ? movementEvidence
+                        : { kind: 'movement', outcome: movementOutcome },
+                    interactionDistance,
+                    elapsedMs: Date.now() - startedAt,
+                    retryable: true,
+                });
+                log(bot, `A qualified ${sourceName} is loaded, but its current position has no completed usable pursuit; waiting for new access evidence.`);
+                return false;
+            }
             if (
                 !reached
                 || !entityMatchesHarvestSource(live, source)
@@ -5090,12 +6123,72 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
             ) continue;
 
             try {
-                await bot.lookAt(live.position.offset(0, Math.max(0.5, Number(live.height) * 0.5 || 0.65), 0), true);
-                // Mineflayer distinguishes generic entity activation (villager
-                // interaction, mounting) from using the held item on an entity.
-                // Shearing is explicitly owned by useOn().
-                bot.useOn(live);
-                await interruptibleDelay(bot, 650);
+                if (source.method === 'kill') {
+                    const combatEnvironment = deliberateEntityHarvestCombatEnvironment(
+                        bot,
+                        live.id,
+                        Math.max(8, Math.min(16, boundedRange)),
+                    );
+                    if (!combatEnvironment.ready) {
+                        setActionEvidence(bot, {
+                            kind: 'entity_harvest',
+                            outcome: combatEnvironment.code,
+                            target: { source: sourceName, output: outputName, method, entityId: live.id },
+                            combatEnvironment,
+                            retryable: true,
+                        });
+                        const nearest = combatEnvironment.threats[0];
+                        log(bot, nearest
+                            ? `Will not start an optional ${sourceName} fight while ${nearest.name} is ${nearest.distance} blocks away.`
+                            : `Will not start an optional ${sourceName} fight without a verified combat environment.`);
+                        return false;
+                    }
+                    // The tactical layer owns whether this deliberate fight is
+                    // safe; mineflayer-pvp still owns pursuit and melee. The
+                    // harvest adapter owns only the requested drop and exact
+                    // post-combat inventory verification.
+                    const resolved = await resolveTacticalCombat(
+                        bot,
+                        Math.max(8, Math.min(16, boundedRange)),
+                        live.id,
+                    );
+                    const combat = bot.lastActionEvidence;
+                    if (
+                        !resolved
+                        || combat?.outcome === 'retreated'
+                        || bot.entities?.[live.id]
+                    ) {
+                        setActionEvidence(bot, {
+                            kind: 'entity_harvest',
+                            outcome: bot.interrupt_code
+                                ? 'interrupted'
+                                : 'combat_target_not_defeated',
+                            target: { source: sourceName, output: outputName, method, entityId: live.id },
+                            combat: combat && typeof combat === 'object'
+                                ? {
+                                    outcome: combat.outcome || null,
+                                    healthBefore: combat.healthBefore ?? null,
+                                    healthAfter: combat.healthAfter ?? null,
+                                    alive: combat.alive ?? null,
+                                }
+                                : null,
+                            retryable: !bot.interrupt_code,
+                        });
+                        log(bot, bot.interrupt_code
+                            ? `Stopped harvesting ${outputName}.`
+                            : `Could not safely defeat ${sourceName}; the harvest did not continue past combat.`);
+                        return false;
+                    }
+                    deliberateCombatResolved = true;
+                } else {
+                    await bot.lookAt(live.position.offset(0, Math.max(0.5, Number(live.height) * 0.5 || 0.65), 0), true);
+                    // Mineflayer distinguishes generic entity activation (villager
+                    // interaction, mounting) from using the held item on an entity.
+                    // Shearing is explicitly owned by useOn().
+                    bot.useOn(live);
+                    await interruptibleDelay(bot, 650);
+                }
+                await interruptibleDelay(bot, 350);
                 await collectEntityHarvestDrops(bot, outputName, 12);
             } catch (error) {
                 if (bot.interrupt_code) break;
@@ -5105,12 +6198,36 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
 
             const currentCount = inventoryCount(bot, outputName);
             if (currentCount >= desiredCount) {
+                const combatCloseout = source.method === 'kill' && deliberateCombatResolved
+                    ? await deliberateEntityHarvestCombatCloseout(
+                        bot,
+                        Math.max(8, Math.min(16, boundedRange)),
+                    )
+                    : null;
+                if (combatCloseout && !combatCloseout.ready) {
+                    setActionEvidence(bot, {
+                        kind: 'entity_harvest',
+                        outcome: combatCloseout.code,
+                        target: { source: sourceName, output: outputName, method, entityId: candidate.id },
+                        collected: currentCount - initialCount,
+                        requested,
+                        combatCloseout,
+                        completionBlocked: true,
+                        elapsedMs: Date.now() - startedAt,
+                        retryable: !bot.interrupt_code,
+                    });
+                    log(bot, bot.interrupt_code
+                        ? `Stopped before the ${outputName} harvest reached a safe closeout.`
+                        : `Collected ${outputName}, but could not clear the hostile area safely enough to resume ordinary work.`);
+                    return false;
+                }
                 setActionEvidence(bot, {
                     kind: 'entity_harvest',
                     outcome: 'drop_collected',
                     target: { source: sourceName, output: outputName, method, entityId: candidate.id },
                     collected: currentCount - initialCount,
                     requested,
+                    ...(combatCloseout ? { combatCloseout } : {}),
                     elapsedMs: Date.now() - startedAt,
                     retryable: false,
                 });
@@ -5124,7 +6241,22 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
         // inside one opaque action. The next invocation starts from the bot's
         // physically advanced position and can bind the next region or method.
         if (search.relocations >= MAX_ENTITY_HARVEST_RELOCATIONS_PER_ACTION) break;
-        if (!await relocateEntityHarvestSearch(bot, sourceName, search)) break;
+        if (attempted.size === 0 && search.spawnWaits === 0) {
+            // Feasibility can observe a qualified Spider that unloads or walks
+            // outside the local envelope before this action's first scan. The
+            // source existed long enough to skip the origin wait, but no entity
+            // was physically attempted. Settle that transient-source race once
+            // before deciding whether a regional move has new authority.
+            await waitForEntityHarvestSpawnSettlement(
+                bot,
+                source,
+                search,
+                'after the previously observed source disappeared',
+            );
+            if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
+            if (loadedEntityHarvestCandidates(bot, source).length > 0) continue;
+        }
+        if (!await relocateEntityHarvestSearch(bot, source, search)) break;
         lastReachedPosition = bot.entity.position.clone();
     }
 
@@ -5141,17 +6273,30 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
         && attempted.size === 0
         && observedAlternative
     );
+    const sourceSpawnPending = Boolean(
+        !interrupted
+        && !reportAlternative
+        && collected === 0
+        && attempted.size === 0
+        && !searchAdvanced
+        && search.spawnWaits > 0
+        && source.method === 'kill'
+        && source.entity === 'spider'
+        && source.output === 'string'
+    );
     setActionEvidence(bot, {
         kind: 'entity_harvest',
         outcome: interrupted
             ? 'interrupted'
             : reportAlternative
                 ? 'alternative_source_observed'
-            : collected > 0
-                ? 'partial_drop_collected'
-                : searchAdvanced
-                    ? 'source_search_advanced'
-                    : 'source_not_found',
+                : collected > 0
+                    ? 'partial_drop_collected'
+                    : sourceSpawnPending
+                        ? 'source_spawn_pending'
+                        : searchAdvanced
+                            ? 'source_search_advanced'
+                            : 'source_not_found',
         target: { source: sourceName, output: outputName, method },
         collected,
         requested,
@@ -5172,12 +6317,16 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
             },
         } : {}),
         relocationDistance,
+        spawnWaits: search.spawnWaits,
+        spawnWaitMs: search.spawnWaitMs,
         elapsedMs: Date.now() - startedAt,
         retryable: !interrupted && !reportAlternative,
     });
     log(bot, interrupted
         ? `Stopped harvesting ${outputName}.`
-        : `Could not find enough harvestable ${sourceName} for ${requested} ${outputName}.`);
+        : sourceSpawnPending
+            ? `No usable ${sourceName} appeared after the bounded night settlement and search; waiting for new live source evidence.`
+            : `Could not find enough harvestable ${sourceName} for ${requested} ${outputName}.`);
     return false;
 }
 
@@ -5191,7 +6340,7 @@ export async function attackEntity(bot, entity, kill=true) {
      * await skills.attackEntity(bot, entity);
      **/
 
-    if (!entity?.position) {
+    if (!entity?.position || bot.entities?.[entity.id] !== entity) {
         setActionEvidence(bot, { kind: 'combat', outcome: 'missing_target', retryable: false });
         log(bot, 'Cannot attack: the target is no longer available.');
         return false;
@@ -5230,7 +6379,7 @@ export async function attackEntity(bot, entity, kill=true) {
                 return false;
             }
         }
-        if (!entity.position || !bot.entities?.[entity.id]) {
+        if (!entity.position || bot.entities?.[entity.id] !== entity) {
             setActionEvidence(bot, { kind: 'combat', outcome: 'target_lost', target, retryable: true });
             log(bot, `Cannot attack ${target.name}: target left verified world state.`);
             return false;
@@ -5303,27 +6452,31 @@ export async function attackEntity(bot, entity, kill=true) {
         let foreignAttributedHits = 0;
         let unknownAttributedHits = 0;
         let lastDamageAttribution = 'unknown';
+        let lastDamageObservedAt = 0;
+        let targetDeathObservedAt = 0;
         const onEntityHurt = (hurtEntity, source) => {
-            const observation = observeCombatDamage(bot, entity.id, hurtEntity, source);
+            const observation = observeCombatDamage(bot, entity, hurtEntity, source);
             if (!observation.matchesTarget) return;
             lastDamageAttribution = observation.attribution;
+            lastDamageObservedAt = Date.now();
             if (observation.attribution === 'bot') botAttributedHits += 1;
             else if (observation.attribution === 'foreign') foreignAttributedHits += 1;
             else unknownAttributedHits += 1;
         };
         const onEntityDead = deadEntity => {
-            if (deadEntity?.id !== entity.id) return;
+            if (deadEntity !== entity) return;
             targetDied = true;
+            targetDeathObservedAt = Date.now();
         };
         const startedAt = Date.now();
         bot.on('entityHurt', onEntityHurt);
         bot.on('entityDead', onEntityDead);
 
         try {
-            const movements = safeMovements(bot);
+            const movements = returnableCombatMovements(bot);
             // Combat may traverse normal block geometry, including native
-            // jumps, but target pursuit never authorizes excavation.
-            movements.canDig = false;
+            // jumps, but target pursuit never authorizes excavation or a
+            // one-way drop that strands the companion after settlement.
             bot.pvp.movements = movements;
             await bot.pvp.attack(entity);
             const deadlineAt = startedAt + remainingActionTimeMs(MAX_PVP_ENGAGEMENT_MS);
@@ -5333,7 +6486,7 @@ export async function attackEntity(bot, entity, kill=true) {
                     setActionEvidence(bot, { kind: 'combat', outcome: 'interrupted', target, retryable: false });
                     return false;
                 }
-                if (!bot.entities?.[entity.id]) break;
+                if (bot.entities?.[entity.id] !== entity) break;
             }
 
             if (!targetDied) {
@@ -5351,7 +6504,12 @@ export async function attackEntity(bot, entity, kill=true) {
                 return false;
             }
 
-            if (botAttributedHits < 1 || lastDamageAttribution !== 'bot') {
+            const finalDamage = confirmBotAttributedCombatDeath(
+                lastDamageAttribution,
+                lastDamageObservedAt,
+                targetDeathObservedAt,
+            );
+            if (botAttributedHits < 1 || !finalDamage.confirmed) {
                 setActionEvidence(bot, {
                     kind: 'combat',
                     outcome: lastDamageAttribution === 'foreign'
@@ -5362,6 +6520,7 @@ export async function attackEntity(bot, entity, kill=true) {
                     foreignAttributedHits,
                     unknownAttributedHits,
                     lastDamageAttribution,
+                    finalDamage,
                     elapsedMs: Date.now() - startedAt,
                     retryable: false,
                 });
@@ -5385,6 +6544,7 @@ export async function attackEntity(bot, entity, kill=true) {
                 foreignAttributedHits,
                 unknownAttributedHits,
                 lastDamageAttribution,
+                finalDamage,
                 elapsedMs: Date.now() - startedAt,
                 retryable: false,
             });
@@ -5933,6 +7093,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
     const preservedReturnRoute = normalizePreservedMiningReturnRoute(
         searchOptions?.preservedReturnRoute,
     );
+    const protectedReturnGeometry = protectedMiningReturnGeometry(preservedReturnRoute);
     const excludedPositions = normalizeCollectionExclusions(exclude);
     const rememberCollectionTargetFailure = (outcome, target) => {
         if (
@@ -5992,6 +7153,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         const targetMatches = block => {
             if (!blocktypes.includes(block?.name)) return false;
             if (!block.position) return true;
+            // A verified return route remains in our custody while collection
+            // continues. Do not select its support, body, or head cells as a
+            // later resource target.
+            if (protectedReturnGeometry.has(miningCellKey(block.position))) return false;
             if (collectionPositionExcluded(block.position, excludedPositions)) return false;
             if (isLiquid) return block.metadata === 0;
             return selectionMovements.safeToBreak(block);
@@ -6432,7 +7597,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     // because the plugin requires canDig=true and mutates it.
                     bot.collectBlock.movements = targetScopedCollectionMovements(bot, block, {
                         allowPillars: searchOptions?.allowPillars === true,
-                        allowNaturalRouteDigging,
+                        // Deterministic access has already opened the legal
+                        // stance. Collect Block owns the explicit target, not
+                        // a second incidental excavation route around it.
+                        allowNaturalRouteDigging: false,
                         requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
                     });
                     try {
@@ -6636,6 +7804,12 @@ const NATURAL_TREE_SUPPORTS = new Set([
 const MAX_TREE_LOGS = 64;
 const MAX_WHOLE_TREE_PASSES = 4;
 const MAX_TEMPORARY_TREE_SCAFFOLDS = 8;
+// A one-block support break can leave Mineflayer reporting the body in the
+// old cell while Paper settles the fall and passive pickup. The generic
+// 800ms stance window is intentionally tight for ordinary movement, but a
+// reversible tree pillar owns this exact transition and can wait longer
+// before declaring its already-removed scaffold unreclaimed.
+const TREE_SCAFFOLD_DESCENT_SETTLE_TIMEOUT_MS = 2_500;
 const TREE_HORIZONTAL_RADIUS = 6;
 const TREE_VERTICAL_RADIUS = 32;
 const TREE_SETTLEMENT_RADIUS = 6;
@@ -6678,6 +7852,27 @@ export function treeScaffoldPositionAuthorized(tree, position) {
         && log.position.y === position.y
         && log.position.z === position.z
     ));
+}
+
+/**
+ * Let native Pathfinder use already-collected logs as temporary whole-tree
+ * scaffolding. Movements defaults to dirt/cobblestone, so a bot that starts a
+ * tree empty-handed can otherwise remove the reachable trunk and then strand
+ * its crown despite carrying the exact material needed for a reversible
+ * pillar. Placement remains restricted to original tree cells by the caller's
+ * placement authorizer, and every placed item is recorded for reclamation.
+ */
+export function authorizeTemporaryTreeScaffoldItems(bot, movements, woodTypes) {
+    if (!Array.isArray(movements?.scafoldingBlocks)) return movements;
+    const names = woodTypes instanceof Set
+        ? [...woodTypes]
+        : (Array.isArray(woodTypes) ? woodTypes : []);
+    for (const name of names) {
+        const itemId = bot?.registry?.itemsByName?.[name]?.id;
+        if (!Number.isInteger(itemId) || movements.scafoldingBlocks.includes(itemId)) continue;
+        movements.scafoldingBlocks.push(itemId);
+    }
+    return movements;
 }
 
 function treeCanopyBlock(name) {
@@ -6763,6 +7958,38 @@ function discoverNaturalTree(bot, seedBlock, exclusions=null) {
         || bot.entity.position.distanceTo(left.position) - bot.entity.position.distanceTo(right.position)
     ));
     return { natural: true, logs, base, truncated };
+}
+
+function naturalTreeComponentKey(tree) {
+    return (tree?.logs || [])
+        .map(block => blockPositionKey(block.position))
+        .sort()
+        .join('|');
+}
+
+function selectWholeTreeForRemaining(bot, selection, remainingQuantity, exclusions=null) {
+    const components = [];
+    const seenComponents = new Set();
+    for (const candidate of selection?.ranked || []) {
+        if (!candidate?.reachable || !candidate.block?.position) continue;
+        const tree = discoverNaturalTree(bot, candidate.block, exclusions);
+        if (!tree.natural || tree.logs.length === 0) continue;
+        const componentKey = naturalTreeComponentKey(tree);
+        if (!componentKey || seenComponents.has(componentKey)) continue;
+        seenComponents.add(componentKey);
+        components.push({
+            ...candidate,
+            position: tree.base,
+            componentSize: tree.logs.length,
+            tree,
+        });
+    }
+    const ranked = rankWholeTreeCandidates(components, remainingQuantity);
+    return {
+        selected: ranked[0] || null,
+        ranked,
+        discoveredComponents: components.length,
+    };
 }
 
 function carriedLogCount(bot, woodTypes=null) {
@@ -6887,7 +8114,14 @@ export function assessTreeScaffoldDescentStep(bot, placedScaffolds=[]) {
     };
 }
 
-async function reclaimSupportingTreeScaffolds(bot, placedScaffolds) {
+export async function reclaimSupportingTreeScaffolds(
+    bot,
+    placedScaffolds,
+    {
+        breakScaffold = breakBlockAt,
+        settleStandingCell = waitForStableSupportedStandingCell,
+    } = {},
+) {
     const scaffolds = [...placedScaffolds]
         .filter(scaffold => scaffold?.position?.offset && scaffold?.itemName)
         .slice(0, MAX_TEMPORARY_TREE_SCAFFOLDS);
@@ -6899,7 +8133,7 @@ async function reclaimSupportingTreeScaffolds(bot, placedScaffolds) {
         }
         if (!step.ok) return { complete: false, ...step, reclaimed };
 
-        if (!await breakBlockAt(
+        if (!await breakScaffold(
             bot,
             step.target.x,
             step.target.y,
@@ -6913,13 +8147,16 @@ async function reclaimSupportingTreeScaffolds(bot, placedScaffolds) {
                 reclaimed,
             };
         }
-        const landed = await waitForWorldCondition(
+        // A momentary body coordinate is not a landing receipt. Wait for the
+        // one-block descent to hold on anchored support before removing the
+        // next pillar block; otherwise consecutive removals turn a careful
+        // teardown into a multi-block fall.
+        const landedCell = await settleStandingCell(
             bot,
-            () => physicallyOccupiesStandingCell(bot, step.expectedFeet),
-            GROUND_SETTLE_TIMEOUT_MS,
-            25,
+            TREE_SCAFFOLD_DESCENT_SETTLE_TIMEOUT_MS,
+            SUPPORTED_STANCE_STABILITY_MS,
         );
-        if (!landed) {
+        if (!landedCell?.equals?.(step.expectedFeet)) {
             return {
                 complete: false,
                 outcome: bot.interrupt_code ? 'interrupted' : 'tree_scaffold_descent_unverified',
@@ -7021,14 +8258,19 @@ async function reclaimDetachedTreeScaffolds(bot, tree, placedScaffolds) {
         };
 }
 
-async function settleTreeTransactionOnTerrain(bot, tree, placedScaffolds) {
-    const stances = treeSettlementStances(bot, tree, placedScaffolds);
+export async function settleTreeTransactionOnTerrain(
+    bot,
+    tree,
+    placedScaffolds,
+    navigateGoal = goToGoal,
+) {
+    let stances = treeSettlementStances(bot, tree, placedScaffolds);
     if (stances.length === 0) {
         return { settled: false, outcome: 'tree_terrain_stance_unavailable', target: null };
     }
     let settled = isAtCollectionStance(bot, stances);
     if (!settled && !bot.interrupt_code) {
-        const reached = await goToGoal(bot, collectionApproachGoal(stances), {
+        await navigateGoal(bot, collectionApproachGoal(stances), {
             // This is ordinary locomotion away from an owned temporary
             // pillar, not traversal through a preflighted mining corridor.
             // The corridor policy deliberately caps drops at one block; using
@@ -7043,9 +8285,35 @@ async function settleTreeTransactionOnTerrain(bot, tree, placedScaffolds) {
             // completed tree into a false permanent settlement failure.
             allowLocalRecovery: true,
         });
-        settled = Boolean(reached && isAtCollectionStance(bot, stances));
+        // The navigation primitive can truthfully report that its original
+        // route failed even though its bounded recovery settled the body on
+        // one of the already-authorized terrain stances. The physical
+        // postcondition is authoritative; cancellation remains censored and
+        // can never be converted into settlement success.
+        // Pathfinder may settle its route while Paper is still applying the
+        // final jump or fall. The body-volume proof below is authoritative,
+        // but it needs the same bounded physical edge already granted to
+        // scaffold descent before an in-flight body becomes a false failure.
+        settled = !bot.interrupt_code && await waitForWorldCondition(
+            bot,
+            () => isAtCollectionStance(bot, stances),
+            TREE_SCAFFOLD_DESCENT_SETTLE_TIMEOUT_MS,
+            25,
+        );
     }
-    const target = stances.find(stance => physicallyOccupiesStandingCell(bot, stance)) || null;
+    let target = stances.find(stance => physicallyOccupiesStandingCell(bot, stance)) || null;
+    if (!target && !bot.interrupt_code) {
+        // Collection, scaffold teardown, leaf decay, and Paper landing can
+        // change which nearby terrain cells are legal after the original
+        // candidate snapshot. Re-evaluate the same bounded tree contract from
+        // live blocks before rejecting a body which already occupies a clear,
+        // naturally supported stance. Sorting from the current body makes the
+        // occupied cell survive the bounded candidate cap; no new movement or
+        // terrain authority is granted here.
+        stances = treeSettlementStances(bot, tree, placedScaffolds);
+        target = stances.find(stance => physicallyOccupiesStandingCell(bot, stance)) || null;
+        settled = Boolean(target);
+    }
     return {
         settled,
         outcome: settled ? 'tree_terrain_settled' : 'tree_terrain_settlement_unverified',
@@ -7216,7 +8484,7 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
             // submit the freshly changed remainder again only after this pass
             // removed at least one real log; that is monotonic geometry
             // convergence, not an identical retry.
-            bot.collectBlock.movements = targetScopedCollectionMovements(bot, targets, {
+            const treeMovements = targetScopedCollectionMovements(bot, targets, {
                 allowPillars: completeStartedTree,
                 maxScaffoldingPlacements: Math.max(
                     0,
@@ -7246,6 +8514,9 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
                 },
                 placementAuthorizer: position => treeScaffoldPositionAuthorized(tree, position),
             });
+            bot.collectBlock.movements = completeStartedTree
+                ? authorizeTemporaryTreeScaffoldItems(bot, treeMovements, woodTypes)
+                : treeMovements;
             try {
                 await runBoundedCollectionOperation(
                     bot,
@@ -7352,10 +8623,18 @@ async function collectDiscoveredTree(bot, tree, woodTypes, maximumLogs = Number.
                 operationError = new Error(`Failed to reclaim ${remaining.length} temporary tree scaffold block(s).`);
             }
         } else if (placedScaffolds.size > 0) {
+            // Settlement failure and cleanup failure are distinct contracts.
+            // Supporting descent may already have removed some or every
+            // scaffold before the body finishes landing; report only blocks
+            // that still match this transaction's exact placement records.
+            const remaining = [...placedScaffolds.values()].filter(scaffold => {
+                const block = bot.blockAt(scaffold.position);
+                return ownedTemporaryScaffoldMatches(scaffold, block);
+            });
             scaffoldCleanup = {
                 placed: placedScaffolds.size,
-                reclaimed: 0,
-                remaining: [...placedScaffolds.values()],
+                reclaimed: placedScaffolds.size - remaining.length,
+                remaining,
             };
         }
     } finally {
@@ -7407,12 +8686,15 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     let completeTrees = 0;
     let temporaryScaffoldsPlaced = 0;
     let temporaryScaffoldsReclaimed = 0;
+    const treeSelectionReceipts = [];
 
     // `num` remains the physical bound for recipe and GoalDirector collection.
     // A lumberjack work order may explicitly add the stronger stewardship
     // contract: once it starts a bounded natural tree, finish that component.
     while (collected < target && !bot.interrupt_code) {
         let nearest = null;
+        let selectedTree = null;
+        let currentTreeSelectionReceipt = null;
 
         let candidates = null;
         if (!nearest) {
@@ -7425,8 +8707,39 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                 true,
             );
             nearest = candidates.selection.selected?.block || null;
+            if (completeStartedTree) {
+                const wholeTreeSelection = selectWholeTreeForRemaining(
+                    bot,
+                    candidates.selection,
+                    target - collected,
+                    failedTargets,
+                );
+                if (wholeTreeSelection.selected) {
+                    nearest = wholeTreeSelection.selected.block;
+                    selectedTree = wholeTreeSelection.selected.tree;
+                    currentTreeSelectionReceipt = {
+                        remainingRequested: target - collected,
+                        selectedLogs: selectedTree.logs.length,
+                        discoveredComponents: wholeTreeSelection.discoveredComponents,
+                        localCandidates: wholeTreeSelection.ranked.length,
+                        routeStatus: wholeTreeSelection.selected.routeStatus,
+                        routeScore: Number.isFinite(wholeTreeSelection.selected.score)
+                            ? wholeTreeSelection.selected.score
+                            : null,
+                        target: {
+                            name: nearest.name,
+                            x: selectedTree.base.x,
+                            y: selectedTree.base.y,
+                            z: selectedTree.base.z,
+                        },
+                    };
+                    if (treeSelectionReceipts.length < MAX_COLLECTION_CANDIDATES) {
+                        treeSelectionReceipts.push(currentTreeSelectionReceipt);
+                    }
+                }
+            }
             if (nearest) {
-                const tree = discoverNaturalTree(bot, nearest, failedTargets);
+                const tree = selectedTree || discoverNaturalTree(bot, nearest, failedTargets);
                 if (tree.natural) {
                     if (completeStartedTree && tree.truncated) {
                         const oversizedTarget = {
@@ -7440,6 +8753,9 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                             outcome: 'tree_component_limit',
                             target: oversizedTarget,
                             discoveredLogs: tree.logs.length,
+                            ...(currentTreeSelectionReceipt
+                                ? { treeSelection: currentTreeSelectionReceipt }
+                                : {}),
                             retryable: false,
                         });
                         log(bot, `The connected ${nearest.name} component exceeds the ${MAX_TREE_LOGS}-log safety bound; it was left intact.`);
@@ -7458,6 +8774,9 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                                 y: tree.base.y,
                                 z: tree.base.z,
                             },
+                            ...(currentTreeSelectionReceipt
+                                ? { treeSelection: currentTreeSelectionReceipt }
+                                : {}),
                             retryable: true,
                         });
                         log(bot, `Cannot collect ${nearest.name}: inventory has no safe working slot.`);
@@ -7701,9 +9020,12 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             outcome: 'collected',
             target: stumpTarget || { name: 'wood' },
             count: collected,
+            requestedCount: target,
+            excessCount: Math.max(0, collected - target),
             completeTrees,
             temporaryScaffoldsPlaced,
             temporaryScaffoldsReclaimed,
+            treeSelections: treeSelectionReceipts.slice(0, MAX_COLLECTION_CANDIDATES),
             search: collectionSearchEvidence(bot, search),
             retryable: false,
         });
@@ -8089,6 +9411,89 @@ export async function pickupUsefulItems(bot, range=12) {
         kind: 'useful_pickup',
         successMessage: count => `Picked up ${count} useful nearby item${count === 1 ? '' : 's'}.`,
     });
+}
+
+export async function pickupItem(bot, itemName, quantity=1, range=12, baselineInventory=null) {
+    const name = String(itemName || '').trim().toLowerCase();
+    const requested = Math.max(1, Math.min(64, Math.floor(Number(quantity) || 1)));
+    const distance = Math.max(4, Math.min(32, Number(range) || 12));
+    const observedBaseline = Number.isFinite(Number(baselineInventory))
+        ? Math.max(0, Math.floor(Number(baselineInventory)))
+        : inventoryCount(bot, name);
+    const targetInventory = observedBaseline + requested;
+    const current = inventoryCount(bot, name);
+    if (current >= targetInventory) {
+        setActionEvidence(bot, {
+            kind: 'item_pickup',
+            outcome: 'already_in_inventory',
+            target: { name },
+            baselineInventory: observedBaseline,
+            targetInventory,
+            afterInventory: current,
+            retryable: false,
+        });
+        return true;
+    }
+    const hostile = bot.nearestEntity?.(entity => (
+        mc.isHostile(entity)
+        && entity?.position
+        && bot.entity.position.distanceTo(entity.position) <= 10
+    ));
+    if (hostile) {
+        setActionEvidence(bot, {
+            kind: 'item_pickup',
+            outcome: 'hostile_nearby',
+            target: { name: hostile.username || hostile.name || 'hostile', id: hostile.id },
+            requestedItem: name,
+            retryable: true,
+        });
+        return false;
+    }
+    const needed = targetInventory - current;
+    const candidates = [];
+    let available = 0;
+    for (const candidate of droppedItemCandidates(
+        bot,
+        distance,
+        item => item.name === name && hasInventoryRoomFor(bot, item.name),
+    )) {
+        candidates.push(candidate);
+        available += Math.max(1, Number(candidate.item.count) || 1);
+        if (available >= needed) break;
+    }
+    if (available < needed) {
+        setActionEvidence(bot, {
+            kind: 'item_pickup',
+            outcome: 'exact_item_unavailable',
+            target: { name },
+            requested,
+            needed,
+            available,
+            baselineInventory: observedBaseline,
+            targetInventory,
+            afterInventory: current,
+            retryable: true,
+        });
+        return false;
+    }
+    await collectDroppedItemQueue(bot, candidates, {
+        kind: 'item_pickup',
+        requireAll: true,
+        successMessage: count => `Picked up ${count} ${name.replaceAll('_', ' ')}.`,
+    });
+    const afterInventory = inventoryCount(bot, name);
+    const complete = afterInventory >= targetInventory;
+    setActionEvidence(bot, {
+        kind: 'item_pickup',
+        outcome: complete ? 'picked_up' : 'pickup_unverified',
+        target: { name },
+        requested,
+        baselineInventory: observedBaseline,
+        targetInventory,
+        afterInventory,
+        retryable: !complete,
+    });
+    return complete;
 }
 
 
@@ -8706,6 +10111,8 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
         ? String(blockType || '').endsWith('_bed')
         : fixtureKind === 'door'
             ? String(blockType || '').endsWith('_door') && blockType !== 'iron_door'
+            : fixtureKind === 'stair'
+                ? String(blockType || '').endsWith('_stairs')
             : false;
     const anchor = new Vec3(Math.floor(Number(x)), Math.floor(Number(y)), Math.floor(Number(z)));
     const target = { name: blockType, x: anchor.x, y: anchor.y, z: anchor.z };
@@ -8718,11 +10125,13 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
             { position: anchor, part: 'lower' },
             { position: anchor.offset(0, 1, 0), part: 'upper' },
         ]
+        : fixtureKind === 'stair'
+            ? [{ position: anchor, part: null }]
         : [
             { position: anchor, part: 'foot' },
             { position: anchor.offset(direction.x, 0, direction.z), part: 'head' },
         ];
-    const supports = fixtureKind === 'door'
+    const supports = fixtureKind === 'door' || fixtureKind === 'stair'
         ? [anchor.offset(0, -1, 0)]
         : occupied.map(cell => cell.position.offset(0, -1, 0));
     if (supports.some(position => !isSafeGameplaySupport(bot.blockAt(position)))) {
@@ -8743,31 +10152,57 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
         }
     }
     const stances = fixtureOrientationStances(bot, anchor, direction);
-    let reachedStance = null;
-    for (const stance of stances) {
-        if (await goToPosition(bot, stance.x, stance.y, stance.z, 0.75)) {
-            reachedStance = stance;
-            break;
-        }
-    }
-    if (!reachedStance) {
-        setActionEvidence(bot, {
+    const stanceGoal = stances.length > 0
+        ? new pf.goals.GoalCompositeAny(
+            stances.map(stance => new pf.goals.GoalBlock(stance.x, stance.y, stance.z)),
+        )
+        : null;
+    const interactionStance = stanceGoal
+        ? await reachInteractionStance(bot, {
+            kind: 'fixture_placement',
+            target: { ...target, fixtureKind, facing: fixtureFacing },
+            goal: stanceGoal,
+            candidates: stances,
+        })
+        : interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.NO_LEGAL_STANCE, {
+            kind: 'fixture_placement',
+            target,
+            code: 'no_legal_stance',
+            candidateCount: 0,
+        });
+    if (interactionStance.status !== 'ready') {
+        setActionEvidence(bot, evidenceWithInteractionStance({
             kind: 'fixture_place',
             outcome: 'orientation_stance_unreachable',
             target,
             candidateCount: stances.length,
             candidates: stances.map(stance => ({ x: stance.x, y: stance.y, z: stance.z })),
             retryable: true,
-        });
+        }, interactionStance));
         return false;
     }
     await bot.lookAt(anchor.offset(0.5, 0.5, 0.5), true);
-    if (!await placeBlock(bot, blockType, anchor.x, anchor.y, anchor.z, 'bottom', true, false)) return false;
+    if (!await placeBlock(bot, blockType, anchor.x, anchor.y, anchor.z, 'bottom', true, false)) {
+        const placementReceipt = bot.lastActionEvidence?.interactionStance;
+        setActionEvidence(bot, {
+            kind: 'fixture_place',
+            outcome: bot.lastActionEvidence?.outcome || 'placement_rejected',
+            target: { ...target, fixtureKind, facing: fixtureFacing },
+            retryable: bot.lastActionEvidence?.retryable !== false,
+            interactionStance: placementReceipt
+                || rejectedInteractionStance(interactionStance, 'placement_rejected'),
+        });
+        return false;
+    }
     const verified = occupied.every(cell => {
         const block = bot.blockAt(cell.position);
         if (!blockMatchesPlacement(bot.registry, blockType, block)) return false;
         const properties = block.getProperties?.() || {};
-        const part = fixtureKind === 'door' ? properties.half : properties.part;
+        const part = fixtureKind === 'door'
+            ? properties.half
+            : fixtureKind === 'bed'
+                ? properties.part
+                : null;
         return part === cell.part && properties.facing === fixtureFacing;
     });
     setActionEvidence(bot, {
@@ -8775,6 +10210,9 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
         outcome: verified ? 'placed' : 'state_unverified',
         target: { ...target, fixtureKind, facing: fixtureFacing },
         retryable: !verified,
+        interactionStance: verified
+            ? confirmedInteractionStance(interactionStance, 'fixture_placement_confirmed')
+            : rejectedInteractionStance(interactionStance, 'fixture_state_unverified'),
     });
     log(bot, verified
         ? `Placed and verified ${fixtureFacing}-facing ${blockType}.`
@@ -9154,46 +10592,47 @@ export async function placeBlock(
         return false;
     }
 
-    const dont_move_for = ['torch', 'redstone_torch', 'redstone', 'lever', 'button', 'rail', 'detector_rail', 
-        'powered_rail', 'activator_rail', 'tripwire_hook', 'tripwire', 'water_bucket', 'string'];
-    if (!dont_move_for.includes(item_name)) {
-        // Pathfinder already owns the exact physical predicate for placing a
-        // block: do not approximate it with distance-only clearance and
-        // GoalNear checks. GoalPlaceBlock proves that the occupied stance is
-        // outside the destination cell and can see/reach the exact supporting
-        // face selected above. Ordinary locomotion remains no-dig.
-        const reached = await goToGoal(
-            bot,
-            new pf.goals.GoalPlaceBlock(target_dest, bot.world, {
-                range: 4.5,
-                faces: [placementDirection],
-                LOS: true,
-            }),
-            {
-                allowHealthBoundedDescent: false,
-                allowLocalRecovery: false,
-            },
-        );
-        if (!reached) {
-            setActionEvidence(bot, { kind: 'place', outcome: 'unreachable', target, retryable: true });
-            log(bot, `Cannot reach a usable stance to place ${blockType}.`);
-            return false;
-        }
-
-        // The world can change while Pathfinder is moving. Rebind the exact
-        // support face before sending the placement packet.
-        buildOffBlock = bot.blockAt(target_dest.plus(placementDirection));
-        if (!buildOffBlock || isReplaceableGameplayBlock(buildOffBlock)) {
-            setActionEvidence(bot, { kind: 'place', outcome: 'missing_support', target, retryable: true });
-            log(bot, `Cannot place ${blockType} at ${targetBlock.position}: its supporting face changed.`);
-            return false;
-        }
-        faceVec = new Vec3(
-            -placementDirection.x,
-            -placementDirection.y,
-            -placementDirection.z,
-        );
+    const placementGoal = new pf.goals.GoalPlaceBlock(target_dest, bot.world, {
+        range: 4.5,
+        faces: [placementDirection],
+        LOS: true,
+    });
+    // Pathfinder already owns the exact physical predicate for placing a
+    // block. Every material uses the same stance contract; bypassing route
+    // planning for torches, rails, or buckets makes failures unattributable.
+    const interactionStance = await reachInteractionStance(bot, {
+        kind: 'placement',
+        target,
+        goal: placementGoal,
+        navigationOptions: {
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        },
+    });
+    if (interactionStance.status !== 'ready') {
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'place',
+            outcome: interactionStance.status === 'interrupted' ? 'interrupted' : 'unreachable',
+            target,
+            retryable: interactionStance.status !== 'interrupted',
+        }, interactionStance));
+        log(bot, `Cannot reach a usable stance to place ${blockType}.`);
+        return false;
     }
+
+    // The world can change while Pathfinder is moving. Rebind the exact
+    // support face before sending the placement packet.
+    buildOffBlock = bot.blockAt(target_dest.plus(placementDirection));
+    if (!buildOffBlock || isReplaceableGameplayBlock(buildOffBlock)) {
+        setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'place', outcome: 'missing_support', target, retryable: true }, interactionStance));
+        log(bot, `Cannot place ${blockType} at ${targetBlock.position}: its supporting face changed.`);
+        return false;
+    }
+    faceVec = new Vec3(
+        -placementDirection.x,
+        -placementDirection.y,
+        -placementDirection.z,
+    );
 
     // will throw error if an entity is in the way, and sometimes even if the block was placed
     try {
@@ -9233,7 +10672,13 @@ export async function placeBlock(
             placed = true;
         }
         if (!placed) {
-            setActionEvidence(bot, { kind: 'place', outcome: 'use_failed', target, retryable: true });
+            setActionEvidence(bot, {
+                kind: 'place',
+                outcome: 'use_failed',
+                target,
+                retryable: true,
+                interactionStance: rejectedInteractionStance(interactionStance, 'use_failed'),
+            });
             return false;
         }
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -9244,16 +10689,36 @@ export async function placeBlock(
                 ? 'lava'
                 : blockType;
         if (!blockMatchesPlacement(bot.registry, expectedName, placedBlock)) {
-            setActionEvidence(bot, { kind: 'place', outcome: 'not_placed', target, observed: placedBlock?.name || 'unloaded', retryable: true });
+            setActionEvidence(bot, {
+                kind: 'place',
+                outcome: 'not_placed',
+                target,
+                observed: placedBlock?.name || 'unloaded',
+                retryable: true,
+                interactionStance: rejectedInteractionStance(interactionStance, 'placement_not_confirmed'),
+            });
             log(bot, `Could not verify ${blockType} at ${target_dest}.`);
             return false;
         }
-        setActionEvidence(bot, { kind: 'place', outcome: 'placed', target, retryable: false });
+        setActionEvidence(bot, {
+            kind: 'place',
+            outcome: 'placed',
+            target,
+            retryable: false,
+            interactionStance: confirmedInteractionStance(interactionStance, 'placement_confirmed'),
+        });
         log(bot, `Placed ${blockType} at ${target_dest}.`);
         return true;
     } catch (err) {
         const message = String(err?.message || err).slice(0, 240);
-        setActionEvidence(bot, { kind: 'place', outcome: 'place_blocked', target, error: message, retryable: true });
+        setActionEvidence(bot, {
+            kind: 'place',
+            outcome: 'place_blocked',
+            target,
+            error: message,
+            retryable: true,
+            interactionStance: rejectedInteractionStance(interactionStance, 'placement_rejected'),
+        });
         log(bot, `Failed to place ${blockType} at ${target_dest}: ${message}.`);
         return false;
     }
@@ -10108,7 +11573,161 @@ export async function recoverDeathItems(bot, deathRecord) {
     });
 }
 
-export async function placeNearPlayer(bot, username, blockType, num=1) {
+const NON_BLOCKING_PLACEMENT_ENTITIES = new Set(['item', 'experience_orb', 'arrow']);
+
+function placementEntityOccupies(bot, position) {
+    const center = position.offset(0.5, 0.5, 0.5);
+    return Object.values(bot?.entities || {}).some(entity => (
+        entity?.position
+        && !NON_BLOCKING_PLACEMENT_ENTITIES.has(entity?.name)
+        && Math.abs(entity.position.y - center.y) < 1.8
+        && Math.hypot(entity.position.x - center.x, entity.position.z - center.z) < 0.8
+    ));
+}
+
+function usablePlacementCell(block) {
+    return Boolean(
+        block
+        && isReplaceableGameplayBlock(block)
+        && !isLiquidGameplayBlock(block)
+        && !isHazardousGameplayBlock(block)
+        && !isProtectedGameplayBlock(block)
+    );
+}
+
+function placementServiceStances(bot, target) {
+    return [
+        target.offset(1, 0, 0),
+        target.offset(-1, 0, 0),
+        target.offset(0, 0, 1),
+        target.offset(0, 0, -1),
+    ].filter(position => {
+        const feet = bot.blockAt(position);
+        const head = bot.blockAt(position.offset(0, 1, 0));
+        const support = bot.blockAt(position.offset(0, -1, 0));
+        return usablePlacementCell(feet)
+            && usablePlacementCell(head)
+            && isSafeGameplaySupport(support)
+            && !isProtectedGameplayBlock(support)
+            && !String(support?.name || '').endsWith('_leaves');
+    });
+}
+
+function boundedPlacementSelectionReceipt({ code, participants = [], inspected = 0, selected = null } = {}) {
+    const selectedTarget = selected?.position
+        ? Object.freeze({
+            x: Math.floor(selected.position.x),
+            y: Math.floor(selected.position.y),
+            z: Math.floor(selected.position.z),
+            maxParticipantDistance: Math.round((Number(selected.maxParticipantDistance) || 0) * 10) / 10,
+            serviceStanceCount: Math.max(0, Math.min(4, Math.floor(Number(selected.serviceStanceCount) || 0))),
+        })
+        : null;
+    return Object.freeze({
+        schemaVersion: 1,
+        code: String(code || 'unknown').slice(0, 80),
+        participants: Object.freeze(participants.map(value => String(value || '').slice(0, 32)).filter(Boolean).slice(0, 8)),
+        inspected: Math.max(0, Math.min(4096, Math.floor(Number(inspected) || 0))),
+        selected: selectedTarget,
+    });
+}
+
+export function selectPlayerRelativePlacementSites(bot, username, {
+    shared = false,
+    searchRadius = 5,
+    sharedReach = 6,
+} = {}) {
+    const resolution = resolvePlayerTarget(bot, username);
+    const anchor = resolution.entity;
+    if (!anchor?.position || typeof bot?.blockAt !== 'function') {
+        return Object.freeze({
+            code: 'player_unavailable',
+            participants: Object.freeze([]),
+            inspected: 0,
+            sites: Object.freeze([]),
+        });
+    }
+
+    const participantByEntity = new Map([[anchor, {
+        name: resolution.canonical || username,
+        position: anchor.position,
+    }]]);
+    if (shared === true) {
+        for (const [key, record] of Object.entries(bot.players || {})) {
+            const entity = record?.entity;
+            const name = String(entity?.username || record?.username || key || '');
+            if (
+                !entity?.position
+                || entity.type !== 'player'
+                || name === bot.username
+                || participantByEntity.has(entity)
+                || Math.abs(entity.position.y - anchor.position.y) > 3
+                || Math.hypot(entity.position.x - anchor.position.x, entity.position.z - anchor.position.z) > 8
+            ) continue;
+            participantByEntity.set(entity, { name, position: entity.position });
+        }
+    }
+    const participants = [...participantByEntity.values()]
+        .sort((left, right) => (
+            (left.position === anchor.position ? -1 : 0)
+            - (right.position === anchor.position ? -1 : 0)
+            || left.name.localeCompare(right.name)
+        ))
+        .slice(0, 8);
+    const radius = Math.max(2, Math.min(8, Math.floor(Number(searchRadius) || 5)));
+    const reach = Math.max(3, Math.min(12, Number(sharedReach) || 6));
+    const base = anchor.position.floored();
+    const sites = [];
+    let inspected = 0;
+
+    for (let ring = 2; ring <= radius; ring += 1) {
+        for (let dx = -ring; dx <= ring; dx += 1) {
+            for (let dz = -ring; dz <= ring; dz += 1) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
+                for (const dy of [0, 1, -1]) {
+                    inspected += 1;
+                    const position = new Vec3(base.x + dx, base.y + dy, base.z + dz);
+                    const cell = bot.blockAt(position);
+                    const support = bot.blockAt(position.offset(0, -1, 0));
+                    if (
+                        !usablePlacementCell(cell)
+                        || !isSafeGameplaySupport(support)
+                        || isProtectedGameplayBlock(support)
+                        || String(support?.name || '').endsWith('_leaves')
+                        || placementEntityOccupies(bot, position)
+                    ) continue;
+                    const participantDistances = participants.map(participant => participant.position.distanceTo(position.offset(0.5, 0.5, 0.5)));
+                    const maxParticipantDistance = Math.max(...participantDistances);
+                    if (shared === true && maxParticipantDistance > reach) continue;
+                    const serviceStances = placementServiceStances(bot, position);
+                    if (serviceStances.length < (shared === true ? 2 : 1)) continue;
+                    sites.push(Object.freeze({
+                        position,
+                        maxParticipantDistance,
+                        serviceStanceCount: serviceStances.length,
+                        botDistance: bot.entity?.position?.distanceTo?.(position.offset(0.5, 0.5, 0.5)) ?? Number.POSITIVE_INFINITY,
+                    }));
+                }
+            }
+        }
+    }
+    sites.sort((left, right) => (
+        left.maxParticipantDistance - right.maxParticipantDistance
+        || right.serviceStanceCount - left.serviceStanceCount
+        || left.botDistance - right.botDistance
+        || left.position.y - right.position.y
+        || left.position.x - right.position.x
+        || left.position.z - right.position.z
+    ));
+    return Object.freeze({
+        code: sites.length > 0 ? 'sites_found' : 'no_shared_site',
+        participants: Object.freeze(participants.map(participant => participant.name)),
+        inspected,
+        sites: Object.freeze(sites.slice(0, 32)),
+    });
+}
+
+export async function placeNearPlayer(bot, username, blockType, num=1, { shared = false } = {}) {
     const requested = Math.max(1, Math.min(16, Math.floor(Number(num) || 1)));
     let resolution = resolvePhysicalPlayer(bot, username);
     let target = playerTargetEvidence(resolution, { item: blockType });
@@ -10142,23 +11761,63 @@ export async function placeNearPlayer(bot, username, blockType, num=1) {
         [3, 2], [-3, 2], [3, -2], [-3, -2],
     ];
     const replaceable = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'tall_grass', 'snow']);
+    const sharedSelection = shared === true
+        ? selectPlayerRelativePlacementSites(bot, resolution.canonical || username, { shared: true })
+        : null;
+    const sharedReceipt = sharedSelection
+        ? boundedPlacementSelectionReceipt({
+            code: sharedSelection.code,
+            participants: sharedSelection.participants,
+            inspected: sharedSelection.inspected,
+        })
+        : null;
+    if (sharedSelection && sharedSelection.sites.length === 0) {
+        const interactionStance = interactionStanceFailure(
+            INTERACTION_STANCE_FAILURE_STAGES.NO_LEGAL_STANCE,
+            {
+                kind: 'placement',
+                target: { ...target, name: blockType },
+                code: 'no_shared_site',
+                candidateCount: 0,
+            },
+        );
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'place_near_player',
+            outcome: 'no_shared_site',
+            target,
+            requested,
+            placed: 0,
+            shared: true,
+            siteSelection: sharedReceipt,
+            retryable: true,
+        }, interactionStance));
+        log(bot, `Cannot place ${blockType}: no supported site is within the nearby group's shared reach envelope.`);
+        return false;
+    }
     let placed = 0;
+    let selectedSite = null;
+    let placementStance = null;
 
-    for (const [dx, dz] of offsets) {
+    const placementCandidates = sharedSelection
+        ? sharedSelection.sites.map(site => ({ destination: site.position, site }))
+        : offsets.map(([dx, dz]) => ({ dx, dz }));
+    for (const candidate of placementCandidates) {
         if (placed >= requested || bot.interrupt_code || inventoryCount(bot, blockType) < 1) break;
-        const x = base.x + dx;
-        const z = base.z + dz;
-        let destination = null;
-        for (const dy of [0, 1, -1]) {
-            const candidate = new Vec3(x, base.y + dy, z);
-            const cell = bot.blockAt(candidate);
-            const support = bot.blockAt(candidate.offset(0, -1, 0));
-            const occupied = Object.values(bot.entities || {}).some(entity => (
-                entity?.position && entity.position.distanceTo(candidate.offset(0.5, 0.5, 0.5)) < 1.2
-            ));
-            if (replaceable.has(cell?.name) && support?.boundingBox === 'block' && !occupied) {
-                destination = candidate;
-                break;
+        let destination = candidate.destination || null;
+        if (!destination) {
+            const x = base.x + candidate.dx;
+            const z = base.z + candidate.dz;
+            for (const dy of [0, 1, -1]) {
+                const position = new Vec3(x, base.y + dy, z);
+                const cell = bot.blockAt(position);
+                const support = bot.blockAt(position.offset(0, -1, 0));
+                const occupied = Object.values(bot.entities || {}).some(entity => (
+                    entity?.position && entity.position.distanceTo(position.offset(0.5, 0.5, 0.5)) < 1.2
+                ));
+                if (replaceable.has(cell?.name) && support?.boundingBox === 'block' && !occupied) {
+                    destination = position;
+                    break;
+                }
             }
         }
         if (!destination) continue;
@@ -10171,7 +11830,11 @@ export async function placeNearPlayer(bot, username, blockType, num=1) {
             'bottom',
             true,
             false,
-        )) placed += 1;
+        )) {
+            placed += 1;
+            selectedSite = candidate.site || null;
+            placementStance = bot.lastActionEvidence?.interactionStance || null;
+        }
     }
 
     const complete = placed >= requested;
@@ -10184,14 +11847,23 @@ export async function placeNearPlayer(bot, username, blockType, num=1) {
                 : inventoryCount(bot, blockType) < 1
                     ? 'missing_material'
                     : 'no_safe_position';
-    setActionEvidence(bot, {
+    const siteSelection = sharedSelection
+        ? boundedPlacementSelectionReceipt({
+            code: complete ? 'shared_site_placed' : sharedSelection.code,
+            participants: sharedSelection.participants,
+            inspected: sharedSelection.inspected,
+            selected: selectedSite,
+        })
+        : null;
+    setActionEvidence(bot, evidenceWithInteractionStance({
         kind: 'place_near_player',
         outcome,
         target,
         requested,
         placed,
+        ...(sharedSelection ? { shared: true, siteSelection } : {}),
         retryable: !complete && !bot.interrupt_code,
-    });
+    }, placementStance));
     log(bot, complete
         ? `Placed ${placed} ${blockType} near ${username}.`
         : `Placed ${placed} of ${requested} requested ${blockType} near ${username}.`);
@@ -10221,6 +11893,21 @@ function equippedItemAt(bot, destination) {
     } catch {
         return null;
     }
+}
+
+function healthiestMatchingEquipment(bot, itemName) {
+    return (bot.inventory?.slots || [])
+        .filter(item => item?.name === itemName)
+        .sort((left, right) => {
+            const leftDurability = toolDurability(bot, left);
+            const rightDurability = toolDurability(bot, right);
+            const leftRatio = leftDurability.remaining / leftDurability.max;
+            const rightRatio = rightDurability.remaining / rightDurability.max;
+            return rightRatio - leftRatio
+                || rightDurability.remaining - leftDurability.remaining
+                || toolEnchantmentScore(bot, right, null) - toolEnchantmentScore(bot, left, null)
+                || (Number(left.slot) || 0) - (Number(right.slot) || 0);
+        })[0] || null;
 }
 
 export async function equip(bot, itemName, requestedDestination = null) {
@@ -10278,7 +11965,7 @@ export async function equip(bot, itemName, requestedDestination = null) {
             log(bot, 'Unequipped hand.');
             return true;
         }
-        let item = bot.inventory.slots.find(slot => slot && slot.name === itemName);
+        let item = healthiestMatchingEquipment(bot, itemName);
         if (!item) {
             if (bot.game.gameMode === 'creative') {
                 const emptySlot = bot.inventory.firstEmptyInventorySlot();
@@ -10288,7 +11975,7 @@ export async function equip(bot, itemName, requestedDestination = null) {
                     return false;
                 }
                 await bot.creative.setInventorySlot(emptySlot, mc.makeItem(itemName, 1));
-                item = bot.inventory.slots.find(slot => slot && slot.name === itemName);
+                item = healthiestMatchingEquipment(bot, itemName);
             }
             else {
                 setActionEvidence(bot, { kind: 'equip', outcome: 'missing_item', target, retryable: true });
@@ -10319,7 +12006,20 @@ export async function equip(bot, itemName, requestedDestination = null) {
         log(bot, `Minecraft did not confirm ${itemName} in the ${destination}.`);
         return false;
     }
-    setActionEvidence(bot, { kind: 'equip', outcome: 'equipped', target, retryable: false });
+    const selectedDurability = toolDurability(bot, equipped);
+    setActionEvidence(bot, {
+        kind: 'equip',
+        outcome: 'equipped',
+        target,
+        selectedInventorySlot: Number.isInteger(equipped?.slot) ? equipped.slot : null,
+        ...(Number.isFinite(selectedDurability.max) ? {
+            durability: {
+                remaining: selectedDurability.remaining,
+                maximum: selectedDurability.max,
+            },
+        } : {}),
+        retryable: false,
+    });
     log(bot, `Equipped ${itemName} in the ${destination}.`);
     return true;
 }
@@ -10439,7 +12139,7 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
     }
     const approach = await approachContainerBlock(bot, chest);
     if (!approach.block) {
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: approach.outcome, target, item: itemName, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' });
+        setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'chest_transfer', outcome: approach.outcome, target, item: itemName, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' }, approach.interactionStance));
         log(bot, `Could not reach the chest to deposit ${itemName}.`);
         return false;
     }
@@ -10491,6 +12191,7 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
                 containerBefore,
                 containerAfter,
                 retryable: inventoryTransferred === 0 && containerTransferred === 0,
+                interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed'),
             });
             log(bot, `Minecraft did not verify ${toPut} ${itemName} in the selected chest without changing unrelated contents.`);
             return false;
@@ -10507,6 +12208,7 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
             containerBefore,
             containerAfter,
             retryable: false,
+            interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_transfer_confirmed'),
         });
         log(bot, `Put ${toPut} ${itemName} in the chest and verified its contents.`);
         return true;
@@ -10537,6 +12239,9 @@ export async function putInChest(bot, itemName, num=-1, exactPosition=null) {
             containerTransferred,
             containerBefore,
             containerAfter,
+            interactionStance: chestContainer || containerBefore
+                ? confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed')
+                : rejectedInteractionStance(approach.interactionStance, 'container_open_rejected'),
             error: error.message,
             retryable: inventoryTransferred === 0 && containerTransferred === 0,
         });
@@ -10712,13 +12417,13 @@ export async function storeInventoryPlanAt(bot, encodedPlan, x, y, z, dimension=
     }
     const approach = await approachContainerBlock(bot, assigned.block);
     if (!approach.block) {
-        setActionEvidence(bot, {
+        setActionEvidence(bot, evidenceWithInteractionStance({
             kind: 'storage_plan',
             outcome: approach.outcome,
             target,
             observed: approach.observed || null,
-            retryable: approach.outcome !== 'interrupted',
-        });
+            retryable: !['interrupted', 'container_activation_blocked'].includes(approach.outcome),
+        }, approach.interactionStance));
         return false;
     }
 
@@ -10745,6 +12450,7 @@ export async function storeInventoryPlanAt(bot, encodedPlan, x, y, z, dimension=
                 plannedTransfers,
                 capacity,
                 retryable: false,
+                interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed'),
             });
             log(bot, capacity.outcome === 'storage_inventory_changed'
                 ? `${capacity.item} changed before storage could begin, so nothing was moved.`
@@ -10820,6 +12526,7 @@ export async function storeInventoryPlanAt(bot, encodedPlan, x, y, z, dimension=
                 transfers,
                 unrelatedPreserved,
                 retryable: Object.values(transfers).every(value => value === 0),
+                interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed'),
             });
             log(bot, 'Minecraft did not verify the complete storage cleanup without changing unrelated contents.');
             return false;
@@ -10833,6 +12540,7 @@ export async function storeInventoryPlanAt(bot, encodedPlan, x, y, z, dimension=
             retained: Object.fromEntries(requirements.map(requirement => [requirement.target, requirement.retain])),
             unrelatedPreserved,
             retryable: false,
+            interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_transfer_confirmed'),
         });
         log(bot, `Stored ${Object.values(transfers).reduce((total, value) => total + value, 0)} authorized item${Object.values(transfers).reduce((total, value) => total + value, 0) === 1 ? '' : 's'} and preserved the requested carried set.`);
         return true;
@@ -10867,6 +12575,11 @@ export async function storeInventoryPlanAt(bot, encodedPlan, x, y, z, dimension=
             transfers,
             error: String(error?.message || error).slice(0, 240),
             retryable: !bot.interrupt_code && transferred === 0,
+            ...(bot.interrupt_code ? {} : {
+                interactionStance: containerBefore
+                    ? confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed')
+                    : rejectedInteractionStance(approach.interactionStance, 'container_open_rejected'),
+            }),
         });
         log(bot, `Storage cleanup stopped after moving ${transferred} item${transferred === 1 ? '' : 's'}: ${String(error?.message || error).slice(0, 180)}.`);
         return false;
@@ -11124,7 +12837,7 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
     const target = { name: chest.name || 'chest', x: chest.position.x, y: chest.position.y, z: chest.position.z };
     const approach = await approachContainerBlock(bot, chest);
     if (!approach.block) {
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: approach.outcome, target, item: itemName, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' });
+        setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'chest_transfer', outcome: approach.outcome, target, item: itemName, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' }, approach.interactionStance));
         log(bot, `Could not reach the chest to take ${itemName}.`);
         return false;
     }
@@ -11173,7 +12886,15 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
             log(bot, `Minecraft only confirmed ${Math.max(0, transferred)} of ${intended} ${itemName} entered inventory.`);
             return false;
         }
-        setActionEvidence(bot, { kind: 'chest_transfer', outcome: 'withdrawn', target, item: itemName, count: transferred, retryable: false });
+        setActionEvidence(bot, {
+            kind: 'chest_transfer',
+            outcome: 'withdrawn',
+            target,
+            item: itemName,
+            count: transferred,
+            retryable: false,
+            interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_transfer_confirmed'),
+        });
         log(bot, `Took ${transferred} ${itemName} from the chest.`);
         return true;
     } catch (error) {
@@ -11187,6 +12908,9 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
             transferred: Math.max(0, afterCount - beforeCount),
             error: error.message,
             retryable: true,
+            interactionStance: chestContainer
+                ? confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed')
+                : rejectedInteractionStance(approach.interactionStance, 'container_open_rejected'),
         });
         log(bot, `Could not take ${itemName} from the chest: ${error.message}.`);
         return false;
@@ -11195,7 +12919,7 @@ export async function takeFromChest(bot, itemName, num=-1, exactPosition=null) {
     }
 }
 
-export async function viewChest(bot) {
+export async function viewChest(bot, exactPosition=null) {
     /**
      * View the contents of the nearest chest.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -11203,7 +12927,51 @@ export async function viewChest(bot) {
      * @example
      * await skills.viewChest(bot);
      * **/
-    let chest = world.getNearestBlock(bot, 'chest', 32);
+    const expectedDimension = normalizedDimension(exactPosition?.dimension);
+    const currentDimension = normalizedDimension(bot.game?.dimension);
+    if (expectedDimension && expectedDimension !== currentDimension) {
+        setActionEvidence(bot, {
+            kind: 'chest_view',
+            outcome: 'assigned_container_wrong_dimension',
+            target: {
+                name: 'assigned_inspection',
+                x: Math.floor(exactPosition.x),
+                y: Math.floor(exactPosition.y),
+                z: Math.floor(exactPosition.z),
+                dimension: expectedDimension,
+            },
+            observed: currentDimension,
+            retryable: true,
+        });
+        log(bot, `The assigned container is in ${expectedDimension}, not ${currentDimension || 'the current dimension'}.`);
+        return false;
+    }
+    let chest = null;
+    if (exactPosition) {
+        const assigned = await loadAssignedContainerBlock(bot, exactPosition);
+        chest = assigned.block;
+        if (!chest) {
+            const retryable = !['assigned_container_invalid', 'interrupted'].includes(assigned.outcome);
+            setActionEvidence(bot, {
+                kind: 'chest_view',
+                outcome: assigned.outcome,
+                target: {
+                    name: 'assigned_inspection',
+                    x: Math.floor(exactPosition.x),
+                    y: Math.floor(exactPosition.y),
+                    z: Math.floor(exactPosition.z),
+                },
+                observed: assigned.observed,
+                retryable,
+            });
+            log(bot, assigned.outcome === 'assigned_container_invalid'
+                ? 'The assigned inspection target is not a chest, trapped chest, or barrel.'
+                : 'Could not reach and load the assigned inspection container.');
+            return false;
+        }
+    } else {
+        chest = world.getNearestBlock(bot, 'chest', 32);
+    }
     if (!chest) {
         setActionEvidence(bot, { kind: 'chest_view', outcome: 'chest_not_found', retryable: true });
         log(bot, 'Could not find a chest nearby.');
@@ -11212,7 +12980,7 @@ export async function viewChest(bot) {
     const target = { name: chest.name || 'chest', x: chest.position.x, y: chest.position.y, z: chest.position.z };
     const approach = await approachContainerBlock(bot, chest);
     if (!approach.block) {
-        setActionEvidence(bot, { kind: 'chest_view', outcome: approach.outcome, target, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' });
+        setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'chest_view', outcome: approach.outcome, target, observed: approach.observed || null, retryable: approach.outcome !== 'interrupted' }, approach.interactionStance));
         log(bot, 'Could not reach the chest to inspect it.');
         return false;
     }
@@ -11220,20 +12988,38 @@ export async function viewChest(bot) {
     let chestContainer = null;
     try {
         chestContainer = await openContainerForAction(bot, chest);
-        const items = chestContainer.containerItems();
-        if (!items.length) {
+        const manifest = Object.freeze(Object.entries(containerItemCounts(chestContainer))
+            .sort(([left], [right]) => left.localeCompare(right))
+            .slice(0, 54)
+            .map(([name, count]) => Object.freeze({ name, count })));
+        if (!manifest.length) {
             log(bot, 'The chest is empty.');
         }
         else {
             log(bot, 'The chest contains:');
-            for (const item of items) {
+            for (const item of manifest) {
                 log(bot, `${item.count} ${item.name}`);
             }
         }
-        setActionEvidence(bot, { kind: 'chest_view', outcome: 'viewed', target, stackCount: items.length, retryable: false });
+        setActionEvidence(bot, {
+            kind: 'chest_view',
+            outcome: 'viewed',
+            target,
+            stackCount: chestContainer.containerItems().length,
+            manifest,
+            retryable: false,
+            interactionStance: confirmedInteractionStance(approach.interactionStance, 'container_open_confirmed'),
+        });
         return true;
     } catch (error) {
-        setActionEvidence(bot, { kind: 'chest_view', outcome: 'view_blocked', target, error: error.message, retryable: true });
+        setActionEvidence(bot, {
+            kind: 'chest_view',
+            outcome: 'view_blocked',
+            target,
+            error: error.message,
+            retryable: true,
+            interactionStance: rejectedInteractionStance(approach.interactionStance, 'container_open_rejected'),
+        });
         log(bot, `Could not view the chest: ${error.message}.`);
         return false;
     } finally {
@@ -11251,9 +13037,19 @@ export async function consume(bot, itemName="") {
      * await skills.eat(bot, "apple");
      **/
     itemName = String(itemName || '').trim();
-    const target = { name: itemName || 'item' };
+    const bestFoodRequested = itemName === 'best_food' || itemName === '';
+    const healingPotionRequested = itemName === 'healing_potion';
+    const target = { name: bestFoodRequested ? 'best_food' : itemName || 'item' };
     let item;
-    if (itemName) item = bot.inventory.findInventoryItem(itemName);
+    if (healingPotionRequested) {
+        item = bot.inventory.items().find(candidate => (
+            isDrinkableHealingPotion(candidate, bot.version)
+        )) || null;
+        if (item) {
+            target.inventoryName = item.name;
+            target.effect = potionIdentity(item, bot.version);
+        }
+    } else if (!bestFoodRequested) item = bot.inventory.findInventoryItem(itemName);
     else {
         const foods = bot.registry?.foodsByName || {};
         item = bot.inventory.items()
@@ -11265,16 +13061,34 @@ export async function consume(bot, itemName="") {
                 (Number(foods[right.name]?.foodPoints) || 0) - (Number(foods[left.name]?.foodPoints) || 0)
                 || (Number(foods[right.name]?.saturation) || 0) - (Number(foods[left.name]?.saturation) || 0)
             ))[0];
-        if (item) target.name = item.name;
+        if (item) {
+            target.selector = 'best_food';
+            target.name = item.name;
+        }
     }
     if (!item) {
         setActionEvidence(bot, { kind: 'consume', outcome: 'missing_item', target, retryable: true });
-        log(bot, `You do not have any ${itemName || 'requested item'} to consume.`);
+        log(bot, `You do not have any ${bestFoodRequested ? 'safe food' : itemName || 'requested item'} to consume.`);
         return false;
     }
     const beforeCount = inventoryCount(bot, item.name);
     const beforeFood = Number.isFinite(bot.food) ? bot.food : null;
-    const previousHeldItem = bot.heldItem?.name || null;
+    const beforeHealth = Number.isFinite(bot.health) ? bot.health : null;
+    // `heldItem` can briefly be null while Mineflayer is reconciling a server
+    // inventory update even though the selected hotbar slot is authoritative.
+    // Preserve that exact slot item before native consumption so a potion does
+    // not leave its empty bottle selected over the player's existing tool or
+    // weapon.
+    const previousQuickBarSlot = Number.isInteger(bot.quickBarSlot)
+        && bot.quickBarSlot >= 0
+        && bot.quickBarSlot <= 8
+        ? bot.quickBarSlot
+        : null;
+    const previousHeldItemRecord = bot.heldItem
+        || (previousQuickBarSlot === null
+            ? null
+            : bot.inventory?.slots?.[36 + previousQuickBarSlot] || null);
+    const previousHeldItem = previousHeldItemRecord?.name || null;
     try {
         await bot.equip(item, 'hand');
         await bot.consume();
@@ -11283,30 +13097,31 @@ export async function consume(bot, itemName="") {
         log(bot, `Could not consume ${item.name}: ${error.message}.`);
         return false;
     }
+    if (healingPotionRequested && beforeHealth !== null) {
+        await waitForWorldCondition(
+            bot,
+            () => (
+                Number(bot.health) > beforeHealth
+                && inventoryCount(bot, item.name) < beforeCount
+            ),
+            1_500,
+            50,
+        );
+    }
     const afterCount = inventoryCount(bot, item.name);
     const afterFood = Number.isFinite(bot.food) ? bot.food : null;
+    const afterHealth = Number.isFinite(bot.health) ? bot.health : null;
     const countConfirmed = afterCount < beforeCount;
     const hungerConfirmed = beforeFood !== null && afterFood !== null && afterFood > beforeFood;
-    if (!countConfirmed && !hungerConfirmed) {
-        setActionEvidence(bot, {
-            kind: 'consume',
-            outcome: 'not_consumed',
-            target,
-            beforeCount,
-            afterCount,
-            beforeFood,
-            afterFood,
-            previousHeldItem,
-            restoredHeldItem: false,
-            retryable: true,
-        });
-        log(bot, `Minecraft did not confirm that ${item.name} was consumed.`);
-        return false;
-    }
+    const healingConfirmed = !healingPotionRequested
+        || (beforeHealth !== null && afterHealth !== null && afterHealth > beforeHealth);
     let restoredHeldItem = previousHeldItem === null || previousHeldItem === item.name;
     let restoreError = null;
     if (!restoredHeldItem && !bot.interrupt_code) {
-        const previousItem = bot.inventory.findInventoryItem(previousHeldItem);
+        const previousItem = previousHeldItemRecord?.name === previousHeldItem
+            && Number(previousHeldItemRecord?.count ?? 1) > 0
+            ? previousHeldItemRecord
+            : bot.inventory.findInventoryItem(previousHeldItem);
         if (previousItem) {
             try {
                 await bot.equip(previousItem, 'hand');
@@ -11316,6 +13131,26 @@ export async function consume(bot, itemName="") {
             }
         }
     }
+    if ((!countConfirmed && !hungerConfirmed) || !healingConfirmed) {
+        setActionEvidence(bot, {
+            kind: 'consume',
+            outcome: healingPotionRequested && !healingConfirmed ? 'healing_unverified' : 'not_consumed',
+            target,
+            beforeCount,
+            afterCount,
+            beforeFood,
+            afterFood,
+            ...(healingPotionRequested ? { beforeHealth, afterHealth, healingConfirmed } : {}),
+            previousHeldItem,
+            restoredHeldItem,
+            ...(restoreError ? { restoreError } : {}),
+            retryable: true,
+        });
+        log(bot, healingPotionRequested && !healingConfirmed
+            ? 'Minecraft consumed the selected healing potion but did not confirm restored health.'
+            : `Minecraft did not confirm that ${item.name} was consumed.`);
+        return false;
+    }
     setActionEvidence(bot, {
         kind: 'consume',
         outcome: 'consumed',
@@ -11324,6 +13159,7 @@ export async function consume(bot, itemName="") {
         afterCount,
         beforeFood,
         afterFood,
+        ...(healingPotionRequested ? { beforeHealth, afterHealth, healingConfirmed } : {}),
         previousHeldItem,
         restoredHeldItem,
         ...(restoreError ? { restoreError } : {}),
@@ -11381,17 +13217,25 @@ function deliveryDropPositionHasSafeSupport(bot, position) {
         && isSafeGameplaySupport(support);
 }
 
-function deliveryDropStances(bot, player) {
+export function deliveryDropStances(bot, player) {
     const y = Math.floor(Number(player?.position?.y));
     const x = Math.floor(Number(player?.position?.x));
     const z = Math.floor(Number(player?.position?.z));
     if (![x, y, z].every(Number.isFinite)) return [];
-    return [
-        new Vec3(x + 2, y, z),
-        new Vec3(x - 2, y, z),
-        new Vec3(x, y, z + 2),
-        new Vec3(x, y, z - 2),
-    ].filter(position => {
+    // A player standing in a one-block depression or on the lower side of a
+    // terrace can be physically adjacent while every same-Y cardinal cell is
+    // solid. Delivery is allowed across a modest vertical offset, so select
+    // the supported body cell rather than assuming both bodies share one Y.
+    const candidates = [];
+    for (const dy of [0, 1, -1, 2, -2]) {
+        candidates.push(
+            new Vec3(x + 2, y + dy, z),
+            new Vec3(x - 2, y + dy, z),
+            new Vec3(x, y + dy, z + 2),
+            new Vec3(x, y + dy, z - 2),
+        );
+    }
+    return candidates.filter(position => {
         const center = position.offset(0.5, 0, 0.5);
         return deliveryDropPositionHasSafeSupport(bot, position)
             && deliveryDropStanceIsExclusive(center, player.position);
@@ -11686,7 +13530,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     return false;
 }
 
-export async function giveFamilyToPlayer(bot, family, username, num=1) {
+export async function giveFamilyToPlayer(bot, family, username, num=1, baselineManifest='') {
     family = String(family || '').trim();
     const requested = Math.max(1, Math.min(2304, Math.floor(Number(num) || 1)));
     const before = familyInventoryCount(bot, family);
@@ -11695,13 +13539,42 @@ export async function giveFamilyToPlayer(bot, family, username, num=1) {
         setActionEvidence(bot, { kind: 'family_give', outcome: 'unsupported_family', target, retryable: false });
         return false;
     }
-    if (before < 1) {
-        setActionEvidence(bot, { kind: 'family_give', outcome: 'family_missing', target, retryable: true });
-        log(bot, `There are no ${family} to give to ${username}.`);
+    const baseline = familyBaselineCounts(bot, family, baselineManifest);
+    if (baseline === false) {
+        setActionEvidence(bot, { kind: 'family_give', outcome: 'invalid_baseline_manifest', target, retryable: false });
+        log(bot, `The ${family} delivery baseline is invalid.`);
         return false;
     }
-    const expected = Math.min(requested, before);
-    const manifest = familyTransferManifest(bot, family, expected);
+    const candidates = familyInventoryEntries(bot, family)
+        .map(entry => ({
+            ...entry,
+            count: baseline === null
+                ? entry.count
+                : Math.max(0, entry.count - (baseline.get(entry.name) || 0)),
+        }))
+        .filter(entry => entry.count > 0);
+    const available = candidates.reduce((total, entry) => total + entry.count, 0);
+    if (available < 1) {
+        setActionEvidence(bot, {
+            kind: 'family_give',
+            outcome: baseline === null ? 'family_missing' : 'family_delta_missing',
+            target,
+            retryable: true,
+        });
+        log(bot, baseline === null
+            ? `There are no ${family} to give to ${username}.`
+            : `There are no newly prepared ${family} to give to ${username}.`);
+        return false;
+    }
+    const expected = Math.min(requested, available);
+    let manifestRemaining = expected;
+    const manifest = [];
+    for (const entry of candidates) {
+        if (manifestRemaining < 1) break;
+        const quantity = Math.min(manifestRemaining, entry.count);
+        manifest.push({ item: entry.name, quantity });
+        manifestRemaining -= quantity;
+    }
     const deliveries = [];
     let allVerified = true;
     let transferred = 0;
@@ -12005,7 +13878,10 @@ function shallowWaterExitCandidates(bot) {
     return candidates.sort((left, right) => left.distance - right.distance);
 }
 
-async function attemptShallowWaterExit(bot, { deadlineAt = null } = {}) {
+async function attemptShallowWaterExit(bot, {
+    deadlineAt = null,
+    attemptTimeoutMs = SHALLOW_WATER_EXIT_TIMEOUT_MS,
+} = {}) {
     const start = bot.entity?.position?.clone?.();
     const feet = start ? bot.blockAt(start.floored()) : null;
     if (!start || (!bot.entity?.isInWater && !isLiquidGameplayBlock(feet))) {
@@ -12041,8 +13917,8 @@ async function attemptShallowWaterExit(bot, { deadlineAt = null } = {}) {
                 goal,
                 safeMovements(bot),
                 Math.min(
-                    SHALLOW_WATER_EXIT_TIMEOUT_MS,
-                    remainingActionTimeMs(SHALLOW_WATER_EXIT_TIMEOUT_MS),
+                    attemptTimeoutMs,
+                    remainingActionTimeMs(attemptTimeoutMs),
                     localRemainingMs,
                 ),
             );
@@ -12080,16 +13956,36 @@ async function attemptShallowWaterExit(bot, { deadlineAt = null } = {}) {
     };
 }
 
-async function attemptLocalNavigationEscape(bot) {
+export async function attemptLocalNavigationEscape(bot) {
     const start = bot.entity.position.clone();
     const origin = start.floored();
     const recovery = localNavigationRecoveryMovements(bot, origin);
-    const escapeGoal = new pf.goals.GoalOutsideRadius(
-        origin.x,
-        origin.y,
-        origin.z,
-        NAVIGATION_RECOVERY_DISTANCE,
+    const candidates = localNavigationEscapeStances(bot, origin);
+    const route = probeSafeRoundTripNavigationStances(
+        bot,
+        candidates,
+        origin,
+        Math.min(750, remainingActionTimeMs(750)),
+        recovery.movements,
     );
+    const strategy = recovery.foliageCount > 0 ? 'local_foliage_escape' : 'safe_local_sidestep';
+    if (!route.reachable || !route.terminalPosition) {
+        return {
+            success: false,
+            strategy,
+            foliageCandidates: recovery.foliageCount,
+            candidateCount: candidates.length,
+            distance: 0,
+            outcome: route.status || 'no_returnable_escape_stance',
+            returnOutcome: route.returnStatus || null,
+        };
+    }
+    const selected = new Vec3(
+        route.terminalPosition.x,
+        route.terminalPosition.y,
+        route.terminalPosition.z,
+    );
+    const escapeGoal = new pf.goals.GoalBlock(selected.x, selected.y, selected.z);
     const outcome = await runNavigationAttempt(
         bot,
         escapeGoal,
@@ -12097,14 +13993,22 @@ async function attemptLocalNavigationEscape(bot) {
         NAVIGATION_RECOVERY_STALL_TIMEOUT_MS,
     );
     const moved = bot.entity.position.distanceTo(start);
+    const terminal = observedSupportedStandingCell(bot);
+    const arrived = outcome.state === 'resolved'
+        && navigationGoalSatisfied(bot, escapeGoal)
+        && Boolean(terminal);
     return {
-        success: !bot.interrupt_code && moved >= NAVIGATION_PROGRESS_DISTANCE,
-        strategy: recovery.foliageCount > 0 ? 'local_foliage_escape' : 'safe_local_sidestep',
+        success: !bot.interrupt_code && arrived && moved >= NAVIGATION_PROGRESS_DISTANCE,
+        strategy,
         foliageCandidates: recovery.foliageCount,
+        candidateCount: candidates.length,
+        selectedStance: { x: selected.x, y: selected.y, z: selected.z },
+        terminalStance: terminal,
+        returnOutcome: route.returnStatus || null,
         distance: Math.round(moved * 100) / 100,
         outcome: outcome.state === 'rejected'
             ? pathfinderErrorOutcome(outcome.error, Boolean(bot.interrupt_code))
-            : outcome.state,
+            : arrived ? 'returnable_stance_reached' : 'escape_stance_not_reached',
     };
 }
 
@@ -12149,6 +14053,25 @@ export async function goToGoal(bot, goal, options = {}) {
         : options?.movements
             ? () => options.movements
             : () => safeMovements(bot);
+    const initialMovements = movementFactory();
+    if (options?.requirePlannedRoute === true && !navigationGoalSatisfied(bot, goal)) {
+        const planning = probeSafeNavigationGoal(
+            bot,
+            goal,
+            options?.plannedRouteTimeoutMs,
+            initialMovements,
+        );
+        if (!planning.reachable) {
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: 'path_not_found',
+                planning,
+                retryable: true,
+            });
+            log(bot, `Pathfinder could not produce a complete safe route (${planning.status}); no movement was attempted.`);
+            return false;
+        }
+    }
     const requestedStallTimeoutMs = Math.max(
         NAVIGATION_STALL_TIMEOUT_MS,
         Math.min(30_000, Number(options?.stallTimeoutMs) || NAVIGATION_STALL_TIMEOUT_MS),
@@ -12185,7 +14108,7 @@ export async function goToGoal(bot, goal, options = {}) {
         }
         let outcome = navigationGoalSatisfied(bot, goal)
             ? { state: 'resolved' }
-            : await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
+            : await runNavigationAttempt(bot, goal, initialMovements, navigationStallTimeoutMs);
         if (aborted()) return false;
         currentFeet = bot.entity?.position
             ? bot.blockAt(bot.entity.position.floored())
@@ -12872,7 +14795,7 @@ function normalizePreservedMiningReturnRoute(value) {
         ));
 }
 
-function protectedMiningReturnGeometry(value) {
+export function protectedMiningReturnGeometry(value) {
     const protectedCells = new Set();
     for (const cell of normalizePreservedMiningReturnRoute(value)) {
         for (const offsetY of [-1, 0, 1]) {
@@ -12950,7 +14873,7 @@ function fallingColumnDepth(bot, start) {
     return depth;
 }
 
-function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
+export function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
     const feet = step.position;
     const head = feet.offset(0, 1, 0);
     const support = feet.offset(0, -1, 0);
@@ -13005,8 +14928,8 @@ function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
             blocks.push(...column.blocks);
             continue;
         }
+        const fallingAbove = boundedFallingRouteColumn(bot, position.offset(0, 1, 0));
         if (!isAuthorizedMiningRouteBlock(bot, block, targetBlock, options)) {
-            const fallingAbove = boundedFallingRouteColumn(bot, position.offset(0, 1, 0));
             const generatedFillBelowFallingColumn = Boolean(
                 NATURAL_FILL_BLOCKS.has(block.name)
                 && !isProtectedGameplayBlock(block)
@@ -13031,7 +14954,18 @@ function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
                 blockedBy: block.name,
             };
         }
-        blocks.push(block);
+        // An authorized solid clearance block can still be the plug beneath
+        // Sand or Gravel. Bind that gravity column before breaking the plug;
+        // otherwise the live world changes after preflight and drops debris
+        // directly into the selected body cell.
+        if (!fallingAbove.ok) return { ...fallingAbove, blocks: [] };
+        if (miningRouteTouchesLiquid(
+            bot,
+            [block.position, ...fallingAbove.blocks.map(entry => entry.position)],
+        )) {
+            return { ok: false, outcome: 'liquid_ingress_risk', blocks: [] };
+        }
+        blocks.push(block, ...fallingAbove.blocks);
     }
     const protectedConflict = blocks.find(block => (
         options.protectedGeometry?.has(miningCellKey(block.position))
@@ -13051,6 +14985,21 @@ function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
         blocks,
         supportBlocks: supportAssessment.blocks,
     };
+}
+
+export function orderMiningExcavationBlocks(blocks, origin = null) {
+    return [...(Array.isArray(blocks) ? blocks : [])].sort((left, right) => {
+        // Clear the lowest gravity block while its solid plug remains in
+        // place. Any higher gravity block then settles into that same bound
+        // coordinate instead of falling through the future standing cell.
+        const gravityOrder = Number(!isFallingGameplayBlock(left))
+            - Number(!isFallingGameplayBlock(right));
+        if (gravityOrder !== 0) return gravityOrder;
+        const heightOrder = Number(left?.position?.y) - Number(right?.position?.y);
+        if (heightOrder !== 0) return heightOrder;
+        if (!origin?.distanceTo) return 0;
+        return origin.distanceTo(left.position) - origin.distanceTo(right.position);
+    });
 }
 
 function miningExcavationTouchesOpenSky(bot, block) {
@@ -13108,7 +15057,7 @@ function toolDurabilityReserve(bot, item) {
     return Math.max(16, Math.ceil(durability.max * 0.1));
 }
 
-function assessMiningRouteDurability(
+export function assessMiningRouteDurability(
     bot,
     routeBlocks,
     {
@@ -13132,30 +15081,50 @@ function assessMiningRouteDurability(
             : Number.POSITIVE_INFINITY;
         return [item.slot, capacity];
     }));
-    const replacementFor = (blocks, minimumUsableDurability) => Object.keys(TOOL_PREPARATION_SPECS)
-        .map(name => {
+    const replacementFor = (blocks, minimumUsableDurability) => {
+        const candidates = Object.keys(TOOL_PREPARATION_SPECS)
+            .map(name => {
             const type = bot.registry?.itemsByName?.[name]?.id;
             if (!Number.isInteger(type)) return null;
             const item = { name, type };
             const durability = toolDurability(bot, item);
+            const spec = TOOL_PREPARATION_SPECS[name];
+            const materialCount = spec.material === 'planks'
+                ? plankInventoryCount(bot)
+                : inventoryCount(bot, spec.material);
             return {
                 ...item,
                 freshUsable: Number.isFinite(durability.max)
                     ? durability.max - toolDurabilityReserve(bot, item)
                     : Number.POSITIVE_INFINITY,
+                preparationReady: (
+                    materialCount >= spec.materialCount
+                    && inventoryCount(bot, 'stick') >= 2
+                    && inventoryCount(bot, 'crafting_table') >= 1
+                ),
             };
-        })
-        .filter(item => (
-            item
-            && item.freshUsable >= minimumUsableDurability
-            && blocks.every(block => {
-                try { return block.canHarvest(item.type); } catch { return false; }
             })
-        ))
-        .sort((left, right) => (
+            .filter(item => (
+                item
+                && item.freshUsable >= minimumUsableDurability
+                && blocks.every(block => {
+                    try { return block.canHarvest(item.type); } catch { return false; }
+                })
+            ));
+        const inventoryReady = candidates.filter(item => item.preparationReady);
+        const responsiveReady = inventoryReady.filter(
+            item => TOOL_PREPARATION_SPECS[item.name].tier >= TOOL_TIER.stone,
+        );
+        const ranked = responsiveReady.length > 0
+            ? responsiveReady
+            : inventoryReady.length > 0
+                ? inventoryReady
+                : candidates;
+        return ranked.sort((left, right) => (
             TOOL_PREPARATION_SPECS[left.name].tier - TOOL_PREPARATION_SPECS[right.name].tier
             || left.name.localeCompare(right.name)
         ))[0] || null;
+    };
 
     // The target is a separate capability role. Reserve exactly one usable
     // break for it before assigning corridor fill; a fixed whole-tranche
@@ -13723,6 +15692,7 @@ function monotonicSurfaceMovements(bot) {
 
 async function traverseClearedMiningCell(bot, step) {
     if (!step) return { success: false, outcome: 'route_step_unavailable' };
+    const start = bot.entity?.position?.clone?.() || null;
     const reached = await goToGoal(
         bot,
         new pf.goals.GoalBlock(step.x, step.y, step.z),
@@ -13733,6 +15703,9 @@ async function traverseClearedMiningCell(bot, step) {
             allowLocalRecovery: false,
         },
     );
+    const movement = bot.lastActionEvidence?.kind === 'movement'
+        ? bot.lastActionEvidence
+        : null;
     await waitForWorldCondition(
         bot,
         () => physicallyOccupiesStandingCell(bot, step),
@@ -13748,8 +15721,10 @@ async function traverseClearedMiningCell(bot, step) {
         success: arrived,
         outcome: arrived ? 'route_step_reached' : 'route_step_not_reached',
         observed,
+        start,
         reached,
         onGround: bot.entity?.onGround === true,
+        movement,
     };
 }
 
@@ -14183,17 +16158,12 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                     blockedBlock: occupiedFallingBlock.position,
                 });
             }
-            // Clear the lowest reachable layer first. For bounded falling
-            // columns, the next layer may settle into the same coordinate;
-            // breakBlockAt verifies that the column height decreased before
-            // this loop charges the excavation or continues.
-            const liveBlock = liveBlocks
-                .filter(block => bot.entity.position.distanceTo(block.position) <= 4.5)
-                .sort((left, right) => (
-                    left.position.y - right.position.y
-                    || bot.entity.position.distanceTo(left.position)
-                        - bot.entity.position.distanceTo(right.position)
-                ))[0];
+            const liveBlock = orderMiningExcavationBlocks(
+                liveBlocks.filter(
+                    block => bot.entity.position.distanceTo(block.position) <= 4.5,
+                ),
+                bot.entity.position,
+            )[0];
             if (!liveBlock) {
                 const nearest = liveBlocks.sort((left, right) => (
                     bot.entity.position.distanceTo(left.position)
@@ -14234,6 +16204,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 observed: traversal.observed,
                 reached: traversal.reached,
                 onGround: traversal.onGround,
+                movement: traversal.movement,
             });
         }
         lastReachedIndex = traversal.landedIndex;
@@ -14455,6 +16426,40 @@ export async function mineSearchTunnel(
 ) {
     const requested = String(resourceName || '').trim().toLowerCase();
     const requestedLength = Math.max(4, Math.min(32, Math.floor(Number(length) || MINING_TUNNEL_LENGTH)));
+    const actionOriginPosition = bot.entity?.position?.clone?.() || null;
+    const actionOriginCell = observedSupportedStandingCell(bot);
+    const physicalProgress = (excavated = 0) => {
+        const observedPosition = bot.entity?.position || null;
+        const observedCell = observedSupportedStandingCell(bot);
+        const distance = actionOriginPosition && observedPosition
+            ? observedPosition.distanceTo(actionOriginPosition)
+            : null;
+        const standingCellChanged = Boolean(
+            actionOriginCell && observedCell && ['x', 'y', 'z'].some(axis => (
+                actionOriginCell[axis] !== observedCell[axis]
+            )),
+        );
+        const supportChanged = Boolean(actionOriginCell) !== Boolean(observedCell);
+        const excavatedCount = Math.max(0, Math.floor(Number(excavated) || 0));
+        const settledPosition = observedCell || observedPosition?.floored?.() || null;
+        return {
+            kind: 'mining_search_physical',
+            verified: Boolean(actionOriginPosition && observedPosition),
+            changed: Boolean(
+                excavatedCount > 0
+                || standingCellChanged
+                || supportChanged
+                || (Number.isFinite(distance) && distance >= NAVIGATION_PROGRESS_DISTANCE)
+            ),
+            distance: Number.isFinite(distance) ? Number(distance.toFixed(3)) : null,
+            excavated: excavatedCount,
+            position: settledPosition ? {
+                x: settledPosition.x,
+                y: settledPosition.y,
+                z: settledPosition.z,
+            } : null,
+        };
+    };
     const requestedBlocks = miningTargetBlockNames(requested);
     const preservedReturnRoute = normalizePreservedMiningReturnRoute(options.preservedReturnRoute);
     const excludedTargets = normalizeCollectionExclusions(options.excludedTargets);
@@ -14502,6 +16507,7 @@ export async function mineSearchTunnel(
                     y: knownTarget.position.y,
                     z: knownTarget.position.z,
                 },
+                progress: physicalProgress(),
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
@@ -14600,6 +16606,7 @@ export async function mineSearchTunnel(
                 searchRejections: plan.searchRejections || null,
                 searchLimitReached: plan.searchLimitReached === true,
                 ...(toolRequirement ? { toolRequirement } : {}),
+                progress: physicalProgress(),
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
@@ -14658,6 +16665,7 @@ export async function mineSearchTunnel(
                 observedPosition: access.observed || null,
                 pathfinderReached: access.reached ?? null,
                 onGround: access.onGround ?? null,
+                progress: physicalProgress(access.excavated),
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
@@ -14762,6 +16770,7 @@ export async function mineSearchTunnel(
                 observedPosition: bot.entity?.position?.clone?.() || null,
                 routeSteps: plan.route.length,
                 excavated: access.excavated,
+                progress: physicalProgress(access.excavated),
                 routeDigging: true,
                 returnable: false,
                 retryable: true,
@@ -14808,6 +16817,7 @@ export async function mineSearchTunnel(
             kind: 'mining_search',
             outcome: 'origin_support_unsafe',
             target: { name: requested || 'resource' },
+            progress: physicalProgress(),
             routeDigging: true,
             retryable: true,
         });
@@ -14858,6 +16868,7 @@ export async function mineSearchTunnel(
                 routeSteps: plan.route.length,
                 excavated: access.excavated,
                 retreat: access.retreat || null,
+                progress: physicalProgress(access.excavated),
                 routeDigging: true,
                 retryable: !bot.interrupt_code,
             });
@@ -14902,6 +16913,7 @@ export async function mineSearchTunnel(
         target: { name: requested || 'resource' },
         rejections,
         ...(toolRequirement ? { toolRequirement } : {}),
+        progress: physicalProgress(),
         routeDigging: true,
         retryable: !bot.interrupt_code,
     });
@@ -15356,7 +17368,7 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     return false;
 }
 
-export async function goToPosition(bot, x, y, z, min_distance=2) {
+export async function goToPosition(bot, x, y, z, min_distance=2, { dryOnly = false } = {}) {
     /**
      * Navigate to the given position.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -15402,7 +17414,36 @@ export async function goToPosition(bot, x, y, z, min_distance=2) {
     const progressInterval = setInterval(checkDigProgress, 1000);
     
     try {
-        const routed = await goToGoal(bot, new pf.goals.GoalNear(x, y, z, requestedDistance));
+        if (dryOnly) {
+            const position = bot.entity?.position?.floored?.();
+            const feet = position ? bot.blockAt(position) : null;
+            if (bot.entity?.isInWater || isLiquidGameplayBlock(feet)) {
+                const shore = await attemptShallowWaterExit(bot);
+                if (!shore.success) {
+                    setActionEvidence(bot, {
+                        kind: 'movement',
+                        outcome: 'dry_route_requires_shore',
+                        target: { x, y, z },
+                        shore,
+                        retryable: true,
+                    });
+                    log(bot, 'A dry recovery route cannot start until Pathfinder reaches stable shore.');
+                    return false;
+                }
+            }
+        }
+        const routed = await goToGoal(
+            bot,
+            new pf.goals.GoalNear(x, y, z, requestedDistance),
+            dryOnly
+                ? {
+                    movements: () => dryRouteMovements(bot),
+                    requirePlannedRoute: true,
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: false,
+                }
+                : {},
+        );
         if (!routed) return false;
         const distance = bot.entity.position.distanceTo(new Vec3(x, y, z));
         if (distance <= requestedDistance + 1) {
@@ -16015,7 +18056,10 @@ export async function rideToPosition(bot, x, y, z, minDistance=2) {
     return arrived;
 }
 
-export async function goToPlayer(bot, username, distance=3, { locatePlayerPosition = null } = {}) {
+export async function goToPlayer(bot, username, distance=3, {
+    locatePlayerPosition = null,
+    dryOnly = false,
+} = {}) {
     /**
      * Navigate to the given player.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -16028,13 +18072,13 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
     if (bot.username === username) {
         setActionEvidence(bot, {
             kind: 'movement',
-            outcome: 'already_at_target',
+            outcome: 'invalid_self_target',
             target: { name: username },
             distance: 0,
             retryable: false,
         });
-        log(bot, `You are already at ${username}.`);
-        return true;
+        log(bot, `Cannot navigate to ${username}: that name identifies this bot, not the requesting player.`);
+        return false;
     }
     let resolution = resolvePhysicalPlayer(bot, username);
     let target = playerTargetEvidence(resolution);
@@ -16057,7 +18101,8 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
                 reacquireDistance,
             );
             const reachedRegion = regionGoal.isEnd(bot.entity.position.floored()) || await goToGoal(bot, regionGoal, {
-                movements: () => safeMovements(bot),
+                movements: () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot),
+                requirePlannedRoute: dryOnly,
                 allowHealthBoundedDescent: false,
                 allowLocalRecovery: false,
             });
@@ -16102,16 +18147,26 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
     }
 
     distance = normalizePlayerDistance(distance, 3);
-    const goal = new pf.goals.GoalFollow(player, distance);
+    // Plan against the same one-block settlement envelope used by the final
+    // live-player verification below. Requiring a stricter abstract goal can
+    // reject a legal adjacent terrace stance that already satisfies this
+    // action's physical completion contract.
+    const arrivalDistance = distance + 1;
+    const goal = new pf.goals.GoalFollow(player, arrivalDistance);
 
-    let reached = await goToGoal(bot, goal);
+    let reached = await goToGoal(bot, goal, {
+        ...(dryOnly ? { movements: () => dryRouteMovements(bot) } : {}),
+        requirePlannedRoute: true,
+        allowHealthBoundedDescent: false,
+        allowLocalRecovery: false,
+    });
     if (!reached && !bot.interrupt_code) {
         resolution = resolvePhysicalPlayer(bot, username);
         player = resolution.entity;
         const settledDistance = player?.position
             ? bot.entity.position.distanceTo(player.position)
             : Number.POSITIVE_INFINITY;
-        if (settledDistance <= distance + 1) {
+        if (settledDistance <= arrivalDistance) {
             reached = true;
             log(bot, `Minecraft already shows ${username} within ${settledDistance.toFixed(1)} blocks despite Pathfinder's late failure.`);
         }
@@ -16135,7 +18190,7 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
                 Math.floor(observed.x),
                 Math.floor(observed.y),
                 Math.floor(observed.z),
-                Math.max(2, distance),
+                Math.max(2, arrivalDistance),
             );
             log(bot, `Dynamic pursuit timed out; routing once to ${username}'s verified current region.`);
             reached = await goToGoal(bot, regionGoal, {
@@ -16151,7 +18206,7 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
         const settledDistance = player?.position
             ? bot.entity.position.distanceTo(player.position)
             : Number.POSITIVE_INFINITY;
-        if (settledDistance <= distance + 1) {
+        if (settledDistance <= arrivalDistance) {
             reached = true;
             log(bot, `Minecraft confirmed ${username} within ${settledDistance.toFixed(1)} blocks after the fallback settled.`);
         }
@@ -16166,7 +18221,7 @@ export async function goToPlayer(bot, username, distance=3, { locatePlayerPositi
         return false;
     }
     const actualDistance = bot.entity.position.distanceTo(player.position);
-    if (actualDistance > distance + 1) {
+    if (actualDistance > arrivalDistance) {
         setActionEvidence(bot, { kind: 'movement', outcome: 'too_far', target, distance: actualDistance });
         log(bot, `Could not reach ${username}; still ${Math.round(actualDistance)} blocks away.`);
         return false;
@@ -16304,6 +18359,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
     let recoveryCooldownUntil = 0;
     let bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
     let liquidNoConvergenceMs = 0;
+    let surfaceAscentActive = false;
     let lastPathStatus = null;
     let followedEntityId = player.id;
     let lastSeenPosition = player.position.clone();
@@ -16340,6 +18396,9 @@ export async function followPlayer(bot, username, distance=4, options={}) {
         target = playerTargetEvidence(resolution);
         const visiblePlayer = resolution.entity;
         if (!visiblePlayer) {
+            surfaceAscentActive = syncFollowSurfaceAscent(bot, {
+                active: surfaceAscentActive,
+            });
             const now = Date.now();
             const context = companionContextFor(bot);
             if (!context?.canUseLastSeen?.()) {
@@ -16438,6 +18497,11 @@ export async function followPlayer(bot, username, distance=4, options={}) {
         );
         const playerDryAndSupported = followTargetRequiresDrySettlement(bot, player);
         const needsShoreRecovery = botInLiquid && playerDryAndSupported;
+        surfaceAscentActive = syncFollowSurfaceAscent(bot, {
+            botInLiquid,
+            playerDryAndSupported,
+            active: surfaceAscentActive,
+        });
 
         if (distance_from_player > nearby_distance || needsShoreRecovery) {
             if (needsShoreRecovery) {
@@ -16561,6 +18625,9 @@ export async function followPlayer(bot, username, distance=4, options={}) {
         }
         return !bot.interrupt_code && Boolean(player);
     } finally {
+        try {
+            syncFollowSurfaceAscent(bot, { active: surfaceAscentActive });
+        } catch { /* final control cleanup below remains authoritative */ }
         stopNavigationGoal(bot);
         bot.clearControlStates?.();
         bot.off('path_update', onPathUpdate);
@@ -16716,6 +18783,107 @@ function probeMeaningfulRelocation(bot, candidates, movements, signal) {
     };
 }
 
+function playerIdentityKey(value) {
+    return String(value || '').replace(/^\./, '').toLowerCase();
+}
+
+export function selectCourtesySpacingGroup(bot, requesterName, {
+    knownBotNames = [],
+    isBotIdentity = () => false,
+} = {}) {
+    const resolution = resolvePlayerTarget(bot, requesterName, {
+        knownBotNames,
+        isBotIdentity,
+    });
+    const requester = resolution.entity;
+    if (!requester?.position) {
+        return Object.freeze({
+            code: resolution.ambiguous ? 'ambiguous_requester' : 'requester_unavailable',
+            requester: null,
+            participants: Object.freeze([]),
+        });
+    }
+
+    const botIdentities = new Set([
+        bot?.username,
+        ...knownBotNames,
+    ].map(playerIdentityKey).filter(Boolean));
+    const byEntity = new Map([[requester, {
+        name: resolution.canonical || String(requesterName || ''),
+        entity: requester,
+    }]]);
+    for (const [key, record] of Object.entries(bot?.players || {})) {
+        const entity = record?.entity;
+        const name = String(entity?.username || record?.username || key || '');
+        if (
+            !entity?.position
+            || entity.type !== 'player'
+            || byEntity.has(entity)
+            || botIdentities.has(playerIdentityKey(name))
+            || isBotIdentity(name)
+            || Math.abs(entity.position.y - requester.position.y) > COURTESY_GROUP_VERTICAL_RADIUS
+            || Math.hypot(
+                entity.position.x - requester.position.x,
+                entity.position.z - requester.position.z,
+            ) > COURTESY_GROUP_HORIZONTAL_RADIUS
+        ) continue;
+        byEntity.set(entity, { name, entity });
+    }
+    const participants = [...byEntity.values()]
+        .sort((left, right) => (
+            (left.entity === requester ? -1 : 0)
+            - (right.entity === requester ? -1 : 0)
+            || left.name.localeCompare(right.name)
+        ))
+        .slice(0, COURTESY_GROUP_MAX_PARTICIPANTS)
+        .map(participant => Object.freeze(participant));
+    return Object.freeze({
+        code: 'group_selected',
+        requester: resolution.canonical || String(requesterName || ''),
+        participants: Object.freeze(participants),
+    });
+}
+
+export function createCourtesySpacingGoal(origin, participants, requestedDistance, maxVerticalDelta = 1) {
+    const start = {
+        x: Number(origin?.x),
+        y: Number(origin?.y),
+        z: Number(origin?.z),
+    };
+    const selected = (Array.isArray(participants) ? participants : [])
+        .filter(participant => participant?.entity?.position)
+        .slice(0, COURTESY_GROUP_MAX_PARTICIPANTS)
+        .map(participant => {
+            const position = participant.entity.position;
+            const gridDistance = Math.hypot(
+                Math.floor(start.x) - Math.floor(position.x),
+                Math.floor(start.z) - Math.floor(position.z),
+            );
+            return Object.freeze({
+                name: String(participant.name || position.username || 'player').slice(0, 32),
+                entity: participant.entity,
+                initialHorizontalDistance: Math.hypot(start.x - position.x, start.z - position.z),
+                zone: Object.freeze({
+                    x: position.x,
+                    z: position.z,
+                    range: gridDistance + COURTESY_GROUP_GRID_GAIN,
+                }),
+            });
+        });
+    const goal = new pf.goals.GoalOutsideXZRadius(
+        start.x,
+        start.y,
+        start.z,
+        Math.max(0, Number(requestedDistance) || 0),
+        Math.max(0, Number(maxVerticalDelta) || 0),
+        selected.map(participant => participant.zone),
+    );
+    return Object.freeze({
+        goal,
+        participants: Object.freeze(selected),
+    });
+}
+
 export async function moveAway(bot, distance, options = {}) {
     /**
      * Move away from current position in any direction.
@@ -16735,8 +18903,28 @@ export async function moveAway(bot, distance, options = {}) {
         || isLiquidGameplayBlock(startingFeet)
     );
     const requestedDistance = Math.max(0, Number(distance) || 0);
+    const groupSelection = options?.groupRequester
+        ? selectCourtesySpacingGroup(bot, options.groupRequester, {
+            knownBotNames: options.knownBotNames,
+            isBotIdentity: options.isBotIdentity,
+        })
+        : null;
+    if (groupSelection && groupSelection.code !== 'group_selected') {
+        setActionEvidence(bot, {
+            kind: 'movement',
+            outcome: groupSelection.code,
+            target: { name: String(options.groupRequester).slice(0, 32) },
+            requestedDistance,
+            retryable: groupSelection.code === 'requester_unavailable',
+        });
+        log(bot, `Cannot give the group room: requester ${String(options.groupRequester).slice(0, 32)} is not uniquely available.`);
+        return false;
+    }
+    const courtesyContract = groupSelection
+        ? createCourtesySpacingGoal(pos, groupSelection.participants, requestedDistance, 1)
+        : null;
     const exclusionZones = recentMoveAwayExclusionZones(bot, pos, requestedDistance);
-    const meaningfulMovements = options?.meaningfulRegion === true && !startedInLiquid
+    const meaningfulMovements = options?.meaningfulRegion === true && !startedInLiquid && !courtesyContract
         ? safeMovements(bot)
         : null;
     const meaningfulRelocation = meaningfulMovements
@@ -16747,23 +18935,54 @@ export async function moveAway(bot, distance, options = {}) {
             signal,
         )
         : null;
+    if (meaningfulMovements && !meaningfulRelocation) {
+        setActionEvidence(bot, {
+            kind: 'movement',
+            outcome: 'no_safe_region',
+            requestedDistance,
+            excludedRegions: exclusionZones.length,
+            retryable: true,
+        });
+        log(bot, 'No reachable loaded surface region satisfies the requested relocation.');
+        return false;
+    }
     const target = meaningfulRelocation
         ? {
             x: meaningfulRelocation.target.x,
             y: meaningfulRelocation.target.y,
             z: meaningfulRelocation.target.z,
         }
+        : courtesyContract
+        ? {
+            requester: groupSelection.requester,
+            participants: courtesyContract.participants.map(participant => participant.name),
+        }
         : { x: pos.x, y: pos.y, z: pos.z };
     const retreatGoal = meaningfulRelocation
         ? new pf.goals.GoalBlock(target.x, target.y, target.z)
-        : new pf.goals.GoalOutsideRadius(
+        : courtesyContract
+        ? courtesyContract.goal
+        : new pf.goals.GoalOutsideXZRadius(
             pos.x,
             pos.y,
             pos.z,
             requestedDistance,
+            4,
             exclusionZones,
         );
     const routeMovements = meaningfulRelocation?.movements || safeMovements(bot);
+    if (courtesyContract) {
+        routeMovements.allowParkour = false;
+        routeMovements.maxDropDown = Math.min(
+            Number(routeMovements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+            1,
+        );
+        routeMovements.infiniteLiquidDropdownDistance = false;
+        const originY = Math.floor(pos.y);
+        routeMovements.exclusionAreasStep.push(block => (
+            Math.abs(Number(block?.position?.y) - originY) > 1 ? 1_000 : 0
+        ));
+    }
     bot.pathfinder.setMovements(routeMovements);
 
     if (bot.modes.isOn('cheat')) {
@@ -16801,6 +19020,12 @@ export async function moveAway(bot, distance, options = {}) {
             allowLocalRecovery: options?.allowLocalRecovery ?? false,
         };
         const movementOptions = meaningfulRelocation
+            ? {
+                ...retreatOptions,
+                movements: routeMovements,
+                allowHealthBoundedDescent: false,
+            }
+            : courtesyContract
             ? {
                 ...retreatOptions,
                 movements: routeMovements,
@@ -16844,7 +19069,9 @@ export async function moveAway(bot, distance, options = {}) {
     }
     if (signal?.aborted) return false;
     let new_pos = bot.entity.position;
-    const moved = new_pos.distanceTo(pos);
+    const moved = meaningfulRelocation
+        ? new_pos.distanceTo(pos)
+        : Math.hypot(new_pos.x - pos.x, new_pos.z - pos.z);
     const finalFeet = bot.blockAt(new_pos.floored());
     if ((startedInLiquid || meaningfulRelocation) && (
         bot.entity?.isInWater
@@ -16868,6 +19095,56 @@ export async function moveAway(bot, distance, options = {}) {
         log(bot, `Retreat stopped after ${moved.toFixed(1)} blocks; ${requestedDistance.toFixed(1)} were requested.`);
         return false;
     }
+    let groupSpacing = null;
+    if (courtesyContract) {
+        const unavailable = courtesyContract.participants.find(participant => !participant.entity?.position);
+        if (unavailable) {
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: 'group_changed',
+                target: { requester: groupSelection.requester },
+                requestedDistance,
+                distance: moved,
+                retryable: true,
+            });
+            log(bot, `Moved away, but ${unavailable.name} left the loaded group before spacing could be verified.`);
+            return false;
+        }
+        const spacingChecks = courtesyContract.participants.map(participant => {
+            const finalHorizontalDistance = Math.hypot(
+                new_pos.x - participant.entity.position.x,
+                new_pos.z - participant.entity.position.z,
+            );
+            return { participant, finalHorizontalDistance };
+        });
+        groupSpacing = Object.freeze(spacingChecks.map(({ participant, finalHorizontalDistance }) => Object.freeze({
+            name: participant.name,
+            initial: Math.round(participant.initialHorizontalDistance * 10) / 10,
+            final: Math.round(finalHorizontalDistance * 10) / 10,
+            gain: Math.round((finalHorizontalDistance - participant.initialHorizontalDistance) * 10) / 10,
+        })));
+        const failedSpacing = spacingChecks.find(({ participant, finalHorizontalDistance }) => (
+            finalHorizontalDistance + 0.05
+                < participant.initialHorizontalDistance + COURTESY_GROUP_VERIFIED_GAIN
+        ));
+        const verticalDelta = Math.abs(new_pos.y - pos.y);
+        if (failedSpacing || verticalDelta > 1.5) {
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: verticalDelta > 1.5 ? 'unsafe_vertical_retreat' : 'group_spacing_not_met',
+                target: { requester: groupSelection.requester },
+                requestedDistance,
+                distance: moved,
+                verticalDelta,
+                groupSpacing,
+                retryable: true,
+            });
+            log(bot, verticalDelta > 1.5
+                ? 'Could not give the group room without leaving the safe elevation band.'
+                : `Moved ${moved.toFixed(1)} blocks, but did not increase spacing from ${failedSpacing.participant.name}.`);
+            return false;
+        }
+    }
     rememberMoveAwayOrigin(bot, pos);
     setActionEvidence(bot, {
         kind: 'movement',
@@ -16877,6 +19154,11 @@ export async function moveAway(bot, distance, options = {}) {
         distance: moved,
         excludedRegions: exclusionZones.length,
         strategy: meaningfulRelocation ? 'verified_region_change' : 'local_relocation',
+        ...(groupSpacing ? {
+            strategy: 'courtesy_group_spacing',
+            target: { requester: groupSelection.requester },
+            groupSpacing,
+        } : {}),
         ...(meaningfulRelocation ? { probePathLength: meaningfulRelocation.pathLength } : {}),
         retryable: true,
     });
@@ -16902,11 +19184,48 @@ export async function moveAwayFromEntity(bot, entity, distance=16) {
 
     const requestedDistance = Math.max(0, Number(distance) || 0);
     const target = { name: entity.username || entity.name || 'entity', id: entity.id };
-    let goal = new pf.goals.GoalFollow(entity, requestedDistance);
-    let inverted_goal = new pf.goals.GoalInvert(goal);
+    const retreatOriginY = Math.floor(bot.entity.position.y);
+    const maxVerticalDelta = 4;
+    const startedAtDrySupportedStance = isDrySupportedStandingStance(
+        bot,
+        bot.entity.position,
+    );
+    const goal = new pf.goals.GoalOutsideEntityXZRadius(
+        entity,
+        requestedDistance,
+        retreatOriginY,
+        maxVerticalDelta,
+    );
+    const movements = safeMovements(bot);
+    // A goal constrains settlement, not intermediate A* nodes. Keep the whole
+    // emergency route inside the same elevation envelope so a legal endpoint
+    // above ground cannot be reached through a dangerous cave detour.
+    movements.allowParkour = false;
+    movements.maxDropDown = Math.min(
+        Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+        1,
+    );
+    movements.infiniteLiquidDropdownDistance = false;
+    const waterType = bot.registry?.blocksByName?.water?.id;
+    if (startedAtDrySupportedStance && Number.isFinite(waterType)) {
+        // A combat retreat may route around water, but it may not turn a dry
+        // follow stance into a submerged endpoint that immediately requires a
+        // separate drowning reflex. Pathfinder remains the route owner; this
+        // project policy only removes water from the legal retreat graph.
+        movements.blocksToAvoid.add(waterType);
+    }
+    movements.exclusionAreasStep.push(block => (
+        Math.abs(Number(block?.position?.y) - retreatOriginY) > maxVerticalDelta
+            ? 1_000
+            : 0
+    ));
     let routed;
     try {
-        routed = await goToGoal(bot, inverted_goal);
+        routed = await goToGoal(bot, goal, {
+            movements,
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
     } catch (err) {
         setActionEvidence(bot, {
             kind: 'movement',
@@ -16928,12 +19247,56 @@ export async function moveAwayFromEntity(bot, entity, distance=16) {
         return true;
     }
     const actualDistance = bot.entity.position.distanceTo(entity.position);
-    if (actualDistance + 0.5 < requestedDistance) {
-        setActionEvidence(bot, { kind: 'movement', outcome: 'too_close', target, requestedDistance, distance: actualDistance, retryable: true });
-        log(bot, `Could not clear ${target.name}; still ${actualDistance.toFixed(1)} blocks away.`);
+    const horizontalDistance = Math.hypot(
+        bot.entity.position.x - entity.position.x,
+        bot.entity.position.z - entity.position.z,
+    );
+    const verticalDelta = Math.abs(bot.entity.position.y - retreatOriginY);
+    const drySupportedSettlement = isDrySupportedStandingStance(
+        bot,
+        bot.entity.position,
+    );
+    if (
+        horizontalDistance + 0.5 < requestedDistance
+        || verticalDelta > maxVerticalDelta + 0.5
+        || !drySupportedSettlement
+    ) {
+        const finalFeet = bot.blockAt(bot.entity.position.floored());
+        const unsafeSettlement = !drySupportedSettlement
+            ? isLiquidGameplayBlock(finalFeet) || bot.entity?.isInWater
+                ? 'unsafe_medium'
+                : 'unsupported_retreat_stance'
+            : null;
+        setActionEvidence(bot, {
+            kind: 'movement',
+            outcome: unsafeSettlement
+                || (verticalDelta > maxVerticalDelta + 0.5 ? 'unsafe_vertical_retreat' : 'too_close'),
+            target,
+            requestedDistance,
+            distance: actualDistance,
+            horizontalDistance,
+            verticalDelta,
+            retryable: true,
+        });
+        log(bot, unsafeSettlement === 'unsafe_medium'
+            ? `Could not clear ${target.name} without ending the retreat in water.`
+            : unsafeSettlement === 'unsupported_retreat_stance'
+                ? `Could not clear ${target.name} onto a supported dry stance.`
+                : verticalDelta > maxVerticalDelta + 0.5
+                    ? `Could not clear ${target.name} without leaving the safe elevation band.`
+                    : `Could not clear ${target.name}; still ${horizontalDistance.toFixed(1)} horizontal blocks away.`);
         return false;
     }
-    setActionEvidence(bot, { kind: 'movement', outcome: 'retreated', target, requestedDistance, distance: actualDistance, retryable: true });
+    setActionEvidence(bot, {
+        kind: 'movement',
+        outcome: 'retreated',
+        target,
+        requestedDistance,
+        distance: actualDistance,
+        horizontalDistance,
+        verticalDelta,
+        retryable: true,
+    });
     return true;
 }
 
@@ -17127,35 +19490,46 @@ export async function useDoor(bot, door_pos=null) {
     }
 
     const originalPosition = bot.entity.position.clone();
-    if (bot.entity.position.distanceTo(door_pos) > DOOR_INTERACTION_REACH) {
-        const approached = await goToPosition(bot, door_pos.x, door_pos.y, door_pos.z, 2);
-        if (!approached) {
-            const prior = bot.lastActionEvidence || {};
-            const interrupted = Boolean(bot.interrupt_code);
-            setActionEvidence(bot, {
-                kind: 'door',
-                outcome: interrupted ? 'interrupted' : prior.outcome || 'unreachable',
-                target,
-                evidence: prior,
-                retryable: !interrupted && prior.retryable !== false,
-            });
-            log(bot, interrupted
-                ? `Stopped before reaching ${target.name}.`
-                : `Could not safely reach ${target.name}.`);
-            return false;
-        }
+    const doorGoal = new pf.goals.GoalLookAtBlock(door_pos, bot.world, {
+        reach: DOOR_INTERACTION_REACH,
+        entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+    });
+    const interactionStance = await reachInteractionStance(bot, {
+        kind: 'door',
+        target,
+        goal: doorGoal,
+    });
+    if (interactionStance.status !== 'ready') {
+        const interrupted = interactionStance.status === 'interrupted';
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'door',
+            outcome: interrupted ? 'interrupted' : 'unreachable',
+            target,
+            retryable: !interrupted,
+        }, interactionStance));
+        log(bot, interrupted
+            ? `Stopped before reaching ${target.name}.`
+            : `Could not safely reach ${target.name}.`);
+        return false;
     }
 
     doorBlock = bot.blockAt(door_pos);
     if (!isWoodenDoor(doorBlock)) {
         const outcome = doorBlock ? 'door_changed' : 'target_unloaded';
-        setActionEvidence(bot, { kind: 'door', outcome, target, retryable: true });
+        setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'door', outcome, target, retryable: true }, interactionStance));
         log(bot, `Cannot use ${target.name}: the door is no longer available.`);
         return false;
     }
     const approachDistance = bot.entity.position.distanceTo(door_pos);
     if (approachDistance > DOOR_INTERACTION_REACH) {
-        setActionEvidence(bot, { kind: 'door', outcome: 'out_of_reach', target, distance: approachDistance, retryable: true });
+        setActionEvidence(bot, {
+            kind: 'door',
+            outcome: 'out_of_reach',
+            target,
+            distance: approachDistance,
+            retryable: true,
+            interactionStance: rejectedInteractionStance(interactionStance, 'interaction_out_of_reach'),
+        });
         log(bot, `Cannot use ${target.name}: still ${approachDistance.toFixed(1)} blocks away.`);
         return false;
     }
@@ -17191,7 +19565,13 @@ export async function useDoor(bot, door_pos=null) {
                 await bot.activateBlock(doorBlock);
                 openedByBot = true;
                 if (!await waitForDoorState(door_pos, true)) {
-                    setActionEvidence(bot, { kind: 'door', outcome: 'door_not_opened', target, retryable: true });
+                    setActionEvidence(bot, {
+                        kind: 'door',
+                        outcome: 'door_not_opened',
+                        target,
+                        retryable: true,
+                        interactionStance: rejectedInteractionStance(interactionStance, 'door_not_opened'),
+                    });
                     log(bot, `Minecraft did not confirm that ${target.name} opened.`);
                     return false;
                 }
@@ -17244,6 +19624,13 @@ export async function useDoor(bot, door_pos=null) {
             openedByBot,
             closeVerified,
             retryable: false,
+            interactionStance: createInteractionStanceReceipt({
+                ...interactionStance,
+                pathStatus: interactionStance.path.status,
+                pathLength: interactionStance.path.length,
+                status: 'interrupted',
+                code: 'interrupted',
+            }),
         });
         log(bot, `Stopped while using ${target.name}.`);
         return false;
@@ -17257,6 +19644,7 @@ export async function useDoor(bot, door_pos=null) {
             error: cleanupError,
             closeVerified,
             retryable: true,
+            interactionStance: rejectedInteractionStance(interactionStance, 'door_interaction_failed'),
         });
         log(bot, `Could not use ${target.name}: ${cleanupError}.`);
         return false;
@@ -17269,6 +19657,7 @@ export async function useDoor(bot, door_pos=null) {
             distance,
             closeVerified,
             retryable: true,
+            interactionStance: rejectedInteractionStance(interactionStance, 'door_traversal_not_confirmed'),
         });
         log(bot, `Could not verify traversal through ${target.name}.`);
         return false;
@@ -17285,6 +19674,7 @@ export async function useDoor(bot, door_pos=null) {
         closeVerified,
         ...(cleanupError ? { cleanupError } : {}),
         retryable: !closeVerified,
+        interactionStance: confirmedInteractionStance(interactionStance, 'door_traversal_confirmed'),
     });
     log(bot, closeVerified
         ? `Traversed ${target.name} and closed it behind me.`
@@ -17313,7 +19703,8 @@ function classifySleepRejection(error) {
 }
 
 export async function goToBed(bot, {
-    navigate = goToPosition,
+    navigate = null,
+    navigateGoal = goToGoal,
     now = Date.now,
     delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
     standaloneSleepTimeoutMs = 600_000,
@@ -17342,7 +19733,11 @@ export async function goToBed(bot, {
         } else {
             beds = bot.findBlocks({
                 matching: block => block?.name?.endsWith('_bed'),
-                maxDistance: 32,
+                // A family request can arrive from the ordinary work area just
+                // outside the base while the home beds remain loaded. Keep the
+                // search bounded, but do not turn that common return trip into
+                // a false "no bed" result before Pathfinder is even asked.
+                maxDistance: 64,
                 count: 4,
             });
         }
@@ -17382,9 +19777,53 @@ export async function goToBed(bot, {
         setActionEvidence(bot, { kind: 'sleep', outcome: 'interrupted', target, retryable: true });
         return false;
     }
-    const reached = await navigate(bot, loc.x, loc.y, loc.z, 2);
-    if (!reached) {
-        setActionEvidence(bot, { kind: 'sleep', outcome: 'unreachable', target, retryable: true });
+    const goal = new pf.goals.GoalLookAtBlock(loc, bot.world, {
+        reach: 4.5,
+        entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+    });
+    // The injectable coordinate navigator is retained for deterministic unit
+    // callers. Real gameplay always uses the full legality/probe/execution
+    // contract with the native Pathfinder goal.
+    const injectedNavigation = typeof navigate === 'function'
+        ? () => navigate(bot, loc.x, loc.y, loc.z, 2)
+        : navigateGoal !== goToGoal
+            ? () => navigateGoal(bot, goal)
+            : null;
+    const bedStances = injectedNavigation
+        ? null
+        : interactionStandingStances(bot, target, goal)
+            .filter(stance => isBedSleepStandingStance(bot, bed, stance));
+    const interactionStance = injectedNavigation
+        ? await injectedNavigation()
+            ? interactionStanceReady({
+                kind: 'bed',
+                target,
+                code: 'stance_reached',
+                candidateCount: 1,
+                selectedStance: observedSupportedStandingCell(bot),
+                pathStatus: 'injected_navigation',
+            })
+            : interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.PATH_EXECUTION_FAILED, {
+                kind: 'bed',
+                target,
+                code: 'path_execution_failed',
+                candidateCount: 1,
+                pathStatus: 'injected_navigation',
+            })
+        : await reachInteractionStance(bot, {
+            kind: 'bed',
+            target,
+            goal,
+            candidates: bedStances,
+            navigateGoal,
+        });
+    if (interactionStance.status !== 'ready') {
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'sleep',
+            outcome: interactionStance.status === 'interrupted' ? 'interrupted' : 'unreachable',
+            target,
+            retryable: interactionStance.status !== 'interrupted',
+        }, interactionStance));
         return false;
     }
     bed = bot.blockAt(loc);
@@ -17407,6 +19846,7 @@ export async function goToBed(bot, {
             target,
             error: rejection.message.slice(0, 180),
             retryable: rejection.retryable,
+            interactionStance: rejectedInteractionStance(interactionStance, rejection.outcome),
         });
         log(bot, `Could not sleep: ${error?.message || error}.`);
         return false;
@@ -17425,6 +19865,7 @@ export async function goToBed(bot, {
                 immediateDawn: sleepTransition?.immediateDawn === true,
                 transitionEvidence: sleepTransition.evidence,
                 retryable: false,
+                interactionStance: confirmedInteractionStance(interactionStance, 'sleep_confirmed'),
             });
             log(bot, 'You slept and woke at dawn.');
             return true;
@@ -17435,6 +19876,7 @@ export async function goToBed(bot, {
             target,
             enteredSleep: false,
             retryable: true,
+            interactionStance: rejectedInteractionStance(interactionStance, 'sleep_not_confirmed'),
         });
         log(bot, 'The server did not confirm that sleep began.');
         return false;
@@ -17479,6 +19921,13 @@ export async function goToBed(bot, {
             enteredSleep: true,
             woke: true,
             retryable: true,
+            interactionStance: createInteractionStanceReceipt({
+                ...interactionStance,
+                pathStatus: interactionStance.path.status,
+                pathLength: interactionStance.path.length,
+                status: 'interrupted',
+                code: 'interrupted',
+            }),
         });
         return false;
     }
@@ -17489,6 +19938,7 @@ export async function goToBed(bot, {
         enteredSleep: true,
         woke: true,
         retryable: false,
+        interactionStance: confirmedInteractionStance(interactionStance, 'sleep_confirmed'),
     });
     log(bot, `You have woken up.`);
     return true;
@@ -18952,10 +21402,10 @@ function stringifyItem(bot, item) {
     return text;
 }
 
-export async function escapeDrowning(bot, timeoutMs=8_000) {
+export async function escapeDrowning(bot, timeoutMs=18_000) {
     const startOxygen = Number(bot.oxygenLevel);
     const target = bot.entity?.position?.floored?.() || null;
-    const deadlineAt = Date.now() + Math.max(1_000, Math.min(12_000, Number(timeoutMs) || 8_000));
+    const deadlineAt = Date.now() + Math.max(1_000, Math.min(20_000, Number(timeoutMs) || 18_000));
     const riseToBreathableSurface = async () => {
         bot.setControlState('jump', true);
         return await waitForWorldCondition(bot, () => {
@@ -18983,12 +21433,9 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
             return false;
         }
 
-        // Mineflayer reports oxygen on a 0-20 scale, so reaching this point
-        // means the immediate drowning hazard is resolved with a full air
-        // reserve. Native Pathfinder may improve that result by reaching dry
-        // support, but open water is not a failed rescue merely because no
-        // loaded shoreline exists. The interrupted deterministic action owns
-        // the destination once this bounded reflex releases ActionManager.
+        // Full oxygen is a breathing receipt, not stable settlement. Releasing
+        // ActionManager while the body still depends on held swim controls lets
+        // combat take ownership and pull the bot under again.
         bot.setControlState('jump', false);
         const feetPosition = bot.entity?.position?.floored?.() || null;
         const feet = feetPosition ? bot.blockAt(feetPosition) : null;
@@ -18998,7 +21445,10 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
         const shoreDeadlineAt = Math.max(Date.now(), deadlineAt - DROWNING_FINAL_ASCENT_RESERVE_MS);
         const shore = alreadyStable
             ? { success: true, outcome: 'stable_shore_reached', target: feetPosition }
-            : await attemptShallowWaterExit(bot, { deadlineAt: shoreDeadlineAt });
+            : await attemptShallowWaterExit(bot, {
+                deadlineAt: shoreDeadlineAt,
+                attemptTimeoutMs: DROWNING_SHORE_ATTEMPT_TIMEOUT_MS,
+            });
         if (!shore.success) {
             const breathable = await riseToBreathableSurface();
             if (!breathable) {
@@ -19015,15 +21465,15 @@ export async function escapeDrowning(bot, timeoutMs=8_000) {
             }
             setActionEvidence(bot, {
                 kind: 'survival',
-                outcome: 'drowning_escape_breathable_surface',
+                outcome: 'drowning_escape_open_water',
                 target,
                 oxygenBefore: Number.isFinite(startOxygen) ? startOxygen : null,
                 oxygenAfter: Number.isFinite(Number(bot.oxygenLevel)) ? Number(bot.oxygenLevel) : null,
                 shore,
-                retryable: false,
+                retryable: true,
             });
-            log(bot, 'Reached breathable air; no loaded dry shore was reachable.');
-            return true;
+            log(bot, 'Reached breathable air, but no loaded dry shore was reachable; retaining emergency ownership.');
+            return false;
         }
         setActionEvidence(bot, {
             kind: 'survival',
@@ -19221,6 +21671,278 @@ export async function digDown(bot, distance = 10) {
     return finish(true, 'descended', { observedY: bot.entity.position.y, retryable: false });
 }
 
+function overheadCoverBlock(block) {
+    // Matches the survival read that decides `sheltered`, minus glass: glass has
+    // a full bounding box but zero light opacity, so it does not close the sky
+    // column that phantom spawning tests.
+    return Boolean(
+        block
+        && block.boundingBox === 'block'
+        && !['water', 'lava', 'glass', 'tinted_glass'].includes(block.name)
+        && !block.name.endsWith('_glass')
+        && !block.name.endsWith('_glass_pane'),
+    );
+}
+
+// Natural terrain is fair game in an emergency; a crafted floor almost always
+// belongs to somebody's build. This is a material check only — it does not know
+// about named sites, so a shared grass courtyard is still diggable. Spatial
+// site protection needs a separate landmark/ownership receipt; until that
+// exists, this limitation remains explicit rather than inferred from terrain.
+function isCraftedFloorMaterial(block) {
+    const name = String(block?.name || '');
+    if (!name) return false;
+    return /(?:_planks|_bricks?|_concrete|_wool|_carpet|_terracotta|_glazed_terracotta|_stairs|_slab|_fence|_wall|_door|_copper|_tiles)$/.test(name)
+        || ['bricks', 'bookshelf', 'crafting_table', 'furnace', 'chest', 'glass', 'quartz_block', 'iron_block', 'gold_block', 'diamond_block', 'netherite_block'].includes(name);
+}
+
+function sealingBlockName(bot) {
+    const items = typeof bot?.inventory?.items === 'function' ? bot.inventory.items() : [];
+    const candidate = items
+        .filter(item => (
+            item
+            && itemMatchesFamily(bot, item, 'building_blocks')
+            && !String(item.name).includes('glass')
+        ))
+        .sort((left, right) => (right.count || 0) - (left.count || 0))[0];
+    return candidate?.name || null;
+}
+
+function shelterReceipt(feasible, code, details = {}) {
+    return Object.freeze({
+        feasible: feasible === true,
+        code,
+        ...details,
+    });
+}
+
+function shelterPosition(position) {
+    return position
+        ? Object.freeze({ x: position.x, y: position.y, z: position.z })
+        : null;
+}
+
+/**
+ * Project-owned fixture/feasibility edge for the destructive emergency skill.
+ * `digDown` and `placeBlock` still revalidate and own execution. This read
+ * prevents policy selection when the currently loaded column cannot produce a
+ * three-deep pocket with a supported cap, or when the bot lacks the one block
+ * that must remain available after excavation.
+ */
+export function assessShelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
+    const requestedDepth = Math.floor(Number(depth));
+    if (requestedDepth !== 3) {
+        return shelterReceipt(false, 'unsupported_enclosure_depth', { depth: requestedDepth });
+    }
+    const feet = bot?.entity?.position?.floored?.();
+    if (!feet || typeof bot?.blockAt !== 'function') {
+        return shelterReceipt(false, 'position_unavailable', { depth: requestedDepth });
+    }
+    const covered = [2, 3].some(height => overheadCoverBlock(bot.blockAt(feet.offset(0, height, 0))));
+    if (covered) {
+        return shelterReceipt(true, 'already_sheltered', {
+            depth: requestedDepth,
+            position: shelterPosition(feet),
+        });
+    }
+    if (allowDig !== true) {
+        return shelterReceipt(false, 'dig_not_authorized', {
+            depth: requestedDepth,
+            position: shelterPosition(feet),
+        });
+    }
+    const material = sealingBlockName(bot);
+    if (!material) {
+        return shelterReceipt(false, 'no_sealing_material', {
+            depth: requestedDepth,
+            position: shelterPosition(feet),
+        });
+    }
+    const floor = bot.blockAt(feet.offset(0, -1, 0));
+    if (isCraftedFloorMaterial(floor)) {
+        return shelterReceipt(false, 'crafted_floor', {
+            depth: requestedDepth,
+            material,
+            position: shelterPosition(feet),
+            observed: floor?.name || 'unloaded',
+        });
+    }
+
+    // This is a conservative, immutable admission read. Execution repeats the
+    // same safety predicates as each block becomes current; a world change
+    // after admission therefore fails closed instead of inheriting authority.
+    for (let completed = 0; completed < requestedDepth; completed += 1) {
+        const virtualFeet = feet.offset(0, -completed, 0);
+        const targetPosition = virtualFeet.offset(0, -1, 0);
+        const supportPosition = virtualFeet.offset(0, -2, 0);
+        const targetBlock = bot.blockAt(targetPosition);
+        const supportBlock = bot.blockAt(supportPosition);
+        const overhead = bot.blockAt(virtualFeet.offset(0, 2, 0));
+        const base = {
+            depth: requestedDepth,
+            completed,
+            material,
+            position: shelterPosition(feet),
+            target: shelterPosition(targetPosition),
+        };
+        if (!targetBlock || !supportBlock || !overhead) {
+            return shelterReceipt(false, 'shaft_unloaded', base);
+        }
+        if (isProtectedGameplayBlock(targetBlock)) {
+            return shelterReceipt(false, 'protected_block', { ...base, observed: targetBlock.name });
+        }
+        if (
+            isLiquidGameplayBlock(targetBlock)
+            || isHazardousGameplayBlock(targetBlock)
+            || isLiquidGameplayBlock(supportBlock)
+            || isHazardousGameplayBlock(supportBlock)
+        ) {
+            return shelterReceipt(false, 'hazard_below', {
+                ...base,
+                observed: `${targetBlock.name}/${supportBlock.name}`,
+            });
+        }
+        if (isFallingGameplayBlock(targetBlock) || isFallingGameplayBlock(overhead)) {
+            return shelterReceipt(false, 'falling_block_risk', { ...base, observed: targetBlock.name });
+        }
+        if (!isSafeGameplaySupport(supportBlock)) {
+            return shelterReceipt(false, 'unsupported_drop', { ...base, observed: supportBlock.name });
+        }
+        if (targetBlock.boundingBox === 'empty') {
+            return shelterReceipt(false, 'existing_drop', { ...base, observed: targetBlock.name });
+        }
+        const adjacentLiquid = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+            .map(([dx, dz]) => bot.blockAt(targetPosition.offset(dx, 0, dz)))
+            .find(isLiquidGameplayBlock);
+        if (adjacentLiquid) {
+            return shelterReceipt(false, 'adjacent_liquid', { ...base, observed: adjacentLiquid.name });
+        }
+    }
+
+    // At depth three the cap occupies the first excavated floor block. Require
+    // a horizontal support face there; at depth two the cap is above the old
+    // ground surface and normally has nothing Mineflayer can place against.
+    const sealPosition = feet.offset(0, -requestedDepth + 2, 0);
+    const sealSupport = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .map(([dx, dz]) => bot.blockAt(sealPosition.offset(dx, 0, dz)))
+        .find(block => (
+            block
+            && !isReplaceableGameplayBlock(block)
+            && !String(block.name || '').endsWith('_door')
+        ));
+    if (!sealSupport) {
+        return shelterReceipt(false, 'seal_support_missing', {
+            depth: requestedDepth,
+            material,
+            position: shelterPosition(feet),
+            sealPosition: shelterPosition(sealPosition),
+        });
+    }
+    return shelterReceipt(true, 'ready', {
+        depth: requestedDepth,
+        material,
+        position: shelterPosition(feet),
+        sealPosition: shelterPosition(sealPosition),
+    });
+}
+
+function shelterPocketSealed(bot) {
+    const feet = bot?.entity?.position?.floored?.();
+    if (!feet) return false;
+    if (!overheadCoverBlock(bot.blockAt(feet.offset(0, 2, 0)))) return false;
+    if (!isSafeGameplaySupport(bot.blockAt(feet.offset(0, -1, 0)))) return false;
+    return [0, 1].every(height => (
+        [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([dx, dz]) => {
+            const wall = bot.blockAt(feet.offset(dx, height, dz));
+            return overheadCoverBlock(wall);
+        })
+    ));
+}
+
+/**
+ * Become unreachable where we stand.
+ *
+ * Every other survival response is navigation-shaped: acquire food, return
+ * home, return to a player, walk to a discovered shelter, retreat from a
+ * threat. A single Pathfinder `noPath` makes all of them unavailable at once,
+ * which leaves an injured companion with nothing to do but wait in the open.
+ * Sealing in place needs no route, food, weapon, or tool, but it does require
+ * one carried opaque building block so the shaft can be closed after descent.
+ *
+ * A sealed pocket denies the three things that hurt an exposed body at night:
+ * sky access, which phantom spawning requires; a walking path, which ground
+ * hostiles require; and line of sight, which skeletons and pillagers require.
+ * Mechanics stay delegated — `digDown` owns descent and its hazard guards,
+ * `placeBlock` owns placement.
+ */
+export async function shelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
+    const feet = bot?.entity?.position?.floored?.();
+    if (!feet) {
+        setActionEvidence(bot, { kind: 'shelter', outcome: 'position_unavailable', retryable: false });
+        log(bot, 'Cannot shelter in place: position is unavailable.');
+        return false;
+    }
+    const feasibility = assessShelterInPlace(bot, { depth, allowDig });
+    if (feasibility.code === 'already_sheltered') {
+        setActionEvidence(bot, { kind: 'shelter', outcome: 'already_sheltered', target: feet, retryable: false });
+        log(bot, 'Already under solid cover; no emergency shelter was needed.');
+        return true;
+    }
+    if (!feasibility.feasible) {
+        setActionEvidence(bot, {
+            kind: 'shelter',
+            outcome: feasibility.code,
+            target: feet,
+            feasibility,
+            retryable: false,
+        });
+        log(bot, `Cannot shelter in place safely: ${feasibility.code.replace(/_/g, ' ')}.`);
+        return false;
+    }
+
+    const requestedDepth = feasibility.depth;
+    const material = feasibility.material;
+    const startY = bot.entity.position.y;
+    const dug = await digDown(bot, requestedDepth);
+    const descentOutcome = bot.lastActionEvidence?.outcome || null;
+    const descended = Math.max(0, Math.round(startY - bot.entity.position.y));
+    if (!dug || descended !== requestedDepth) {
+        setActionEvidence(bot, {
+            kind: 'shelter',
+            outcome: bot.interrupt_code ? 'interrupted' : 'descent_incomplete',
+            target: feet,
+            descended,
+            descentOutcome,
+            material,
+            feasibility,
+            // Partial excavation is changed terrain, not authority to deepen
+            // the shaft with an automatic retry from a new origin.
+            retryable: false,
+        });
+        return false;
+    }
+
+    const sealAt = bot.entity.position.floored().offset(0, 2, 0);
+    const placed = await placeBlock(bot, material, sealAt.x, sealAt.y, sealAt.z, 'side', true);
+    const sealed = placed && await waitForWorldCondition(bot, () => shelterPocketSealed(bot), 1_500, 50);
+    setActionEvidence(bot, {
+        kind: 'shelter',
+        outcome: sealed ? 'sheltered_in_place' : bot.interrupt_code ? 'interrupted' : 'seal_unconfirmed',
+        target: feet,
+        descended,
+        descentOutcome,
+        material,
+        placed,
+        feasibility,
+        sealPosition: { x: sealAt.x, y: sealAt.y, z: sealAt.z },
+        retryable: false,
+    });
+    log(bot, sealed
+        ? `Sealed an emergency shelter with ${material} after descending ${descended} block(s).`
+        : `Could not confirm an emergency seal with ${material}.`);
+    return sealed;
+}
+
 function isSurfaceTerrainSupport(bot, block) {
     const name = String(block?.name || '');
     return Boolean(
@@ -19307,7 +22029,13 @@ function nearestLoadedSurfaceStandingCell(
     return { target: null, diagnostics };
 }
 
-function surfaceEgressStances(bot, supported, minY, maxY) {
+function surfaceEgressStances(
+    bot,
+    supported,
+    minY,
+    maxY,
+    { maximumRise = Number.POSITIVE_INFINITY } = {},
+) {
     const candidates = [];
     for (
         let distance = SURFACE_EGRESS_MIN_DISTANCE;
@@ -19324,7 +22052,11 @@ function surfaceEgressStances(bot, supported, minY, maxY) {
                     minY,
                     maxY,
                 );
-                if (!stance || stance.y < supported.y - 1) continue;
+                if (
+                    !stance
+                    || stance.y < supported.y - 1
+                    || stance.y > supported.y + maximumRise
+                ) continue;
                 candidates.push(stance);
             }
         }
@@ -19333,13 +22065,50 @@ function surfaceEgressStances(bot, supported, minY, maxY) {
     return candidates.slice(0, 32);
 }
 
-function occupiedUsableSurfaceStandingCell(bot, minY, maxY) {
-    const supported = occupiedOpenSurfaceStandingCell(bot);
+function occupiedUsableSurfaceStandingCell(
+    bot,
+    minY,
+    maxY,
+    probeSurfaceEgress = probeSafeNavigationStances,
+) {
+    const supported = observedSupportedStandingCell(bot);
     if (!supported) return null;
-    const egress = surfaceEgressStances(bot, supported, minY, maxY);
+    // Open sky is not the definition of surface access. A player standing in
+    // a ground-level house, under an awning, or beneath a tree canopy is still
+    // at the surface when ordinary locomotion has a complete route to nearby
+    // open terrain at the same gameplay elevation. Conversely, the same-rise
+    // bound keeps a cave floor from treating a roof or treetop as evidence that
+    // it has already escaped.
+    const egress = surfaceEgressStances(bot, supported, minY, maxY, {
+        maximumRise: 1,
+    });
     if (egress.length === 0) return null;
-    const route = probeSafeNavigationStances(bot, egress, SURFACE_EGRESS_PROBE_MS);
-    return route.reachable ? supported : null;
+    const route = probeSurfaceEgress(bot, egress, SURFACE_EGRESS_PROBE_MS);
+    if (!route?.reachable) return null;
+    const terminal = route.terminalPosition;
+    return Object.freeze({
+        supported,
+        access: Object.freeze({
+            kind: occupiedOpenSurfaceStandingCell(bot)
+                ? 'open_surface_egress'
+                : 'covered_surface_egress',
+            candidateCount: egress.length,
+            pathStatus: String(route.status || 'unknown').slice(0, 64),
+            pathLength: Math.min(
+                4_096,
+                Math.max(0, Math.floor(Number(route.pathLength) || 0)),
+            ),
+            ...(terminal && [terminal.x, terminal.y, terminal.z].every(Number.isFinite)
+                ? {
+                    terminalPosition: Object.freeze({
+                        x: Math.floor(terminal.x),
+                        y: Math.floor(terminal.y),
+                        z: Math.floor(terminal.z),
+                    }),
+                }
+                : {}),
+        }),
+    });
 }
 
 function terminalSurfaceCorridorStances(bot, origin, minY, maxY) {
@@ -19455,9 +22224,10 @@ function incrementalSurfaceCorridorStances(bot, origin, surfaceTarget) {
         .map(candidate => candidate.stance);
 }
 
-function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY) {
-    const origin = observedSupportedStandingCell(bot);
-    if (!origin) return { ok: false, outcome: 'position_unavailable' };
+function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY, origin) {
+    if (!origin || !physicallyOccupiesStandingCell(bot, origin)) {
+        return { ok: false, outcome: 'position_unavailable' };
+    }
     const stances = surfaceCorridorStances(bot, origin, surfaceTarget, minY, maxY);
     const incrementalStances = incrementalSurfaceCorridorStances(bot, origin, surfaceTarget);
     if (stances.length === 0 && incrementalStances.length === 0) {
@@ -19496,7 +22266,29 @@ function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY) {
     return plan;
 }
 
-function surfaceArrivalObservation(bot, minY, maxY) {
+/**
+ * Surface recovery may deliberately break ordinary natural blocks without
+ * harvesting them, but accepting stone as a bare-hand route is not competent
+ * gameplay. Bind the shared responsive pickaxe prerequisite only after a
+ * concrete corridor proves that it contains such unharvested pickaxe work.
+ */
+export function surfaceCorridorToolRequirement(bot, plan) {
+    if (!plan?.ok || Number(plan.durability?.unharvestedBreaks) < 1) return null;
+    const pickaxeBreaks = (plan.excavationBlocks || [])
+        .filter(block => toolFamilyForBlock(block) === 'pickaxe').length;
+    if (pickaxeBreaks < 1 || inventoryToolTier(bot, 'pickaxe') >= TOOL_TIER.stone) return null;
+    return Object.freeze({
+        name: 'stone_pickaxe',
+        minimumUsableDurability: pickaxeBreaks,
+    });
+}
+
+function surfaceArrivalObservation(
+    bot,
+    minY,
+    maxY,
+    probeSurfaceEgress = probeSafeNavigationStances,
+) {
     const observed = bot.entity?.position?.clone?.() || null;
     const supported = observedSupportedStandingCell(bot);
     // Seeing the sky is not sufficient surface access: a ravine or open pit
@@ -19505,9 +22297,12 @@ function surfaceArrivalObservation(bot, minY, maxY) {
     // usable horizontal egress from the occupied stance. If it cannot, bind a
     // genuinely higher surface cell so deterministic recovery keeps climbing.
     const occupiedOpenSurface = occupiedOpenSurfaceStandingCell(bot);
-    const occupiedUsableSurface = occupiedOpenSurface
-        ? occupiedUsableSurfaceStandingCell(bot, minY, maxY)
-        : null;
+    const occupiedUsableSurface = occupiedUsableSurfaceStandingCell(
+        bot,
+        minY,
+        maxY,
+        probeSurfaceEgress,
+    );
     const scan = occupiedUsableSurface
         ? { target: supported, diagnostics: null }
         : observed
@@ -19526,11 +22321,17 @@ function surfaceArrivalObservation(bot, minY, maxY) {
         supported,
         target,
         scan: scan.diagnostics,
+        access: occupiedUsableSurface?.access || null,
         arrived: Boolean(observed && supported && occupiedUsableSurface && target),
     };
 }
 
-export async function goToSurface(bot) {
+export async function goToSurface(bot, {
+    navigateGoal = goToGoal,
+    settleSupportedStandingCell = waitForStableSupportedStandingCell,
+    prepareSurfaceTool = prepareTool,
+    probeSurfaceEgress = probeSafeNavigationStances,
+} = {}) {
     const origin = bot.entity.position.clone();
     const minY = Number.isFinite(Number(bot.game?.minY)) ? Number(bot.game.minY) : -64;
     const height = Number.isFinite(Number(bot.game?.height)) ? Number(bot.game.height) : 384;
@@ -19549,6 +22350,7 @@ export async function goToSurface(bot) {
                 z: arrival.observed.z,
             },
             support: support?.name || null,
+            access: arrival.access || null,
             legs: leg,
             verticalProgress: arrival.observed.y - origin.y,
             routeDigging,
@@ -19560,7 +22362,7 @@ export async function goToSurface(bot) {
 
     for (let leg = 1; leg <= MAX_SURFACE_ROUTE_LEGS; leg += 1) {
         if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
-        const before = surfaceArrivalObservation(bot, minY, maxY);
+        const before = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
         if (before.arrived) return finishReached(before, leg - 1);
         const target = before.target;
         lastTarget = target || lastTarget;
@@ -19594,7 +22396,7 @@ export async function goToSurface(bot) {
         // out through the whole cave and can time out despite a viable route to
         // the selected exit. Keep the native locomotion policy, but give it the
         // exact usable stance the surface planner chose.
-        const routed = await goToGoal(bot, new pf.goals.GoalNear(
+        const routed = await navigateGoal(bot, new pf.goals.GoalNear(
             target.x,
             target.y,
             target.z,
@@ -19604,17 +22406,95 @@ export async function goToSurface(bot) {
             allowHealthBoundedDescent: false,
             allowLocalRecovery: false,
         });
-        let arrival = surfaceArrivalObservation(bot, minY, maxY);
+        // A failed ascent route may resolve while its final jump is still
+        // settling. One transient supported tick is not authority to bind an
+        // excavation plan: wait for the same occupied support cell to remain
+        // physically true across a short Paper settlement edge.
+        let settledStance = null;
+        if (!bot.interrupt_code) {
+            settledStance = await settleSupportedStandingCell(
+                bot,
+                Math.min(
+                    NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS,
+                    remainingActionTimeMs(NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS),
+                ),
+            );
+        }
+        let arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg);
         const nativeRise = arrival.observed.y - nativeStart.y;
+        const settlementRetained = Boolean(
+            settledStance
+            && arrival.supported?.equals?.(settledStance)
+        );
+        if (!bot.interrupt_code && !settlementRetained) {
+            setActionEvidence(bot, {
+                kind: 'surface_navigation',
+                outcome: 'surface_settlement_unverified',
+                target: { x: target.x, y: target.y, z: target.z },
+                observed: arrival.observed,
+                routeOutcome: bot.lastActionEvidence?.outcome || (routed ? 'goal_resolved' : 'unreachable'),
+                settlement: settledStance ? 'changed_after_stability' : 'no_stable_stance',
+                routeDigging: false,
+                legs: leg,
+                verticalProgress: nativeRise,
+                supported: Boolean(arrival.supported),
+                retryable: true,
+            });
+            log(bot, 'Native movement did not settle on one stable supported standing cell; corridor planning was not attempted.');
+            return false;
+        }
         if (!bot.interrupt_code && arrival.supported && nativeRise >= MIN_SURFACE_ROUTE_PROGRESS) {
             log(bot, `Native Pathfinder advanced ${nativeRise.toFixed(1)} vertical blocks without excavation; rebinding surface leg ${leg}/${MAX_SURFACE_ROUTE_LEGS}.`);
             continue;
         }
         if (bot.interrupt_code) break;
 
-        const plan = bindSurfaceCorridorPlan(bot, target, minY, maxY);
+        let plan = bindSurfaceCorridorPlan(bot, target, minY, maxY, settledStance);
+        const corridorToolRequirement = surfaceCorridorToolRequirement(bot, plan);
+        if (corridorToolRequirement) {
+            log(
+                bot,
+                `The verified surface corridor requires ${corridorToolRequirement.minimumUsableDurability} pickaxe break${corridorToolRequirement.minimumUsableDurability === 1 ? '' : 's'}; preparing a responsive stone pickaxe before excavation.`,
+            );
+            const prepared = await prepareSurfaceTool(bot, corridorToolRequirement.name);
+            if (!prepared || bot.interrupt_code) return false;
+
+            // Crafting may place/recover a table or move to an interaction
+            // stance. Reconcile one fresh supported cell and rebuild the route;
+            // the pre-craft geometry and deadline are no longer authority.
+            settledStance = await settleSupportedStandingCell(
+                bot,
+                Math.min(
+                    NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS,
+                    remainingActionTimeMs(NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS),
+                ),
+            );
+            arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+            if (
+                !settledStance
+                || !arrival.supported?.equals?.(settledStance)
+            ) {
+                setActionEvidence(bot, {
+                    kind: 'surface_navigation',
+                    outcome: 'surface_settlement_unverified',
+                    target: { x: target.x, y: target.y, z: target.z },
+                    observed: arrival.observed,
+                    settlement: settledStance ? 'changed_after_tool_preparation' : 'no_stable_stance_after_tool_preparation',
+                    toolRequirement: corridorToolRequirement,
+                    routeDigging: false,
+                    legs: leg,
+                    verticalProgress: arrival.observed.y - origin.y,
+                    supported: Boolean(arrival.supported),
+                    retryable: true,
+                });
+                log(bot, 'Tool preparation did not retain one stable supported standing cell; corridor planning was not resumed.');
+                return false;
+            }
+            if (arrival.arrived) return finishReached(arrival, leg);
+            plan = bindSurfaceCorridorPlan(bot, target, minY, maxY, settledStance);
+        }
         if (!plan.ok) {
             const toolRequirement = (
                 plan.outcome === 'insufficient_tool_durability'
@@ -19668,6 +22548,12 @@ export async function goToSurface(bot) {
         const access = await executeMiningAccessPlan(bot, null, plan);
         if (!access.success) {
             const observed = access.observed || bot.entity.position;
+            const movementOutcome = String(access.movement?.outcome || 'unknown');
+            const routeFailureStage = ['path_not_found', 'unreachable'].includes(movementOutcome)
+                ? 'planning'
+                : access.reached === true
+                    ? 'reconciliation'
+                    : 'execution';
             setActionEvidence(bot, {
                 kind: 'surface_navigation',
                 outcome: access.outcome,
@@ -19677,6 +22563,21 @@ export async function goToSurface(bot) {
                 excavated: access.excavated,
                 blockBudget: plan.blockBudget,
                 accessFailureOutcome: access.failureOutcome || access.outcome,
+                routeFailureStage,
+                failedStepIndex: Number.isInteger(access.stepIndex) ? access.stepIndex : null,
+                failedStep: access.step && [access.step.x, access.step.y, access.step.z].every(Number.isFinite)
+                    ? { x: access.step.x, y: access.step.y, z: access.step.z }
+                    : null,
+                route: plan.route.slice(0, 16).map(step => ({
+                    position: {
+                        x: step.position.x,
+                        y: step.position.y,
+                        z: step.position.z,
+                    },
+                    heading: { x: step.heading.x, z: step.heading.z },
+                    yOffset: step.yOffset,
+                })),
+                movement: access.movement || null,
                 retreat: access.retreat || null,
                 routeDigging: true,
                 legs: leg,
@@ -19688,7 +22589,7 @@ export async function goToSurface(bot) {
             return false;
         }
 
-        arrival = surfaceArrivalObservation(bot, minY, maxY);
+        arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg, true);
         const corridorRise = arrival.observed.y - corridorStart.y;
@@ -20200,7 +23101,7 @@ const FISHING_ROD = 'fishing_rod';
 const FISH_CAST_TIMEOUT_MS = 45_000;
 const WORKSTATION_SEARCH_RANGE = 32;
 const WINDOW_READY_TIMEOUT_MS = 8_000;
-const FISH_LOOT_PATTERN = /(?:cod|salmon|pufferfish|tropical_fish|bowl|leather|stick|string|bone|ink_sac|lily_pad|rotten_flesh|saddle|name_tag|enchanted_book|_boots)$/;
+const COOKABLE_FISH_ITEMS = Object.freeze(['cod', 'salmon']);
 const ANVIL_MATERIAL = Object.freeze({
     wooden: 'oak_planks',
     stone: 'cobblestone',
@@ -20272,29 +23173,59 @@ async function reachWorkstation(bot, blockName, navigate) {
     };
 }
 
-function totalInventoryCount(bot) {
-    return bot.inventory.items().reduce((total, item) => total + Math.max(0, Number(item.count) || 0), 0);
-}
-
-export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_TIMEOUT_MS } = {}) {
+export async function fishForItems(bot, count = 1, {
+    castTimeoutMs = FISH_CAST_TIMEOUT_MS,
+    equipItem = equip,
+    navigate = goToPosition,
+    baselineManifest = '',
+} = {}) {
     /**
-     * Fish until the requested number of catches is verified.
+     * Fish until the requested number of cookable fish is verified.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @param {number} count, how many catches to verify.
-     * @returns {Promise<boolean>} true if at least one catch was verified.
+     * @param {number} count, how many new cod or salmon to verify.
+     * @returns {Promise<boolean>} true only if the requested edible-fish count was verified.
      * @example
      * await skills.fishForItems(bot, 3);
      **/
     const target = { name: FISHING_ROD };
     const wanted = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
+    const durableBaseline = familyBaselineCounts(bot, 'raw_fish', baselineManifest);
+    if (durableBaseline === false) {
+        setActionEvidence(bot, { kind: 'fish', outcome: 'invalid_baseline_manifest', target, retryable: false });
+        return false;
+    }
     if (!bot.inventory.items().some(item => item.name === FISHING_ROD)) {
         setActionEvidence(bot, { kind: 'fish', outcome: 'missing_rod', target, retryable: false });
         log(bot, 'I have no fishing rod.');
         return false;
     }
-    if (!await equip(bot, FISHING_ROD)) {
+    if (!await equipItem(bot, FISHING_ROD)) {
         setActionEvidence(bot, { kind: 'fish', outcome: 'equip_blocked', target, retryable: true });
         return false;
+    }
+
+    const actionBaseline = durableBaseline || new Map(
+        COOKABLE_FISH_ITEMS.map(name => [name, inventoryCount(bot, name)]),
+    );
+    const collected = Object.fromEntries(COOKABLE_FISH_ITEMS.map(name => [
+        name,
+        Math.max(0, inventoryCount(bot, name) - (actionBaseline.get(name) || 0)),
+    ]));
+    let caught = Object.values(collected).reduce((total, quantity) => total + quantity, 0);
+    if (caught >= wanted) {
+        setActionEvidence(bot, {
+            kind: 'fish',
+            outcome: 'catches_verified',
+            target,
+            caught,
+            requested: wanted,
+            manifest: Object.entries(collected)
+                .filter(([, quantity]) => quantity > 0)
+                .map(([item, quantity]) => ({ item, quantity })),
+            retryable: false,
+        });
+        log(bot, `Already verified ${caught} of ${wanted} cookable fish above the durable baseline.`);
+        return true;
     }
 
     let water = null;
@@ -20309,7 +23240,7 @@ export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_T
         return false;
     }
     if (bot.entity.position.distanceTo(water.position) > 5) {
-        if (!await goToPosition(bot, water.position.x, water.position.y + 1, water.position.z, 3)) {
+        if (!await navigate(bot, water.position.x, water.position.y + 1, water.position.z, 3)) {
             setActionEvidence(bot, {
                 kind: 'fish',
                 outcome: 'water_unreachable',
@@ -20321,11 +23252,11 @@ export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_T
         }
     }
 
-    let caught = 0;
-    const collected = [];
-    for (let attempt = 0; attempt < wanted; attempt += 1) {
+    const remainingAtStart = Math.max(0, wanted - caught);
+    const maximumCasts = Math.min(64, Math.max(remainingAtStart, remainingAtStart * 4));
+    for (let attempt = 0; attempt < maximumCasts && caught < wanted; attempt += 1) {
         if (bot.interrupt_code) break;
-        const before = totalInventoryCount(bot);
+        const before = Object.fromEntries(COOKABLE_FISH_ITEMS.map(name => [name, inventoryCount(bot, name)]));
         try {
             await bot.lookAt(water.position.offset(0.5, 1, 0.5), true);
             // A cast can sit for most a minute waiting for a bite, so it has to
@@ -20340,6 +23271,10 @@ export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_T
                 outcome: interrupted ? 'interrupted' : message === 'fish_timeout' ? 'cast_timeout' : 'cast_failed',
                 target,
                 caught,
+                requested: wanted,
+                manifest: Object.entries(collected)
+                    .filter(([, quantity]) => quantity > 0)
+                    .map(([item, quantity]) => ({ item, quantity })),
                 ...(interrupted || message === 'fish_timeout' ? {} : { error: message.slice(0, 240) }),
                 retryable: !interrupted,
             });
@@ -20348,13 +23283,13 @@ export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_T
                 : message === 'fish_timeout'
                     ? `Nothing bit after ${caught} catch${caught === 1 ? '' : 'es'}.`
                     : `Fishing stopped: ${message}.`);
-            return caught > 0;
+            return false;
         }
-        if (totalInventoryCount(bot) > before) {
-            caught += 1;
-            const newest = bot.inventory.items()
-                .find(item => FISH_LOOT_PATTERN.test(item.name) && !collected.includes(item.name));
-            if (newest) collected.push(newest.name);
+        for (const name of COOKABLE_FISH_ITEMS) {
+            const increase = Math.max(0, inventoryCount(bot, name) - before[name]);
+            if (increase < 1) continue;
+            collected[name] += increase;
+            caught += increase;
         }
     }
 
@@ -20365,13 +23300,106 @@ export async function fishForItems(bot, count = 1, { castTimeoutMs = FISH_CAST_T
         target,
         caught,
         requested: wanted,
-        items: collected.slice(0, 8),
+        manifest: Object.entries(collected)
+            .filter(([, quantity]) => quantity > 0)
+            .map(([item, quantity]) => ({ item, quantity })),
         retryable: !interrupted && caught < wanted,
     });
     log(bot, caught > 0
-        ? `Caught ${caught} of ${wanted}${collected.length ? ` (${collected.join(', ')})` : ''}.`
-        : 'I fished but caught nothing.');
-    return caught > 0;
+        ? `Caught ${caught} of ${wanted} cookable fish.`
+        : 'I fished but caught no cod or salmon.');
+    return !interrupted && caught >= wanted;
+}
+
+export async function cookCaughtFish(
+    bot,
+    count,
+    x,
+    y,
+    z,
+    dimension = '',
+    baselineRawManifest = 'none',
+    baselineCookedManifest = 'none',
+    { smelt = smeltItem } = {},
+) {
+    const requested = Math.max(1, Math.min(64, Math.floor(Number(count) || 1)));
+    const target = { name: 'cooked_fish', x, y, z, dimension };
+    const rawBaseline = familyBaselineCounts(bot, 'raw_fish', baselineRawManifest);
+    const cookedBaseline = familyBaselineCounts(bot, 'cooked_fish', baselineCookedManifest);
+    if (rawBaseline === false || cookedBaseline === false) {
+        setActionEvidence(bot, { kind: 'cook_fish', outcome: 'invalid_baseline_manifest', target, retryable: false });
+        return false;
+    }
+    const newRaw = familyInventoryEntries(bot, 'raw_fish')
+        .map(entry => ({
+            ...entry,
+            count: Math.max(0, entry.count - (rawBaseline?.get(entry.name) || 0)),
+        }))
+        .filter(entry => entry.count > 0);
+    const available = newRaw.reduce((total, entry) => total + entry.count, 0);
+    const cookedManifest = () => familyInventoryEntries(bot, 'cooked_fish')
+        .map(entry => ({
+            item: entry.name,
+            quantity: Math.max(0, entry.count - (cookedBaseline?.get(entry.name) || 0)),
+        }))
+        .filter(entry => entry.quantity > 0);
+    const alreadyCooked = cookedManifest().reduce((total, entry) => total + entry.quantity, 0);
+    if (alreadyCooked >= requested) {
+        setActionEvidence(bot, {
+            kind: 'cook_fish',
+            outcome: 'cooked',
+            target,
+            requested,
+            cooked: alreadyCooked,
+            manifest: cookedManifest(),
+            retryable: false,
+        });
+        log(bot, `Already verified ${alreadyCooked} newly cooked fish above the durable baseline.`);
+        return true;
+    }
+    const needed = requested - alreadyCooked;
+    if (available < needed) {
+        setActionEvidence(bot, {
+            kind: 'cook_fish',
+            outcome: 'fresh_fish_missing',
+            target,
+            requested,
+            available,
+            alreadyCooked,
+            retryable: true,
+        });
+        log(bot, `I have only ${available} raw fish for the ${needed} remaining breakfast fish.`);
+        return false;
+    }
+
+    const workstation = {
+        name: 'furnace',
+        position: { x: Math.floor(Number(x)), y: Math.floor(Number(y)), z: Math.floor(Number(z)) },
+        dimension: String(dimension || '').replace(/^minecraft:/, ''),
+    };
+    let remaining = needed;
+    for (const entry of newRaw) {
+        if (remaining < 1 || bot.interrupt_code) break;
+        const amount = Math.min(remaining, entry.count);
+        if (!await smelt(bot, entry.name, amount, workstation)) break;
+        remaining -= amount;
+    }
+    const cooked = cookedManifest();
+    const cookedCount = cooked.reduce((total, entry) => total + entry.quantity, 0);
+    const success = !bot.interrupt_code && remaining === 0 && cookedCount >= requested;
+    setActionEvidence(bot, {
+        kind: 'cook_fish',
+        outcome: success ? 'cooked' : bot.interrupt_code ? 'interrupted' : cookedCount > 0 ? 'partial' : 'cooking_blocked',
+        target,
+        requested,
+        cooked: Math.min(requested, cookedCount),
+        manifest: cooked,
+        retryable: !bot.interrupt_code && !success,
+    });
+    log(bot, success
+        ? `Cooked ${requested} newly caught fish in the selected furnace.`
+        : `Cooked ${Math.min(requested, cookedCount)} of ${requested} newly caught fish.`);
+    return success;
 }
 
 export async function enchantItem(bot, itemName, { navigate = goToPosition } = {}) {

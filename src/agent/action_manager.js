@@ -46,6 +46,10 @@ const CRITICAL_REFLEX_ACTIONS = new Set([
     'mode:self_defense',
     'mode:cowardice',
 ]);
+const OPERATOR_HOLD_REFLEX_ACTIONS = new Set([
+    'mode:self_preservation',
+    'mode:self_defense',
+]);
 const PLAYER_PREEMPTIBLE_REFLEX_ACTIONS = new Set([
     'mode:unstuck',
     'mode:item_collecting',
@@ -175,6 +179,7 @@ export class ActionManager {
         this.resume_func = null;
         this.resume_name = '';
         this.resume_owner = '';
+        this.deferredPlayerAction = null;
         this.last_action_time = 0;
         this.currentActionStartedAt = 0;
         this.recentActionAttempts = [];
@@ -331,6 +336,14 @@ export class ActionManager {
 
     async runAction(actionLabel, actionFn, { timeout, resume = false, owner } = {}) {
         const actionOwner = normalizeActionOwner(owner || this.ownerContext.getStore());
+        if (
+            resume !== true
+            && actionOwner === 'player'
+            && this.isCriticalReflexAction()
+            && this.isOwnerBlocked(actionOwner)
+        ) {
+            return this.deferPlayerAction(actionLabel, actionFn, timeout, actionOwner);
+        }
         if (resume) {
             return this._executeResume(actionLabel, actionFn, timeout, actionOwner);
         } else {
@@ -393,6 +406,52 @@ export class ActionManager {
         this.resume_func = null;
         this.resume_name = null;
         this.resume_owner = '';
+        this.deferredPlayerAction = null;
+    }
+
+    deferPlayerAction(actionLabel, actionFn, timeout = -1, owner = 'player') {
+        this.deferredPlayerAction = Object.freeze({
+            actionLabel,
+            actionFn,
+            timeout,
+            owner: normalizeActionOwner(owner),
+            requestContext: this.currentRequestContext(),
+        });
+        this.agent.behavior_arbiter?.wake?.('deferred_player_action_registered');
+        return {
+            success: true,
+            message: null,
+            interrupted: false,
+            timedout: false,
+            deferred: true,
+        };
+    }
+
+    hasDeferredPlayerAction() {
+        return this.deferredPlayerAction !== null;
+    }
+
+    async resumeDeferredPlayerAction() {
+        if (!this.deferredPlayerAction || this.executing) {
+            return {
+                success: false,
+                message: null,
+                interrupted: false,
+                timedout: false,
+                deferred: this.deferredPlayerAction !== null,
+            };
+        }
+        const pending = this.deferredPlayerAction;
+        this.deferredPlayerAction = null;
+        const execute = () => this._executeAction(
+            pending.actionLabel,
+            pending.actionFn,
+            pending.timeout,
+            pending.owner,
+        );
+        return pending.requestContext
+            ? this.runWithRequestContext(pending.requestContext, execute)
+            : execute();
     }
 
     async _executeResume(actionLabel = null, actionFn = null, timeout = 10, owner = null) {
@@ -442,7 +501,7 @@ export class ActionManager {
         try {
             if (
                 this.agent.isOperatorHeld?.()
-                && !(actionOwner === 'reflex' && actionLabel === 'mode:self_preservation')
+                && !(actionOwner === 'reflex' && OPERATOR_HOLD_REFLEX_ACTIONS.has(actionLabel))
             ) {
                 const result = createActionResult({
                     actionId,

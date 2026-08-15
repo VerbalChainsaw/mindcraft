@@ -81,6 +81,15 @@ class Targets {
     clear() {
         this.targets.length = 0;
     }
+    /**
+     * Stop attempting pending block targets while preserving mined item drops.
+     * A later block can exhaust its route-failure budget after earlier blocks
+     * already produced physical drops. Clearing the whole queue at that edge
+     * loses the unfinished pickup half of those successful block transactions.
+     */
+    removeBlocks() {
+        this.targets = this.targets.filter(target => target?.constructor?.name !== 'Block');
+    }
     removeTarget(target) {
         const index = this.targets.indexOf(target);
         if (index < 0)

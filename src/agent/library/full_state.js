@@ -466,6 +466,99 @@ export function getSurvivalDirectorState(agent) {
             else if (Number.isFinite(status.target[key])) target[key] = status.target[key];
         }
     }
+    const decision = status.decision && typeof status.decision === 'object' && !Array.isArray(status.decision)
+        ? {
+            schemaVersion: Number.isFinite(status.decision.schemaVersion)
+                ? Math.max(1, Math.floor(status.decision.schemaVersion))
+                : 1,
+            evaluatedAt: Number.isFinite(status.decision.evaluatedAt)
+                ? status.decision.evaluatedAt
+                : null,
+            gate: {
+                allowed: status.decision.gate?.allowed === true,
+                code: String(status.decision.gate?.code || 'unknown').slice(0, 48),
+                allowBusy: status.decision.gate?.allowBusy === true,
+                inFlight: status.decision.gate?.inFlight === true,
+                cooldownActive: status.decision.gate?.cooldownActive === true,
+                nextEligibleAt: Number.isFinite(status.decision.gate?.nextEligibleAt)
+                    ? status.decision.gate.nextEligibleAt
+                    : null,
+                botAvailable: status.decision.gate?.botAvailable === true,
+                held: status.decision.gate?.held === true,
+                idle: status.decision.gate?.idle === true,
+            },
+            situation: {
+                health: Number.isFinite(status.decision.situation?.health)
+                    ? status.decision.situation.health
+                    : null,
+                hunger: Number.isFinite(status.decision.situation?.hunger)
+                    ? status.decision.situation.hunger
+                    : null,
+                held: typeof status.decision.situation?.held === 'boolean'
+                    ? status.decision.situation.held
+                    : null,
+                urgentDanger: typeof status.decision.situation?.urgentDanger === 'boolean'
+                    ? status.decision.situation.urgentDanger
+                    : null,
+                idle: typeof status.decision.situation?.idle === 'boolean'
+                    ? status.decision.situation.idle
+                    : null,
+            },
+            policy: {
+                mode: String(status.decision.policy?.mode || 'missing').slice(0, 32),
+                criticalFood: Number.isFinite(status.decision.policy?.criticalFood)
+                    ? status.decision.policy.criticalFood
+                    : null,
+                eatAt: Number.isFinite(status.decision.policy?.eatAt)
+                    ? status.decision.policy.eatAt
+                    : null,
+                autonomy: String(status.decision.policy?.autonomy || 'unknown').slice(0, 32),
+            },
+            selectedIntent: status.decision.selectedIntent
+                ? {
+                    kind: String(status.decision.selectedIntent.kind || 'unknown').slice(0, 48),
+                    reason: String(status.decision.selectedIntent.reason || 'unknown').slice(0, 80),
+                    preempt: status.decision.selectedIntent.preempt === true,
+                }
+                : null,
+            durablePlayerWorkActive: typeof status.decision.durablePlayerWorkActive === 'boolean'
+                ? status.decision.durablePlayerWorkActive
+                : null,
+            outcomeCode: String(status.decision.outcomeCode || 'unknown').slice(0, 80),
+            scheduled: status.decision.scheduled === true,
+        }
+        : null;
+    const rawIncident = status.safetyIncident && typeof status.safetyIncident === 'object'
+      && !Array.isArray(status.safetyIncident)
+        ? status.safetyIncident
+        : null;
+    const safetyIncident = rawIncident
+        ? {
+            id: String(rawIncident.id || '').slice(0, 96) || null,
+            active: rawIncident.active === true,
+            stage: String(rawIncident.stage || 'unknown').slice(0, 48),
+            source: rawIncident.source && typeof rawIncident.source === 'object'
+                ? {
+                    kind: String(rawIncident.source.kind || 'unknown').slice(0, 32),
+                    id: Number.isFinite(rawIncident.source.id) ? rawIncident.source.id : null,
+                    name: String(rawIncident.source.name || '').slice(0, 64) || null,
+                    username: String(rawIncident.source.username || '').slice(0, 32) || null,
+                }
+                : null,
+            lastAction: rawIncident.lastAction && typeof rawIncident.lastAction === 'object'
+                ? {
+                    actionId: String(rawIncident.lastAction.actionId || '').slice(0, 80) || null,
+                    phase: String(rawIncident.lastAction.phase || 'unknown').slice(0, 24),
+                    code: String(rawIncident.lastAction.code || 'unknown').slice(0, 80),
+                    outcome: String(rawIncident.lastAction.outcome || 'unknown').slice(0, 80),
+                }
+                : null,
+            resolutionCode: String(rawIncident.resolutionCode || '').slice(0, 80) || null,
+            startedAt: Number.isFinite(rawIncident.startedAt) ? rawIncident.startedAt : null,
+            updatedAt: Number.isFinite(rawIncident.updatedAt) ? rawIncident.updatedAt : null,
+            resolvedAt: Number.isFinite(rawIncident.resolvedAt) ? rawIncident.resolvedAt : null,
+        }
+        : null;
     return {
         name: String(status.name || 'survival').slice(0, 40),
         phase: String(status.phase || 'unknown').slice(0, 24),
@@ -474,6 +567,8 @@ export function getSurvivalDirectorState(agent) {
         detail: String(status.detail || '').slice(0, 280),
         retryable: status.retryable === true,
         nextEligibleAt: Number.isFinite(status.nextEligibleAt) ? status.nextEligibleAt : null,
+        decision,
+        safetyIncident,
     };
 }
 

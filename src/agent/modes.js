@@ -3,6 +3,7 @@ import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js';
 import convoManager from './conversation.js';
+import { isDrinkableHealingPotion } from './runtime/brewing-plan.js';
 
 const MAX_BEHAVIOR_LOG_CHARS = 1_024;
 const FRESH_PLAYER_ACTION_GRACE_MS = 3_000;
@@ -41,7 +42,8 @@ function say(agent, message) {
 const DEFAULT_UNSTUCK_TIMEOUT_MS = 10_000;
 const DEFAULT_REFLEX_RETRY_MS = 1_500;
 const RECENT_DAMAGE_WINDOW_MS = 4_000;
-const LOW_HEALTH_RETREAT_THRESHOLD = 10;
+const LOW_HEALTH_RETREAT_THRESHOLD = 14;
+const CRITICAL_HEALING_THRESHOLD = 10;
 const SEVERE_DAMAGE_MINIMUM = 4;
 const SURVIVAL_RETREAT_DISTANCE = 24;
 const SURVIVAL_FALLBACK_DISTANCE = 12;
@@ -49,12 +51,309 @@ const SURVIVAL_RETREAT_COOLDOWN_MS = 4_000;
 const DROWNING_REFLEX_OXYGEN = 12;
 const FALL_REFLEX_VELOCITY = -0.7;
 const IMMEDIATE_EXPLOSIVE_RANGE = 10;
+const CRITICAL_EXPLOSIVE_RANGE = 6;
+const CRITICAL_TACTICAL_HEALTH = 8;
 // Match the ordinary tactical-combat observation envelope. Projectile mobs can
 // damage the bot well before they enter an eight-block melee bubble, so a
 // recent hit must be allowed to bind the loaded attacker while useful health
 // remains for the existing deterministic retreat response.
 const SELF_DEFENSE_RANGE = 16;
 const COMBAT_PRIORITY_ROLES = new Set(['defender', 'attacker']);
+const RETREAT_ROUTE_FAILURE_CODES = new Set([
+    'skill_unreachable',
+    'skill_path_not_found',
+    'skill_path_execution_failed',
+]);
+const RETREAT_ROUTE_FAILURE_OUTCOMES = new Set([
+    'unreachable',
+    'path_not_found',
+    'path_execution_failed',
+    'retreat_blocked',
+    'retreat_no_progress',
+]);
+
+function reflexBlockPosition(position) {
+    if (![position?.x, position?.y, position?.z].every(Number.isFinite)) return null;
+    return Object.freeze({
+        x: Math.floor(position.x),
+        y: Math.floor(position.y),
+        z: Math.floor(position.z),
+    });
+}
+
+function sameReflexBlockPosition(left, right) {
+    return Boolean(
+        left
+        && right
+        && left.x === right.x
+        && left.y === right.y
+        && left.z === right.z
+    );
+}
+
+function tacticalFailureStage({ failureCode, failureOutcome, response } = {}) {
+    if (
+        response === 'retreat'
+        && (
+            RETREAT_ROUTE_FAILURE_CODES.has(String(failureCode || ''))
+            || RETREAT_ROUTE_FAILURE_OUTCOMES.has(String(failureOutcome || ''))
+        )
+    ) return 'route_unavailable';
+    return 'tactical_execution';
+}
+
+function selfDefenseReflexReceipt(agent, threat, detail = {}) {
+    const bot = agent?.bot;
+    const targetName = String(threat?.name || '').toLowerCase().slice(0, 64);
+    const threatAirborne = typeof threat?.onGround === 'boolean'
+        ? threat.onGround === false
+        : null;
+    const failureCode = String(detail.failureCode || '').slice(0, 80);
+    const failureOutcome = String(detail.failureOutcome || '').slice(0, 80);
+    const response = String(detail.response || '').slice(0, 40);
+    return Object.freeze({
+        entityId: Number.isFinite(Number(threat?.id)) ? Number(threat.id) : null,
+        entityUuid: typeof threat?.uuid === 'string' ? threat.uuid.slice(0, 80) : null,
+        targetName,
+        threatAirborne,
+        botPosition: reflexBlockPosition(bot?.entity?.position),
+        threatPosition: reflexBlockPosition(threat?.position),
+        health: Number.isFinite(Number(bot?.health))
+            ? Math.round(Number(bot.health) * 10) / 10
+            : null,
+        lastDamageTime: Number.isFinite(Number(bot?.lastDamageTime))
+            ? Number(bot.lastDamageTime)
+            : 0,
+        dimension: String(bot?.game?.dimension || '').slice(0, 48),
+        failureCode,
+        failureOutcome,
+        failureStage: tacticalFailureStage({ failureCode, failureOutcome, response }),
+        response,
+        responseReason: String(detail.responseReason || '').slice(0, 64),
+        retreatDistanceBefore: Number.isFinite(Number(detail.retreatDistanceBefore))
+            ? Math.round(Number(detail.retreatDistanceBefore) * 10) / 10
+            : null,
+        retreatDistanceAfter: Number.isFinite(Number(detail.retreatDistanceAfter))
+            ? Math.round(Number(detail.retreatDistanceAfter) * 10) / 10
+            : null,
+    });
+}
+
+/**
+ * A failed tactical response is retry authority only after material Minecraft
+ * evidence changes. A scheduler delay alone cannot make the same retreat,
+ * pursuit, or attack succeed against an unchanged hostile.
+ */
+export function selfDefenseReflexEligibility(agent, threat, failedReceipt = null) {
+    const receipt = selfDefenseReflexReceipt(agent, threat);
+    const sameThreatInstance = Boolean(
+        failedReceipt
+        && receipt.entityId !== null
+        && failedReceipt.entityId === receipt.entityId
+        && (failedReceipt.entityUuid || null) === (receipt.entityUuid || null)
+    );
+    const equivalentAirborneThreat = Boolean(
+        failedReceipt
+        && receipt.targetName
+        && failedReceipt.targetName === receipt.targetName
+        && failedReceipt.threatAirborne === true
+        && receipt.threatAirborne === true
+    );
+    const criticalRouteFailure = Boolean(
+        failedReceipt?.failureStage === 'route_unavailable'
+        && failedReceipt.response === 'retreat'
+        && failedReceipt.responseReason === 'critical_health'
+    );
+    const unchangedCriticalRouteFailure = Boolean(
+        criticalRouteFailure
+        && (sameThreatInstance || equivalentAirborneThreat)
+        && sameReflexBlockPosition(failedReceipt.botPosition, receipt.botPosition)
+        && failedReceipt.dimension === receipt.dimension
+        && failedReceipt.threatAirborne === receipt.threatAirborne
+        && Number.isFinite(receipt.health)
+        && receipt.health <= CRITICAL_TACTICAL_HEALTH
+    );
+    const unchangedOrdinaryFailure = Boolean(
+        failedReceipt
+        && !criticalRouteFailure
+        && sameThreatInstance
+        && sameReflexBlockPosition(failedReceipt.botPosition, receipt.botPosition)
+        && failedReceipt.health === receipt.health
+        && Number(failedReceipt.lastDamageTime || 0) === receipt.lastDamageTime
+        && failedReceipt.dimension === receipt.dimension
+    );
+    const unchangedFailure = unchangedCriticalRouteFailure || unchangedOrdinaryFailure;
+    return Object.freeze({
+        eligible: !unchangedFailure,
+        code: unchangedFailure
+            ? 'unchanged_failed_tactical_suppressed'
+            : 'self_defense_evidence_changed',
+        receipt,
+    });
+}
+
+/**
+ * Ordinary nearby-hostile scanning is ambient autonomy. It cannot take the
+ * body away from an explicit player action merely because that action lasts
+ * longer than a short startup grace period. Fresh damage and attributed
+ * protection are selected before this gate and remain valid reflex authority.
+ */
+export function ambientSelfDefensePermitted(agent) {
+    return !durablePlayerAccompanimentActive(agent)
+        && !(agent?.actions?.executing === true
+            && agent.actions.currentActionOwner === 'player');
+}
+
+/**
+ * Follow and guard are standing player commitments, not just the individual
+ * ActionManager turn currently moving the body. Keep that authority through
+ * the brief idle handoff after a safety reflex so ambient hostile scanning
+ * cannot win another turn before the accepted directive resumes.
+ */
+export function durablePlayerAccompanimentActive(agent) {
+    const directive = String(
+        agent?.companion_context?.snapshot?.().directive || '',
+    ).toLowerCase();
+    return directive === 'follow' || directive === 'guard';
+}
+
+function announceAccompanimentHandoff(agent, message) {
+    if (agent?.shut_up || typeof agent?.openChat !== 'function') return false;
+    void Promise.resolve(agent.openChat(message)).catch(error => {
+        console.error(`[mode:handoff] Failed to send safety status: ${String(error?.message || error).slice(0, 512)}`);
+    });
+    return true;
+}
+
+/**
+ * Once tactical combat has physically disengaged from the exact hostile that
+ * caused a safety incident, let the survival-owned rendezvous/cover action
+ * finish. A new hit moves the incident back to `threat_response`, and a
+ * different entity never matches this gate, so genuine new danger can still
+ * preempt immediately.
+ */
+export function selfDefenseRecoveryOwnsSameThreat(agent, threat) {
+    const director = agent?.survival_director;
+    const snapshot = director?.snapshot?.() || null;
+    const incident = director?.safetyIncident || snapshot?.safetyIncident;
+    const status = director?.status || snapshot;
+    const sourceId = Number(incident?.source?.id);
+    const threatId = Number(threat?.id);
+    return Boolean(
+        incident?.active === true
+        && incident.stage === 'disengaged'
+        && Number.isFinite(sourceId)
+        && Number.isFinite(threatId)
+        && sourceId === threatId
+        && agent?.actions?.executing === true
+        && agent.actions.currentActionOwner === 'survival'
+        && ['return_to_player', 'seek_shelter'].includes(status?.code)
+    );
+}
+
+/**
+ * Cancellation is censored. Latch only a physically settled, retryable
+ * tactical-combat failure using the structured skill receipt rather than
+ * parsing logs or narration. Successful settlement and terminal failures do
+ * not need retry suppression.
+ */
+export function selfDefenseFailedTacticalReceipt(agent, threat, execution) {
+    const result = execution?.result;
+    const skill = result?.evidence?.skill;
+    const lastDecision = Array.isArray(skill?.decisions) ? skill.decisions.at(-1) : null;
+    const before = Number(skill?.retreatDistanceBefore);
+    const after = Number(skill?.retreatDistanceAfter);
+    if (
+        execution?.interrupted
+        || result?.phase !== 'failed'
+        || skill?.kind !== 'tactical_combat'
+        || skill?.retryable === false
+    ) return null;
+    return selfDefenseReflexReceipt(agent, threat, {
+        failureCode: result.code,
+        failureOutcome: skill.outcome,
+        response: lastDecision?.response,
+        responseReason: lastDecision?.reason,
+        retreatDistanceBefore: before,
+        retreatDistanceAfter: after,
+    });
+}
+
+export function shouldUseCriticalHealingPotion(bot, threshold = CRITICAL_HEALING_THRESHOLD) {
+    const health = Number(bot?.health);
+    if (!Number.isFinite(health) || health > threshold) return false;
+    return (bot?.inventory?.items?.() || []).some(item => (
+        isDrinkableHealingPotion(item, bot.version)
+    ));
+}
+
+export function recentDamageRequiresRetreat(bot, now = Date.now()) {
+    const health = Number(bot?.health);
+    const lastDamageTaken = Number(bot?.lastDamageTaken);
+    const lastDamageTime = Number(bot?.lastDamageTime);
+    if (!Number.isFinite(health) || !Number.isFinite(lastDamageTime)) return false;
+    return now - lastDamageTime < RECENT_DAMAGE_WINDOW_MS
+        && (
+            health <= LOW_HEALTH_RETREAT_THRESHOLD
+            || lastDamageTaken >= Math.max(SEVERE_DAMAGE_MINIMUM, health * 0.5)
+    );
+}
+
+/**
+ * A retreat leg that bought real distance but still lost health is not an
+ * unchanged retry. Preserve emergency ownership for the next behavior tick
+ * instead of letting the ordinary combat band replace self-preservation while
+ * the bot is critically exposed.
+ */
+export function rearmDeterioratingSelfPreservationRetreat(mode, agent, execution) {
+    const result = execution?.result;
+    const skill = result?.evidence?.skill;
+    const healthBefore = Number(skill?.healthBefore);
+    const healthAfter = Number(skill?.healthAfter);
+    const distanceBefore = Number(skill?.retreatDistanceBefore);
+    const distanceAfter = Number(skill?.retreatDistanceAfter);
+    const materiallyChanged = Boolean(
+        execution?.interrupted !== true
+        && result?.phase === 'failed'
+        && skill?.kind === 'tactical_combat'
+        && skill?.outcome === 'retreat_health_deteriorated'
+        && skill?.retryable === true
+        && Number.isFinite(healthBefore)
+        && Number.isFinite(healthAfter)
+        && healthAfter < healthBefore
+        && Number.isFinite(distanceBefore)
+        && Number.isFinite(distanceAfter)
+        && distanceAfter > distanceBefore + 0.5
+    );
+    if (!materiallyChanged || !mode) return false;
+    mode.last_retreat_at = 0;
+    mode.next_retry_at = 0;
+    agent?.behavior_arbiter?.wake?.('self_preservation_health_deteriorated');
+    return true;
+}
+
+/**
+ * Breathing at the surface is not stable settlement while swim input is still
+ * required. Keep the emergency lane ahead of combat until Pathfinder reaches
+ * dry support or a later observation proves the body is no longer in water.
+ */
+export function rearmOpenWaterDrowningEscape(mode, agent, execution) {
+    const result = execution?.result;
+    const skill = result?.evidence?.skill;
+    const bot = agent?.bot;
+    const stillInWater = Boolean(bot?.entity?.isInWater || bot?.blockAt?.(bot.entity?.position)?.name === 'water');
+    if (
+        execution?.interrupted === true
+        || result?.phase !== 'failed'
+        || skill?.kind !== 'survival'
+        || skill?.outcome !== 'drowning_escape_open_water'
+        || skill?.retryable !== true
+        || !stillInWater
+    ) return false;
+    mode.next_retry_at = 0;
+    agent?.behavior_arbiter?.wake?.('open_water_drowning_escape');
+    return true;
+}
 
 function getImmediateExplosiveThreat(agent) {
     const bot = agent?.bot;
@@ -75,6 +374,52 @@ function getImmediateExplosiveThreat(agent) {
     }
 }
 
+function explosiveReflexReceipt(agent, threat) {
+    const bot = agent?.bot;
+    const distance = threat?.position && bot?.entity?.position?.distanceTo
+        ? bot.entity.position.distanceTo(threat.position)
+        : Number.POSITIVE_INFINITY;
+    return Object.freeze({
+        entityId: Number.isFinite(Number(threat?.id)) ? Number(threat.id) : null,
+        entityUuid: typeof threat?.uuid === 'string' ? threat.uuid.slice(0, 80) : null,
+        actionLabel: String(agent?.actions?.currentActionLabel || '').slice(0, 120),
+        goalId: typeof agent?.goal_director?.activeGoal?.id === 'string'
+            ? agent.goal_director.activeGoal.id.slice(0, 120)
+            : null,
+        lastDamageTime: Number.isFinite(Number(bot?.lastDamageTime))
+            ? Number(bot.lastDamageTime)
+            : 0,
+        rangeBand: distance <= CRITICAL_EXPLOSIVE_RANGE ? 'critical' : 'warning',
+    });
+}
+
+/**
+ * A warning-range explosive observation may become stale while ActionManager
+ * settles the player action it preempts. If tactical revalidation then finds
+ * the area already secure, do not steal the same commitment again for the
+ * same entity and unchanged damage evidence. A critical-range threat, new
+ * damage, a different entity, action, or goal is always material new evidence.
+ */
+export function explosiveReflexEligibility(agent, threat, staleReceipt = null) {
+    const receipt = explosiveReflexReceipt(agent, threat);
+    const sameEntity = staleReceipt
+        && receipt.entityId !== null
+        && staleReceipt.entityId === receipt.entityId
+        && (staleReceipt.entityUuid || null) === (receipt.entityUuid || null);
+    const repeatedStaleWarning = Boolean(
+        receipt.rangeBand === 'warning'
+        && sameEntity
+        && staleReceipt.actionLabel === receipt.actionLabel
+        && (staleReceipt.goalId || null) === (receipt.goalId || null)
+        && Number(staleReceipt.lastDamageTime || 0) === receipt.lastDamageTime
+    );
+    return Object.freeze({
+        eligible: !repeatedStaleWarning,
+        code: repeatedStaleWarning ? 'stale_explosive_trigger_suppressed' : 'explosive_threat_observed',
+        receipt,
+    });
+}
+
 function isExplicitGuardOrder(agent) {
     return agent?.actions?.currentActionLabel === 'action:guardPlayer';
 }
@@ -93,16 +438,55 @@ function getRecentDamageCombatThreat(agent) {
     const bot = agent?.bot;
     const elapsed = Date.now() - Number(bot?.lastDamageTime);
     if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed >= RECENT_DAMAGE_WINDOW_MS) return null;
-    try {
-        // This is bounded proximity correlation only; it does not attribute the damage to the hostile.
-        return world.getNearestEntityWhere(bot, entity => mc.isCombatSafeHostile(entity), SELF_DEFENSE_RANGE);
-    } catch {
-        return null;
-    }
+    const receipt = freshReceivedDamageReceipt(agent);
+    if (!receipt || receipt.kind !== 'hostile') return null;
+    const exact = liveReceivedDamageSource(agent, receipt);
+    if (!exact?.position || !mc.isCombatSafeHostile(exact)) return null;
+    const distance = typeof exact.position.distanceTo === 'function'
+        ? exact.position.distanceTo(bot.entity?.position)
+        : Math.hypot(
+            Number(exact.position.x) - Number(bot.entity?.position?.x),
+            Number(exact.position.y) - Number(bot.entity?.position?.y),
+            Number(exact.position.z) - Number(bot.entity?.position?.z),
+        );
+    return Number.isFinite(distance) && distance <= SELF_DEFENSE_RANGE ? exact : null;
+}
+
+function freshReceivedDamageReceipt(agent) {
+    const receipt = agent?.bot?.lastDamageSource;
+    const age = Date.now() - Number(receipt?.observedAt);
+    return receipt?.matchesSelf === true
+        && Number.isFinite(age)
+        && age >= 0
+        && age < RECENT_DAMAGE_WINDOW_MS
+        ? receipt
+        : null;
+}
+
+function liveReceivedDamageSource(agent, receipt = freshReceivedDamageReceipt(agent)) {
+    const source = receipt?.source;
+    if (!Number.isFinite(Number(source?.id))) return null;
+    const entity = agent?.bot?.entities?.[Number(source.id)] || null;
+    if (!entity) return null;
+    const expectedPlayer = String(source.username || '').toLowerCase();
+    const actualPlayer = String(entity.username || '').toLowerCase();
+    if (expectedPlayer && actualPlayer !== expectedPlayer) return null;
+    const expectedName = String(source.name || '').toLowerCase();
+    const actualName = String(entity.name || '').toLowerCase();
+    if (!expectedPlayer && expectedName && actualName !== expectedName) return null;
+    return entity;
 }
 
 function getAttributedProtectionThreat(agent) {
-    return agent?.companion_context?.protectionThreat?.() || null;
+    const threat = agent?.companion_context?.protectionThreat?.() || null;
+    const botPosition = agent?.bot?.entity?.position;
+    if (!threat?.position || !botPosition) return null;
+    const distance = Math.hypot(
+        threat.position.x - botPosition.x,
+        threat.position.y - botPosition.y,
+        threat.position.z - botPosition.z,
+    );
+    return Number.isFinite(distance) && distance <= SELF_DEFENSE_RANGE ? threat : null;
 }
 
 function hasFreshPlayerAction(agent) {
@@ -116,7 +500,13 @@ function hasFreshPlayerAction(agent) {
 
 function getModeSuppressionReason(agent, mode) {
     if (!agent || !mode) return null;
-    if (agent.isOperatorHeld?.() && mode.name !== 'self_preservation') {
+    const heldRecentDamageDefense = mode.name === 'self_defense'
+        && Boolean(getRecentDamageCombatThreat(agent));
+    if (
+        agent.isOperatorHeld?.()
+        && mode.name !== 'self_preservation'
+        && !heldRecentDamageDefense
+    ) {
         return 'operator_hold';
     }
 
@@ -239,6 +629,7 @@ const modes_list = [
         active: false,
         fall_blocks: ['sand', 'red_sand', 'gravel'],
         last_retreat_at: 0,
+        stale_explosive_trigger: null,
         update: function (agent) {
             const bot = agent.bot;
             let explosiveThreat = null;
@@ -247,14 +638,25 @@ const modes_list = [
             if (!block) block = {name: 'air'}; // hacky fix when blocks are not loaded
             if (!blockAbove) blockAbove = {name: 'air'};
             const oxygen = Number(bot.oxygenLevel);
+            const health = Number(bot.health);
+            const criticalWaterExposure = bot.entity.isInWater
+                && Number.isFinite(health)
+                && health <= LOW_HEALTH_RETREAT_THRESHOLD;
             const isFalling = !bot.entity.onGround
                 && !bot.entity.isInWater
                 && !bot.entity.isInLava
                 && Number(bot.entity.velocity?.y) <= FALL_REFLEX_VELOCITY;
-            if (blockAbove.name === 'water' && Number.isFinite(oxygen) && oxygen <= DROWNING_REFLEX_OXYGEN) {
-                say(agent, 'I need air!');
+            if (
+                (blockAbove.name === 'water' && Number.isFinite(oxygen) && oxygen <= DROWNING_REFLEX_OXYGEN)
+                || criticalWaterExposure
+            ) {
+                say(agent, criticalWaterExposure && blockAbove.name !== 'water'
+                    ? 'I need stable shore before I can fight.'
+                    : 'I need air!');
                 void execute(this, agent, async () => {
                     return await skills.escapeDrowning(bot);
+                }).then(execution => {
+                    rearmOpenWaterDrowningEscape(this, agent, execution);
                 });
             }
             else if (isFalling) {
@@ -285,48 +687,70 @@ const modes_list = [
                 });
             }
             else if ((explosiveThreat = getImmediateExplosiveThreat(agent))) {
+                const eligibility = explosiveReflexEligibility(
+                    agent,
+                    explosiveThreat,
+                    this.stale_explosive_trigger,
+                );
+                if (!eligibility.eligible) {
+                    return { code: eligibility.code };
+                }
                 say(agent, `A ${explosiveThreat.name.replaceAll('_', ' ')} is too close—moving clear!`);
                 void execute(this, agent, async () => {
-                    return await skills.resolveTacticalCombat(
+                    const resolved = await skills.resolveTacticalCombat(
                         bot,
                         SELF_DEFENSE_RANGE,
                         explosiveThreat.id,
                     );
+                    this.stale_explosive_trigger = bot.lastActionEvidence?.outcome === 'area_already_secure'
+                        && eligibility.receipt.rangeBand === 'warning'
+                        ? eligibility.receipt
+                        : null;
+                    return resolved;
                 });
             }
             else if (
-                Date.now() - bot.lastDamageTime < RECENT_DAMAGE_WINDOW_MS
-                && (
-                    bot.health <= LOW_HEALTH_RETREAT_THRESHOLD
-                    || bot.lastDamageTaken >= Math.max(SEVERE_DAMAGE_MINIMUM, bot.health * 0.5)
-                )
+                recentDamageRequiresRetreat(bot)
                 && Date.now() - this.last_retreat_at >= SURVIVAL_RETREAT_COOLDOWN_MS
             ) {
                 const now = Date.now();
-                let threat = null;
-                try {
-                    threat = world.getNearestEntityWhere(
-                        bot,
-                        entity => mc.isHostile(entity),
-                        SURVIVAL_RETREAT_DISTANCE,
-                    );
-                } catch (error) {
-                    console.warn(`[mode:self_preservation] Could not resolve the damage threat: ${String(error?.message || error).slice(0, 240)}`);
-                }
+                const sourceReceipt = freshReceivedDamageReceipt(agent);
+                const damageSource = liveReceivedDamageSource(agent, sourceReceipt);
+                const threat = sourceReceipt?.kind === 'hostile' && damageSource
+                    ? damageSource
+                    : null;
                 this.last_retreat_at = now;
-                say(agent, threat?.name
-                    ? `I'm badly hurt—retreating from ${threat.name.replaceAll('_', ' ')}!`
-                    : 'I\'m badly hurt—moving to safer ground!');
+                if (sourceReceipt?.kind === 'requester_player') {
+                    say(agent, 'You hit me. I\'m giving you room; tell me if that was intentional.');
+                } else if (sourceReceipt?.kind === 'other_player') {
+                    say(agent, `${sourceReceipt.source?.username || 'Another player'} hit me. I'm getting clear and need help!`);
+                } else {
+                    say(agent, threat?.name
+                        ? `I'm badly hurt—responding to the ${threat.name.replaceAll('_', ' ')} that hit me!`
+                        : 'I\'m badly hurt, but the damage source is unknown—seeking safety without blaming a nearby mob!');
+                }
                 void execute(this, agent, async () => {
+                    if (shouldUseCriticalHealingPotion(bot)) {
+                        await skills.consume(bot, 'healing_potion');
+                        if (bot.interrupt_code) return false;
+                    }
                     if (threat?.position) {
-                        const retreated = await skills.moveAwayFromEntity(
+                        return await skills.resolveTacticalCombat(
                             bot,
-                            threat,
                             SURVIVAL_RETREAT_DISTANCE,
+                            threat.id,
+                            { objective: 'disengage' },
                         );
-                        if (retreated || bot.interrupt_code) return retreated;
+                    }
+                    if (damageSource?.position && sourceReceipt?.kind === 'requester_player') {
+                        return await skills.moveAwayFromEntity(bot, damageSource, 8);
+                    }
+                    if (damageSource?.position && sourceReceipt?.kind === 'other_player') {
+                        return await skills.moveAwayFromEntity(bot, damageSource, SURVIVAL_RETREAT_DISTANCE);
                     }
                     return await skills.moveAway(bot, SURVIVAL_FALLBACK_DISTANCE);
+                }).then(execution => {
+                    rearmDeterioratingSelfPreservationRetreat(this, agent, execution);
                 });
             }
             else if (agent.isIdle()) {
@@ -455,16 +879,30 @@ const modes_list = [
         interrupts: ['all'],
         on: true,
         active: false,
+        failed_tactical_trigger: null,
         update: function (agent) {
             const protectionThreat = getAttributedProtectionThreat(agent);
-            const enemy = protectionThreat || (agent.runtime?.autonomy === 'command'
+            const damageReceipt = freshReceivedDamageReceipt(agent);
+            const enemy = protectionThreat || (damageReceipt
                 ? getRecentDamageCombatThreat(agent)
-                : world.getNearestEntityWhere(
-                    agent.bot,
-                    entity => mc.isCombatSafeHostile(entity),
-                    SELF_DEFENSE_RANGE,
-                ));
+                : agent.runtime?.autonomy === 'command' || !ambientSelfDefensePermitted(agent)
+                    ? null
+                    : world.getNearestEntityWhere(
+                        agent.bot,
+                        entity => mc.isCombatSafeHostile(entity),
+                        SELF_DEFENSE_RANGE,
+                    ));
             if (!enemy) return;
+            if (selfDefenseRecoveryOwnsSameThreat(agent, enemy)) {
+                return { code: 'survival_incident_recovery_owns_same_threat' };
+            }
+            const eligibility = selfDefenseReflexEligibility(
+                agent,
+                enemy,
+                this.failed_tactical_trigger,
+            );
+            if (!eligibility.eligible) return { code: eligibility.code };
+            this.failed_tactical_trigger = null;
             // Threat relevance is independent from whether pathfinder can walk
             // beside the nearest hostile. The tactical selector evaluates all
             // loaded threats and chooses melee, range, or retreat itself.
@@ -481,6 +919,9 @@ const modes_list = [
                 } finally {
                     if (protectionThreat) agent.companion_context?.clearProtection?.('engagement_finished');
                 }
+            }).then(execution => {
+                const failedTactical = selfDefenseFailedTacticalReceipt(agent, enemy, execution);
+                this.failed_tactical_trigger = failedTactical || null;
             });
         }
     },
@@ -690,10 +1131,21 @@ async function execute(mode, agent, func, timeout=-1) {
     if (agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
+    const continuingAccompaniment = durablePlayerAccompanimentActive(agent);
+    const announcesSafetyHandoff = continuingAccompaniment
+        && ['self_defense', 'self_preservation'].includes(mode.name);
     mode.active = true;
     let code_return;
     try {
         code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
+            if (announcesSafetyHandoff) {
+                announceAccompanimentHandoff(
+                    agent,
+                    mode.name === 'self_defense'
+                        ? 'Something is attacking me. I am breaking contact, then I will resume your order.'
+                        : 'I need to get safe for a moment, then I will resume your order.',
+                );
+            }
             return await func();
         }, { timeout, owner: 'reflex' });
     } catch (error) {
@@ -711,12 +1163,15 @@ async function execute(mode, agent, func, timeout=-1) {
     }
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return?.message || ''}`);
 
-    if (interrupted_action && !code_return?.interrupted) {
+    if ((interrupted_action || continuingAccompaniment) && code_return?.success === true) {
         // A reflex preemption is a control-loop event, not a new conversation.
         // GoalDirector, JobDirector, and resumable companion directives already
         // retain the exact deterministic work to continue. Asking the model what
         // to do here added a full inference delay and commonly produced status or
         // awareness commands while the original action still owned control.
+        if (announcesSafetyHandoff) {
+            announceAccompanimentHandoff(agent, 'I am clear. Resuming your order now.');
+        }
         agent.behavior_arbiter?.requestDirectiveResume?.();
     }
     return code_return;
@@ -854,6 +1309,7 @@ class ModeController {
         if (!agent) return { active: false, scheduled: false, mode: null, code: 'agent_unavailable' };
         if (!this.updateCycleOpen) this.beginUpdateCycle();
         const names = [...new Set(Array.isArray(modeNames) ? modeNames : [modeNames])];
+        let inactiveCode = 'band_clear';
         for (const modeName of names) {
             const mode = this.modeMap[modeName];
             if (!mode || this.evaluatedThisCycle.has(modeName)) continue;
@@ -868,6 +1324,9 @@ class ModeController {
                 const wasExecuting = agent.actions.executing === true;
                 const previousLabel = agent.actions.currentActionLabel;
                 const result = await mode.update(agent);
+                if (result && typeof result === 'object' && typeof result.code === 'string') {
+                    inactiveCode = result.code;
+                }
                 const scheduled = result === true
                     || mode.active
                     || (!wasExecuting && agent.actions.executing === true)
@@ -877,7 +1336,7 @@ class ModeController {
                 }
             }
         }
-        return { active: false, scheduled: false, mode: null, code: 'band_clear' };
+        return { active: false, scheduled: false, mode: null, code: inactiveCode };
     }
 
     async update() {

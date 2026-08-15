@@ -8,7 +8,7 @@ import {
 import { capabilityCommand } from '../../src/agent/runtime/capability-catalogue.js';
 import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 
-test('Lumberjack recognizes canonical log families and prepares an axe before harvesting', () => {
+test('Lumberjack recognizes canonical log families and keeps a small wood chore out of the stone-tool bootstrap', () => {
   assert.equal(canonicalLogFamily('oak_log'), 'oak');
   assert.equal(canonicalLogFamily('warped_stem'), 'warped');
   assert.equal(canonicalLogFamily('oak_planks'), null);
@@ -25,8 +25,35 @@ test('Lumberjack recognizes canonical log families and prepares an axe before ha
     freeSlots: 10,
     safeTrunks: true,
   });
-  assert.equal(step.command, '!prepareTool("stone_axe")');
-  assert.equal(step.phase, 'prepare');
+  assert.equal(step.command, '!collectBlocksInRange("oak_log", 8, 64, false, true)');
+  assert.equal(step.phase, 'execute');
+  assert.equal(step.nextPhase, 'verify');
+  assert.equal(step.code, 'hand_harvest_ready');
+
+  const larger = createWorkOrder({
+    id: 'logs-large',
+    role: 'lumberjack',
+    kind: 'harvest',
+    target: { name: 'logs' },
+    quota: 32,
+  });
+  const bootstrap = nextLumberjackStep(larger, {
+    inventory: {},
+    tools: { axeTier: 0 },
+    freeSlots: 10,
+    safeTrunks: true,
+  });
+  assert.equal(bootstrap.command, '!collectWoodInRange(3, 64, false, true)');
+  assert.equal(bootstrap.nextPhase, 'assess');
+  assert.equal(bootstrap.code, 'wooden_axe_material_bootstrap');
+  const prepare = nextLumberjackStep(larger, {
+    inventory: { spruce_log: 7 },
+    tools: { axeTier: 0 },
+    freeSlots: 10,
+    safeTrunks: true,
+  });
+  assert.equal(prepare.command, '!prepareTool("wooden_axe")');
+  assert.equal(prepare.phase, 'prepare');
 });
 
 test('Lumberjack collects only safe reachable trunks and replants only with every verified prerequisite', () => {
@@ -134,4 +161,51 @@ test('Lumberjack bounds collection by remaining quota and inventory capacity', (
     baseline: 0,
     maximum: 4,
   });
+});
+
+test('A player harvest counts only logs acquired after its persisted baseline', () => {
+  const order = createWorkOrder({
+    id: 'fresh-family-firewood',
+    role: 'lumberjack',
+    kind: 'harvest',
+    source: 'player',
+    requester: 'DadPlayer',
+    target: { name: 'logs' },
+    quota: 6,
+    checkpoint: {
+      baselineInventory: 7,
+      targetInventory: 13,
+    },
+  });
+
+  const collect = nextLumberjackStep(order, {
+    inventory: { spruce_log: 7 },
+    tools: { axeTier: 0 },
+    freeSlots: 30,
+    safeTrunks: true,
+  });
+  assert.equal(collect.command, '!collectWoodInRange(6, 64, false, true)');
+  assert.equal(collect.code, 'hand_harvest_ready');
+
+  const verify = nextLumberjackStep(order, {
+    inventory: { spruce_log: 13 },
+    tools: { axeTier: 0 },
+    freeSlots: 30,
+    safeTrunks: true,
+  });
+  assert.equal(verify.phase, 'verify');
+  assert.equal(verify.code, 'log_quota_met');
+
+  const roleOrder = createWorkOrder({
+    id: 'absolute-role-stockpile',
+    role: 'lumberjack',
+    kind: 'harvest',
+    source: 'role',
+    target: { name: 'logs' },
+    quota: 6,
+  });
+  const roleComplete = nextLumberjackStep(roleOrder, {
+    inventory: { spruce_log: 7 },
+  });
+  assert.equal(roleComplete.phase, 'verify', 'role stockpile quotas remain absolute');
 });

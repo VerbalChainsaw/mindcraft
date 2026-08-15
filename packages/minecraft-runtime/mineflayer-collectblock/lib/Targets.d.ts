@@ -20,5 +20,7 @@ export declare class Targets {
     getClosestBlock(): Block | null;
     get empty(): boolean;
     clear(): void;
+    /** Stop attempting blocks while preserving already-mined item drops. */
+    removeBlocks(): void;
     removeTarget(target: Collectable): void;
 }

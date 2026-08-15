@@ -251,6 +251,18 @@ export const queryList = [
         }
     },
     {
+        name: '!nearbyBeds',
+        description: 'Report the exact canonical nearby bed targets currently visible to the shared survival selector, including occupied state.',
+        perform: function (agent) {
+            const beds = agent.survival_director?.inspectSleepBeds?.();
+            if (!Array.isArray(beds)) return pad('NEARBY_BEDS: unavailable');
+            if (beds.length === 0) return pad('NEARBY_BEDS: none');
+            return pad(`NEARBY_BEDS\n${beds.map(bed => (
+                `- ${bed.name} at (${bed.x}, ${bed.y}, ${bed.z}); occupied=${bed.occupied === true ? 'true' : bed.occupied === false ? 'false' : 'unknown'}; safe=${bed.safe === true ? 'true' : 'false'}; distance=${Number(bed.distance).toFixed(2)}`
+            )).join('\n')}`);
+        }
+    },
+    {
         name: "!craftable",
         description: "Get the craftable items with the bot's inventory.",
         perform: function (agent) {

@@ -1,5 +1,22 @@
 import { PersonalMemory } from './runtime/personal-memory.js';
 
+export function hasPendingDeathRecovery(memoryBank, { after = null } = {}) {
+	const boundary = Number(after);
+	const death = Number.isFinite(boundary)
+		? memoryBank?.recallLatestDeath?.() || memoryBank?.recallDeath?.() || null
+		: memoryBank?.recallDeath?.() || null;
+	return Boolean(
+		death
+		&& !death.recoveredAt
+		&& Object.values(death.inventory || {}).some(count => Number(count) > 0)
+		&& (
+			!Number.isFinite(boundary)
+			|| !Number.isFinite(Number(death.recordedAt))
+			|| Number(death.recordedAt) > boundary
+		)
+	);
+}
+
 function normalizedPlaceName(value) {
 	return String(value || '')
 		.trim()
@@ -86,29 +103,7 @@ export class MemoryBank {
 		return this.personal.export().facts?.[normalized]?.value || null;
 	}
 
-	rememberDeath(position, dimension, inventory = {}) {
-		if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) return false;
-		const counts = Object.fromEntries(Object.entries(inventory)
-			.filter(([name, count]) => name && Number.isFinite(count) && count > 0)
-			.slice(0, 36)
-			.map(([name, count]) => [String(name).slice(0, 80), Math.floor(count)]));
-		const recordedAt = Date.now();
-		if (!this.rememberPlace(
-			'last_death_position',
-			position.x,
-			position.y,
-			position.z,
-			dimension,
-		)) return false;
-		return this.rememberFact('last_death_manifest', JSON.stringify({
-			dimension: String(dimension || ''),
-			inventory: counts,
-			recordedAt,
-			recoveredAt: null,
-		}));
-	}
-
-	recallDeath() {
+	_recallLegacyDeath() {
 		const position = this.recallPlaceDetails('last_death_position');
 		const manifest = this.recallFact('last_death_manifest');
 		if (!position || !manifest) return null;
@@ -129,21 +124,192 @@ export class MemoryBank {
 		}
 	}
 
-	markDeathRecovered(evidence = {}) {
-		const death = this.recallDeath();
-		if (!death || death.recoveredAt) return false;
-		const recoveredAt = Date.now();
-		const stored = this.rememberFact('last_death_manifest', JSON.stringify({
+	_rememberLegacyDeathProjection(death) {
+		if (!death) return false;
+		if (!this.rememberPlace(
+			'last_death_position',
+			death.position.x,
+			death.position.y,
+			death.position.z,
+			death.dimension,
+		)) return false;
+		return this.rememberFact('last_death_manifest', JSON.stringify({
 			dimension: death.dimension,
 			inventory: death.inventory,
 			recordedAt: death.recordedAt,
-			recoveredAt,
+			recoveredAt: death.recoveredAt,
 		}));
+	}
+
+	recordDeath(position, dimension, inventory = {}) {
+		if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) {
+			return Object.freeze({
+				stored: false,
+				code: 'death_position_invalid',
+				record: null,
+			});
+		}
+		const counts = Object.fromEntries(Object.entries(inventory)
+			.filter(([name, count]) => name && Number.isFinite(count) && count > 0)
+			.slice(0, 36)
+			.map(([name, count]) => [String(name).slice(0, 80), Math.floor(count)]));
+		const ledger = this.personal.recallDeathRecoveryLedger();
+		const legacy = ledger.initialized ? null : this._recallLegacyDeath();
+		const legacyPending = legacy
+			&& !legacy.recoveredAt
+			&& Object.values(legacy.inventory || {}).some(count => Number(count) > 0)
+			? legacy
+			: null;
+		const pending = ledger.initialized
+			? ledger.pending
+			: (legacyPending ? [legacyPending] : []);
+		if (Object.keys(counts).length === 0) {
+			const stored = ledger.initialized || pending.length === 0
+				? true
+				: this.personal.replaceDeathRecoveryLedger({
+					initialized: true,
+					pending,
+					lastSettled: ledger.lastSettled,
+					lastDisplaced: ledger.lastDisplaced,
+				});
+			return Object.freeze({
+				stored,
+				code: stored ? 'death_empty_no_record' : 'death_recovery_persistence_rejected',
+				record: null,
+				pending: pending.length,
+			});
+		}
+		const latestRecordedAt = pending.reduce(
+			(latest, entry) => Math.max(latest, Number(entry?.recordedAt) || 0),
+			0,
+		);
+		const recordedAt = Math.max(Date.now(), latestRecordedAt + 1);
+		const death = {
+			position: { x: position.x, y: position.y, z: position.z },
+			dimension: String(dimension || ''),
+			inventory: counts,
+			recordedAt,
+			recoveredAt: null,
+		};
+		let persistedPending = [...pending, death];
+		let displaced = null;
+		let stored = this.personal.replaceDeathRecoveryLedger({
+			initialized: true,
+			pending: persistedPending,
+			lastSettled: ledger.lastSettled,
+			lastDisplaced: ledger.lastDisplaced,
+		});
+		if (!stored && pending.length > 0) {
+			displaced = {
+				...pending[0],
+				displacedAt: Date.now(),
+				displacementCode: 'death_recovery_capacity_displaced',
+			};
+			persistedPending = [...pending.slice(1), death];
+			stored = this.personal.replaceDeathRecoveryLedger({
+				initialized: true,
+				pending: persistedPending,
+				lastSettled: ledger.lastSettled,
+				lastDisplaced: displaced,
+			});
+		}
+		if (!stored) {
+			return Object.freeze({
+				stored: false,
+				code: 'death_recovery_persistence_rejected',
+				record: null,
+				pending: pending.length,
+			});
+		}
+		this._rememberLegacyDeathProjection(persistedPending[0] || death);
+		return Object.freeze({
+			stored: true,
+			code: displaced
+				? 'death_recorded_after_capacity_displacement'
+				: 'death_recorded',
+			record: this.recallDeath(recordedAt),
+			pending: persistedPending.length,
+			...(displaced ? {
+				displacedRecordedAt: displaced.recordedAt,
+				displacementCode: displaced.displacementCode,
+			} : {}),
+		});
+	}
+
+	rememberDeath(position, dimension, inventory = {}) {
+		return this.recordDeath(position, dimension, inventory).stored;
+	}
+
+	recallDeath(recordedAt = null) {
+		const ledger = this.personal.recallDeathRecoveryLedger();
+		const identity = Number(recordedAt);
+		if (!ledger.initialized) {
+			const legacy = this._recallLegacyDeath();
+			if (recordedAt == null) return legacy;
+			return legacy && Number(legacy.recordedAt) === identity ? legacy : null;
+		}
+		const death = recordedAt == null
+			? ledger.pending[0] || ledger.lastSettled
+			: ledger.pending.find(entry => Number(entry.recordedAt) === identity);
+		if (!death) return null;
+		return {
+			position: { ...death.position },
+			dimension: death.dimension,
+			inventory: { ...death.inventory },
+			recordedAt: death.recordedAt,
+			recoveredAt: death.recoveredAt,
+		};
+	}
+
+	recallLatestDeath() {
+		const ledger = this.personal.recallDeathRecoveryLedger();
+		if (!ledger.initialized) return this._recallLegacyDeath();
+		const death = ledger.pending.at(-1) || ledger.lastSettled;
+		if (!death) return null;
+		return {
+			position: { ...death.position },
+			dimension: death.dimension,
+			inventory: { ...death.inventory },
+			recordedAt: death.recordedAt,
+			recoveredAt: death.recoveredAt,
+		};
+	}
+
+	markDeathRecovered(evidence = {}, recordedAt = null) {
+		const ledger = this.personal.recallDeathRecoveryLedger();
+		const legacy = ledger.initialized ? null : this._recallLegacyDeath();
+		const identity = Number(recordedAt);
+		const pendingIndex = ledger.initialized
+			? (recordedAt == null
+				? 0
+				: ledger.pending.findIndex(entry => Number(entry.recordedAt) === identity))
+			: -1;
+		const death = ledger.initialized
+			? ledger.pending[pendingIndex]
+			: (recordedAt == null || Number(legacy?.recordedAt) === identity ? legacy : null);
+		if (!death || death.recoveredAt) return false;
+		const recoveredAt = Date.now();
+		const settled = {
+			...death,
+			recoveredAt,
+			recovered: Math.max(0, Number(evidence.recovered) || 0),
+		};
+		const remaining = ledger.initialized
+			? ledger.pending.filter((entry, index) => index !== pendingIndex)
+			: [];
+		const stored = this.personal.replaceDeathRecoveryLedger({
+			initialized: true,
+			pending: remaining,
+			lastSettled: settled,
+			lastDisplaced: ledger.lastDisplaced,
+		});
 		if (!stored) return false;
-		return this.rememberFact('death_recovery_verified', JSON.stringify({
+		this._rememberLegacyDeathProjection(remaining[0] || settled);
+		this.rememberFact('death_recovery_verified', JSON.stringify({
 			recoveredAt,
 			recovered: Math.max(0, Number(evidence.recovered) || 0),
 		}));
+		return true;
 	}
 
 	getJson() {

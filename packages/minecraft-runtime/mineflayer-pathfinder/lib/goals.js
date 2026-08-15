@@ -124,6 +124,102 @@ class GoalOutsideRadius extends Goal {
   }
 }
 
+// Reach a horizontal boundary without allowing vertical travel to satisfy the
+// retreat by itself. The Y band keeps a local sidestep or surface-region change
+// from terminating on a cave floor far below its origin.
+class GoalOutsideXZRadius extends Goal {
+  constructor (x, y, z, range, maxVerticalDelta = 4, exclusionZones = []) {
+    super()
+    this.x = Math.floor(x)
+    this.y = Math.floor(y)
+    this.z = Math.floor(z)
+    this.range = Math.max(0, Number(range) || 0)
+    this.rangeSq = this.range * this.range
+    this.maxVerticalDelta = Math.max(0, Number(maxVerticalDelta) || 0)
+    this.exclusionZones = Array.isArray(exclusionZones)
+      ? exclusionZones
+          .filter(zone => zone && [zone.x, zone.z].every(Number.isFinite))
+          .map(zone => {
+            const zoneRange = Math.max(0, Number(zone.range) || 0)
+            return {
+              x: Math.floor(zone.x),
+              z: Math.floor(zone.z),
+              range: zoneRange,
+              rangeSq: zoneRange * zoneRange
+            }
+          })
+      : []
+  }
+
+  heuristic (node) {
+    let requiredDistance = 0
+    for (const zone of [this, ...this.exclusionZones]) {
+      const dx = zone.x - node.x
+      const dz = zone.z - node.z
+      requiredDistance = Math.max(
+        requiredDistance,
+        zone.range - Math.sqrt(dx * dx + dz * dz)
+      )
+    }
+    const verticalExcess = Math.max(0, Math.abs(node.y - this.y) - this.maxVerticalDelta)
+    return Math.max(0, requiredDistance) + verticalExcess
+  }
+
+  isEnd (node) {
+    if (Math.abs(node.y - this.y) > this.maxVerticalDelta) return false
+    return [this, ...this.exclusionZones].every(zone => {
+      const dx = zone.x - node.x
+      const dz = zone.z - node.z
+      return (dx * dx + dz * dz) >= zone.rangeSq
+    })
+  }
+}
+
+// Reach a horizontal boundary from a moving entity without letting cave depth
+// satisfy the retreat. The target tracks the entity in X/Z, while the Y band
+// remains anchored to the retreating body's original stance so a descending
+// threat cannot turn flight into a chase underground.
+class GoalOutsideEntityXZRadius extends Goal {
+  constructor (entity, range, originY, maxVerticalDelta = 4) {
+    super()
+    this.entity = entity
+    this.x = Math.floor(entity.position.x)
+    this.z = Math.floor(entity.position.z)
+    this.y = Math.floor(originY)
+    this.range = Math.max(0, Number(range) || 0)
+    this.rangeSq = this.range * this.range
+    this.maxVerticalDelta = Math.max(0, Number(maxVerticalDelta) || 0)
+  }
+
+  heuristic (node) {
+    const dx = this.x - node.x
+    const dz = this.z - node.z
+    const requiredDistance = this.range - Math.sqrt(dx * dx + dz * dz)
+    const verticalExcess = Math.max(0, Math.abs(node.y - this.y) - this.maxVerticalDelta)
+    return Math.max(0, requiredDistance) + verticalExcess
+  }
+
+  isEnd (node) {
+    if (Math.abs(node.y - this.y) > this.maxVerticalDelta) return false
+    const dx = this.x - node.x
+    const dz = this.z - node.z
+    return (dx * dx + dz * dz) >= this.rangeSq
+  }
+
+  hasChanged () {
+    if (!this.entity?.position) return false
+    const p = this.entity.position.floored()
+    if (p.x === this.x && p.z === this.z) return false
+    this.x = p.x
+    this.z = p.z
+    return true
+  }
+
+  isValid () {
+    return this.entity?.position != null
+  }
+}
+
 // Useful for long-range goals that don't have a specific Y level
 class GoalXZ extends Goal {
   constructor (x, z) {
@@ -549,6 +645,8 @@ module.exports = {
   GoalBlock,
   GoalNear,
   GoalOutsideRadius,
+  GoalOutsideXZRadius,
+  GoalOutsideEntityXZRadius,
   GoalXZ,
   GoalNearXZ,
   GoalY,

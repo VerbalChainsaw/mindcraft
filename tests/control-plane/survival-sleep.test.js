@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import Vec3 from 'vec3';
 
-import { goToBed } from '../../src/agent/library/skills.js';
+import { goToBed, isBedSleepStandingStance } from '../../src/agent/library/skills.js';
 
 function position(x, y, z) {
   return {
@@ -34,6 +35,22 @@ function createBot() {
   return { bot, bedPosition };
 }
 
+test('bed stance legality excludes the live raised-bed cell Mineflayer rejects as too far', () => {
+  const bed = { name: 'gray_bed', position: new Vec3(8105, 69, 7939) };
+  const bot = {
+    parseBedMetadata: () => ({
+      part: true,
+      facing: 0,
+      headOffset: new Vec3(0, 0, 1),
+    }),
+    isABed: block => block?.name?.endsWith('_bed') === true,
+    blockAt: () => bed,
+  };
+
+  assert.equal(isBedSleepStandingStance(bot, bed, new Vec3(8105, 66, 7938)), false);
+  assert.equal(isBedSleepStandingStance(bot, bed, new Vec3(8105, 67, 7938)), true);
+});
+
 test('Given an unreachable bed, verified sleep fails without calling Mineflayer sleep', async () => {
   const { bot } = createBot();
   let sleepCalls = 0;
@@ -56,6 +73,58 @@ test('Given an unreachable bed, verified sleep fails without calling Mineflayer 
     dimension: '',
   });
   assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
+test('Given a loaded family bed beyond the old local radius, sleep still delegates the return to Pathfinder', async () => {
+  const { bot, bedPosition } = createBot();
+  let searchOptions = null;
+  bot.findBlocks = options => {
+    searchOptions = options;
+    return [bedPosition];
+  };
+  bot.sleep = () => Promise.resolve({
+    enteredSleep: true,
+    woke: true,
+    immediateDawn: true,
+    evidence: 'day_advance',
+  });
+  const navigated = [];
+
+  const result = await goToBed(bot, {
+    navigate: (_bot, x, y, z) => {
+      navigated.push({ x, y, z });
+      return true;
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(searchOptions.maxDistance, 64);
+  assert.deepEqual(navigated, [{ x: 4, y: 64, z: 0 }]);
+});
+
+test('Given an ordinary bed, default navigation uses Pathfinders interaction-stance goal', async () => {
+  const { bot, bedPosition } = createBot();
+  bot.world = {};
+  bot.sleep = () => Promise.resolve({
+    enteredSleep: true,
+    woke: true,
+    immediateDawn: true,
+    evidence: 'day_advance',
+  });
+  const goals = [];
+
+  const result = await goToBed(bot, {
+    navigateGoal: (_bot, goal) => {
+      goals.push(goal);
+      return true;
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(goals.length, 1);
+  assert.equal(goals[0].constructor.name, 'GoalLookAtBlock');
+  assert.deepEqual(goals[0].pos, bedPosition);
+  assert.equal(goals[0].reach, 4.5);
 });
 
 test('Given a multiplayer night, verified sleep remains owned past the old 20-second ceiling and succeeds at dawn', async () => {

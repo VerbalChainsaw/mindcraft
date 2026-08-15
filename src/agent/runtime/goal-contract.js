@@ -521,6 +521,82 @@ function normalizeDeliveryTarget(raw) {
   });
 }
 
+function normalizeSourceHarvestReplay(raw, expectedSource = null) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const source = canonicalName(raw.source);
+  const output = canonicalName(raw.output);
+  const method = canonicalName(raw.method);
+  if (
+    !source
+    || (expectedSource && source !== expectedSource)
+    || !output
+    || !['kill', 'shear'].includes(method)
+  ) return null;
+  return Object.freeze({
+    source,
+    output,
+    method,
+    count: finiteInteger(raw.count, 1, 1, 64),
+    range: finiteInteger(raw.range, 64, 16, 512),
+    allowAlternative: raw.allowAlternative === true,
+    expectedIncrease: finiteInteger(raw.expectedIncrease, 1, 1, 64),
+    learningKey: boundedText(raw.learningKey, 160),
+    reason: boundedText(raw.reason, 320),
+  });
+}
+
+function normalizeSourceAccessPending(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const source = canonicalName(raw.source);
+  const entityId = Number(raw.entityId);
+  const position = raw.position && typeof raw.position === 'object' && !Array.isArray(raw.position)
+    ? raw.position
+    : null;
+  const coordinates = position ? ['x', 'y', 'z'].map(axis => Number(position[axis])) : [];
+  if (
+    !source
+    || !Number.isFinite(entityId)
+    || coordinates.length !== 3
+    || !coordinates.every(Number.isFinite)
+  ) return null;
+  const replay = normalizeSourceHarvestReplay(raw.replay, source);
+  return Object.freeze({
+    source,
+    entityId: Math.floor(entityId),
+    position: Object.freeze({
+      x: Math.floor(coordinates[0]),
+      y: Math.floor(coordinates[1]),
+      z: Math.floor(coordinates[2]),
+    }),
+    stage: ['path_not_found', 'path_execution_failed'].includes(raw.stage)
+      ? raw.stage
+      : 'path_execution_failed',
+    movementOutcome: boundedText(raw.movementOutcome, 80) || 'unknown',
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+    ...(replay ? { replay } : {}),
+  });
+}
+
+function normalizeSourceSearchPending(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const replay = normalizeSourceHarvestReplay(raw.replay);
+  if (!replay) return null;
+  return Object.freeze({
+    outcome: ['source_spawn_pending', 'source_search_advanced'].includes(raw.outcome)
+      ? raw.outcome
+      : 'source_spawn_pending',
+    replay,
+    observedAt: Number.isFinite(raw.observedAt) ? raw.observedAt : Date.now(),
+  });
+}
+
+function normalizeDeathRecoveryBinding(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const recordedAt = Number(raw.recordedAt);
+  if (!Number.isSafeInteger(recordedAt) || recordedAt < 1) return null;
+  return Object.freeze({ recordedAt });
+}
+
 function normalizeOperationalMemory(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const failedTargets = Array.isArray(source.failedTargets)
@@ -529,6 +605,9 @@ function normalizeOperationalMemory(raw) {
       .map(normalizeFailedTarget)
       .filter(Boolean)
     : [];
+  const sourceAccessPending = normalizeSourceAccessPending(source.sourceAccessPending);
+  const sourceSearchPending = normalizeSourceSearchPending(source.sourceSearchPending);
+  const deathRecovery = normalizeDeathRecoveryBinding(source.deathRecovery);
   return Object.freeze({
     failedTargets: Object.freeze(failedTargets),
     toolRequirement: normalizeToolRequirement(source.toolRequirement),
@@ -538,6 +617,9 @@ function normalizeOperationalMemory(raw) {
       : null,
     activeCollectionTarget: normalizeActiveCollectionTarget(source.activeCollectionTarget),
     deliveryTarget: normalizeDeliveryTarget(source.deliveryTarget),
+    ...(sourceAccessPending ? { sourceAccessPending } : {}),
+    ...(sourceSearchPending ? { sourceSearchPending } : {}),
+    ...(deathRecovery ? { deathRecovery } : {}),
   });
 }
 
@@ -576,6 +658,40 @@ function normalizeSubgoal(raw, index) {
   });
 }
 
+export function normalizeMiningReturnCheckpoint(raw) {
+  const checkpointSource = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw
+    : {};
+  const miningReturnRoute = [];
+  if (Array.isArray(checkpointSource.miningReturnRoute)) {
+    for (const rawCell of checkpointSource.miningReturnRoute.slice(0, MAX_MINING_RETURN_CELLS)) {
+      if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
+      const cell = Object.freeze({
+        x: Math.floor(rawCell.x),
+        y: Math.floor(rawCell.y),
+        z: Math.floor(rawCell.z),
+      });
+      const previous = miningReturnRoute.at(-1);
+      if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
+      miningReturnRoute.push(cell);
+    }
+  }
+  const miningReturnDimension = boundedText(checkpointSource.miningReturnDimension, 64)
+    .toLowerCase()
+    .replace(/^minecraft:/, '')
+    .replace(/[^a-z0-9_]/g, '');
+  return Object.freeze(miningReturnRoute.length > 0 ? {
+    miningReturnRoute: Object.freeze(miningReturnRoute),
+    miningReturnIndex: finiteInteger(
+      checkpointSource.miningReturnIndex,
+      miningReturnRoute.length - 1,
+      -1,
+      miningReturnRoute.length - 1,
+    ),
+    ...(miningReturnDimension ? { miningReturnDimension } : {}),
+  } : {});
+}
+
 export function normalizeGoalContract(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new TypeError('Goal contract must be an object.');
@@ -612,38 +728,12 @@ export function normalizeGoalContract(raw) {
   const checkpointSource = raw.checkpoint && typeof raw.checkpoint === 'object' && !Array.isArray(raw.checkpoint)
     ? raw.checkpoint
     : {};
-  const miningReturnRoute = [];
-  if (Array.isArray(checkpointSource.miningReturnRoute)) {
-    for (const rawCell of checkpointSource.miningReturnRoute.slice(0, MAX_MINING_RETURN_CELLS)) {
-      if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
-      const cell = Object.freeze({
-        x: Math.floor(rawCell.x),
-        y: Math.floor(rawCell.y),
-        z: Math.floor(rawCell.z),
-      });
-      const previous = miningReturnRoute.at(-1);
-      if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
-      miningReturnRoute.push(cell);
-    }
-  }
-  const miningReturnDimension = boundedText(checkpointSource.miningReturnDimension, 64)
-    .toLowerCase()
-    .replace(/^minecraft:/, '')
-    .replace(/[^a-z0-9_]/g, '');
+  const miningReturnCheckpoint = normalizeMiningReturnCheckpoint(checkpointSource);
   const checkpoint = Object.freeze({
     baselineInventory: finiteInteger(checkpointSource.baselineInventory, 0, 0, 100_000),
     targetInventory: finiteInteger(checkpointSource.targetInventory, quantity, 0, 100_000),
     delivered: finiteInteger(checkpointSource.delivered, 0, 0, quantity),
-    ...(miningReturnRoute.length > 0 ? {
-      miningReturnRoute: Object.freeze(miningReturnRoute),
-      miningReturnIndex: finiteInteger(
-        checkpointSource.miningReturnIndex,
-        miningReturnRoute.length - 1,
-        -1,
-        miningReturnRoute.length - 1,
-      ),
-      ...(miningReturnDimension ? { miningReturnDimension } : {}),
-    } : {}),
+    ...miningReturnCheckpoint,
   });
   const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
   return Object.freeze({

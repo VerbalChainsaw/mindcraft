@@ -27,6 +27,48 @@ test('the central interrupt asks Mineflayer to wake a sleeping body', async () =
   assert.equal(wakeCalls, 1);
 });
 
+test('typed access repair dispatches one ordinary exact Builder work order', () => {
+  let submitted = null;
+  const store = { lastError: null, load: () => [], save: () => true };
+  const agent = {
+    name: 'TestBot',
+    bot: {},
+    job_director: {
+      submit(order) {
+        submitted = order;
+        return { accepted: true, id: order.id };
+      },
+    },
+  };
+  const director = new AgendaDirector(agent, { store, now: () => 10_000 });
+  const accepted = director.add({
+    kind: 'repair_access',
+    requester: 'DadPlayer',
+    target: 'cobblestone',
+    quantity: 2,
+    accessRepairConstraint: {
+      kind: 'existing_access_surface',
+      door: { x: 8105, y: 69, z: 7937 },
+      facing: 'north',
+      dimension: 'overworld',
+      cells: [
+        { x: 8105, y: 68, z: 7936 },
+        { x: 8105, y: 68, z: 7935 },
+      ],
+      interiorStance: { x: 8105, y: 69, z: 7938 },
+      exteriorStance: { x: 8105, y: 68, z: 7934 },
+    },
+  });
+
+  assert.equal(accepted.accepted, true);
+  const outcome = director.dispatch(director.entries[0]);
+  assert.equal(outcome.accepted, true);
+  assert.equal(submitted.role, 'builder');
+  assert.equal(submitted.kind, 'build');
+  assert.deepEqual(submitted.target, { name: 'access_repair', x: 8105, y: 68, z: 7935 });
+  assert.equal(submitted.blueprint.cells.length, 2);
+});
+
 test('an ordered item plan is validated and persisted atomically before execution', () => {
   let saved = [];
   let wakes = 0;
@@ -80,6 +122,13 @@ test('an ordered item plan is validated and persisted atomically before executio
   });
 
   const before = JSON.stringify(director.entries);
+  const preflight = director.validateMany([
+    { kind: 'mine', requester: 'DadPlayer', target: 'coal_ore', quantity: 4 },
+    { kind: 'not_real', requester: 'DadPlayer', dependsOnPrevious: true },
+  ]);
+  assert.equal(preflight.accepted, false);
+  assert.equal(JSON.stringify(director.entries), before, 'preflight is pure');
+  assert.equal(saved.length, 4);
   const rejected = director.addMany([
     { kind: 'acquire', requester: 'Gabriel', target: 'logs', quantity: 1 },
     { kind: 'not_real', requester: 'Gabriel', target: 'stone', quantity: 1 },
@@ -141,12 +190,48 @@ test('an interrupting model-compiled item plan replaces the whole unfinished age
   assert.equal(director.status.code, 'agenda_plan_replaced');
 });
 
+test('one atomic Agenda batch resolves plan-local dependencies and rejects an invalid later step without publication', () => {
+  const saved = [];
+  const director = new AgendaDirector({ name: 'TestBot' }, {
+    store: { lastError: null, load: () => [], save: entries => saved.push(entries) },
+    now: () => 9_750,
+  });
+  const accepted = director.addMany([
+    { kind: 'mine', requester: 'DadPlayer', target: 'iron_ore', quantity: 8 },
+    {
+      kind: 'goto',
+      requester: 'DadPlayer',
+      recipient: 'DadPlayer',
+      dependsOnPrevious: true,
+      dependencyPolicy: 'requires_success',
+    },
+  ]);
+  assert.equal(accepted.accepted, true);
+  assert.equal(director.entries[1].dependsOnEntryId, director.entries[0].id);
+  assert.equal(saved.length, 1, 'the complete linked plan is persisted once');
+
+  const before = JSON.stringify(director.entries);
+  const rejected = director.addMany([
+    { kind: 'mine', requester: 'DadPlayer', target: 'coal_ore', quantity: 4 },
+    { kind: 'not_real', requester: 'DadPlayer', dependsOnPrevious: true },
+  ]);
+  assert.equal(rejected.accepted, false);
+  assert.equal(JSON.stringify(director.entries), before);
+  assert.equal(saved.length, 1, 'a malformed later effect publishes none of its plan');
+});
+
 test('natural cleanup compiles one durable retained-inventory storage plan', () => {
   const inventory = [
     { name: 'raw_iron', count: 67 },
     ...Array.from({ length: 11 }, (_, index) => ({ name: 'stone_pickaxe', count: 1, durabilityUsed: 90 + index })),
     { name: 'stone_sword', count: 1 },
   ];
+  const position = (x, y, z) => ({
+    x, y, z,
+    offset: (dx, dy, dz) => position(x + dx, y + dy, z + dz),
+  });
+  const blockedChest = { name: 'chest', position: position(8, 64, 12) };
+  const usableChest = { name: 'chest', position: position(10, 64, 12) };
   const bot = {
     game: { dimension: 'minecraft:overworld' },
     registry: {
@@ -155,9 +240,22 @@ test('natural cleanup compiles one durable retained-inventory storage plan', () 
         stone_pickaxe: { id: 2 },
         stone_sword: { id: 3 },
       },
+      blocksByName: {
+        chest: { id: 10 },
+        trapped_chest: { id: 11 },
+        barrel: { id: 12 },
+      },
     },
     inventory: { items: () => inventory },
-    findBlock: () => ({ name: 'chest', position: { x: 10, y: 64, z: 12 } }),
+    blockAt(point) {
+      if (point.x === 8 && point.y === 64 && point.z === 12) return blockedChest;
+      if (point.x === 10 && point.y === 64 && point.z === 12) return usableChest;
+      if (point.x === 8 && point.y === 65 && point.z === 12) {
+        return { name: 'cobblestone', boundingBox: 'block' };
+      }
+      return { name: 'air', boundingBox: 'empty' };
+    },
+    findBlocks: () => [blockedChest.position, usableChest.position],
   };
   const request = 'Clean up after mining: put the ore and worn extra tools in this chest, but keep one good pickaxe and combat gear, then come back to me.';
   const directive = resolvePlayerDirective('Gabriel', request, { bot });
@@ -261,6 +359,55 @@ test('a final inventory checklist repairs a floor consumed by a later step and r
   assert.equal(saved.at(-1).state, 'complete');
 });
 
+test('a synchronously verified final inventory checklist applies its durable terminal wait', () => {
+  const holds = [];
+  const messages = [];
+  let saved = [];
+  const agent = {
+    name: 'TestBot',
+    bot: { inventory: { slots: [{ name: 'oak_boat', count: 1 }] } },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+    holdPosition(reason, options) { holds.push({ reason, options }); },
+    openChat(message) { messages.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    now: () => 24_000,
+    resolveTarget: (_bot, name) => ({
+      requestedName: name,
+      canonicalName: name,
+      inventoryName: name,
+      acquisitionName: name,
+      acquisitionKind: 'planned',
+    }),
+    store: {
+      lastError: null,
+      load: () => [],
+      save(entries) { saved = entries.map(entry => ({ ...entry })); },
+    },
+  });
+  director.add({
+    kind: 'inventory_checklist',
+    requester: 'DadPlayer',
+    inventoryRequirements: [{ target: 'oak_boat', quantity: 1 }],
+    terminalDisposition: 'hold_position',
+  });
+
+  director.update();
+
+  assert.equal(director.entries[0].state, 'complete');
+  assert.equal(director.entries[0].evidence.code, 'inventory_checklist_verified');
+  assert.equal(director.entries[0].terminalDispositionApplied, true);
+  assert.equal(saved[0].terminalDispositionApplied, true);
+  assert.deepEqual(holds, [{
+    reason: 'companion wait requested by DadPlayer',
+    options: { preserveDurableWork: true },
+  }]);
+  assert.match(messages.at(-1), /wait here until you give me another order/i);
+});
+
 test('a final inventory checklist cannot erase an acquire step physical postcondition failure', () => {
   let now = 25_000;
   let submittedGoal = null;
@@ -337,16 +484,18 @@ test('a final inventory checklist cannot erase an acquire step physical postcond
 // append / interrupt / takeover branching is verified without spinning a bot.
 // The real directive resolver runs; the messages used resolve without a bot
 // registry (mining, harvest, come-here).
-function makeFakeAgent({ remaining = 0, stopResult = { stopped: true } } = {}) {
+function makeFakeAgent({ remaining = 0, held = false, stopResult = { stopped: true } } = {}) {
   const calls = {
     added: [],
     cleared: 0,
+    replaced: 0,
     cancelResume: 0,
     goalCancel: 0,
     jobCancel: 0,
     directiveCleared: 0,
     selfPromptInterrupt: 0,
     roleDefer: 0,
+    modelCancel: 0,
     stop: 0,
     operatorHoldReleased: 0,
     operatorHoldSet: 0,
@@ -357,6 +506,36 @@ function makeFakeAgent({ remaining = 0, stopResult = { stopped: true } } = {}) {
     runtime: { role: 'companion' },
     bot: {},
     agenda_director: {
+      validateMany(entries) {
+        return {
+          accepted: Array.isArray(entries) && entries.length > 0,
+          entries: entries.map((entry, index) => ({
+            id: `agenda-validation-${index + 1}`,
+            description: entry.kind,
+          })),
+        };
+      },
+      addMany(entries, { replaceUnfinished = false } = {}) {
+        const ids = entries.map((_, index) => `agenda-test-${calls.added.length + index + 1}`);
+        const staged = entries.map((entry, index) => {
+          if (entry.dependsOnPrevious !== true) return entry;
+          const { dependsOnPrevious, ...rest } = entry;
+          return {
+            ...rest,
+            dependsOnEntryId: ids[index - 1],
+          };
+        });
+        calls.added.push(...staged);
+        if (replaceUnfinished) calls.replaced += 1;
+        return {
+          accepted: true,
+          replaced: replaceUnfinished ? remaining : 0,
+          entries: staged.map((entry, index) => ({
+            id: ids[index],
+            description: `${entry.kind} ${entry.target || entry.recipient || ''}`.trim(),
+          })),
+        };
+      },
       add(entry) {
         calls.added.push(entry);
         return {
@@ -369,12 +548,14 @@ function makeFakeAgent({ remaining = 0, stopResult = { stopped: true } } = {}) {
       snapshot() { return { remaining }; },
     },
     history: { add() {}, save() {} },
-    actions: { cancelResume() { calls.cancelResume += 1; }, async stop() { calls.stop += 1; return stopResult; } },
+    actions: { cancelResume() { calls.cancelResume += 1; }, stop() { calls.stop += 1; return stopResult; } },
     goal_director: { cancel() { calls.goalCancel += 1; } },
     job_director: { cancel() { calls.jobCancel += 1; } },
     companion_context: { setDirective() { calls.directiveCleared += 1; } },
     self_prompter: { interruptForManualCommand() { calls.selfPromptInterrupt += 1; } },
+    prompter: { cancelPendingModelGeneration() { calls.modelCancel += 1; return 1; } },
     role_director: { deferForManualCommand() { calls.roleDefer += 1; } },
+    isOperatorHeld() { return held; },
     releaseOperatorHold() { calls.operatorHoldReleased += 1; },
     holdPosition() { calls.operatorHoldSet += 1; },
     routeResponse(_source, message) { calls.responses.push(message); },
@@ -391,6 +572,7 @@ test('dispatchPlayerAgenda queues a fresh multi-step plan and takes over the bod
   assert.equal(calls.cancelResume, 1);
   assert.equal(calls.directiveCleared, 1);
   assert.equal(calls.stop, 1);
+  assert.equal(calls.modelCancel, 1, 'fresh durable player authority invalidates an older model turn');
   assert.equal(calls.cleared, 0, 'append must not clear the queue');
   assert.match(calls.responses[0], /Queued 2 steps/);
 });
@@ -412,11 +594,48 @@ test('dispatchPlayerAgenda rejects the whole plan when the prior action does not
   assert.match(calls.responses[0], /did not queue or start/i);
 });
 
+test('dispatchPlayerAgenda asks for an unresolved clause before takeover or partial installation', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 0 });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'DadPlayer',
+    'DadPlayer',
+    'mine 8 iron then sing our family song then come back to me',
+  );
+  assert.equal(handled, true);
+  assert.equal(calls.added.length, 0);
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.cancelResume, 0);
+  assert.match(calls.responses[0], /did not start only part/i);
+  assert.match(calls.responses[0], /sing our family song/i);
+});
+
+test('dispatchPlayerAgenda rejects a malformed complete effect list before physical takeover', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 0 });
+  agent.agenda_director.validateMany = () => ({
+    accepted: false,
+    code: 'invalid_agenda_entry',
+    detail: 'later effect is invalid',
+  });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'DadPlayer',
+    'DadPlayer',
+    'mine 8 iron then come back to me',
+  );
+  assert.equal(handled, true);
+  assert.equal(calls.added.length, 0);
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.cancelResume, 0);
+  assert.match(calls.responses[0], /complete effect list was rejected/i);
+});
+
 test('dispatchPlayerAgenda interrupt clears the queue and preempts', async () => {
   const { agent, calls } = makeFakeAgent({ remaining: 2 });
   const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'stop, mine 10 iron then come here');
   assert.equal(handled, true);
-  assert.equal(calls.cleared, 1, 'interrupt clears the existing queue');
+  assert.equal(calls.replaced, 1, 'interrupt replaces the existing queue in the atomic install');
+  assert.equal(calls.cleared, 0, 'the old queue is not cleared before the replacement validates');
   assert.equal(calls.stop, 1, 'interrupt preempts the current action');
   assert.equal(calls.added.length, 2);
   assert.match(calls.responses[0], /new plan/i);
@@ -427,10 +646,56 @@ test('dispatchPlayerAgenda appends onto a running agenda without preempting it',
   const handled = await Agent.prototype.dispatchPlayerAgenda.call(agent, 'Gabriel', 'Gabriel', 'also mine 5 coal');
   assert.equal(handled, true);
   assert.equal(calls.added.length, 1);
+  assert.equal(calls.modelCancel, 0, 'ordinary FIFO append must not cancel the active construction compiler');
   // Running agenda => no takeover, no preemption, no clear.
   assert.equal(calls.stop, 0);
   assert.equal(calls.cancelResume, 0);
   assert.equal(calls.cleared, 0);
+});
+
+test('a construction continuation appends through its compilation hold without cancelling the barrier', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 1, held: true });
+  agent.agenda_director.activeConstructionIntent = () => ({
+    id: 'agenda-construction-compiling',
+    kind: 'construction',
+    assignmentState: 'compiling',
+  });
+
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'DadPlayer',
+    'DadPlayer',
+    ', then come back to me and wait with us.',
+  );
+
+  assert.equal(handled, true);
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.cancelResume, 0);
+  assert.equal(calls.cleared, 0);
+  assert.deepEqual(calls.added, [{
+    kind: 'goto',
+    requester: 'DadPlayer',
+    recipient: 'DadPlayer',
+    terminalDisposition: 'hold_position',
+  }]);
+  assert.match(calls.responses[0], /^Queued 1 step:/);
+});
+
+test('a new player plan replaces unfinished agenda work preserved under Operator Stop', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 2, held: true });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'DadPlayer',
+    'DadPlayer',
+    'mine 8 iron then come here',
+  );
+  assert.equal(handled, true);
+  assert.equal(calls.replaced, 1, 'held unfinished work is replaced in the same atomic queue mutation');
+  assert.equal(calls.cleared, 0, 'the held queue is not erased before the replacement validates');
+  assert.equal(calls.stop, 1, 'the new authority takes control through the normal physical handoff');
+  assert.equal(calls.added.length, 2);
+  assert.equal(calls.operatorHoldReleased, 1);
+  assert.match(calls.responses[0], /new plan/i);
 });
 
 test('dispatchPlayerAgenda ignores an ordinary lone task but retains a construction contract', async () => {
@@ -454,6 +719,25 @@ test('dispatchPlayerAgenda ignores an ordinary lone task but retains a construct
     'interior_light',
   ]);
   assert.equal(outcome.deferredConstruction.entryId, 'agenda-test-1');
+});
+
+test('dispatchPlayerAgenda persists a lone rendezvous so reflex preemption cannot erase it', async () => {
+  const { agent, calls } = makeFakeAgent({ remaining: 0 });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'Gabriel',
+    'Gabriel',
+    'come to me',
+  );
+
+  assert.equal(handled, true);
+  assert.deepEqual(calls.added, [{
+    kind: 'goto',
+    requester: 'Gabriel',
+    recipient: 'Gabriel',
+  }]);
+  assert.equal(calls.stop, 1);
+  assert.match(calls.responses[0], /Queued 1 step/);
 });
 
 test('dispatchPlayerAgenda queues a construction barrier and returns it for model binding', async () => {
@@ -858,6 +1142,197 @@ test('agenda acquire snapshots current family inventory for each dispatched step
   assert.equal(submittedGoal.checkpoint.targetInventory, 7);
 });
 
+test('agenda acquisition retry preserves its first absolute inventory target across restart', () => {
+  let now = 42_000;
+  let persisted = [];
+  const submitted = [];
+  const bot = { inventory: { slots: [] } };
+  const goalDirector = {
+    activeGoal: null,
+    lastGoal: null,
+    submit(goal) {
+      const expectedCheckpoint = submitted.length === 0
+        ? { baselineInventory: 0, targetInventory: 8 }
+        : {
+            baselineInventory: 0,
+            targetInventory: 8,
+            miningReturnRoute: [
+              { x: 2, y: 32, z: 8 },
+              { x: 3, y: 31, z: 8 },
+            ],
+            miningReturnIndex: 1,
+            miningReturnDimension: 'overworld',
+          };
+      assert.deepEqual(
+        persisted[0]?.acquisitionCheckpoint,
+        expectedCheckpoint,
+        'the acquisition continuation checkpoint must be durable before GoalDirector receives physical ownership',
+      );
+      submitted.push(goal);
+      this.activeGoal = goal;
+      return { accepted: true, id: goal.id };
+    },
+  };
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      return true;
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot,
+    actions: { executing: false },
+    goal_director: goalDirector,
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+  };
+  const options = {
+    store,
+    now: () => now,
+    resolveTarget: () => ({
+      requestedName: 'raw_iron',
+      canonicalName: 'raw_iron',
+      inventoryName: 'raw_iron',
+      acquisitionName: 'raw_iron',
+      acquisitionKind: 'planned',
+    }),
+  };
+  let director = new AgendaDirector(agent, options);
+  director.add({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: 'raw_iron',
+    quantity: 8,
+  });
+
+  director.update();
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0].checkpoint.baselineInventory, 0);
+  assert.equal(submitted[0].checkpoint.targetInventory, 8);
+
+  bot.inventory.slots = [{ name: 'raw_iron', count: 5 }];
+  goalDirector.activeGoal = null;
+  goalDirector.lastGoal = {
+    ...submitted[0],
+    phase: 'failed',
+    checkpoint: {
+      ...submitted[0].checkpoint,
+      miningReturnRoute: [
+        { x: 2, y: 32, z: 8 },
+        { x: 3, y: 31, z: 8 },
+      ],
+      miningReturnIndex: 1,
+      miningReturnDimension: 'minecraft:overworld',
+    },
+    evidence: {
+      code: 'unsupported_acquisition_leaf',
+      detail: 'The current source alternatives were exhausted.',
+      retryable: true,
+    },
+  };
+  director.update();
+  assert.equal(persisted[0].state, 'pending');
+  assert.deepEqual(persisted[0].acquisitionCheckpoint, {
+    baselineInventory: 0,
+    targetInventory: 8,
+    miningReturnRoute: [
+      { x: 2, y: 32, z: 8 },
+      { x: 3, y: 31, z: 8 },
+    ],
+    miningReturnIndex: 1,
+    miningReturnDimension: 'overworld',
+  });
+
+  now += 6_000;
+  director = new AgendaDirector(agent, options);
+  director.update();
+
+  assert.equal(submitted.length, 2);
+  assert.equal(submitted[1].quantityMode, 'additional');
+  assert.equal(submitted[1].quantity, 8);
+  assert.equal(submitted[1].checkpoint.baselineInventory, 0);
+  assert.equal(submitted[1].checkpoint.targetInventory, 8);
+  assert.deepEqual(submitted[1].checkpoint.miningReturnRoute, [
+    { x: 2, y: 32, z: 8 },
+    { x: 3, y: 31, z: 8 },
+  ]);
+  assert.equal(submitted[1].checkpoint.miningReturnIndex, 1);
+  assert.equal(submitted[1].checkpoint.miningReturnDimension, 'overworld');
+});
+
+test('an exhausted GoalDirector result cannot gain fresh Agenda retry authority by omission', () => {
+  let now = 84_000;
+  let persisted = [];
+  const submitted = [];
+  const goalDirector = {
+    activeGoal: null,
+    lastGoal: null,
+    submit(goal) {
+      submitted.push(goal);
+      this.activeGoal = goal;
+      return { accepted: true, id: goal.id };
+    },
+  };
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      return true;
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot: { inventory: { slots: [] } },
+    actions: { executing: false },
+    goal_director: goalDirector,
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+    openChat() {},
+  };
+  const director = new AgendaDirector(agent, {
+    store,
+    now: () => now,
+    resolveTarget: () => ({
+      requestedName: 'cobblestone',
+      canonicalName: 'cobblestone',
+      inventoryName: 'cobblestone',
+      acquisitionName: 'cobblestone',
+      acquisitionKind: 'planned',
+    }),
+  });
+  director.add({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: 'cobblestone',
+    quantity: 8,
+  });
+
+  director.update();
+  assert.equal(submitted.length, 1);
+  goalDirector.activeGoal = null;
+  goalDirector.lastGoal = {
+    ...submitted[0],
+    phase: 'failed',
+    evidence: {
+      code: 'goal_attempts_exhausted',
+      detail: 'GoalDirector exhausted its bounded recovery without material progress.',
+    },
+  };
+
+  director.update();
+  assert.equal(persisted[0].state, 'failed');
+  assert.equal(persisted[0].evidence.retryable, false);
+  assert.equal(persisted[0].attempts, 1);
+
+  now += 6_000;
+  director.update();
+  assert.equal(submitted.length, 1, 'Agenda must not manufacture a new Goal ID or fresh recovery budget');
+});
+
 test('a stale unrelated job result cannot settle a correlated active agenda job', () => {
   const saved = [];
   const agent = {
@@ -894,6 +1369,112 @@ test('a stale unrelated job result cannot settle a correlated active agenda job'
   assert.equal(settled.evidence.code, 'agenda_job_result_mismatch');
   assert.equal(director.pending().length, 0, 'stale evidence must not trigger a retry');
   assert.equal(saved.at(-1).find(entry => entry.id === added.id)?.state, 'failed');
+});
+
+test('an Agenda mining job treats its quantity as fresh output above dispatch inventory', () => {
+  let submitted = null;
+  const agent = {
+    name: 'TestBot',
+    bot: {
+      inventory: {
+        slots: [{ name: 'raw_iron', count: 9 }],
+      },
+    },
+    job_director: {
+      submit(order) {
+        submitted = order;
+        return { accepted: true, id: order.id };
+      },
+    },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => 42_500,
+  });
+  const added = director.add({
+    kind: 'mine',
+    requester: 'DadPlayer',
+    target: 'iron_ore',
+    quantity: 8,
+  });
+  const entry = director.entries.find(candidate => candidate.id === added.id);
+
+  const result = director.dispatch(entry);
+
+  assert.equal(result.accepted, true);
+  assert.equal(submitted.quota, 17);
+  assert.equal(submitted.checkpoint.baselineInventory, 9);
+  assert.equal(submitted.checkpoint.targetInventory, 17);
+});
+
+test('an Agenda harvest persists fresh-output accounting and the exact requester', () => {
+  let submitted = null;
+  const agent = {
+    name: 'TestBot',
+    bot: {
+      inventory: {
+        slots: [{ name: 'spruce_log', count: 7 }],
+      },
+    },
+    job_director: {
+      submit(order) {
+        submitted = order;
+        return { accepted: true, id: order.id };
+      },
+    },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => 42_750,
+  });
+  const added = director.add({
+    kind: 'harvest',
+    requester: 'DadPlayer',
+    target: 'logs',
+    quantity: 6,
+  });
+  const entry = director.entries.find(candidate => candidate.id === added.id);
+
+  const result = director.dispatch(entry);
+
+  assert.equal(result.accepted, true);
+  assert.equal(submitted.requester, 'DadPlayer');
+  assert.equal(submitted.quota, 6);
+  assert.equal(submitted.checkpoint.baselineInventory, 7);
+  assert.equal(submitted.checkpoint.targetInventory, 13);
+});
+
+test('the direct harvest command uses the same fresh-output and requester contract', async () => {
+  let submitted = null;
+  const director = {
+    activeOrder: null,
+    submit(order) {
+      submitted = order;
+      this.activeOrder = order;
+      return { accepted: true, id: order.id, code: 'job_accepted' };
+    },
+  };
+  const agent = {
+    bot: {
+      inventory: {
+        items: () => [{ name: 'spruce_log', count: 7 }],
+      },
+    },
+    runtime: { role: 'companion' },
+    job_director: director,
+    actions: { currentRequestContext: () => null },
+    companion_context: {
+      snapshot: () => ({ canonicalUsername: 'DadPlayer' }),
+    },
+  };
+
+  const response = await getCommand('!assignHarvestJob').perform(agent, 'logs', 6, 'DadPlayer');
+
+  assert.match(response, /Accepted resumable lumberjack work order/);
+  assert.equal(submitted.requester, 'DadPlayer');
+  assert.equal(submitted.quota, 6);
+  assert.equal(submitted.checkpoint.baselineInventory, 7);
+  assert.equal(submitted.checkpoint.targetInventory, 13);
 });
 
 test('a terminal job cannot be replayed, but its after-settlement return still runs', async () => {
@@ -983,6 +1564,68 @@ test('a terminal job cannot be replayed, but its after-settlement return still r
   assert.equal(director.entries.find(entry => entry.id === returnStep.id).state, 'complete');
 });
 
+test('exact container inspection dispatches one bound action and reports its structured manifest', async () => {
+  const commands = [];
+  const chat = [];
+  let now = 50_000;
+  const agent = {
+    name: 'TestBot',
+    bot: {},
+    last_action_result: { actionId: 'before', phase: 'succeeded', code: 'old_result' },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+    openChat(message) { chat.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    now: () => now,
+    executeCommand(_agent, command) {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'inspect-result',
+        phase: 'succeeded',
+        code: 'skill_viewed',
+        detail: 'Action output: inspected exact chest.',
+        retryable: false,
+        evidence: {
+          request: { routeOrigin: 'agenda-director' },
+          skill: {
+            kind: 'chest_view',
+            outcome: 'viewed',
+            target: { name: 'chest', x: 8104, y: 69, z: 7940 },
+            manifest: [
+              { name: 'iron_axe', count: 1 },
+              { name: 'iron_pickaxe', count: 2 },
+            ],
+          },
+        },
+      };
+      return Promise.resolve();
+    },
+  });
+  director.add({
+    kind: 'inspect_container',
+    requester: 'DadPlayer',
+    containerConstraint: {
+      name: 'chest',
+      position: { x: 8104, y: 69, z: 7940 },
+      dimension: 'overworld',
+    },
+  });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  now += 1_000;
+
+  assert.deepEqual(commands, ['!viewChestAt(8104, 69, 7940, "overworld")']);
+  assert.equal(director.entries[0].state, 'complete');
+  assert.equal(director.entries[0].evidence.code, 'skill_viewed');
+  assert.match(chat.join(' '), /2 iron pickaxe/);
+  assert.match(chat.join(' '), /1 iron axe/);
+});
+
 test('an unrelated later action cannot replace the direct result captured for an agenda step', async () => {
   const agent = {
     name: 'TestBot',
@@ -1020,6 +1663,266 @@ test('an unrelated later action cannot replace the direct result captured for an
   assert.equal(settled.state, 'failed');
   assert.equal(settled.evidence.code, 'skill_player_unreachable');
   assert.notEqual(settled.evidence.code, 'skill_fall_landed');
+});
+
+test('direct agenda work resumes after reflex preemption without spending its failure budget', async () => {
+  let now = 50_000;
+  let persisted = [];
+  const messages = [];
+  const results = [
+    {
+      actionId: 'return-preempted-1',
+      phase: 'interrupted',
+      code: 'interrupted',
+      detail: 'Self-defense took ownership for a nearby Skeleton.',
+      retryable: true,
+    },
+    {
+      actionId: 'return-preempted-2',
+      phase: 'interrupted',
+      code: 'interrupted',
+      detail: 'Self-defense took ownership for a nearby Skeleton.',
+      retryable: true,
+    },
+    {
+      actionId: 'return-complete',
+      phase: 'succeeded',
+      code: 'skill_arrived',
+      detail: 'Reached DadPlayer.',
+      retryable: false,
+    },
+  ];
+  const agent = {
+    name: 'TestBot',
+    last_action_result: { actionId: 'before', phase: 'succeeded', code: 'old_result' },
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    openChat(message) { messages.push(message); },
+  };
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      return true;
+    },
+  };
+  const options = {
+    store,
+    now: () => now,
+    executeCommand(_agent, _command, options) {
+      agent.last_action_result = {
+        ...results.shift(),
+        evidence: { request: { routeOrigin: options.routeOrigin } },
+      };
+      return Promise.resolve();
+    },
+  };
+  let director = new AgendaDirector(agent, options);
+  const added = director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+  assert.equal(director.directSettlement({
+    phase: 'interrupted',
+    code: 'stop_requested',
+    retryable: true,
+  }).preempted, false, 'Operator Stop is censored but never automatic resume authority');
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  let entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(entry.state, 'pending');
+  assert.equal(entry.attempts, 0);
+  assert.equal(entry.preemptions, 1);
+  assert.equal(entry.evidence.code, 'preempted');
+  assert.match(messages.at(-1), /still queued and will resume/i);
+
+  director = new AgendaDirector(agent, options);
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(entry.state, 'pending');
+  assert.equal(entry.attempts, 0);
+  assert.equal(entry.preemptions, 2);
+  assert.ok(messages.some(message => /safety response settled.*resuming go to DadPlayer/i.test(message)));
+
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(entry.state, 'complete');
+  assert.equal(entry.attempts, 1);
+  assert.equal(entry.preemptions, 0);
+  assert.equal(entry.evidence.code, 'skill_arrived');
+});
+
+test('a retryable death tells the player that the agenda remains queued and announces the retry', async () => {
+  let now = 80_000;
+  const messages = [];
+  const results = [
+    {
+      actionId: 'return-died',
+      phase: 'failed',
+      code: 'skill_died',
+      detail: 'The skill reported that it could not complete.',
+      retryable: true,
+    },
+    {
+      actionId: 'return-after-respawn',
+      phase: 'succeeded',
+      code: 'skill_arrived',
+      detail: 'Reached DadPlayer.',
+      retryable: false,
+    },
+  ];
+  const agent = {
+    name: 'TestBot',
+    last_action_result: null,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    openChat(message) { messages.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    now: () => now,
+    store: { lastError: null, load: () => [], save: () => true },
+    executeCommand(_agent, _command, options) {
+      agent.last_action_result = {
+        ...results.shift(),
+        evidence: { request: { routeOrigin: options.routeOrigin } },
+      };
+      return Promise.resolve();
+    },
+  });
+  const added = director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  let entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(entry.state, 'pending');
+  assert.equal(entry.attempts, 1);
+  assert.match(messages.at(-1), /died before the step completed.*remains queued/i);
+
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(entry.state, 'complete');
+  assert.ok(messages.some(message => /retrying go to DadPlayer now \(2\/2\)/i.test(message)));
+});
+
+test('a successful terminal return enters the durable companion wait hold', async () => {
+  const holds = [];
+  const messages = [];
+  const agent = {
+    name: 'TestBot',
+    last_action_result: null,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    holdPosition(reason, options) { holds.push({ reason, options }); },
+    openChat(message) { messages.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save() {} },
+    executeCommand(_agent, _command, options) {
+      agent.last_action_result = {
+        actionId: 'terminal-return',
+        phase: 'succeeded',
+        code: 'skill_arrived',
+        retryable: false,
+        evidence: { request: { routeOrigin: options.routeOrigin } },
+      };
+      return Promise.resolve();
+    },
+  });
+  const added = director.add({
+    kind: 'goto',
+    requester: 'DadPlayer',
+    recipient: 'DadPlayer',
+    terminalDisposition: 'hold_position',
+  });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  const settled = director.entries.find(entry => entry.id === added.id);
+  assert.equal(settled.state, 'complete');
+  assert.equal(settled.terminalDispositionApplied, true);
+  assert.deepEqual(holds, [{
+    reason: 'companion wait requested by DadPlayer',
+    options: { preserveDurableWork: true },
+  }]);
+  assert.match(messages.at(-1), /wait here until you give me another order/i);
+});
+
+test('offered gear dispatches additive pickup before verified equip and terminal Hold', async () => {
+  const commands = [];
+  const holds = [];
+  const messages = [];
+  let now = 61_000;
+  const agent = {
+    name: 'TestBot',
+    bot: { inventory: { slots: [] } },
+    last_action_result: null,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+    holdPosition(reason, options) { holds.push({ reason, options }); },
+    openChat(message) { messages.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save: () => true },
+    now: () => now,
+    executeCommand(_agent, command, options) {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: `offered-gear-${commands.length}`,
+        phase: 'succeeded',
+        code: command.startsWith('!pickupItem') ? 'skill_picked_up' : 'skill_equipped',
+        detail: command.startsWith('!pickupItem')
+          ? 'Minecraft confirmed one additional stone_pickaxe.'
+          : 'Minecraft confirmed stone_pickaxe in the main hand.',
+        retryable: false,
+        evidence: { request: { routeOrigin: options.routeOrigin } },
+      };
+      return Promise.resolve();
+    },
+  });
+  const pickup = director.add({
+    kind: 'pickup_item',
+    requester: 'KidPlayer',
+    target: 'stone_pickaxe',
+    quantity: 1,
+    acquisitionCheckpoint: { baselineInventory: 0, targetInventory: 1 },
+  });
+  director.add({
+    kind: 'equip_item',
+    requester: 'KidPlayer',
+    target: 'stone_pickaxe',
+    dependsOnEntryId: pickup.id,
+    dependencyPolicy: 'requires_success',
+    terminalDisposition: 'hold_position',
+  });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  now += 1_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(commands, [
+    '!pickupItem("stone_pickaxe", 1, 12, 0)',
+    '!equip("stone_pickaxe")',
+  ]);
+  assert.deepEqual(director.entries.map(entry => entry.state), ['complete', 'complete']);
+  assert.deepEqual(holds, [{
+    reason: 'companion wait requested by KidPlayer',
+    options: { preserveDurableWork: true },
+  }]);
+  assert.match(messages.at(-1), /equip the carried stone pickaxe/i);
+  assert.match(messages.at(-1), /wait here until you give me another order/i);
 });
 
 test('a direct Agenda result persists while Stop is held and is not repeated after restart', async () => {
@@ -1156,6 +2059,94 @@ test('a retryable parent failure preserves its dependent and restart repairs the
   assert.equal(persisted.find(entry => entry.id === laterDependent.id).state, 'pending');
 });
 
+test('a terminal Agenda failure tells the player once after durable settlement', async () => {
+  const messages = [];
+  const holds = [];
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    holdPosition(reason, options) { holds.push({ reason, options }); },
+    openChat(message) { messages.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save: () => true },
+    now: () => 47_000,
+  });
+  const added = director.add({
+    kind: 'goto',
+    requester: 'DadPlayer',
+    recipient: 'DadPlayer',
+  });
+  director.replace(added.id, { state: 'active', startedAt: 46_000 });
+
+  director.commitSettlement(
+    director.entries.find(entry => entry.id === added.id),
+    {
+      state: 'failed',
+      code: 'skill_path_not_found',
+      detail: 'I could not find a complete route to DadPlayer.',
+      retryable: false,
+    },
+  );
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(director.entries.find(entry => entry.id === added.id).state, 'failed');
+  assert.deepEqual(messages, [
+    'I could not complete go to DadPlayer. Blocker: I could not find a complete route to DadPlayer. I did not retry without new evidence. I am holding position.',
+  ]);
+  assert.deepEqual(holds, [
+    {
+      reason: 'agenda terminal fallback awaiting player direction',
+      options: { preserveDurableWork: true },
+    },
+  ]);
+});
+
+test('a failed Agenda step does not Hold ahead of an already-authorized continuation', async () => {
+  const messages = [];
+  const holds = [];
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    holdPosition(reason, options) { holds.push({ reason, options }); },
+    openChat(message) { messages.push(message); },
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save: () => true },
+    now: () => 48_000,
+  });
+  const failed = director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+  const continuation = director.add({
+    kind: 'goto',
+    requester: 'DadPlayer',
+    recipient: 'KidPlayer',
+    dependsOnEntryId: failed.id,
+    dependencyPolicy: 'after_settlement',
+  });
+  director.replace(failed.id, { state: 'active', startedAt: 47_000 });
+
+  director.commitSettlement(
+    director.entries.find(entry => entry.id === failed.id),
+    {
+      state: 'failed',
+      code: 'skill_path_not_found',
+      detail: 'The route to DadPlayer was unavailable.',
+      retryable: false,
+    },
+  );
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(director.entries.find(entry => entry.id === continuation.id).state, 'pending');
+  assert.deepEqual(holds, []);
+  assert.deepEqual(messages, [
+    'I could not complete go to DadPlayer. Blocker: The route to DadPlayer was unavailable. I did not retry without new evidence. I am continuing 1 already-authorized remaining step.',
+  ]);
+});
+
 test('follow-until durably binds the designated furnace before a dependent smelt dispatch', async () => {
   let persisted = [];
   let director = null;
@@ -1255,4 +2246,198 @@ test('follow-until durably binds the designated furnace before a dependent smelt
   assert.equal(commands.length, 2, 'a failed exact furnace must not trigger a nearest-furnace fallback');
   assert.equal(persisted[1].state, 'failed');
   assert.equal(persisted[1].evidence.code, 'skill_exact_furnace_changed');
+});
+
+test('fishing breakfast direct phases dispatch only typed fresh-output commands', () => {
+  const commands = [];
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    last_action_result: null,
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save: () => true },
+    executeCommand(_agent, command) {
+      commands.push(command);
+      return new Promise(() => {});
+    },
+    now: () => 60_000,
+  });
+  const workstationConstraint = {
+    name: 'furnace',
+    position: { x: 8102, y: 70, z: 7938 },
+    dimension: 'overworld',
+    source: 'player_context_here',
+    observedAt: 59_000,
+  };
+
+  const caught = director.add({
+    kind: 'catch_fish',
+    requester: 'DadPlayer',
+    quantity: 3,
+    baselineInventory: [{ name: 'cod', count: 1 }],
+  });
+  const cooked = director.add({
+    kind: 'cook_fish',
+    requester: 'DadPlayer',
+    quantity: 3,
+    baselineInventory: [{ name: 'cod', count: 1 }],
+    baselineOutputInventory: [{ name: 'cooked_cod', count: 2 }],
+    workstationConstraint,
+  });
+  const delivered = director.add({
+    kind: 'deliver_family',
+    requester: 'DadPlayer',
+    recipient: 'DadPlayer',
+    target: 'cooked_fish',
+    quantity: 3,
+    baselineInventory: [{ name: 'cooked_cod', count: 2 }],
+  });
+
+  assert.equal(director.dispatch(director.entries.find(entry => entry.id === caught.id)).accepted, true);
+  assert.equal(director.dispatch(director.entries.find(entry => entry.id === cooked.id)).accepted, true);
+  assert.equal(director.dispatch(director.entries.find(entry => entry.id === delivered.id)).accepted, true);
+  assert.deepEqual(commands, [
+    '!fish(3, "cod:1")',
+    '!cookCaughtFish(3, 8102, 70, 7938, "overworld", "cod:1", "cooked_cod:2")',
+    '!giveFamilyToPlayer("cooked_fish", "DadPlayer", 3, "cooked_cod:2")',
+  ]);
+});
+
+test('craft dispatch preserves the exact normalized crafting-table constraint', () => {
+  const commands = [];
+  const agent = {
+    name: 'TestBot',
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    last_action_result: null,
+  };
+  const director = new AgendaDirector(agent, {
+    store: { lastError: null, load: () => [], save: () => true },
+    executeCommand(_agent, command) {
+      commands.push(command);
+      return new Promise(() => {});
+    },
+    now: () => 61_000,
+  });
+  const added = director.add({
+    kind: 'craft',
+    requester: 'DadPlayer',
+    target: 'iron_pickaxe',
+    quantity: 1,
+    workstationConstraint: {
+      name: 'crafting_table',
+      position: { x: -392, y: 67, z: -42 },
+      dimension: 'overworld',
+      source: 'player_context_here',
+      observedAt: 60_500,
+    },
+  });
+  const entry = director.entries.find(candidate => candidate.id === added.id);
+
+  assert.equal(director.dispatch(entry).accepted, true);
+  assert.deepEqual(commands, ['!craftRecipe("iron_pickaxe", 1, -392, 67, -42, "overworld")']);
+});
+
+test('death durably rearms the immediate inventory prerequisite and censors its active dependent callback', async () => {
+  let persisted = [];
+  let finishDirect;
+  let now = 70_000;
+  const commands = [];
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      return true;
+    },
+  };
+  const bot = {
+    inventory: { slots: [{ name: 'fishing_rod', count: 1 }] },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+    last_action_result: { actionId: 'before-death', phase: 'succeeded', code: 'old_result' },
+  };
+  let director = new AgendaDirector(agent, {
+    store,
+    now: () => now,
+    executeCommand(_agent, command) {
+      commands.push(command);
+      return new Promise(resolve => { finishDirect = resolve; });
+    },
+  });
+  const acquire = director.add({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: 'fishing_rod',
+    quantity: 1,
+    quantityMode: 'minimum',
+  });
+  const catchFish = director.add({
+    kind: 'catch_fish',
+    requester: 'DadPlayer',
+    quantity: 3,
+    baselineInventory: [],
+    dependsOnEntryId: acquire.id,
+    dependencyPolicy: 'requires_success',
+  });
+  director.replace(acquire.id, {
+    state: 'complete',
+    finishedAt: now,
+    executorId: 'goal-fishing-rod',
+    attempts: 1,
+    acquisitionCheckpoint: { baselineInventory: 0, targetInventory: 1 },
+    evidence: { code: 'inventory_goal_verified', detail: 'Fishing Rod verified.' },
+  });
+
+  director.update();
+  assert.deepEqual(commands, ['!fish(3, "none")']);
+  assert.equal(director.entries.find(entry => entry.id === catchFish.id).state, 'active');
+
+  bot.inventory.slots = [];
+  now += 100;
+  const reconciled = director.reconcileDeath({
+    position: { x: 20, y: 64, z: 20 },
+    dimension: 'overworld',
+  });
+  assert.deepEqual(reconciled, {
+    reconciled: true,
+    code: 'agenda_death_inventory_revalidation_required',
+    prerequisiteId: acquire.id,
+    dependentId: catchFish.id,
+  });
+
+  const rearmedAcquire = director.entries.find(entry => entry.id === acquire.id);
+  const rearmedCatch = director.entries.find(entry => entry.id === catchFish.id);
+  assert.equal(rearmedAcquire.state, 'pending');
+  assert.equal(rearmedAcquire.attempts, 1, 'death revalidation is not another productive attempt');
+  assert.deepEqual(rearmedAcquire.acquisitionCheckpoint, { baselineInventory: 0, targetInventory: 1 });
+  assert.equal(rearmedAcquire.evidence.code, 'agenda_death_inventory_revalidation_required');
+  assert.equal(rearmedCatch.state, 'pending');
+  assert.equal(rearmedCatch.evidence.code, 'agenda_dependency_revalidation_pending');
+  assert.equal(persisted.find(entry => entry.id === acquire.id).state, 'pending');
+  assert.equal(persisted.find(entry => entry.id === catchFish.id).state, 'pending');
+
+  agent.last_action_result = {
+    actionId: 'stale-fish-result',
+    phase: 'succeeded',
+    code: 'skill_catches_verified',
+    evidence: { request: { routeOrigin: 'agenda-director' } },
+  };
+  finishDirect();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(director.entries.find(entry => entry.id === catchFish.id).state, 'pending');
+
+  director = new AgendaDirector(agent, { store, now: () => now });
+  assert.equal(director.entries.find(entry => entry.id === acquire.id).state, 'pending');
+  assert.equal(director.entries.find(entry => entry.id === catchFish.id).state, 'pending');
 });

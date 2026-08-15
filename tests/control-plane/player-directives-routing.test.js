@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { resolvePlayerDirective } from '../../src/agent/player-directives.js';
 import { classifyPlayerSpeechAuthority } from '../../src/agent/player-speech-authority.js';
+import { stripLeadingAgentAddress } from '../../src/agent/chat-address.js';
 
 function commandFor(message) {
   const directive = resolvePlayerDirective('Gabriel', message, {});
@@ -36,6 +37,56 @@ test('player self-assignment stays conversation instead of authorizing bot work'
   }
 });
 
+test('a family member expressing a wish does not authorize resource work', () => {
+  const message = 'I hope we find enough iron for a bucket and some shears.';
+  assert.equal(classifyPlayerSpeechAuthority(message), 'conversation_only');
+  assert.equal(commandFor(message), null);
+});
+
+test('a server-authority request cannot authorize substitute physical work', () => {
+  for (const message of [
+    'Kevin give me admin',
+    'you gotta grant me operator permissions',
+    'op me',
+  ]) {
+    assert.equal(classifyPlayerSpeechAuthority(message), 'response_only', message);
+    assert.equal(commandFor(message), null, message);
+  }
+});
+
+test('a preservation clause naming a build cannot grant construction authority', () => {
+  const message = 'Come home to KidPlayer at the family base using safe existing terrain. Do not damage any build.';
+  const directive = resolvePlayerDirective('DadPlayer', message, {});
+
+  assert.equal(directive?.deferToModel, undefined);
+  assert.equal(directive?.assignmentKind, undefined);
+  assert.notEqual(directive?.command, '!designStructure');
+
+  const authorized = resolvePlayerDirective(
+    'DadPlayer',
+    'Build a small shelter without damaging any existing build.',
+    {},
+  );
+  assert.ok(authorized, 'an affirmative construction clause must remain authorized');
+});
+
+test('a named-player home request binds the explicit player and preserves identity', () => {
+  const directive = resolvePlayerDirective(
+    'DadPlayer',
+    'come home to KidPlayer at the family base using safe existing terrain. Do not damage any build.',
+  );
+
+  assert.equal(directive.command, '!goToPlayer("KidPlayer", 2)');
+  assert.equal(directive.releasesHold, true);
+});
+
+test('a family return pronoun binds the exact requesting player', () => {
+  const directive = resolvePlayerDirective('DadPlayer', 'come back to us');
+
+  assert.equal(directive.command, '!goToPlayer("DadPlayer", 2)');
+  assert.equal(directive.releasesHold, true);
+});
+
 test('digTunnel is reachable deterministically (the reported gap)', () => {
   assert.equal(commandFor('dig a straight tunnel forward for 8 blocks'), '!digTunnel("forward", 8)');
   assert.equal(commandFor('cut a tunnel north 20'), '!digTunnel("north", 20)');
@@ -58,18 +109,36 @@ test('player item handoffs inspect authoritative carried and dropped state', () 
   assert.equal(commandFor('I handed you another tool'), '!awareness');
 });
 
+test('natural cancellation of an old plan routes to durable agenda control', () => {
+  assert.equal(
+    commandFor('Forget the rest of your old plan. We are done with it.'),
+    '!clearAgenda',
+  );
+  assert.equal(commandFor('Clear your old plan.'), '!clearAgenda');
+});
+
 test('surface, coordinates, move-away, bed, fish, and death recovery route directly', () => {
   assert.equal(commandFor('get back to the surface'), '!goToSurface');
   assert.equal(commandFor('go to 100 64 -200'), '!goToCoordinates(100, 64, -200, 2)');
   assert.equal(commandFor('go to coordinates 10, 70, 5'), '!goToCoordinates(10, 70, 5, 2)');
   assert.equal(commandFor('back off 3'), '!moveAway(3)');
+  assert.equal(commandFor('Give us a little room—step back four blocks.'), '!moveAway(4, false, "Gabriel")');
+  assert.equal(commandFor('give us some space'), '!moveAway(5, false, "Gabriel")');
   assert.equal(commandFor('give me some space'), '!moveAway(5)');
   assert.equal(commandFor('go to sleep'), '!goToBed');
+  assert.equal(commandFor('go sleep in one of our beds'), '!goToBed');
   assert.equal(commandFor('go inside and sleep'), '!goToBed');
   assert.equal(commandFor('sleep inside'), '!goToBed');
   assert.equal(commandFor('go in and get some sleep'), '!goToBed');
   assert.equal(commandFor('go catch some fish'), '!fish(8)');
   assert.equal(commandFor('go get your dropped items'), '!recoverDeathItems');
+});
+
+test('a conversational boat ride noun does not become another mount action', () => {
+  assert.equal(commandFor('Are you ready for our boat ride?'), null);
+  assert.equal(commandFor('That boat ride was fun.'), null);
+  assert.equal(commandFor('Ride the boat.'), '!mountEntity("boat", 32)');
+  assert.equal(commandFor('Hop on the boat.'), '!mountEntity("boat", 32)');
 });
 
 test('new branches do not shadow existing follow/come/stay/stop directives', () => {
@@ -78,12 +147,95 @@ test('new branches do not shadow existing follow/come/stay/stop directives', () 
   assert.equal(commandFor('come here'), '!goToPlayer("Gabriel", 2)');
   assert.equal(commandFor("return to me when you're finished"), '!goToPlayer("Gabriel", 2)');
   assert.equal(commandFor('head back to me'), '!goToPlayer("Gabriel", 2)');
-  assert.equal(commandFor('stay here'), '!stay(-1)');
+  assert.equal(commandFor('stay here'), '!stop');
+  assert.equal(commandFor('wait'), '!stop');
+  assert.equal(
+    commandFor('wait here while we step away. Stay put until one of us comes back.'),
+    '!stop',
+  );
   assert.equal(commandFor('stop'), '!stop');
   // "go to sleep" must resolve to bed, not be swallowed by the coordinate branch.
   assert.equal(commandFor('go to sleep'), '!goToBed');
   // "go to the surface" must resolve to surface, not coordinates.
   assert.equal(commandFor('head to the surface'), '!goToSurface');
+});
+
+test('generic eat requests use the validated best-food selector', () => {
+  assert.equal(commandFor('eat the watermelon'), '!consume("best_food")');
+  assert.equal(commandFor('have something to eat'), '!consume("best_food")');
+});
+
+test('deictic gaze commands bind the exact speaking player', () => {
+  assert.equal(
+    resolvePlayerDirective('KidPlayer', 'Simon says, look at me.')?.command,
+    '!lookAtPlayer("KidPlayer", "at")',
+  );
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'Now look at me.')?.command,
+    '!lookAtPlayer("DadPlayer", "at")',
+  );
+  assert.equal(commandFor('Are you looking at me?'), null);
+});
+
+test('qualified equipment requests bind the registry item before trailing prose', () => {
+  const bot = {
+    registry: {
+      itemsByName: {
+        iron_helmet: { displayName: 'Iron Helmet' },
+        shield: { displayName: 'Shield' },
+      },
+    },
+  };
+
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'Put on the iron helmet I set out for you.', { bot })?.command,
+    '!equip("iron_helmet")',
+  );
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'Wear the iron helmet now.', { bot })?.command,
+    '!equip("iron_helmet")',
+  );
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'Hold the shield for me.', { bot })?.command,
+    '!equip("shield")',
+  );
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'Put on the moon helmet I found.', { bot }),
+    null,
+  );
+});
+
+test('shared single-block placement binds the requester and existing placement capability', () => {
+  const bot = {
+    registry: {
+      itemsByName: {
+        crafting_table: { displayName: 'Crafting Table' },
+        chest: { displayName: 'Chest' },
+      },
+    },
+  };
+  const directive = resolvePlayerDirective(
+    'DadPlayer',
+    'Please set your crafting table beside us where all three of us can reach it.',
+    { bot },
+  );
+
+  assert.equal(directive?.command, '!place("DadPlayer", "crafting_table", 1, true)');
+  assert.equal(directive?.releasesHold, true);
+  assert.match(directive?.response || '', /nearby family can share/i);
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'Put the crafting table in the chest.', { bot })?.command,
+    '!putInChest("crafting_table", 64)',
+  );
+});
+
+test('a leading bot address does not hide the deterministic Follow directive', () => {
+  const message = stripLeadingAgentAddress(
+    'IronSuiteProof, follow me while we look around the base.',
+    'IronSuiteProof',
+  );
+  assert.equal(message, 'follow me while we look around the base.');
+  assert.equal(commandFor(message), '!followPlayer("Gabriel", 3)');
 });
 
 test('compound pickaxe upgrade requests route through the resumable typed goal', () => {

@@ -1496,8 +1496,10 @@ export class ManagedMinecraftServer {
       if (!clean) continue;
       this.pushLog(source === 'stderr' ? `[stderr] ${clean}` : clean);
       if (/\bDone \([^)]+\)!/i.test(clean)) {
+        const becameRunning = this.phase !== 'running';
         this.phase = 'running';
         this.error = null;
+        if (becameRunning) this.applyConfiguredRuntimeSettings();
       }
       const geyserEndpoint = clean.match(/\[Geyser[^\]]*\].*Started Geyser on\s+(\[[^\]]+\]|[^\s:]+):(\d{1,5})/i);
       const geyserPortOnly = geyserEndpoint
@@ -1519,6 +1521,18 @@ export class ManagedMinecraftServer {
       }
       this.observeBedrockJoin(clean);
     }
+  }
+
+  applyConfiguredRuntimeSettings() {
+    if (!this.child?.stdin?.writable) return false;
+    const configured = readServerSettings(this.readConfig());
+    // Paper persists world difficulty independently of server.properties.
+    // Reconcile it only after the authoritative Done edge so the dashboard's
+    // configured value remains true across an old world's level.dat state.
+    const command = `difficulty ${configured.difficulty}`;
+    this.child.stdin.write(`${command}\n`);
+    this.pushLog(`[runtime-config] > ${command}`);
+    return true;
   }
 
   pushLog(line) {
@@ -1833,9 +1847,25 @@ export class ManagedMinecraftServer {
     if (!MANAGED_PLAYER_NAME.test(name)) {
       throw new ManagedMinecraftServerError('Player name is not valid for an authoritative position lookup.');
     }
+    const aliases = [
+      name,
+      ...(!name.startsWith('.') && name.length <= 15 ? [`.${name}`] : []),
+    ];
+    const locateExactOrFloodgateAlias = async () => {
+      let absent = null;
+      for (const candidate of aliases) {
+        const observation = await this.locatePlayerPositionNow(candidate);
+        if (observation?.success === true && observation?.found === false) {
+          absent = observation;
+          continue;
+        }
+        return observation;
+      }
+      return absent;
+    };
     const operation = this.playerLocationQueue.then(
-      () => this.locatePlayerPositionNow(name),
-      () => this.locatePlayerPositionNow(name),
+      locateExactOrFloodgateAlias,
+      locateExactOrFloodgateAlias,
     );
     this.playerLocationQueue = operation.catch(() => {});
     const observation = await operation;

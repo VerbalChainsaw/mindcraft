@@ -43,3 +43,16 @@ test('CollectBlock can retain a vertical work stance until every bound block is 
     assert.equal(targets.getClosestBlock(), null);
     assert.equal(targets.getClosestDrop(), lowerDrop);
 });
+
+test('CollectBlock route exhaustion preserves drops from blocks already mined', () => {
+    const targets = new Targets({ entity: { position: new Vec3(0, 64, 0) } });
+    const unreachableCrown = new Block(new Vec3(0, 72, 0));
+    const lowerDrop = new Entity(new Vec3(1, 64, 0));
+
+    targets.appendTargets([unreachableCrown, lowerDrop]);
+    targets.removeBlocks();
+
+    assert.equal(targets.getClosestBlock(), null);
+    assert.equal(targets.getClosestDrop(), lowerDrop);
+    assert.equal(targets.empty, false, 'the mined drop remains unfinished collection work');
+});

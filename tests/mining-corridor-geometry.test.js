@@ -6,10 +6,16 @@ import { Vec3 } from 'vec3';
 
 import collectBlockRuntime from '../packages/minecraft-runtime/mineflayer-collectblock/lib/index.js';
 import {
+    assessMiningRouteStep,
+    assessMiningRouteDurability,
     goToSurface,
     observedSupportedStandingCell,
+    orderMiningExcavationBlocks,
     selectMiningDeadlinePrefix,
     selectMiningRouteTool,
+    surfaceCorridorToolRequirement,
+    toolPreparationPlankFloor,
+    waitForStableSupportedStandingCell,
 } from '../src/agent/library/skills.js';
 
 const {
@@ -51,6 +57,152 @@ test('observed standing geometry accepts a body touching but not intersecting ba
     assert.equal(observedSupportedStandingCell(bot), null);
 });
 
+test('surface recovery does not bind from one transient supported body sample', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes: [], position });
+    };
+    put(4, 63, -3, 'stone');
+    const bot = {
+        interrupt_code: false,
+        entity: {
+            position: new Vec3(4.5, 64, -2.5),
+            width: 0.6,
+            height: 1.8,
+        },
+        blockAt(position) {
+            return blocks.get(key(position)) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+    };
+    let transientEnded = false;
+    setTimeout(() => {
+        bot.entity.position = new Vec3(4.5, 65, -2.5);
+    }, 20);
+    setTimeout(() => {
+        bot.entity.position = new Vec3(4.5, 64, -2.5);
+        transientEnded = true;
+    }, 60);
+
+    const settled = await waitForStableSupportedStandingCell(bot, 300, 75);
+
+    assert.equal(transientEnded, true);
+    assert.deepEqual(settled, new Vec3(4, 64, -3));
+});
+
+test('surface recovery does not classify corridor planning when native movement never settles', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes: [], position });
+    };
+    put(4, 26, -3, 'stone');
+    put(4, 63, -3, 'stone');
+    const bot = {
+        interrupt_code: false,
+        entity: {
+            position: new Vec3(4.5, 27, -2.5),
+            width: 0.6,
+            height: 1.8,
+        },
+        game: { minY: -64, height: 384 },
+        blockAt(position) {
+            return blocks.get(key(position)) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+        output: '',
+    };
+    let navigateCalls = 0;
+    let settleCalls = 0;
+
+    const reached = await goToSurface(bot, {
+        async navigateGoal() {
+            navigateCalls += 1;
+            bot.entity.position = new Vec3(4.08, 28, -2.5);
+            bot.lastActionEvidence = { kind: 'movement', outcome: 'unreachable' };
+            return false;
+        },
+        async settleSupportedStandingCell() {
+            settleCalls += 1;
+            return null;
+        },
+    });
+
+    assert.equal(reached, false);
+    assert.equal(navigateCalls, 1);
+    assert.equal(settleCalls, 1);
+    assert.equal(bot.lastActionEvidence.outcome, 'surface_settlement_unverified');
+    assert.equal(bot.lastActionEvidence.settlement, 'no_stable_stance');
+    assert.equal(bot.lastActionEvidence.routeDigging, false);
+});
+
+test('surface recovery recognizes covered ground-level access from a complete native egress proof', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes: [], position });
+    };
+    put(4, 68, -3, 'spruce_planks');
+    put(4, 71, -3, 'spruce_planks');
+    put(10, 68, -3, 'grass_block');
+    const bot = {
+        entity: {
+            position: new Vec3(4.5, 69, -2.5),
+            width: 0.6,
+            height: 1.8,
+        },
+        game: { minY: -64, height: 384 },
+        blockAt(position) {
+            return blocks.get(key(position.floored())) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+        output: '',
+    };
+    let navigationCalls = 0;
+    const reached = await goToSurface(bot, {
+        async navigateGoal() {
+            navigationCalls += 1;
+            return false;
+        },
+        probeSurfaceEgress(_bot, stances) {
+            assert.ok(stances.some(stance => stance.equals(new Vec3(10, 69, -3))));
+            assert.ok(stances.every(stance => stance.y <= 70));
+            return {
+                reachable: true,
+                status: 'success',
+                pathLength: 6,
+                terminalPosition: { x: 10, y: 69, z: -3 },
+            };
+        },
+    });
+
+    assert.equal(reached, true);
+    assert.equal(navigationCalls, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'surface_reached');
+    assert.equal(bot.lastActionEvidence.support, 'spruce_planks');
+    assert.deepEqual(bot.lastActionEvidence.access, {
+        kind: 'covered_surface_egress',
+        candidateCount: 1,
+        pathStatus: 'success',
+        pathLength: 6,
+        terminalPosition: { x: 10, y: 69, z: -3 },
+    });
+    assert.equal(bot.lastActionEvidence.legs, 0);
+});
+
 test('surface recovery accepts an already occupied open stance without routing toward treetops', async () => {
     const blocks = new Map();
     const put = (x, y, z, name, boundingBox, shapes) => {
@@ -80,6 +232,99 @@ test('surface recovery accepts an already occupied open stance without routing t
     assert.equal(bot.lastActionEvidence.outcome, 'surface_reached');
     assert.equal(bot.lastActionEvidence.support, 'acacia_leaves');
     assert.equal(bot.lastActionEvidence.legs, 0);
+});
+
+test('surface recovery requires one shared responsive pick only for a bound unharvested stone corridor', () => {
+    const stone = {
+        name: 'stone',
+        canHarvest: type => type === 2,
+        position: new Vec3(1, 32, 0),
+    };
+    const carried = [];
+    const bot = {
+        inventory: { items: () => carried },
+        registry: {
+            itemsByName: {
+                wooden_pickaxe: { id: 1 },
+                stone_pickaxe: { id: 2 },
+                iron_pickaxe: { id: 3 },
+                diamond_pickaxe: { id: 4 },
+            },
+        },
+    };
+    const plan = {
+        ok: true,
+        excavationBlocks: [stone, stone],
+        durability: { unharvestedBreaks: 2 },
+    };
+
+    assert.deepEqual(surfaceCorridorToolRequirement(bot, plan), {
+        name: 'stone_pickaxe',
+        minimumUsableDurability: 2,
+    });
+
+    carried.push({
+        name: 'stone_pickaxe',
+        type: 2,
+        slot: 10,
+        maxDurability: 131,
+        durabilityUsed: 0,
+    });
+    assert.equal(surfaceCorridorToolRequirement(bot, plan), null);
+    assert.equal(surfaceCorridorToolRequirement(bot, {
+        ...plan,
+        durability: { unharvestedBreaks: 0 },
+    }), null);
+});
+
+test('responsive wooden pickaxe preparation reserves Spruce-family tool planks before its crafting kit', () => {
+    const items = [
+        { name: 'spruce_log', count: 4 },
+        { name: 'stick', count: 3 },
+    ];
+    const bot = { inventory: { slots: items, items: () => items } };
+
+    assert.equal(toolPreparationPlankFloor(bot, 'wooden_pickaxe'), 7);
+
+    items.push({ name: 'crafting_table', count: 1 });
+    assert.equal(toolPreparationPlankFloor(bot, 'wooden_pickaxe'), 3);
+    assert.equal(toolPreparationPlankFloor(bot, 'stone_pickaxe'), 0);
+});
+
+test('surface corridor binds and clears Gravel above an authorized Diorite plug before opening the stance', () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        const block = { name, boundingBox, shapes: [], position };
+        blocks.set(key(position), block);
+        return block;
+    };
+    const air = position => ({
+        name: 'air',
+        boundingBox: 'empty',
+        shapes: [],
+        position: position.floored(),
+    });
+    put(1, 64, 0, 'dirt');
+    const plug = put(1, 67, 0, 'diorite');
+    const gravel = put(1, 68, 0, 'gravel');
+    const bot = {
+        blockAt(position) {
+            return blocks.get(key(position.floored())) || air(position);
+        },
+    };
+    const assessment = assessMiningRouteStep(bot, {
+        position: new Vec3(1, 65, 0),
+        heading: { x: 1, z: 0 },
+        yOffset: 1,
+    }, null);
+
+    assert.equal(assessment.ok, true);
+    assert.ok(assessment.blocks.some(block => block.position.equals(gravel.position)));
+    assert.deepEqual(
+        orderMiningExcavationBlocks([plug, gravel]).map(block => block.name),
+        ['gravel', 'diorite'],
+    );
 });
 
 test('corridor binding preserves the ore-tier pick when a capable stone pick is carried', () => {
@@ -121,6 +366,52 @@ test('corridor binding preserves the ore-tier pick when a capable stone pick is 
         selectMiningRouteTool(bot, corridorStone, redstoneOre),
         stonePick,
     );
+});
+
+test('corridor replacement prefers a fresh stone pick that is craftable from carried supplies', () => {
+    const woodenPick = {
+        name: 'wooden_pickaxe',
+        type: 1,
+        slot: 10,
+        maxDurability: 59,
+        durabilityUsed: 43,
+    };
+    const stonePick = {
+        name: 'stone_pickaxe',
+        type: 2,
+        slot: 11,
+        maxDurability: 131,
+        durabilityUsed: 113,
+    };
+    const carried = [
+        woodenPick,
+        stonePick,
+        { name: 'cobblestone', type: 20, slot: 12, count: 64 },
+        { name: 'stick', type: 21, slot: 13, count: 2 },
+        { name: 'crafting_table', type: 22, slot: 14, count: 1 },
+    ];
+    const bot = {
+        inventory: { items: () => carried, slots: carried },
+        registry: {
+            itemsByName: {
+                wooden_pickaxe: { id: 1, maxDurability: 59 },
+                stone_pickaxe: { id: 2, maxDurability: 131 },
+                iron_pickaxe: { id: 3, maxDurability: 250 },
+                diamond_pickaxe: { id: 4, maxDurability: 1561 },
+            },
+        },
+    };
+    const stone = {
+        name: 'stone',
+        canHarvest: type => [1, 2, 3, 4].includes(type),
+    };
+
+    const assessment = assessMiningRouteDurability(bot, Array(5).fill(stone));
+
+    assert.equal(assessment.ok, false);
+    assert.equal(assessment.outcome, 'insufficient_tool_durability');
+    assert.equal(assessment.replacementTool, 'stone_pickaxe');
+    assert.equal(assessment.minimumUsableDurability, 3);
 });
 
 test('ordinary hand-harvestable collection does not consume a tied durable tool', () => {

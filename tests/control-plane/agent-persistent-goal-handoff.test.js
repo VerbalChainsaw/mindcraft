@@ -105,3 +105,27 @@ test('Operator Stop holds the body without cancelling durable player work', () =
     'save-history',
   ]);
 });
+
+test('releasing Operator Hold clears its surface stance before later player authority', () => {
+  const calls = [];
+  const agent = {
+    operator_hold: true,
+    operator_hold_generation: 4,
+    behavior_arbiter: {
+      releaseHeldSurfaceStance(reason) { calls.push(`surface:${reason}`); },
+    },
+    operator_control: { release(reason) { calls.push(`persist:${reason}`); } },
+    history: { save() { calls.push('save-history'); } },
+  };
+
+  const released = Agent.prototype.releaseOperatorHold.call(agent, 'player command');
+
+  assert.equal(released, true);
+  assert.equal(agent.operator_hold, false);
+  assert.equal(agent.operator_hold_generation, 5);
+  assert.deepEqual(calls, [
+    'surface:operator_hold_released',
+    'persist:player command',
+    'save-history',
+  ]);
+});

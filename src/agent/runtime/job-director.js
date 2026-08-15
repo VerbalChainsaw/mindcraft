@@ -1052,6 +1052,7 @@ export class JobDirector extends RoleDirector {
 
   cancel(reason = 'cancelled') {
     if (!this.activeOrder) return false;
+    this.agent.survival_director?.clearJobFoodUpkeep?.(this.activeOrder.id);
     const cancelled = normalizeWorkOrder({
       ...this.activeOrder,
       phase: 'cancelled',
@@ -1313,6 +1314,7 @@ export class JobDirector extends RoleDirector {
   }
 
   finishOrder(phase, code, detail = '', retryable = false) {
+    this.agent.survival_director?.clearJobFoodUpkeep?.(this.activeOrder?.id);
     const terminal = normalizeWorkOrder({
       ...this.activeOrder,
       phase,
@@ -1423,7 +1425,30 @@ export class JobDirector extends RoleDirector {
         const reducerResult = materialBindingSupersededResult
           ? null
           : this.agent.last_action_result;
-        step = nextJobUpkeepStep(this.activeOrder, snapshot)
+        const upkeepStep = nextJobUpkeepStep(this.activeOrder, snapshot);
+        if (upkeepStep?.code === 'food_resupply_required') {
+          const upkeepOutcome = this.agent.survival_director?.jobFoodUpkeepOutcome?.(this.activeOrder.id);
+          if (upkeepOutcome?.phase === 'failed') {
+            this.finishOrder(
+              'failed',
+              upkeepOutcome.code,
+              upkeepOutcome.detail,
+              true,
+            );
+            return;
+          }
+          this.agent.survival_director?.requestJobFoodUpkeep?.({
+            workOrderId: this.activeOrder.id,
+            requester: this.activeOrder.requester,
+            targetFoodPoints: upkeepStep.target?.foodPoints || Math.max(
+              24,
+              Number(this.activeOrder.constraints?.minFoodPoints) || 12,
+            ),
+          });
+        } else {
+          this.agent.survival_director?.clearJobFoodUpkeep?.(this.activeOrder.id);
+        }
+        step = upkeepStep
           || nextWorksiteReturnStep(this.activeOrder, snapshot)
           || reducer(this.activeOrder, snapshot, reducerResult, {
             planItem: ({

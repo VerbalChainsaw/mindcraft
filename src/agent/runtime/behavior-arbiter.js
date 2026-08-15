@@ -30,6 +30,12 @@ const MAX_STATUS_TEXT = 240;
 // idle lock.
 const TERMINAL_HANDOFF_MIN_MS = 1_000;
 const TERMINAL_HANDOFF_MAX_MS = 5_000;
+// A held bot has no ordinary survival authority. Once every human has left,
+// keeping that body loaded only preserves exposure, not companionship. Ten
+// seconds absorbs tab-list/reconnect churn without leaving an unattended body
+// in the world for a meaningful part of a hostile night.
+export const HELD_NO_HUMAN_UNLOAD_GRACE_MS = 10_000;
+const SAFE_UNLOAD_HOLD_REASON = /^(?:operator stop(?: command| restored after restart)?|companion wait requested by\s)/i;
 
 // Per-lane base tick period. Reflex lanes re-evaluate quickly so a threat is
 // answered in one frame rather than one third of a second; cosmetic and idle
@@ -113,12 +119,41 @@ function boundedText(value, fallback = '') {
     .slice(0, MAX_STATUS_TEXT);
 }
 
+function identityKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+/**
+ * Full tab-roster human presence. An entity-only scan would miss a distant
+ * player and could unload a companion that is still sharing their world.
+ * Missing roster evidence stays unknown instead of becoming zero humans.
+ */
+export function onlineHumanPlayerNames(agent) {
+  const players = agent?.bot?.players;
+  if (!players || typeof players !== 'object' || Array.isArray(players)) return null;
+  const knownAgentNames = agent?.getKnownAgentNames?.();
+  const botNames = new Set([
+    agent?.name,
+    ...(Array.isArray(knownAgentNames) ? knownAgentNames : []),
+  ].map(identityKey).filter(Boolean));
+  const humans = new Set();
+  for (const [key, player] of Object.entries(players)) {
+    const aliases = [key, player?.username, player?.entity?.username]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    if (!aliases.length || aliases.some(alias => botNames.has(identityKey(alias)))) continue;
+    humans.add(aliases[0]);
+  }
+  return [...humans].sort((left, right) => left.localeCompare(right));
+}
+
 export class BehaviorArbiter {
   constructor(agent, {
     now = Date.now,
     random = Math.random,
     monotonicNow = () => performance.now(),
     trace = null,
+    heldNoHumanUnloadGraceMs = HELD_NO_HUMAN_UNLOAD_GRACE_MS,
   } = {}) {
     this.agent = agent;
     this.now = now;
@@ -133,6 +168,17 @@ export class BehaviorArbiter {
     this.nextTickDelayMs = DEFAULT_TICK_MS;
     this.urgency = 'calm';
     this.traceEvaluationLane = null;
+    this.heldNoHumanSince = null;
+    this.heldUnloadRequested = false;
+    this.heldSurfaceStance = {
+      active: false,
+      code: 'inactive',
+      updatedAt: null,
+    };
+    this.heldNoHumanUnloadGraceMs = Math.max(
+      0,
+      Number(heldNoHumanUnloadGraceMs) || 0,
+    );
     // Wake channel. Perception was previously sampled purely on a schedule, so
     // a hostile that loaded right after a tick went unnoticed for the whole
     // selected period, and an idle lane had selected a period of half a second.
@@ -184,6 +230,8 @@ export class BehaviorArbiter {
     this.comportmentPauseUntil = 0;
     this.wasActing = false;
     this.pendingWake = null;
+    this.heldNoHumanSince = null;
+    this.releaseHeldSurfaceStance('arbiter_stopped', { force: true });
     // Release a parked loop immediately so teardown never waits out a sleep.
     if (this.wakeResolve) this.wakeResolve('stopped');
     this.select('stopped', 'arbiter_stopped', 'Behavior arbitration stopped during teardown.', true);
@@ -430,6 +478,132 @@ export class BehaviorArbiter {
     return this.traceRecorder.linkOutcome(result);
   }
 
+  observeHeldPresence() {
+    if (this.agent?.isOperatorHeld?.() !== true) {
+      this.heldNoHumanSince = null;
+      this.heldUnloadRequested = false;
+      return Object.freeze({ code: 'operator_not_held', humans: null, elapsedMs: 0, due: false });
+    }
+    if (!SAFE_UNLOAD_HOLD_REASON.test(String(this.agent?.operator_hold_reason || ''))) {
+      // Assignment-compilation and handoff-failure Holds can protect already
+      // authorized durable work. Human absence must not convert that temporary
+      // physical gate into an implicit cancellation of the player's request.
+      this.heldNoHumanSince = null;
+      this.heldUnloadRequested = false;
+      return Object.freeze({ code: 'hold_disposition_not_terminal', humans: null, elapsedMs: 0, due: false });
+    }
+    const humans = onlineHumanPlayerNames(this.agent);
+    if (humans === null) {
+      this.heldNoHumanSince = null;
+      this.heldUnloadRequested = false;
+      return Object.freeze({ code: 'player_roster_unknown', humans: null, elapsedMs: 0, due: false });
+    }
+    if (humans.length) {
+      this.heldNoHumanSince = null;
+      this.heldUnloadRequested = false;
+      return Object.freeze({ code: 'human_player_online', humans, elapsedMs: 0, due: false });
+    }
+    const now = this.now();
+    if (!Number.isFinite(this.heldNoHumanSince)) this.heldNoHumanSince = now;
+    const elapsedMs = Math.max(0, now - this.heldNoHumanSince);
+    return Object.freeze({
+      code: elapsedMs >= this.heldNoHumanUnloadGraceMs
+        ? 'held_unload_due'
+        : 'held_unload_grace',
+      humans,
+      elapsedMs,
+      due: elapsedMs >= this.heldNoHumanUnloadGraceMs,
+    });
+  }
+
+  releaseHeldSurfaceStance(reason = 'surface_stance_released', { force = false } = {}) {
+    const wasActive = this.heldSurfaceStance.active === true;
+    this.heldSurfaceStance = {
+      active: false,
+      code: boundedText(reason, 'surface_stance_released'),
+      updatedAt: this.now(),
+    };
+    if (!wasActive) return false;
+
+    // A drowning reflex may inherit the same native ascent control. Releasing
+    // Hold must not pull jump away from that higher-priority action; the skill
+    // owns its own bounded cleanup. Teardown is the exception and clears every
+    // control regardless of the active label.
+    const activeAction = this.actionState();
+    if (!force && activeAction.label === 'mode:self_preservation') return true;
+    try { this.agent?.bot?.setControlState?.('jump', false); } catch { /* disconnected body */ }
+    return true;
+  }
+
+  updateHeldSurfaceStance(heldPresence) {
+    const bot = this.agent?.bot;
+    const entity = bot?.entity;
+    let feet = null;
+    try {
+      const feetPosition = entity?.position?.floored?.();
+      if (feetPosition) feet = bot?.blockAt?.(feetPosition) || null;
+    } catch { /* unloaded body stays in ordinary Hold */ }
+    const openWater = entity?.onGround !== true
+      && (entity?.isInWater === true || feet?.name === 'water');
+    const shouldMaintain = heldPresence?.code === 'human_player_online'
+      && openWater
+      && this.agent?.isOperatorHeld?.() === true;
+
+    if (!shouldMaintain) {
+      this.releaseHeldSurfaceStance(
+        heldPresence?.code === 'human_player_online'
+          ? 'surface_stance_not_required'
+          : boundedText(heldPresence?.code, 'surface_stance_ineligible'),
+      );
+      return { ...this.heldSurfaceStance };
+    }
+
+    try {
+      bot.setControlState('jump', true);
+      this.heldSurfaceStance = {
+        active: true,
+        code: 'maintaining_breathable_surface',
+        updatedAt: this.now(),
+      };
+    } catch {
+      this.heldSurfaceStance = {
+        active: false,
+        code: 'surface_control_unavailable',
+        updatedAt: this.now(),
+      };
+    }
+    return { ...this.heldSurfaceStance };
+  }
+
+  requestHeldSafeUnload() {
+    if (this.heldUnloadRequested) return false;
+    this.heldUnloadRequested = true;
+    Promise.resolve().then(async () => {
+      // Reconcile the authority and roster at the actual lifecycle edge. A
+      // player joining in the scheduling microtask must keep the companion in
+      // game, and missing roster evidence never authorizes departure.
+      const humans = onlineHumanPlayerNames(this.agent);
+      if (this.agent?.isOperatorHeld?.() !== true || humans === null || humans.length) {
+        this.heldUnloadRequested = false;
+        this.heldNoHumanSince = null;
+        return;
+      }
+      if (typeof this.agent?.teardownAndExit !== 'function') {
+        this.heldUnloadRequested = false;
+        console.warn('[behavior-arbiter] Held safe-unload is unavailable; retaining Operator Hold.');
+        return;
+      }
+      await this.agent.teardownAndExit(
+        `Operator Hold safely unloaded after ${Math.ceil(this.heldNoHumanUnloadGraceMs / 1_000)} seconds with no human players online.`,
+        0,
+      );
+    }).catch(error => {
+      this.heldUnloadRequested = false;
+      console.warn(`[behavior-arbiter] Held safe-unload failed: ${boundedText(error?.message || error)}`);
+    });
+    return true;
+  }
+
   comportment() {
     return this.agent?.runtime?.comportment || NEUTRAL_COMPORTMENT;
   }
@@ -444,18 +618,19 @@ export class BehaviorArbiter {
     const health = Number(bot.health);
     const food = Number(bot.food);
     const oxygen = Number(bot.oxygenLevel);
+    const criticalFood = Number(this.agent?.runtime?.survival?.criticalFood ?? 6);
     const lastDamageTime = Number(bot.lastDamageTime);
     const sinceDamage = Number.isFinite(lastDamageTime) && lastDamageTime > 0
       ? this.now() - lastDamageTime
       : Infinity;
     if (
       (Number.isFinite(health) && health <= 10)
+      || (Number.isFinite(food) && food <= criticalFood)
       || (Number.isFinite(oxygen) && oxygen <= 12)
       || sinceDamage <= 2_000
     ) return 'critical';
     if (
       (Number.isFinite(health) && health <= 16)
-      || (Number.isFinite(food) && food <= 6)
       || sinceDamage <= 6_000
     ) return 'elevated';
     return 'calm';
@@ -659,16 +834,72 @@ export class BehaviorArbiter {
         return this.select('degraded', 'mode_cycle_failed', `Mode cycle failed safely: ${boundedText(error?.message || error)}`, true, perception);
       }
       // Operator Stop is authoritative over every ordinary lane, but it is not
-      // a suicide switch. modes.js and ActionManager both expose one exact,
-      // bounded exception for `reflex + mode:self_preservation`; evaluate that
-      // exception before the hold gate so drowning, burning, falling, or a
-      // severe low-health hit can use it without releasing the hold.
+      // a suicide switch. modes.js admits only self-preservation plus
+      // recent-damage self-defense while held, and ActionManager admits those
+      // same exact reflex labels. Evaluate both bands before the hold gate so
+      // mortal danger can settle without releasing Hold or authorizing ambient
+      // combat.
       let selected = await this.evaluateModeBand('emergency_self_preservation', EMERGENCY_MODES, perception);
       if (selected) return selected;
 
+      selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
+      if (selected) return selected;
+
+      const heldPresence = this.observeHeldPresence();
+      const heldSurfaceStance = this.updateHeldSurfaceStance(heldPresence);
       this.traceRecorder.startLane('operator_hold');
       if (this.agent.isOperatorHeld?.()) {
         this.directiveResumeRequested = false;
+        if (heldPresence.due) {
+          this.requestHeldSafeUnload();
+          return this.select(
+            'operator_hold',
+            'operator_hold_unloading',
+            'Operator Hold remains persisted; no human players are online, so the unattended body is unloading safely.',
+            true,
+            perception,
+          );
+        }
+        if (heldPresence.code === 'held_unload_grace') {
+          const remainingSeconds = Math.max(
+            1,
+            Math.ceil((this.heldNoHumanUnloadGraceMs - heldPresence.elapsedMs) / 1_000),
+          );
+          return this.select(
+            'operator_hold',
+            'operator_hold_unload_grace',
+            `Operator Hold remains active; no human players are online. Safe unload is due in ${remainingSeconds} second(s) if absence continues.`,
+            true,
+            perception,
+          );
+        }
+        if (heldPresence.code === 'player_roster_unknown') {
+          return this.select(
+            'operator_hold',
+            'operator_hold_roster_unknown',
+            'Operator Hold remains active; player-presence evidence is unavailable, so safe unload is not authorized.',
+            true,
+            perception,
+          );
+        }
+        if (heldSurfaceStance.code === 'surface_control_unavailable') {
+          return this.select(
+            'operator_hold',
+            'operator_hold_surface_control_unavailable',
+            'Operator Hold remains active, but Mineflayer could not maintain the open-water surface stance.',
+            true,
+            perception,
+          );
+        }
+        if (heldSurfaceStance.active) {
+          return this.select(
+            'operator_hold',
+            'operator_hold_surface_stance',
+            'Operator Hold remains active while Mineflayer maintains a breathable open-water surface stance beside the family.',
+            true,
+            perception,
+          );
+        }
         return this.select(
           'operator_hold',
           'operator_hold_safe',
@@ -681,13 +912,15 @@ export class BehaviorArbiter {
       }
       this.traceRecorder.finishLane('operator_hold', { status: 'ineligible', reasonCode: 'operator_not_held' });
 
-      selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
-      if (selected) return selected;
+      const survival = this.agent.survival_director;
+      let survivalEvaluated = false;
 
       // Player and job actions already own a serialized ActionManager turn.
-      // Classify that ownership before asking recovery modes to inspect the
-      // world; otherwise unstuck can see the first motionless frames of a new
-      // command and preempt it before the pathfinder has had a chance to move.
+      // Release any stale terminal handoff as soon as fresh player-authorized
+      // work owns the body. Critical bodily survival is the one ordinary lane
+      // allowed to challenge that ownership before it is retained: its
+      // deterministic skill is dispatched as the higher-priority `survival`
+      // ActionManager owner, which performs the actual bounded interruption.
       const activeBeforeSelection = this.actionState();
       const activeJobSource = this.agent.job_director?.activeOrder?.source;
       if (
@@ -696,6 +929,38 @@ export class BehaviorArbiter {
       ) {
         this.releaseTerminalHandoff('Fresh player-authorized action owns the body.', false);
       }
+
+      if (this.urgency === 'critical') {
+        survivalEvaluated = true;
+        this.traceRecorder.startLane('basic_survival');
+        if (survival?.update) {
+          try {
+            survival.update();
+          } catch (error) {
+            return this.select('basic_survival', 'survival_update_failed', `Survival policy failed safely: ${boundedText(error?.message || error)}`, true, perception);
+          }
+          if (
+            survival.inFlight
+            || survival.blocksLowerPriority?.()
+            || this.actionState().owner === 'survival'
+          ) {
+            if (
+              survival.permitsIdleEmbodiment?.()
+              && this.agent.isIdle?.()
+              && this.comportment().idleEmbodiment
+            ) {
+              selected = await this.evaluateModeBand('idle_embodiment', ['idle_staring'], perception);
+              if (selected) return selected;
+            }
+            return this.select('basic_survival', survival.status?.code || 'survival_selected', 'Critical bodily survival preempted lower-priority serialized work.', true, perception);
+          }
+        }
+        this.traceRecorder.finishLane('basic_survival', { status: 'ineligible', reasonCode: 'critical_survival_not_selected' });
+      }
+
+      // Classify live player/job ownership before asking recovery modes to
+      // inspect the world; otherwise unstuck can see the first motionless
+      // frames of a new command and preempt it before Pathfinder can move.
       if (['player', 'job'].includes(activeBeforeSelection.owner)) {
         try {
           // Reactions may speak while accompanying or working for the player.
@@ -742,8 +1007,22 @@ export class BehaviorArbiter {
       }
 
       const companion = this.agent.companion_context?.snapshot?.();
-      if (!companion?.directive) this.directiveResumeRequested = false;
+      const deferredPlayerAction = this.agent.actions?.hasDeferredPlayerAction?.() === true;
+      if (!companion?.directive && !deferredPlayerAction) this.directiveResumeRequested = false;
       this.traceRecorder.startLane('player_directive');
+      if (deferredPlayerAction && this.agent.isIdle?.()) {
+        const operation = this.agent.actions.resumeDeferredPlayerAction();
+        void Promise.resolve(operation).catch(error => {
+          console.error(`[behavior-arbiter] Deferred player action failed: ${boundedText(error?.message || error)}`);
+        });
+        return this.select(
+          'player_directive',
+          'deferred_player_action_resumed',
+          'The critical safety reflex released control; resuming the accepted finite player action once.',
+          true,
+          perception,
+        );
+      }
       if (
         companion?.directive
         && companion.presence === 'present'
@@ -769,19 +1048,28 @@ export class BehaviorArbiter {
       }
       this.traceRecorder.finishLane('player_directive', { status: 'ineligible', reasonCode: 'directive_not_resumable' });
 
-      const survival = this.agent.survival_director;
-      this.traceRecorder.startLane('basic_survival');
-      if (survival?.update) {
-        try {
-          survival.update();
-        } catch (error) {
-          return this.select('basic_survival', 'survival_update_failed', `Survival policy failed safely: ${boundedText(error?.message || error)}`, true, perception);
+      if (!survivalEvaluated) {
+        this.traceRecorder.startLane('basic_survival');
+        if (survival?.update) {
+          try {
+            survival.update();
+          } catch (error) {
+            return this.select('basic_survival', 'survival_update_failed', `Survival policy failed safely: ${boundedText(error?.message || error)}`, true, perception);
+          }
+          if (survival.inFlight || survival.blocksLowerPriority?.() || this.agent.actions?.executing) {
+            if (
+              survival.permitsIdleEmbodiment?.()
+              && this.agent.isIdle?.()
+              && this.comportment().idleEmbodiment
+            ) {
+              selected = await this.evaluateModeBand('idle_embodiment', ['idle_staring'], perception);
+              if (selected) return selected;
+            }
+            return this.select('basic_survival', survival.status?.code || 'survival_selected', 'Basic survival maintenance selected the tick.', true, perception);
+          }
         }
-        if (survival.inFlight || survival.blocksLowerPriority?.() || this.agent.actions?.executing) {
-          return this.select('basic_survival', survival.status?.code || 'survival_selected', 'Basic survival maintenance selected the tick.', true, perception);
-        }
+        this.traceRecorder.finishLane('basic_survival', { status: 'ineligible', reasonCode: 'survival_not_selected' });
       }
-      this.traceRecorder.finishLane('basic_survival', { status: 'ineligible', reasonCode: 'survival_not_selected' });
 
       const job = this.agent.job_director;
       this.traceRecorder.startLane('survival_job');
@@ -1062,6 +1350,7 @@ export class BehaviorArbiter {
       nextTickDelayMs: this.nextTickDelayMs,
       comportment: this.comportment().preset,
       terminalHandoff: this.currentTerminalHandoff(),
+      heldSurfaceStance: { ...this.heldSurfaceStance },
       decisionTrace: this.traceRecorder.snapshot(16),
     };
   }

@@ -48,14 +48,40 @@ export class BehaviorDirector {
     };
   }
 
-  canSchedule({ allowBusy = false } = {}) {
-    return Boolean(
-      !this.inFlight
-      && Date.now() >= this.nextEligibleAt
-      && this.agent?.bot?.entity
-      && !this.agent.isOperatorHeld?.()
-      && (allowBusy || this.agent.isIdle?.()),
-    );
+  scheduleGate({ allowBusy = false, now = Date.now() } = {}) {
+    const evaluatedAt = Number.isFinite(now) ? Number(now) : Date.now();
+    const inFlight = this.inFlight === true;
+    const cooldownActive = evaluatedAt < this.nextEligibleAt;
+    const botAvailable = Boolean(this.agent?.bot?.entity);
+    const held = this.agent?.isOperatorHeld?.() === true;
+    const idle = this.agent?.isIdle?.() === true;
+    const code = inFlight
+      ? 'in_flight'
+      : cooldownActive
+        ? 'cooldown'
+        : !botAvailable
+          ? 'bot_unavailable'
+          : held
+            ? 'operator_held'
+            : !allowBusy && !idle
+              ? 'busy'
+              : 'ready';
+    return Object.freeze({
+      allowed: code === 'ready',
+      code,
+      evaluatedAt,
+      allowBusy: allowBusy === true,
+      inFlight,
+      cooldownActive,
+      nextEligibleAt: cooldownActive ? this.nextEligibleAt : null,
+      botAvailable,
+      held,
+      idle,
+    });
+  }
+
+  canSchedule(options = {}) {
+    return this.scheduleGate(options).allowed;
   }
 
   defer(reason, durationMs = 0) {

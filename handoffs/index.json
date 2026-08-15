@@ -1,0 +1,142 @@
+{
+  "activePacket": "HOF-20260812T165519356Z-699d6939",
+  "claims": {},
+  "format": "neutral-software-handoff/index-v1",
+  "hookEvents": {
+    "43fb087f3a401228ec316a18b962f56a7534088ad0fa1c47c138487a3e759611": {
+      "observedAt": "2026-08-12T16:36:41.856Z",
+      "packetId": "HOF-20260812T163641856Z-b50425cf"
+    },
+    "991222965a69cdb819f5720dd2eef54380b31cc4da596933479bcb2d132c4890": {
+      "observedAt": "2026-08-12T15:53:38.559Z",
+      "packetId": "HOF-20260812T155338559Z-b2e63b8e"
+    }
+  },
+  "records": {
+    "HOF-20260812T150227167Z-fe0a374d": {
+      "createdAt": "2026-08-12T15:02:27.167Z",
+      "id": "HOF-20260812T150227167Z-fe0a374d",
+      "source": {
+        "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+        "metadata": {
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T152914983Z-aadb8857": {
+      "createdAt": "2026-08-12T15:29:14.983Z",
+      "id": "HOF-20260812T152914983Z-aadb8857",
+      "predecessor": "HOF-20260812T150227167Z-fe0a374d",
+      "source": {
+        "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+        "metadata": {
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T155338559Z-b2e63b8e": {
+      "createdAt": "2026-08-12T15:53:38.559Z",
+      "id": "HOF-20260812T155338559Z-b2e63b8e",
+      "predecessor": "HOF-20260812T152914983Z-aadb8857",
+      "source": {
+        "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+        "metadata": {
+          "compactionCount": 1,
+          "compactionTrigger": "auto",
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "turnId": "019ff6ac-b997-7220-815e-270e501556ee"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T160627579Z-a74d2570": {
+      "createdAt": "2026-08-12T16:06:27.579Z",
+      "id": "HOF-20260812T160627579Z-a74d2570",
+      "predecessor": "HOF-20260812T155338559Z-b2e63b8e",
+      "source": {
+        "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+        "metadata": {
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T160809715Z-31044c2f": {
+      "createdAt": "2026-08-12T16:08:09.715Z",
+      "id": "HOF-20260812T160809715Z-31044c2f",
+      "predecessor": "HOF-20260812T160627579Z-a74d2570",
+      "source": {
+        "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+        "metadata": {
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T163641856Z-b50425cf": {
+      "createdAt": "2026-08-12T16:36:41.856Z",
+      "id": "HOF-20260812T163641856Z-b50425cf",
+      "predecessor": "HOF-20260812T160809715Z-31044c2f",
+      "source": {
+        "cwd": "/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2",
+        "metadata": {
+          "compactionCount": 1,
+          "compactionTrigger": "auto",
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "turnId": "019ff6c8-3295-75e1-9b4b-0335731e4698"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T163814597Z-26b8015f": {
+      "createdAt": "2026-08-12T16:38:14.597Z",
+      "id": "HOF-20260812T163814597Z-26b8015f",
+      "predecessor": "HOF-20260812T163641856Z-b50425cf",
+      "source": {
+        "cwd": "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2",
+        "metadata": {
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+      },
+      "status": "superseded"
+    },
+    "HOF-20260812T165519356Z-699d6939": {
+      "createdAt": "2026-08-12T16:55:19.356Z",
+      "id": "HOF-20260812T165519356Z-699d6939",
+      "predecessor": "HOF-20260812T163814597Z-26b8015f",
+      "source": {
+        "cwd": "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2",
+        "metadata": {
+          "managedBy": "external-session"
+        },
+        "provider": "codex",
+        "sessionId": "019feb65-d159-79b1-969b-346cad21ff27",
+        "threadId": "019feb65-d159-79b1-969b-346cad21ff27"
+      },
+      "status": "active"
+    }
+  }
+}

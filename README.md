@@ -74,7 +74,7 @@ The managed server owns Java selection, Paper/Geyser startup, bind policy, and t
 Do not assume that Windows can join a WSL server through `127.0.0.1`. Open the dashboard's **Join this world** panel and use the displayed address. The same values are available without the UI:
 
 ```bash
-curl -sS http://127.0.0.1:8080/api/minecraft-server \
+curl -sS http://127.0.0.1:8081/api/minecraft-server \
   | jq '.server | {phase, javaRuntime: .java, javaEndpoint, bedrock: .crossplay}'
 ```
 
@@ -83,7 +83,7 @@ For local-network access, `javaEndpoint.lanAddresses[0]:port` is the Java Editio
 Before live play, require `phase: "running"`, a non-`.exe` Java runtime on WSL, `crossplay.ready: true` when Bedrock is needed, and a clean health response:
 
 ```bash
-curl -sS http://127.0.0.1:8080/api/health | jq .
+curl -sS http://127.0.0.1:8081/api/health | jq .
 ```
 
 If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](minecollab.md#installation)

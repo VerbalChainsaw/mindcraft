@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+import * as mc from '../../utils/mcdata.js';
 import { getCommand, executeCommand as executeAgentCommand } from '../commands/index.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
@@ -12,6 +13,7 @@ import {
 import {
   capabilityCommand,
   capabilityCommandName,
+  createCapabilityPlanAction,
   createCapabilityRequest,
   executeCapabilityAction,
 } from './capability-catalogue.js';
@@ -21,8 +23,18 @@ import {
   inventoryCountForGoalTarget,
   normalizeGoalContract,
 } from './goal-contract.js';
-import { buildPrerequisitePlan, plannedInventoryCount } from './prerequisite-planner.js';
+import {
+  buildPrerequisiteMethodFrontier,
+  buildPrerequisitePlan,
+  plannedInventoryCount,
+} from './prerequisite-planner.js';
 import { isSafeProcedureCommand, ProcedureStore } from './procedure-store.js';
+import { qualifyStrategicBranch } from './strategic-branch-qualification.js';
+import { isNightTime } from './survival-policy.js';
+import {
+  deliberateEntityHarvestCombatEnvironment,
+  deliberateEntityHarvestTargetQualification,
+} from '../library/skills.js';
 
 const STORE_VERSION = 1;
 const MAX_STORE_BYTES = 512 * 1024;
@@ -31,12 +43,16 @@ const SUCCESS_DELAY_MS = 100;
 const RETRY_DELAY_MS = 750;
 const PREEMPTION_RESUME_MS = 0;
 const PLAYER_WAIT_MS = 5_000;
+const TEMPORAL_FEASIBILITY_RECHECK_MS = 5_000;
 const PLAYER_ANCHOR_MAX_AGE_MS = 15_000;
 const DELIVERY_REACQUIRE_DISTANCE = 16;
+const ENVIRONMENTAL_WAIT_COMPANION_DISTANCE = 6;
+const ENVIRONMENTAL_WAIT_REQUESTER_THREAT_DISTANCE = 16;
 const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
 const FAILED_TARGET_EXCLUSION_RADIUS = 4;
+const SOURCE_ACCESS_RECHECK_DISTANCE = 2;
 // Collection binds candidates inside a 64-block physical scan. A 32-block
 // retreat leaves most of that candidate field unchanged, so repeated failures
 // can spend the goal budget on the same contaminated region. Move one complete
@@ -57,7 +73,9 @@ const MAX_LOCAL_VERTICAL_INTERACTION_REACH = 4.5;
 // the next plan bind a genuinely different region instead.
 const MAX_LOCAL_CONCRETE_TARGET_FAILURES = 1;
 const MAX_MINING_RETURN_CELLS = 512;
+const TERMINAL_FRONTIER_SEARCHES = 12;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
+const GOAL_ONLY_RECOVERY_COMMANDS = new Set(['!recoverDeathItems', '!goToPlayer']);
 
 function boundedText(value, maximum = 280, fallback = '') {
   return Array.from(String(value ?? fallback), character => {
@@ -146,8 +164,19 @@ function checkpointWithVerifiedMiningRoute(checkpoint, result, bot) {
     && Number(checkpoint?.miningReturnIndex) >= 0
     ? [...checkpoint.miningReturnRoute]
     : [];
-  const continuous = prior.length < 1 || sameMiningRouteCell(prior.at(-1), incoming[0]);
-  const combined = continuous ? prior : [];
+  // A later leg can safely backtrack along the preserved corridor before it
+  // extends again. Splice at that exact shared cell so the original exit is
+  // retained while the superseded inner tail is replaced.
+  const overlapIndex = prior.findLastIndex(cell => sameMiningRouteCell(cell, incoming[0]));
+  // A later action can cross an already-open tunnel before excavating its
+  // reported fragment. Preserve the earlier exit route when there is no exact
+  // overlap; traverseMiningRouteCell owns no-dig Pathfinder verification of
+  // the open gap on the way back.
+  const combined = prior.length > 0
+    ? overlapIndex >= 0
+      ? prior.slice(0, overlapIndex + 1)
+      : prior
+    : [];
   for (const cell of incoming) {
     if (sameMiningRouteCell(combined.at(-1), cell)) continue;
     if (combined.length >= MAX_MINING_RETURN_CELLS) break;
@@ -443,17 +472,25 @@ function needsSurfaceRecovery(goal, bot) {
     );
 }
 
-function recoveryCommand(goal, bot) {
+function hasPendingDeathItems(memoryBank, recordedAt) {
+  if (!Number.isSafeInteger(recordedAt) || recordedAt < 1) return false;
+  const death = memoryBank?.recallDeath?.(recordedAt);
+  if (!death || death.recoveredAt) return false;
+  return Object.values(death.inventory || {}).some(count => Number(count) > 0);
+}
+
+function recoveryCommand(goal, bot, memoryBank = null) {
   const code = String(goal.evidence?.code || '');
+  const deathRecordedAt = Number(goal.memory?.deathRecovery?.recordedAt);
+  if (code === 'goal_owner_died' && hasPendingDeathItems(memoryBank, deathRecordedAt)) {
+    return `!recoverDeathItems(${deathRecordedAt})`;
+  }
   if (needsSurfaceRecovery(goal, bot)) return '!goToSurface';
   if (
     /(?:not_found|no_safe|unreachable|search|resource|no_path|path_|stuck)/.test(code)
     && !/(?:missing_material|missing_item|missing_tool|invalid_|table_unreachable|furnace_unreachable)/.test(code)
   ) {
-    const localRelocationAlreadyTried = goal.subgoals.some(subgoal => (
-      subgoal.kind === 'recover' && subgoal.commandName === '!moveAway'
-    ));
-    return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
+    return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, true)`;
   }
   return null;
 }
@@ -461,17 +498,14 @@ function recoveryCommand(goal, bot) {
 function plannedDisengagementCommand(goal, bot) {
   const code = String(goal.evidence?.code || '');
   if (needsSurfaceRecovery(goal, bot)) return '!goToSurface';
-  const localRelocationAlreadyTried = goal.subgoals.some(subgoal => (
-    subgoal.kind === 'recover' && subgoal.commandName === '!moveAway'
-  ));
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:source_not_found|resource_not_found|search_exhausted)/.test(code)
-  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, true)`;
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:path_stalled|path_timeout|unreachable|no_path|not_collected|not_broken|timeout|action_deadline)/.test(code)
-  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, ${localRelocationAlreadyTried})`;
+  ) return `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, true)`;
   return null;
 }
 
@@ -525,6 +559,7 @@ function repeatedFailedPlannerMethods(goal, threshold = 2) {
       || !subgoal.learningKey
       || subgoal.targetInventoryAfter > subgoal.targetInventoryBefore
       || isPreemption({ phase: 'failed', code: subgoal.code })
+      || classifyMethodOutcome({ phase: 'failed', code: subgoal.code }) !== 'method_failure'
     ) continue;
     const signature = `${subgoal.learningKey}\u0000${subgoal.code || 'unknown'}`;
     const failures = (signatures.get(signature) || 0) + 1;
@@ -532,6 +567,87 @@ function repeatedFailedPlannerMethods(goal, threshold = 2) {
     if (failures >= threshold) excluded.add(subgoal.learningKey);
   }
   return [...excluded];
+}
+
+function sourceHarvestReplayDescriptor(goal) {
+  const pending = goal?.memory?.sourceAccessPending || goal?.memory?.sourceSearchPending;
+  if (!pending) return null;
+  if (pending.replay) return pending.replay;
+
+  // Compatibility for access receipts written before replay metadata existed.
+  // The persisted subgoal still owns the method/output identity; only the
+  // historical bounded range falls back to the GoalDirector's standard 64.
+  const subgoal = [...(goal?.subgoals || [])]
+    .reverse()
+    .find(entry => (
+      entry.kind === 'plan'
+      && entry.state === 'failed'
+      && entry.code === 'skill_source_access_pending'
+      && entry.learningKey
+    ));
+  const match = /^harvest:(kill|shear):([a-z0-9_]+)->([a-z0-9_]+)$/.exec(
+    String(subgoal?.learningKey || ''),
+  );
+  if (!match || match[2] !== pending.source) return null;
+  const expectedIncrease = Math.max(1, Math.min(64, Math.floor(Number(subgoal.expectedIncrease) || 1)));
+  return Object.freeze({
+    source: match[2],
+    output: match[3],
+    method: match[1],
+    count: expectedIncrease,
+    range: 64,
+    allowAlternative: false,
+    expectedIncrease,
+    learningKey: subgoal.learningKey,
+    reason: subgoal.reason || `${match[2]} is the persisted source for ${match[3]}.`,
+  });
+}
+
+function sourceHarvestReplayStep(bot, goal, targetEntityId = null) {
+  const replay = sourceHarvestReplayDescriptor(goal);
+  if (!replay) return null;
+  try {
+    return createCapabilityPlanAction('harvest_entity_drop', {
+      source: replay.source,
+      output: replay.output,
+      method: replay.method,
+      count: replay.count,
+      range: replay.range,
+      allowAlternative: replay.allowAlternative,
+      targetEntityId,
+      expectedIncrease: replay.expectedIncrease,
+    }, {
+      kind: 'harvest_entity',
+      target: replay.output,
+      expectedName: replay.output,
+      expectedIncrease: replay.expectedIncrease,
+      reason: replay.reason,
+      learningKey: replay.learningKey,
+    }, { bot });
+  } catch {
+    return null;
+  }
+}
+
+function sourceHarvestReplayFromSettlement(result, actingSubgoal, skill) {
+  const requestArgs = Array.isArray(result?.evidence?.request?.args)
+    ? result.evidence.request.args
+    : [];
+  const expectedIncrease = Math.max(
+    1,
+    Math.min(64, Math.floor(Number(actingSubgoal?.expectedIncrease) || 1)),
+  );
+  return Object.freeze({
+    source: skill?.target?.source || skill?.sourceAccess?.source || requestArgs[0],
+    output: skill?.target?.output || actingSubgoal?.targetName || requestArgs[1],
+    method: skill?.target?.method || requestArgs[2],
+    count: requestArgs[3] ?? expectedIncrease,
+    range: requestArgs[4] ?? 64,
+    allowAlternative: requestArgs[5] === true,
+    expectedIncrease,
+    learningKey: actingSubgoal?.learningKey || '',
+    reason: actingSubgoal?.reason || '',
+  });
 }
 
 function terminalBlockerClassification(boundary, goal, plan = null) {
@@ -575,6 +691,300 @@ function terminalBlockerClassification(boundary, goal, plan = null) {
     return { blockerClass: 'mechanical_defect', basis: 'settled_mechanical_contract_failed' };
   }
   return { blockerClass: 'terminal', basis: 'bounded_deterministic_recovery_is_exhausted' };
+}
+
+function goalCompletionIdentity(goal) {
+  return JSON.stringify([
+    'goal-completion-v1',
+    goal?.kind || null,
+    goal?.target || null,
+    goal?.quantity ?? null,
+    goal?.quantityMode || null,
+    goal?.completion || null,
+    goal?.destination || null,
+  ]);
+}
+
+function prerequisitePlannerOptions(agent, goal, quantity) {
+  return {
+    target: goal.target.inventoryName,
+    quantity,
+    completion: goal.completion,
+    range: 64,
+    experience: learningKey => agent.memory_bank?.outcomePreference?.(learningKey) || 0,
+    toolRequirement: goal.memory?.toolRequirement,
+    workstationRequirement: goal.memory?.workstationRequirement,
+    accessRequirement: goal.memory?.accessRequirement,
+    workstationConstraint: goal.workstationConstraint,
+    // One retry after a region change is useful evidence. Repeating the same
+    // no-progress method after that is not: temporarily exclude it for this
+    // goal so the catalogue must bind a genuinely different method or report
+    // that none exists.
+    excludedMethods: repeatedFailedPlannerMethods(goal),
+  };
+}
+
+function unavailableMethodFrontier(reasonCode, blockerCodes = []) {
+  return Object.freeze({
+    schemaVersion: 2,
+    status: 'incomplete',
+    reasonCode,
+    enumerationComplete: false,
+    enumerationScope: 'planner_whole_goal_methods_v1',
+    rankingStatus: 'unknown',
+    selectedMethodId: null,
+    candidates: Object.freeze([]),
+    candidateCount: 0,
+    queryCount: 0,
+    frontierFingerprint: null,
+    blockerCodes: Object.freeze(blockerCodes),
+  });
+}
+
+/**
+ * Time is a physical prerequisite, not a reason to burn search regions. A
+ * loaded source is always actionable; otherwise the connected string method
+ * waits for the shared hostile-spawn window before leaving the family base.
+ */
+export function acquisitionTemporalFeasibility(bot, nextStep, goal = null) {
+  const capabilityId = String(nextStep?.capability?.id || '');
+  const args = nextStep?.capability?.arguments || {};
+  if (capabilityId === 'harvest_entity_drop' && args.method === 'kill') {
+    const health = Number(bot?.health);
+    if (!Number.isFinite(health)) {
+      return Object.freeze({
+        ready: false,
+        code: 'combat_health_unknown',
+        health: null,
+        detail: 'Current health is unknown; optional hostile acquisition will not start without combat-readiness evidence.',
+      });
+    }
+    if (health <= 8) {
+      return Object.freeze({
+        ready: false,
+        code: 'waiting_for_combat_recovery',
+        health,
+        detail: `Health is ${Math.max(0, Math.round(health * 10) / 10)}/20; waiting for verified recovery before optional hostile acquisition.`,
+      });
+    }
+  }
+  if (
+    capabilityId !== 'harvest_entity_drop'
+    || args.method !== 'kill'
+    || args.source !== 'spider'
+    || args.output !== 'string'
+  ) {
+    return Object.freeze({ ready: true, code: 'not_time_gated' });
+  }
+
+  const observedSources = Object.values(bot?.entities || {})
+    .filter(entity => entity?.name === 'spider' && entity?.position)
+    .filter(entity => deliberateEntityHarvestTargetQualification(bot, {
+      entity: 'spider',
+      output: 'string',
+      method: 'kill',
+    }, entity).qualified)
+    .sort((left, right) => {
+      const origin = bot?.entity?.position;
+      if (!origin?.distanceTo) return Number(left.id) - Number(right.id);
+      return origin.distanceTo(left.position) - origin.distanceTo(right.position)
+        || Number(left.id) - Number(right.id);
+    });
+  if (observedSources.length > 0) {
+    const pendingAccess = goal?.memory?.sourceAccessPending;
+    const changedSources = pendingAccess
+      ? observedSources.filter(entity => (
+          Number(entity.id) !== Number(pendingAccess.entityId)
+          || distanceBetween(entity.position, pendingAccess.position) >= SOURCE_ACCESS_RECHECK_DISTANCE
+        ))
+      : observedSources;
+    if (pendingAccess && changedSources.length < 1) {
+      return Object.freeze({
+        ready: false,
+        code: 'waiting_for_hostile_source_access_change',
+        sourceAccess: pendingAccess,
+        detail: 'The same qualified spider remains at the pursuit position Pathfinder rejected; waiting for new entity or movement evidence before retrying.',
+      });
+    }
+    const selectedSource = changedSources[0];
+    const combatEnvironment = deliberateEntityHarvestCombatEnvironment(
+      bot,
+      selectedSource.id,
+      16,
+    );
+    if (!combatEnvironment.ready) {
+      const nearest = combatEnvironment.threats[0];
+      return Object.freeze({
+        ready: false,
+        code: 'waiting_for_safe_combat_environment',
+        combatEnvironment,
+        detail: nearest
+          ? `A loaded spider is present, but ${nearest.name} is ${nearest.distance} blocks away; waiting before optional hostile acquisition.`
+          : 'A loaded spider is present, but the combat environment is not yet verified safe.',
+      });
+    }
+    return Object.freeze({
+      ready: true,
+      code: 'source_observed',
+      targetEntityId: Number(selectedSource.id),
+    });
+  }
+  const timeOfDay = Number(bot?.time?.timeOfDay);
+  if (!isNightTime(timeOfDay)) {
+    return Object.freeze({
+      ready: false,
+      code: 'waiting_for_hostile_spawn_window',
+      timeOfDay: Number.isFinite(timeOfDay) ? timeOfDay : null,
+      detail: 'No loaded spider is present; waiting at the current stance for night before starting the bounded string search.',
+    });
+  }
+  if (goal?.memory?.sourceSearchPending) {
+    return Object.freeze({
+      ready: false,
+      code: 'waiting_for_hostile_source_change',
+      timeOfDay,
+      detail: 'One bounded night search already settled without a usable spider; waiting for a newly qualified loaded source instead of repeating unchanged work.',
+    });
+  }
+  const latestSubgoal = goal?.subgoals?.at(-1);
+  if (
+    latestSubgoal?.kind === 'plan'
+    && latestSubgoal.commandName === '!harvestEntityDrop'
+    && latestSubgoal.state === 'failed'
+    && [
+      'skill_source_spawn_pending',
+      'skill_source_search_advanced',
+    ].includes(latestSubgoal.code)
+  ) {
+    return Object.freeze({
+      ready: false,
+      code: 'waiting_for_hostile_source_change',
+      timeOfDay,
+      detail: latestSubgoal.code === 'skill_source_search_advanced'
+        ? 'One bounded night settlement and native region move found no usable local spider; waiting for a newly qualified loaded source instead of walking through another unchanged region.'
+        : 'One bounded night settlement and search found no usable local spider; waiting for a qualified loaded source instead of repeating unchanged work.',
+    });
+  }
+  if (goal?.memory?.sourceAccessPending) {
+    return Object.freeze({
+      ready: true,
+      code: 'hostile_source_search_window_open',
+      timeOfDay,
+      sourceAccess: goal.memory.sourceAccessPending,
+      targetEntityId: null,
+      detail: 'The previously selected spider is no longer loaded during the natural spawn window; the existing bounded harvest search may settle and move to one new region without reusing that stale identity.',
+    });
+  }
+  return Object.freeze({ ready: true, code: 'hostile_spawn_window_open', timeOfDay });
+}
+
+function loadedRequesterThreats(agent, requesterPosition) {
+  return Object.values(agent?.bot?.entities || {})
+    .filter(entity => (
+      entity?.position
+      && mc.isHostile(entity)
+      && distanceBetween(entity.position, requesterPosition)
+        <= ENVIRONMENTAL_WAIT_REQUESTER_THREAT_DISTANCE
+    ))
+    .map(entity => ({
+      id: Number.isFinite(Number(entity.id)) ? Number(entity.id) : null,
+      name: boundedText(entity.name, 64, 'hostile'),
+      distance: Math.round(distanceBetween(entity.position, requesterPosition) * 10) / 10,
+    }))
+    .sort((left, right) => left.distance - right.distance
+      || Number(left.id || 0) - Number(right.id || 0))
+    .slice(0, 4);
+}
+
+function environmentalWaitReturnDecision(agent, goal, temporalFeasibility) {
+  const none = { command: null, blocker: null };
+  if (![
+    'waiting_for_hostile_spawn_window',
+    'waiting_for_hostile_source_change',
+  ].includes(temporalFeasibility?.code)) return none;
+  const latestSubgoal = goal?.subgoals?.at(-1);
+  if (
+    latestSubgoal?.kind === 'recover'
+    && latestSubgoal.commandName === '!goToPlayer'
+    && latestSubgoal.state === 'failed'
+    && !isPreemption({ phase: 'failed', code: latestSubgoal.code })
+  ) {
+    // One failed native route is physical evidence. Do not fill the durable
+    // subgoal history with the same return attempt while daylight and both
+    // endpoints are unchanged. A later acquisition action becomes new
+    // evidence and naturally releases this latch.
+    return none;
+  }
+  const resolution = resolvePlayerTarget(agent?.bot, goal?.requester, {
+    knownBotNames: agent?.getKnownAgentNames?.() || [],
+  });
+  const botPosition = physicalPosition(agent?.bot?.entity?.position);
+  const requesterPosition = physicalPosition(resolution.entity?.position);
+  if (
+    !resolution.entity
+    || !resolution.canonical
+    || !botPosition
+    || !requesterPosition
+    || distanceBetween(botPosition, requesterPosition) <= ENVIRONMENTAL_WAIT_COMPANION_DISTANCE
+  ) return none;
+  const health = Number(agent?.bot?.health);
+  const threats = Number.isFinite(health) && health < 20
+    ? loadedRequesterThreats(agent, requesterPosition)
+    : [];
+  if (threats.length > 0) {
+    const nearest = threats[0];
+    return {
+      command: null,
+      blocker: {
+        code: 'waiting_for_safe_requester_return',
+        detail: `${goal.requester}'s loaded region still contains ${nearest.name} ${nearest.distance} blocks away while health is ${Math.round(health * 10) / 10}; preserving the successful safety retreat before returning.`,
+      },
+    };
+  }
+  return {
+    command: `!goToPlayer(${JSON.stringify(goal.requester)}, 3)`,
+    blocker: null,
+  };
+}
+
+function hostileSourceSurfaceStaging(goal, temporalFeasibility) {
+  const pending = goal?.memory?.sourceSearchPending;
+  if (
+    !pending
+    || ![
+      'waiting_for_hostile_spawn_window',
+      'waiting_for_hostile_source_change',
+    ].includes(temporalFeasibility?.code)
+  ) return null;
+
+  const observedAt = Number(pending.observedAt);
+  const staging = [...(goal.subgoals || [])]
+    .reverse()
+    .find(subgoal => (
+      subgoal.kind === 'recover'
+      && subgoal.commandName === '!goToSurface'
+      && (!Number.isFinite(observedAt) || Number(subgoal.startedAt) >= observedAt)
+    ));
+  if (!staging || (
+    staging.state === 'failed'
+    && isPreemption({ phase: 'failed', code: staging.code })
+  )) {
+    return Object.freeze({ state: 'required', command: '!goToSurface' });
+  }
+  if (
+    staging.state === 'succeeded'
+    && staging.code === 'skill_surface_reached'
+  ) return Object.freeze({ state: 'verified' });
+  if (staging.state === 'acting') return Object.freeze({ state: 'acting' });
+  return Object.freeze({
+    state: 'blocked',
+    code: boundedText(staging.code, 80, 'surface_staging_failed'),
+    detail: boundedText(
+      staging.detail,
+      280,
+      'The shared surface capability did not verify a supported surface stance.',
+    ),
+  });
 }
 
 export class GoalDirector {
@@ -771,6 +1181,108 @@ export class GoalDirector {
     return true;
   }
 
+  reconcileDeath({
+    position = null,
+    dimension = null,
+    recoverableItems = 0,
+    deathRecord = null,
+    deathPersistenceCode = '',
+  } = {}) {
+    if (!this.activeGoal) return false;
+    let goal = this.activeGoal;
+    const actingSubgoal = goal.subgoals.at(-1)?.state === 'acting'
+      ? goal.subgoals.at(-1)
+      : null;
+    const observedRecoverableItems = Math.max(0, Math.floor(Number(recoverableItems) || 0));
+    const recordedAt = Number(deathRecord?.recordedAt);
+    const persistedRecoverableDeath = observedRecoverableItems < 1 || (
+      Number.isSafeInteger(recordedAt)
+      && recordedAt > 0
+      && Object.values(deathRecord?.inventory || {}).some(count => Number(count) > 0)
+    );
+    const resultCode = persistedRecoverableDeath
+      ? 'goal_owner_died'
+      : 'death_recovery_persistence_failed';
+    const detail = !persistedRecoverableDeath
+      ? `The bot died during this goal and lost ${observedRecoverableItems} carried item${observedRecoverableItems === 1 ? '' : 's'}, but the current death record was not persisted (${boundedText(deathPersistenceCode, 80, 'persistence_rejected')}); stale recovery is forbidden.`
+      : observedRecoverableItems > 0
+      ? `The bot died during this goal and lost ${observedRecoverableItems} carried item${observedRecoverableItems === 1 ? '' : 's'}; reconcile the recorded death inventory before replanning.`
+      : 'The bot died during this goal; revalidate inventory and strategy before replanning.';
+    const result = {
+      actionId: `death-${this.now()}`,
+      phase: 'failed',
+      code: resultCode,
+      detail,
+      retryable: persistedRecoverableDeath,
+      evidence: {
+        skill: {
+          kind: 'death_reconciliation',
+          outcome: persistedRecoverableDeath ? 'owner_died' : 'persistence_failed',
+          target: position && [position.x, position.y, position.z].every(Number.isFinite)
+            ? { name: 'last_death_position', x: position.x, y: position.y, z: position.z }
+            : { name: 'last_death_position' },
+          dimension: boundedText(dimension, 64) || null,
+          recoverableItems: observedRecoverableItems,
+          persistenceCode: boundedText(deathPersistenceCode, 80) || null,
+          recordedAt: persistedRecoverableDeath && observedRecoverableItems > 0
+            ? recordedAt
+            : null,
+          retryable: persistedRecoverableDeath,
+        },
+      },
+    };
+
+    // Death is a material world-state transition, not a harmless ownership
+    // preemption. Revoke the old dispatch token first so the action's later
+    // interrupted result cannot overwrite this durable settlement.
+    this.invalidateDispatch();
+    this.persist({
+      ...goal,
+      memory: {
+        ...goal.memory,
+        deathRecovery: persistedRecoverableDeath && observedRecoverableItems > 0
+          ? { recordedAt }
+          : null,
+      },
+      updatedAt: this.now(),
+    });
+    goal = this.activeGoal;
+    if (actingSubgoal) {
+      this.handleResult(actingSubgoal.kind, result);
+      return true;
+    }
+
+    const attempts = goal.attempts + 1;
+    this.persist({
+      ...goal,
+      attempts,
+      phase: attempts >= goal.maxAttempts ? goal.phase : 'recover',
+      evidence: {
+        actionId: result.actionId,
+        phase: result.phase,
+        code: result.code,
+        detail: result.detail,
+        verified: false,
+        at: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    if (!persistedRecoverableDeath) {
+      this.fail(resultCode, detail, { retryable: false });
+      return true;
+    }
+    if (attempts >= goal.maxAttempts) {
+      this.fail(
+        'goal_attempts_exhausted',
+        `${detail} The goal exhausted its ${goal.maxAttempts} bounded attempts.`,
+      );
+      return true;
+    }
+    this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+    this.setStatus('recover', 'goal_owner_died', detail, true);
+    return true;
+  }
+
   invalidateDispatch() {
     this.dispatchGeneration += 1;
     this.activeDispatch = null;
@@ -925,8 +1437,37 @@ export class GoalDirector {
       const latestSubgoal = goal.subgoals.at(-1) || null;
       const skill = this.agent.bot?.lastActionEvidence;
       const selected = this.agent.bot?.heldItem;
+      const completionIdentity = goalCompletionIdentity(goal);
+      let methodFrontier = unavailableMethodFrontier(
+        'family_goal_not_owned_by_prerequisite_planner',
+      );
+      if (!goal.target.family) {
+        try {
+          methodFrontier = buildPrerequisiteMethodFrontier(this.agent.bot, {
+            ...prerequisitePlannerOptions(this.agent, goal, this.requiredInventory(goal)),
+            completionIdentity,
+            frontierMaxSearches: TERMINAL_FRONTIER_SEARCHES,
+          });
+        } catch (error) {
+          console.warn(`[goal-telemetry] Planner frontier failed closed: ${boundedText(error?.message || error)}`);
+          methodFrontier = unavailableMethodFrontier(
+            'frontier_runtime_error',
+            ['frontier_runtime_error'],
+          );
+        }
+      }
+      const branchQualification = qualifyStrategicBranch({
+        blockerClass: classification.blockerClass,
+        completionIdentity,
+        deterministicRecoveryExhausted: true,
+        enumerationComplete: methodFrontier.enumerationComplete,
+        candidates: methodFrontier.candidates,
+        frontierFingerprint: methodFrontier.frontierFingerprint,
+        rankingStatus: methodFrontier.rankingStatus,
+        selectedMethodId: methodFrontier.selectedMethodId,
+      });
       return this.agent.flight_recorder?.recordRuntimeEvent?.('goal.terminal_boundary', {
-        schemaVersion: 1,
+        schemaVersion: 2,
         boundary,
         terminalCode: boundedText(code, 80, boundary),
         blockerClass: classification.blockerClass,
@@ -956,9 +1497,35 @@ export class GoalDirector {
         },
         failedTargets: (goal.memory?.failedTargets || []).slice(-MAX_FAILED_TARGETS),
         methods: {
-          enumerationComplete: false,
-          enumerationScope: 'selected_causal_chain_only',
-          strategicBranchEstablished: false,
+          enumerationComplete: branchQualification.enumerationComplete,
+          enumerationScope: methodFrontier.enumerationScope,
+          strategicBranchEstablished: branchQualification.strategicBranchEstablished,
+          qualification: branchQualification,
+          frontier: {
+            schemaVersion: methodFrontier.schemaVersion,
+            status: methodFrontier.status,
+            reasonCode: methodFrontier.reasonCode,
+            candidateCount: methodFrontier.candidateCount,
+            queryCount: methodFrontier.queryCount,
+            selectedMethodId: methodFrontier.selectedMethodId,
+            frontierFingerprint: methodFrontier.frontierFingerprint,
+            blockerCodes: methodFrontier.blockerCodes,
+            candidates: methodFrontier.candidates.map(candidate => ({
+              methodId: candidate.methodId,
+              completionIdentity: candidate.completionIdentity,
+              feasible: candidate.feasible,
+              proof: {
+                plannerStatus: candidate.proof.plannerStatus,
+                plannerCode: candidate.proof.plannerCode,
+                actionCount: candidate.proof.actionCount,
+                exploredNodes: candidate.proof.exploredNodes,
+                planFingerprint: candidate.proof.planFingerprint,
+                rootMethodKey: candidate.proof.rootMethodKey,
+                decisionKeys: candidate.proof.decisionKeys.slice(0, 12),
+                capabilityIds: candidate.proof.capabilityIds.slice(0, 12),
+              },
+            })),
+          },
           observed: (planner?.actions || []).slice(0, 12).map(action => ({
             methodKey: boundedText(action?.learningKey, 160) || null,
             capability: boundedText(action?.capability?.id, 80) || null,
@@ -1433,21 +2000,6 @@ export class GoalDirector {
           : 'The command resolved but the typed goal observed no required inventory increase.',
         retryable: true,
       };
-    } else if (
-      result.phase === 'succeeded'
-      && kind === 'plan'
-      && actingSubgoal?.targetName
-      && plannedTargetAfter <= Math.max(0, Number(actingSubgoal.targetInventoryBefore) || 0)
-    ) {
-      effectiveResult = {
-        ...result,
-        phase: 'failed',
-        code: 'planned_effect_unverified',
-        detail: result.detail
-          ? `${result.detail} The causal planner did not observe the expected ${actingSubgoal.targetName} inventory increase.`
-          : `The action resolved without the expected ${actingSubgoal.targetName} inventory increase.`,
-        retryable: true,
-      };
     } else if (result.phase === 'succeeded' && kind === 'deliver' && transferredBeforeFinish < 1) {
       effectiveResult = {
         ...result,
@@ -1513,6 +2065,107 @@ export class GoalDirector {
       });
     }
     this.finishLatestSubgoal(effectiveResult);
+    const finishedSkill = actionResultEvidence(effectiveResult);
+    if (
+      kind === 'plan'
+      && finishedSkill?.kind === 'entity_harvest'
+      && finishedSkill?.outcome === 'source_access_pending'
+      && (
+        finishedSkill.sourceAccess
+        || finishedSkill.targetIdentity?.stage === 'physical_address_stale'
+      )
+    ) {
+      const goal = this.activeGoal;
+      const replay = sourceHarvestReplayFromSettlement(
+        effectiveResult,
+        actingSubgoal,
+        finishedSkill,
+      );
+      this.persist({
+        ...goal,
+        checkpoint: durableActionCheckpoint,
+        memory: {
+          ...goal.memory,
+          sourceAccessPending: finishedSkill.sourceAccess ? {
+            ...finishedSkill.sourceAccess,
+            replay,
+          } : goal.memory.sourceAccessPending,
+          sourceSearchPending: null,
+        },
+        phase: 'assess',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+      this.setStatus(
+        'waiting',
+        'waiting_for_hostile_source_access_change',
+        'A qualified hostile source is loaded but its current pursuit failed; waiting for new entity or movement evidence without consuming a productive attempt.',
+        true,
+      );
+      return;
+    }
+    if (
+      kind === 'plan'
+      && finishedSkill?.kind === 'entity_harvest'
+      && [
+        'source_spawn_pending',
+        'source_search_advanced',
+      ].includes(finishedSkill?.outcome)
+    ) {
+      const goal = this.activeGoal;
+      const replay = sourceHarvestReplayFromSettlement(
+        effectiveResult,
+        actingSubgoal,
+        finishedSkill,
+      );
+      this.persist({
+        ...goal,
+        checkpoint: durableActionCheckpoint,
+        memory: {
+          ...goal.memory,
+          sourceAccessPending: null,
+          sourceSearchPending: {
+            outcome: finishedSkill.outcome,
+            replay,
+            observedAt: this.now(),
+          },
+        },
+        phase: 'assess',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+      this.setStatus(
+        'waiting',
+        'waiting_for_hostile_source_change',
+        finishedSkill.outcome === 'source_search_advanced'
+          ? 'The bounded night search physically reached one new region but found no usable Spider; waiting for new live source evidence without consuming a productive attempt.'
+          : 'The bounded night search produced no usable local Spider; waiting for new live source evidence without consuming a productive attempt.',
+        true,
+      );
+      return;
+    }
+    if (
+      kind === 'plan'
+      && finishedSkill?.kind === 'entity_harvest'
+      && (
+        this.activeGoal?.memory?.sourceAccessPending
+        || this.activeGoal?.memory?.sourceSearchPending
+      )
+    ) {
+      // The in-flight replay retained the latch across a possible restart.
+      // Any other structured settlement consumes that retry authority; another
+      // access receipt above replaces it with the new entity/position instead.
+      const goal = this.activeGoal;
+      this.persist({
+        ...goal,
+        memory: {
+          ...goal.memory,
+          sourceAccessPending: null,
+          sourceSearchPending: null,
+        },
+        updatedAt: this.now(),
+      });
+    }
     this.rememberOperationalProgress(effectiveResult, miningRouteProgress);
     this.rememberToolRequirement(effectiveResult);
     this.rememberWorkstationRequirement(effectiveResult);
@@ -1613,9 +2266,15 @@ export class GoalDirector {
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
     // unreachable target does, and the goal gave up on work that was fine.
-    const attempts = (preemptionRecovery || relocationFailure || prerequisiteBlocked || capacityBlocked)
-      ? goal.attempts
-      : goal.attempts + 1;
+    const deathFailure = [
+      'goal_owner_died',
+      'death_recovery_persistence_failed',
+    ].includes(effectiveResult.code);
+    const attempts = deathFailure
+      ? goal.attempts + 1
+      : (preemptionRecovery || relocationFailure || prerequisiteBlocked || capacityBlocked)
+        ? goal.attempts
+        : goal.attempts + 1;
     if (capacityBlocked) {
       // The collection primitive has already exhausted its bounded safe release
       // policy. Inventory capacity is a physical precondition, not a failed ore
@@ -1657,7 +2316,7 @@ export class GoalDirector {
           ? `The unreachable ${skill.workstationRequirement.name} must be replaced by a carried local workstation.`
           : skill.accessRequirement
             ? 'The selected physical source requires a verified supported surface stance before acquisition can continue.'
-            : `Mining requires a replacement ${skill.toolRequirement.name} with at least ${skill.toolRequirement.minimumUsableDurability} usable durability.`,
+            : `The selected capability requires ${skill.toolRequirement.name} with at least ${skill.toolRequirement.minimumUsableDurability} usable durability.`,
         true,
       );
       return;
@@ -1701,6 +2360,30 @@ export class GoalDirector {
         'mining_return_failed',
         effectiveResult.detail || 'The preserved mining return route could not be traversed safely.',
       );
+      return;
+    }
+    const failedDeliveryRelocation = relocationFailure
+      && goal.kind === 'deliver'
+      && actingSubgoal?.commandName === '!moveAway';
+    if (failedDeliveryRelocation) {
+      // Delivery has one bound recipient and one unchanged handoff objective.
+      // If its bounded relocation made no verified progress, replaying the
+      // same delivery cannot reveal a different route or target. Finish with a
+      // non-retryable structured boundary so Agenda cannot clone the same Goal
+      // with a fresh budget against materially identical world evidence.
+      const detail = effectiveResult.detail
+        || 'The bounded delivery relocation made no verified progress; no different deterministic handoff route was established.';
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        updatedAt: this.now(),
+      });
+      this.recordTerminalBoundary('no_deterministic_recovery', {
+        code: 'no_deterministic_recovery',
+        detail,
+      });
+      this.fail('no_deterministic_recovery', detail, { retryable: false });
       return;
     }
     if (
@@ -1771,7 +2454,9 @@ export class GoalDirector {
     const selectedName = capability
       ? capabilityCommandName(capability)
       : commandName(command);
-    if (!selectedName || !isSafeProcedureCommand(selectedName) || !getCommand(selectedName)) {
+    const safeGoalCommand = isSafeProcedureCommand(selectedName)
+      || (kind === 'recover' && GOAL_ONLY_RECOVERY_COMMANDS.has(selectedName));
+    if (!selectedName || !safeGoalCommand || !getCommand(selectedName)) {
       this.fail('unsafe_goal_command', `Goal attempted unavailable or unsafe command '${selectedName || 'unknown'}'.`);
       return false;
     }
@@ -1815,15 +2500,6 @@ export class GoalDirector {
             detail: `${selectedName} returned without a new structured action result.`,
             retryable: true,
             evidence: null,
-          };
-        }
-        if (result.phase === 'succeeded' && outcome?.verification?.ok === false) {
-          result = {
-            ...result,
-            phase: 'failed',
-            code: outcome.verification.code || 'verification_failed',
-            detail: outcome.verification.detail || 'The capability effects were not verified in Minecraft.',
-            retryable: true,
           };
         }
         this.handleResult(kind, result);
@@ -2162,6 +2838,26 @@ export class GoalDirector {
       }
 
       if (goal.phase === 'recover') {
+        if (goal.evidence?.code === 'goal_owner_died') {
+          const command = recoveryCommand(
+            goal,
+            this.agent.bot,
+            this.agent.memory_bank,
+          );
+          this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
+          if (command) {
+            this.dispatch('recover', command);
+            return;
+          }
+          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+          this.setStatus(
+            'waiting',
+            'death_reconciled',
+            'Death was charged to the bounded goal budget; no recoverable item manifest remains, so live inventory and strategy will be replanned.',
+            true,
+          );
+          return;
+        }
         if (goal.subgoals.at(-1)?.kind === 'plan') {
           if (latestPlanFailureHasConcreteTarget(goal)) {
             const localFailures = consecutiveLocalPlanFailures(goal);
@@ -2221,7 +2917,7 @@ export class GoalDirector {
           );
           return;
         }
-        const command = recoveryCommand(goal, this.agent.bot);
+        const command = recoveryCommand(goal, this.agent.bot, this.agent.memory_bank);
         if (command) {
           this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
           this.dispatch('recover', command);
@@ -2252,22 +2948,124 @@ export class GoalDirector {
 
       if (goal.phase === 'acquire') {
         if (!goal.target.family) {
-          const plan = buildPrerequisitePlan(this.agent.bot, {
-            target: goal.target.inventoryName,
-            quantity: required,
-            completion: goal.completion,
-            range: 64,
-            experience: learningKey => this.agent.memory_bank?.outcomePreference?.(learningKey) || 0,
-            toolRequirement: goal.memory?.toolRequirement,
-            workstationRequirement: goal.memory?.workstationRequirement,
-            accessRequirement: goal.memory?.accessRequirement,
-            workstationConstraint: goal.workstationConstraint,
-            // One retry after a region change is useful evidence. Repeating
-            // the same no-progress method after that is not: temporarily
-            // exclude it for this goal so the catalogue must bind a genuinely
-            // different strategy or report that none exists.
-            excludedMethods: repeatedFailedPlannerMethods(goal),
-          });
+          if (goal.memory?.sourceAccessPending || goal.memory?.sourceSearchPending) {
+            const replayStep = sourceHarvestReplayStep(this.agent.bot, goal);
+            if (!replayStep) {
+              this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+              this.setStatus(
+                'waiting',
+                'source_harvest_replay_unavailable',
+                'The persisted source-harvest receipt lacks a valid normalized replay capability; waiting without selecting an unrelated acquisition method.',
+                true,
+              );
+              return;
+            }
+            const temporalFeasibility = acquisitionTemporalFeasibility(
+              this.agent.bot,
+              replayStep,
+              goal,
+            );
+            if (!temporalFeasibility.ready) {
+              const surfaceStaging = hostileSourceSurfaceStaging(
+                goal,
+                temporalFeasibility,
+              );
+              if (surfaceStaging?.state === 'required') {
+                this.persist({
+                  ...goal,
+                  evidence: {
+                    actionId: '',
+                    phase: 'acting',
+                    code: 'hostile_source_surface_staging',
+                    detail: 'The settled hostile-source search has no newly qualified source; establishing one verified supported surface stance before waiting.',
+                    verified: false,
+                    at: this.now(),
+                  },
+                  updatedAt: this.now(),
+                });
+                this.dispatch('recover', surfaceStaging.command);
+                return;
+              }
+              if (surfaceStaging?.state === 'blocked') {
+                this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+                this.setStatus(
+                  'waiting',
+                  'hostile_source_surface_staging_blocked',
+                  `No supported surface wait stance was verified (${surfaceStaging.code}): ${surfaceStaging.detail}`,
+                  true,
+                );
+                return;
+              }
+              const returnDecision = environmentalWaitReturnDecision(
+                this.agent,
+                goal,
+                temporalFeasibility,
+              );
+              if (returnDecision.command) {
+                this.persist({
+                  ...goal,
+                  evidence: {
+                    actionId: '',
+                    phase: 'acting',
+                    code: 'environmental_wait_returning_to_requester',
+                    detail: `The bounded hostile-source wait began away from ${goal.requester}; returning through native Pathfinder before waiting.`,
+                    verified: false,
+                    at: this.now(),
+                  },
+                  updatedAt: this.now(),
+                });
+                this.dispatch('recover', returnDecision.command);
+                return;
+              }
+              if (returnDecision.blocker) {
+                this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+                this.setStatus(
+                  'waiting',
+                  returnDecision.blocker.code,
+                  returnDecision.blocker.detail,
+                  true,
+                );
+                return;
+              }
+              this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+              this.setStatus(
+                'waiting',
+                temporalFeasibility.code,
+                temporalFeasibility.detail,
+                true,
+              );
+              return;
+            }
+            this.setStatus(
+              'planning',
+              'source_harvest_replay_authorized',
+              Number.isInteger(Number(temporalFeasibility.targetEntityId))
+                ? 'New source identity or movement evidence authorizes one replay of the same normalized entity-harvest capability.'
+                : 'The stale source disappeared during the natural spawn window; authorizing the existing bounded entity-harvest search without binding the stale identity.',
+              true,
+            );
+            const boundReplayStep = sourceHarvestReplayStep(
+              this.agent.bot,
+              goal,
+              temporalFeasibility.targetEntityId,
+            );
+            if (!boundReplayStep) {
+              this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+              this.setStatus(
+                'waiting',
+                'source_harvest_replay_unavailable',
+                'The newly qualified source identity could not be bound into the normalized replay capability; waiting without dispatch.',
+                true,
+              );
+              return;
+            }
+            this.dispatch('plan', null, boundReplayStep);
+            return;
+          }
+          const plan = buildPrerequisitePlan(
+            this.agent.bot,
+            prerequisitePlannerOptions(this.agent, goal, required),
+          );
           const planSignature = JSON.stringify(
             (plan.actions || []).map(action => [
               action.capability?.id,
@@ -2315,6 +3113,52 @@ export class GoalDirector {
             `${plan.detail} ${plan.nextStep.reason}`.slice(0, 280),
             true,
           );
+          const temporalFeasibility = acquisitionTemporalFeasibility(
+            this.agent.bot,
+            plan.nextStep,
+            goal,
+          );
+          if (!temporalFeasibility.ready) {
+            const returnDecision = environmentalWaitReturnDecision(
+              this.agent,
+              goal,
+              temporalFeasibility,
+            );
+            if (returnDecision.command) {
+              this.persist({
+                ...goal,
+                evidence: {
+                  actionId: '',
+                  phase: 'acting',
+                  code: 'environmental_wait_returning_to_requester',
+                  detail: `The bounded hostile-source wait began away from ${goal.requester}; returning through native Pathfinder before waiting.`,
+                  verified: false,
+                  at: this.now(),
+                },
+                updatedAt: this.now(),
+              });
+              this.dispatch('recover', returnDecision.command);
+              return;
+            }
+            if (returnDecision.blocker) {
+              this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+              this.setStatus(
+                'waiting',
+                returnDecision.blocker.code,
+                returnDecision.blocker.detail,
+                true,
+              );
+              return;
+            }
+            this.nextAttemptAt = this.now() + TEMPORAL_FEASIBILITY_RECHECK_MS;
+            this.setStatus(
+              'waiting',
+              temporalFeasibility.code,
+              temporalFeasibility.detail,
+              true,
+            );
+            return;
+          }
           this.dispatch('plan', null, plan.nextStep);
           return;
         }

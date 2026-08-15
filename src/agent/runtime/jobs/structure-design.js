@@ -81,6 +81,7 @@ export function designLanguageHelp() {
   'Support rule: ground fixtures go above a solid floor. A torch may stand above a solid floor or attach beside a same-height solid wall; a ladder requires the wall. Never replace a roof or required support with a fixture.',
   'A door occupies its anchor plus the block directly above; leave both cells clear of every other fixture.',
   'A bed occupies its anchor plus one block in its facing direction; keep both cells over clear supported interior floor.',
+  'An exact stair item such as spruce_stairs is a one-block fixture and requires north, south, east, or west facing: put 0 0 0 spruce_stairs east.',
   'box X Y Z W H D - solid block of material.',
   'shell X Y Z W H D - four walls only, open top and bottom.',
   'room X Y Z W H D - floor, four walls, and a roof.',
@@ -92,7 +93,7 @@ export function designLanguageHelp() {
   'For a habitable building use room, or combine slab + shell + roof. Shell has walls only: no floor and no roof.',
   'roof X Y Z W D STYLE - flat, gable, or pyramid; stepped and solid so it supports itself.',
   'carve X Y Z W H D - remove already-planned blocks to cut a doorway, window, or interior.',
-  `put X Y Z THING [FACING] - place one fixture: ${ACCESSORY_NAMES.join(' ')}; door and bed optionally face north, south, east, or west. Fixtures must use put, never block.`,
+  `put X Y Z THING [FACING] - place one fixture: ${ACCESSORY_NAMES.join(' ')}, or an exact *_stairs item; stairs require facing, while door and bed optionally face north, south, east, or west. Fixtures must use put, never block or bracketed block-state syntax.`,
   ].join(' ');
 }
 
@@ -399,15 +400,21 @@ export function parseStructureDesign(text) {
         need(4);
         allow(5);
         const requestedThing = canonicalMaterial(tokens[4], `${step} fixture`);
-        const thing = ACCESSORIES[requestedThing]
-          ? requestedThing
-          : ACCESSORY_ALIASES[requestedThing];
-        if (!ACCESSORIES[thing]) {
-          throw new TypeError(`Design ${step} fixture must be one of: ${ACCESSORY_NAMES.join(', ')}.`);
+        const stairMaterial = requestedThing.endsWith('_stairs') ? requestedThing : null;
+        const thing = stairMaterial
+          ? 'stair'
+          : ACCESSORIES[requestedThing]
+            ? requestedThing
+            : ACCESSORY_ALIASES[requestedThing];
+        if (!stairMaterial && !ACCESSORIES[thing]) {
+          throw new TypeError(`Design ${step} fixture must be one of: ${ACCESSORY_NAMES.join(', ')}, or an exact *_stairs item.`);
         }
         const facing = tokens[5] ? String(tokens[5]).toLowerCase() : null;
         if (facing && !['north', 'south', 'east', 'west'].includes(facing)) {
           throw new TypeError(`Design ${step} fixture facing must be north, south, east, or west.`);
+        }
+        if (stairMaterial && !facing) {
+          throw new TypeError(`Design ${step} stair fixture requires north, south, east, or west facing.`);
         }
         return {
           op,
@@ -415,6 +422,7 @@ export function parseStructureDesign(text) {
           y: coordinate(tokens[2], `${step} y`),
           z: coordinate(tokens[3], `${step} z`),
           thing,
+          ...(stairMaterial ? { material: stairMaterial } : {}),
           facing,
         };
       }
@@ -598,7 +606,9 @@ function applyOperation(placed, operation, block, displacedFoundations) {
       return;
     }
     case 'put': {
-      const accessory = ACCESSORIES[operation.thing];
+      const accessory = operation.thing === 'stair'
+        ? { material: operation.material, function: 'seating' }
+        : ACCESSORIES[operation.thing];
       const anchorKey = `${operation.x}:${operation.y}:${operation.z}`;
       const displacesFoundation = (
         FLOOR_STANDING_ACCESSORIES.has(operation.thing)
@@ -612,7 +622,7 @@ function applyOperation(placed, operation, block, displacedFoundations) {
         placed.delete(`${operation.x}:${operation.y + 1}:${operation.z}`);
       }
       set(operation.x, operation.y, operation.z, accessory.material, accessory.function, {
-        fixtureKind: ['door', 'bed'].includes(operation.thing) ? operation.thing : null,
+        fixtureKind: ['door', 'bed', 'stair'].includes(operation.thing) ? operation.thing : null,
         requestedFacing: operation.facing,
       });
       if (displacesFoundation) {
@@ -674,6 +684,7 @@ function logicalFixtures(placed, canSupportMaterial, problems = []) {
   const fixtureEntries = [...placed.entries()].filter(([, value]) => value.fixtureKind);
   if (fixtureEntries.length === 0) return [];
   const parsedPositions = [...placed.keys()].map(key => key.split(':').map(Number));
+  const minY = Math.min(...parsedPositions.map(([, y]) => y));
   const minX = Math.min(...parsedPositions.map(([x]) => x));
   const maxX = Math.max(...parsedPositions.map(([x]) => x));
   const minZ = Math.min(...parsedPositions.map(([, , z]) => z));
@@ -704,6 +715,13 @@ function logicalFixtures(placed, canSupportMaterial, problems = []) {
           return `lacks planned solid support at ${x},${y - 1},${z}`;
         }
         return null;
+      }
+      if (value.fixtureKind === 'stair') {
+        if (y === minY) return null;
+        const support = placed.get(`${x}:${y - 1}:${z}`);
+        return support && canSupportMaterial(support.material)
+          ? null
+          : `lacks planned solid support at ${x},${y - 1},${z}`;
       }
       const offset = FACING_OFFSETS[candidate];
       const headKey = `${x + offset.x}:${y}:${z + offset.z}`;
@@ -740,6 +758,8 @@ function logicalFixtures(placed, canSupportMaterial, problems = []) {
       if (detail?.startsWith('lacks planned solid support')) {
         const correction = value.fixtureKind === 'bed'
           ? 'a bed occupies its anchor plus one block in its facing direction, so move it inward, face it toward supported interior floor, or extend the floor'
+          : value.fixtureKind === 'stair'
+            ? 'place a ground stair at the lowest design level or add a solid support below it'
           : 'add a solid floor with room or slab before placing the fixture';
         problems.push(`Fixture ${id} ${detail}; ${correction}`);
       } else if (detail) {
@@ -752,9 +772,13 @@ function logicalFixtures(placed, canSupportMaterial, problems = []) {
     const direction = FACING_OFFSETS[facing];
     const occupiedOffsets = value.fixtureKind === 'door'
       ? [{ x: 0, y: 0, z: 0, part: 'lower' }, { x: 0, y: 1, z: 0, part: 'upper' }]
+      : value.fixtureKind === 'stair'
+        ? [{ x: 0, y: 0, z: 0 }]
       : [{ x: 0, y: 0, z: 0, part: 'foot' }, { ...direction, part: 'head' }];
     const supportOffsets = value.fixtureKind === 'door'
       ? [{ x: 0, y: -1, z: 0 }]
+      : value.fixtureKind === 'stair'
+        ? (y === minY ? [] : [{ x: 0, y: -1, z: 0 }])
       : [{ x: 0, y: -1, z: 0 }, { x: direction.x, y: -1, z: direction.z }];
     value.fixtureId = id;
     value.facing = facing;

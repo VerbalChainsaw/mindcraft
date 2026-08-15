@@ -7,12 +7,14 @@ import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import {
   authoritativePlayerRefreshMs,
   BehaviorArbiter,
+  onlineHumanPlayerNames,
 } from '../../src/agent/runtime/behavior-arbiter.js';
 import {
   DecisionTraceRecorder,
   extractDecisionTraces,
   formatDecisionTrace,
 } from '../../src/agent/runtime/decision-trace.js';
+import { getModeSuppressionReason } from '../../src/agent/modes.js';
 
 function fakeAgent({ emergency = false, held = false, survival = null, job = null } = {}) {
   const calls = [];
@@ -78,9 +80,10 @@ test('trace enablement preserves the emergency selection and side-effect order',
   assert.equal(trace.lanes.find(lane => lane.lane === 'attributed_protection').status, 'not_evaluated');
 });
 
-test('a safe operator-held bot selects the hold gate after checking only emergency self-preservation', async () => {
+test('a safe operator-held bot selects the hold gate after checking bounded mortal reflexes', async () => {
   const { agent, calls } = fakeAgent({ held: true });
   agent.operator_hold_reason = 'Operator stop is active.';
+  agent.bot.players = { DadPlayer: { username: 'DadPlayer', entity: null } };
   const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
 
   const status = await arbiter.update(25);
@@ -89,18 +92,204 @@ test('a safe operator-held bot selects the hold gate after checking only emergen
   assert.equal(status.code, 'operator_hold_safe');
   assert.match(status.reason, /No immediate self-preservation response is required/);
   assert.equal(calls.indexOf('modes:self_preservation') < calls.indexOf('operator:check'), true);
-  assert.equal(calls.some(call => call === 'modes:self_defense,cowardice'), false);
+  assert.equal(calls.indexOf('modes:self_preservation') < calls.indexOf('modes:self_defense,cowardice'), true);
+  assert.equal(calls.indexOf('modes:self_defense,cowardice') < calls.indexOf('operator:check'), true);
   const trace = arbiter.snapshot().decisionTrace.recent[0];
   assert.equal(trace.lanes.find(lane => lane.lane === 'emergency_self_preservation').status, 'ineligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'attributed_protection').status, 'ineligible');
   assert.equal(trace.lanes.find(lane => lane.lane === 'operator_hold').status, 'eligible');
   assert.equal(trace.lanes.find(lane => lane.lane === 'basic_survival').status, 'not_evaluated');
 });
 
-test('an operator-held bot admits only the bounded self-preservation reflex and returns to hold', async () => {
+test('a human-attended open-water Hold maintains and releases one native surface control', async () => {
+  const controls = [];
+  const { agent } = fakeAgent({ held: true });
+  agent.operator_hold_reason = 'operator stop command';
+  agent.bot.players = { DadPlayer: { username: 'DadPlayer', entity: null } };
+  agent.bot.entity = {
+    isInWater: true,
+    onGround: false,
+    position: { floored: () => ({ x: 12, y: 62, z: 20 }) },
+  };
+  agent.bot.blockAt = () => ({ name: 'water' });
+  agent.bot.setControlState = (name, value) => controls.push({ name, value });
+  const arbiter = new BehaviorArbiter(agent, {
+    heldNoHumanUnloadGraceMs: 1_000,
+    trace: { enabled: true, retention: 4 },
+  });
+
+  const attended = await arbiter.update(25);
+  assert.equal(attended.selectedLane, 'operator_hold');
+  assert.equal(attended.code, 'operator_hold_surface_stance');
+  assert.equal(attended.heldSurfaceStance.active, true);
+  assert.deepEqual(controls.at(-1), { name: 'jump', value: true });
+  assert.equal(agent.actions.executing, false, 'surface posture must not invent a serialized action');
+
+  delete agent.bot.players.DadPlayer;
+  const unattended = await arbiter.update(25);
+  assert.equal(unattended.code, 'operator_hold_unload_grace');
+  assert.equal(unattended.heldSurfaceStance.active, false);
+  assert.deepEqual(controls.at(-1), { name: 'jump', value: false });
+});
+
+test('releasing Operator Hold synchronously releases an owned open-water surface control', () => {
+  const controls = [];
+  const { agent } = fakeAgent({ held: true });
+  agent.bot.setControlState = (name, value) => controls.push({ name, value });
+  const arbiter = new BehaviorArbiter(agent);
+  arbiter.heldSurfaceStance = {
+    active: true,
+    code: 'maintaining_breathable_surface',
+    updatedAt: Date.now(),
+  };
+
+  assert.equal(arbiter.releaseHeldSurfaceStance('operator_hold_released'), true);
+  assert.deepEqual(controls, [{ name: 'jump', value: false }]);
+  assert.equal(arbiter.snapshot().heldSurfaceStance.active, false);
+});
+
+test('missing player-roster evidence never authorizes an open-water surface posture', async () => {
+  const controls = [];
+  const { agent } = fakeAgent({ held: true });
+  agent.operator_hold_reason = 'operator stop command';
+  agent.bot.entity = {
+    isInWater: true,
+    onGround: false,
+    position: { floored: () => ({ x: 12, y: 62, z: 20 }) },
+  };
+  agent.bot.blockAt = () => ({ name: 'water' });
+  agent.bot.setControlState = (name, value) => controls.push({ name, value });
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.code, 'operator_hold_roster_unknown');
+  assert.equal(status.heldSurfaceStance.active, false);
+  assert.deepEqual(controls, []);
+});
+
+test('the arbiter resumes one deferred finite player action after mortal reflexes clear', async () => {
+  const { agent } = fakeAgent();
+  let resumed = 0;
+  agent.actions = {
+    executing: false,
+    currentActionLabel: '',
+    currentActionOwner: '',
+    hasDeferredPlayerAction: () => true,
+    resumeDeferredPlayerAction() {
+      resumed += 1;
+      return Promise.resolve({ success: true });
+    },
+  };
+  agent.isIdle = () => true;
+  agent.self_prompter = { isActive: () => false };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.selectedLane, 'player_directive');
+  assert.equal(status.code, 'deferred_player_action_resumed');
+  assert.equal(resumed, 1);
+});
+
+test('held lifecycle classifies distant tab-listed humans and excludes known bot profiles', () => {
+  const agent = {
+    name: 'HeldBot',
+    getKnownAgentNames: () => ['HeldBot', 'HelperBot'],
+    bot: {
+      players: {
+        HeldBot: { username: 'HeldBot', entity: null },
+        HelperBot: { username: 'HelperBot', entity: null },
+        DadPlayer: { username: 'DadPlayer', entity: null },
+      },
+    },
+  };
+
+  assert.deepEqual(onlineHumanPlayerNames(agent), ['DadPlayer']);
+  assert.equal(onlineHumanPlayerNames({ name: 'HeldBot', bot: {} }), null);
+});
+
+test('a continuously human-empty Hold unloads once after grace and presence resets the clock', async () => {
+  let now = 1_000;
+  let held = true;
+  const unloads = [];
+  const { agent } = fakeAgent({ held: true });
+  agent.bot.players = {
+    HeldBot: { username: 'HeldBot', entity: null },
+    HelperBot: { username: 'HelperBot', entity: null },
+  };
+  agent.name = 'HeldBot';
+  agent.operator_hold_reason = 'operator stop command';
+  agent.getKnownAgentNames = () => ['HeldBot', 'HelperBot'];
+  agent.isOperatorHeld = () => held;
+  agent.teardownAndExit = async (reason, code) => {
+    unloads.push({ reason, code });
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => now,
+    heldNoHumanUnloadGraceMs: 1_000,
+    trace: { enabled: true, retention: 8 },
+  });
+
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_unload_grace');
+  now += 900;
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_unload_grace');
+  agent.bot.players.DadPlayer = { username: 'DadPlayer', entity: null };
+  now += 200;
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_safe');
+
+  delete agent.bot.players.DadPlayer;
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_unload_grace');
+  now += 1_000;
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_unloading');
+  await Promise.resolve();
+  assert.equal(unloads.length, 1);
+  assert.equal(unloads[0].code, 0);
+  assert.match(unloads[0].reason, /no human players online/);
+
+  now += 1_000;
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_unloading');
+  await Promise.resolve();
+  assert.equal(unloads.length, 1);
+
+  held = false;
+});
+
+test('human absence does not unload a temporary assignment-compilation Hold', async () => {
+  let now = 1_000;
+  let unloads = 0;
+  const { agent } = fakeAgent({ held: true });
+  agent.name = 'HeldBot';
+  agent.operator_hold_reason = 'construction assignment pending';
+  agent.bot.players = { HeldBot: { username: 'HeldBot', entity: null } };
+  agent.getKnownAgentNames = () => ['HeldBot'];
+  agent.teardownAndExit = async () => { unloads += 1; };
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => now,
+    heldNoHumanUnloadGraceMs: 1_000,
+    trace: { enabled: true, retention: 4 },
+  });
+
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_safe');
+  now += 10_000;
+  assert.equal((await arbiter.update(25)).code, 'operator_hold_safe');
+  await Promise.resolve();
+  assert.equal(unloads, 0);
+});
+
+test('an operator-held bot admits bounded mortal reflexes and returns to hold', async () => {
   let danger = true;
+  let recentDamageThreat = false;
   let held = true;
   let reflexRuns = 0;
+  let defenseRuns = 0;
   const recorded = [];
+  const zombie = {
+    id: 12,
+    type: 'hostile',
+    name: 'zombie',
+    position: { x: 2, y: 64, z: 0 },
+  };
   const agent = {
     name: 'HeldBot',
     runtime: { autonomy: 'command' },
@@ -109,9 +298,26 @@ test('an operator-held bot admits only the bounded self-preservation reflex and 
       health: 8,
       food: 20,
       oxygenLevel: 20,
+      players: { DadPlayer: { username: 'DadPlayer', entity: null } },
       interrupt_code: false,
       output: '',
       lastActionEvidence: null,
+      lastDamageTime: 0,
+      lastDamageSource: null,
+      entities: { 12: zombie },
+      entity: {
+        position: {
+          x: 0,
+          y: 64,
+          z: 0,
+          distanceTo(position) {
+            return Math.hypot(position.x - this.x, position.y - this.y, position.z - this.z);
+          },
+        },
+      },
+      nearestEntity(predicate) {
+        return recentDamageThreat && predicate(zombie) ? zombie : null;
+      },
       emit() {},
     },
     clearBotLogs() { this.bot.output = ''; },
@@ -128,21 +334,37 @@ test('an operator-held bot admits only the bounded self-preservation reflex and 
     beginUpdateCycle() {},
     endUpdateCycle() {},
     async updateBand(names) {
-      if (!names.includes('self_preservation') || !danger) {
-        return { active: false, scheduled: false, code: 'inactive' };
+      if (names.includes('self_preservation') && danger) {
+        const outcome = await agent.actions.runAction('mode:self_preservation', () => {
+          reflexRuns += 1;
+          assert.equal(held, true);
+          agent.bot.lastActionEvidence = { outcome: 'retreated' };
+          return true;
+        }, { owner: 'reflex' });
+        return {
+          active: false,
+          scheduled: outcome.success,
+          mode: 'self_preservation',
+          code: outcome.success ? 'mode_scheduled' : outcome.result?.code,
+        };
       }
-      const outcome = await agent.actions.runAction('mode:self_preservation', () => {
-        reflexRuns += 1;
-        assert.equal(held, true);
-        agent.bot.lastActionEvidence = { outcome: 'retreated' };
-        return true;
-      }, { owner: 'reflex' });
-      return {
-        active: false,
-        scheduled: outcome.success,
-        mode: 'self_preservation',
-        code: outcome.success ? 'mode_scheduled' : outcome.result?.code,
-      };
+      if (names.includes('self_defense') && recentDamageThreat) {
+        const suppression = getModeSuppressionReason(agent, { name: 'self_defense' });
+        if (suppression) return { active: false, scheduled: false, code: suppression };
+        const outcome = await agent.actions.runAction('mode:self_defense', () => {
+          defenseRuns += 1;
+          assert.equal(held, true);
+          agent.bot.lastActionEvidence = { outcome: 'threat_resolved' };
+          return true;
+        }, { owner: 'reflex' });
+        return {
+          active: false,
+          scheduled: outcome.success,
+          mode: 'self_defense',
+          code: outcome.success ? 'mode_scheduled' : outcome.result?.code,
+        };
+      }
+      return { active: false, scheduled: false, code: 'inactive' };
     },
   };
   const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
@@ -160,6 +382,23 @@ test('an operator-held bot admits only the bounded self-preservation reflex and 
   assert.equal(recorded.at(-1).code, 'skill_retreated');
 
   danger = false;
+  recentDamageThreat = true;
+  agent.bot.lastDamageTime = Date.now();
+  agent.bot.lastDamageSource = {
+    matchesSelf: true,
+    kind: 'hostile',
+    observedAt: Date.now(),
+    source: { id: 12, name: 'zombie', username: null },
+  };
+  const defenseStatus = await arbiter.update(25);
+  assert.equal(defenseStatus.selectedLane, 'attributed_protection');
+  assert.equal(defenseRuns, 1);
+  assert.equal(held, true);
+  assert.equal(agent.actions.executing, false);
+
+  recentDamageThreat = false;
+  agent.bot.lastDamageTime = 0;
+  agent.bot.lastDamageSource = null;
   const heldStatus = await arbiter.update(25);
   assert.equal(heldStatus.selectedLane, 'operator_hold');
   assert.equal(heldStatus.code, 'operator_hold_safe');
@@ -209,6 +448,69 @@ test('hunger survival ownership hands off to the persisted survival-job lane', a
   const trace = arbiter.snapshot().decisionTrace.recent.at(-1);
   assert.equal(trace.lanes.find(lane => lane.lane === 'basic_survival').status, 'ineligible');
   assert.equal(trace.lanes.find(lane => lane.lane === 'survival_job').status, 'eligible');
+});
+
+test('critical bodily survival gets a chance to preempt an active player goal', async () => {
+  let survivalUpdates = 0;
+  const survival = {
+    inFlight: false,
+    status: { code: 'idle' },
+    update() {
+      survivalUpdates += 1;
+      this.inFlight = true;
+      this.status = { code: 'acquire_food' };
+    },
+    blocksLowerPriority() { return this.inFlight; },
+  };
+  const { agent } = fakeAgent({ survival });
+  agent.bot.health = 20;
+  agent.bot.food = 6;
+  agent.goal_director = { activeGoal: { id: 'family-breakfast' } };
+  agent.actions = {
+    executing: true,
+    currentActionId: 'player-action-1',
+    currentActionLabel: 'action:collectWoodInRange',
+    currentActionOwner: 'player',
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.selectedLane, 'basic_survival');
+  assert.equal(status.code, 'acquire_food');
+  assert.equal(survivalUpdates, 1);
+  const trace = arbiter.snapshot().decisionTrace.recent.at(-1);
+  assert.equal(trace.lanes.find(lane => lane.lane === 'basic_survival').status, 'eligible');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'active_action_retention').status, 'not_evaluated');
+  assert.deepEqual(trace.winner.preemption, {
+    involved: true,
+    fromOwner: 'player',
+    fromAction: 'action:collectWoodInRange',
+    toLane: 'basic_survival',
+  });
+});
+
+test('a settled survival help wait permits eye tracking without releasing movement autonomy', async () => {
+  const survival = {
+    inFlight: false,
+    status: { phase: 'waiting', code: 'safety_cover_unavailable' },
+    update() {},
+    blocksLowerPriority: () => true,
+    permitsIdleEmbodiment: () => true,
+  };
+  const { agent } = fakeAgent({ survival });
+  agent.isIdle = () => true;
+  agent.bot.modes.updateBand = names => (
+    names.includes('idle_staring')
+      ? { active: true, scheduled: true, mode: 'idle_staring', code: 'tracking_player' }
+      : { active: false, scheduled: false, code: 'inactive' }
+  );
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.selectedLane, 'idle_embodiment');
+  assert.equal(status.code, 'tracking_player');
 });
 
 test('decision trace retention remains bounded and later short-circuited lanes stay explicit', async () => {

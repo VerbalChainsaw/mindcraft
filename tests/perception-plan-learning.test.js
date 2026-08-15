@@ -26,7 +26,7 @@ import {
   getCapabilityDefinition,
 } from '../src/agent/runtime/capability-catalogue.js';
 import { buildPrerequisitePlan } from '../src/agent/runtime/prerequisite-planner.js';
-import { ProcedureStore } from '../src/agent/runtime/procedure-store.js';
+import { isSafeProcedureCommand, ProcedureStore } from '../src/agent/runtime/procedure-store.js';
 
 function plannerBot() {
   return {
@@ -468,6 +468,38 @@ test('The causal planner derives renewable entity harvests instead of searching 
     builderPlan.actions[0].capability.binding.command,
     '!harvestEntityDrop("sheep", "white_wool", "shear", 3, 192, true)',
   );
+});
+
+test('The causal planner derives string from bounded spider combat before scavenging placed tripwire', () => {
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+  ];
+  const bot = {
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    entities: {},
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+    registry,
+  };
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'fishing_rod',
+    quantity: 1,
+    range: 64,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.deepEqual(plan.actions.map(action => action.capability.id), [
+    'harvest_entity_drop',
+    'craft',
+  ]);
+  assert.equal(
+    plan.actions[0].capability.binding.command,
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64)',
+  );
+  assert.equal(isSafeProcedureCommand('!harvestEntityDrop'), true);
 });
 
 test('Nested recipes never treat an observed crafted self-drop block as demolition authority', () => {

@@ -181,6 +181,54 @@ test('Pathfinder represents a one-block waterline bank as a native step-up', () 
   assert.equal(neighbors[0].locomotion.type, 'step_up');
 });
 
+test('Pathfinder does not advertise a step-up launched from inside a door', () => {
+  const node = { x: 4, y: 71, z: 7, remainingBlocks: 0 };
+  const movement = Object.create(Movements.prototype);
+  movement.canPlaceBlocks = false;
+  movement.getNumEntitiesAt = () => 0;
+  movement.safeOrBreak = () => 0;
+  movement.openableAction = () => null;
+  movement.getBlock = (_node, x, y, z) => {
+    if (x === 0 && y === -1 && z === 0) {
+      return {
+        position: new Vec3(4, 70, 7),
+        name: 'oak_door',
+        openable: true,
+        physical: true,
+        liquid: false,
+        height: 71,
+      };
+    }
+    if (x === 1 && y === 0 && z === 0) {
+      return {
+        position: new Vec3(5, 71, 7),
+        name: 'cobblestone',
+        openable: false,
+        physical: true,
+        liquid: false,
+        height: 72,
+      };
+    }
+    return {
+      position: new Vec3(node.x + x, node.y + y, node.z + z),
+      name: 'air',
+      openable: false,
+      physical: false,
+      liquid: false,
+      safe: true,
+      height: node.y + y,
+    };
+  };
+  movement.makeMove = () => {
+    throw new Error('a door is passable body space, not a solid launch platform');
+  };
+
+  const neighbors = [];
+  movement.getMoveJumpUp(node, { x: 1, z: 0 }, neighbors);
+
+  assert.deepEqual(neighbors, []);
+});
+
 test('Pathfinder omits bridge placement when the movement owner has no construction authority', () => {
   const node = { x: 4, y: 64, z: 7, remainingBlocks: 8 };
   const movement = Object.create(Movements.prototype);

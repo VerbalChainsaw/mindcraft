@@ -113,6 +113,55 @@ declare module 'mineflayer-pathfinder' {
 			public hasChanged(): boolean;
 		}
 
+		export class GoalOutsideXZRadius extends Goal {
+			public constructor(
+				x: number,
+				y: number,
+				z: number,
+				range: number,
+				maxVerticalDelta?: number,
+				exclusionZones?: Array<{ x: number; z: number; range: number }>
+			);
+
+			public x: number;
+			public y: number;
+			public z: number;
+			public range: number;
+			public rangeSq: number;
+			public maxVerticalDelta: number;
+			public exclusionZones: Array<{
+				x: number;
+				z: number;
+				range: number;
+				rangeSq: number;
+			}>;
+
+			public heuristic(node: Move): number;
+			public isEnd(node: Move): boolean;
+		}
+
+		export class GoalOutsideEntityXZRadius extends Goal {
+			public constructor(
+				entity: Entity,
+				range: number,
+				originY: number,
+				maxVerticalDelta?: number
+			);
+
+			public entity: Entity;
+			public x: number;
+			public y: number;
+			public z: number;
+			public range: number;
+			public rangeSq: number;
+			public maxVerticalDelta: number;
+
+			public heuristic(node: Move): number;
+			public isEnd(node: Move): boolean;
+			public hasChanged(): boolean;
+			public isValid(): boolean;
+		}
+
 		export class GoalXZ extends Goal {
 			public constructor(x: number, z: number);
 

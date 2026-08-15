@@ -41,6 +41,12 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, number));
 }
 
+function optionalBoundedInteger(value, minimum, maximum) {
+  if (value === null || value === undefined || value === '') return null;
+  if (!Number.isFinite(Number(value))) return null;
+  return Math.max(minimum, Math.min(maximum, Math.floor(Number(value))));
+}
+
 function commandString(value) {
   return JSON.stringify(String(value || ''));
 }
@@ -1252,10 +1258,11 @@ defineCapability({
   parameters: {
     source: { type: 'entity_name' },
     output: { type: 'item_name' },
-    method: { type: 'enum', values: ['shear'] },
+    method: { type: 'enum', values: ['shear', 'kill'] },
     count: { type: 'integer', minimum: 1, maximum: 64 },
     range: { type: 'integer', minimum: 16, maximum: 512 },
     allowAlternative: { type: 'boolean' },
+    targetEntityId: { type: 'integer', minimum: 1, maximum: 2_147_483_647 },
     expectedIncrease: { type: 'integer', minimum: 1 },
   },
   normalizeArguments: args => immutable({
@@ -1265,19 +1272,22 @@ defineCapability({
     count: boundedInteger(args?.count, 1, 1, 64),
     range: boundedInteger(args?.range, 64, 16, 512),
     allowAlternative: args?.allowAlternative === true,
+    targetEntityId: optionalBoundedInteger(args?.targetEntityId, 1, 2_147_483_647),
     expectedIncrease: boundedInteger(args?.expectedIncrease ?? args?.count, 1, 1, 64),
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: `registered source entity ${args.source}`, satisfied: validName(args.source) && snapshot.hasEntity(args.source) },
     { requirement: `registered output item ${args.output}`, satisfied: validName(args.output) && snapshot.hasItem(args.output) },
-    { requirement: 'supported entity harvest method', satisfied: args.method === 'shear' },
+    { requirement: 'supported entity harvest method', satisfied: ['shear', 'kill'].includes(args.method) },
     { requirement: 'positive bounded harvest count', satisfied: args.count >= 1 && args.count <= 64 },
+    { requirement: 'valid optional entity identity', satisfied: args.targetEntityId === null || Number.isInteger(args.targetEntityId) },
   ]),
   expectedEffects: (_snapshot, args) => [inventoryEffect(args.output, args.expectedIncrease)],
   bind: (_context, args, _signal) => immutable({
     ok: true,
     commandName: '!harvestEntityDrop',
-    command: `!harvestEntityDrop(${commandString(args.source)}, ${commandString(args.output)}, ${commandString(args.method)}, ${args.count}, ${args.range}${args.allowAlternative ? ', true' : ''})`,
+    command: `!harvestEntityDrop(${commandString(args.source)}, ${commandString(args.output)}, ${commandString(args.method)}, ${args.count}, ${args.range}${args.targetEntityId !== null ? `, ${args.allowAlternative}, ${args.targetEntityId}` : args.allowAlternative ? ', true' : ''})`,
+    targetEntityId: args.targetEntityId,
   }),
   execute: executeBoundCommand,
   verify: verifyEffects,

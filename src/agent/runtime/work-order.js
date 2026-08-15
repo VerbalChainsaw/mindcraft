@@ -26,7 +26,7 @@ const MAX_FAILED_METHODS = 24;
 const MAX_FAILED_TARGETS = 24;
 const MAX_MINING_RETURN_CELLS = 512;
 const DEFAULT_MAX_RECOVERIES = 8;
-const FIXTURE_KINDS = new Set(['bed', 'door']);
+const FIXTURE_KINDS = new Set(['bed', 'door', 'stair']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
 // A preemption is not the work order failing. The bot was mid-swing when a
 // creeper arrived: nothing about the order became wrong, and the same step is
@@ -136,8 +136,8 @@ function normalizeBlueprint(blueprint) {
       ...(facing ? { facing } : {}),
     });
   });
-  const fixtureOffsets = (values, label) => {
-    if (!Array.isArray(values) || values.length === 0 || values.length > 4) {
+  const fixtureOffsets = (values, label, { allowEmpty = false } = {}) => {
+    if (!Array.isArray(values) || (!allowEmpty && values.length === 0) || values.length > 4) {
       throw new TypeError(`Blueprint fixture ${label} are invalid.`);
     }
     return Object.freeze(values.map(value => {
@@ -180,7 +180,11 @@ function normalizeBlueprint(blueprint) {
       || !Number.isInteger(anchor.z)
     ) throw new TypeError('Blueprint fixture anchor is invalid.');
     const occupiedOffsets = fixtureOffsets(raw.occupiedOffsets, 'occupied offsets');
-    const supportOffsets = fixtureOffsets(raw.supportOffsets, 'support offsets');
+    const supportOffsets = fixtureOffsets(raw.supportOffsets, 'support offsets', {
+      // A lowest-course one-cell fixture is supported by the natural terrain
+      // proven by site selection and rechecked immediately before placement.
+      allowEmpty: kind === 'stair' && anchor.y === 0,
+    });
     const anchorCell = cells.find(cell => (
       cell.x === anchor.x
       && cell.y === anchor.y
@@ -231,6 +235,11 @@ function normalizeAnchor(anchor) {
 function normalizeCheckpoint(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) return Object.freeze({});
   const normalized = {};
+  for (const key of ['baselineInventory', 'targetInventory']) {
+    if (Number.isFinite(checkpoint[key])) {
+      normalized[key] = finiteInteger(checkpoint[key], 0, 0, 100_000);
+    }
+  }
   for (const key of [
     'verifiedCount',
     'nextCell',
@@ -375,6 +384,23 @@ function normalizeCheckpoint(checkpoint) {
     }
     if (route.length > 0) normalized.miningReturnRoute = Object.freeze(route);
   }
+  const miningSearchNoProgress = checkpoint.miningSearchNoProgress;
+  const miningSearchMethod = boundedText(miningSearchNoProgress?.method, 120);
+  const miningSearchTarget = boundedText(miningSearchNoProgress?.target, 64);
+  if (
+    miningSearchMethod === 'action:mineSearchTunnel'
+    && CANONICAL_NAME.test(miningSearchTarget)
+    && ['x', 'y', 'z'].every(axis => Number.isFinite(miningSearchNoProgress?.[axis]))
+  ) {
+    normalized.miningSearchNoProgress = Object.freeze({
+      method: miningSearchMethod,
+      target: miningSearchTarget,
+      x: Math.floor(miningSearchNoProgress.x),
+      y: Math.floor(miningSearchNoProgress.y),
+      z: Math.floor(miningSearchNoProgress.z),
+      code: boundedText(miningSearchNoProgress.code, 80),
+    });
+  }
   const toolName = boundedText(checkpoint.toolRequirement?.name, 80);
   const minimumUsableDurability = Number(checkpoint.toolRequirement?.minimumUsableDurability);
   if (/^[a-z0-9_]+$/.test(toolName) && Number.isFinite(minimumUsableDurability)) {
@@ -452,7 +478,7 @@ function checkpointWithVerifiedMiningRoute(result, currentCheckpoint) {
     || !Array.isArray(skill.returnRoute)
     || skill.returnRoute.length < 1
   ) return currentCheckpoint;
-  const combined = [...(currentCheckpoint?.miningReturnRoute || [])];
+  const incoming = [];
   for (const rawCell of skill.returnRoute) {
     if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
     const cell = {
@@ -460,14 +486,48 @@ function checkpointWithVerifiedMiningRoute(result, currentCheckpoint) {
       y: Math.floor(rawCell.y),
       z: Math.floor(rawCell.z),
     };
+    const previous = incoming.at(-1);
+    if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
+    incoming.push(cell);
+  }
+  if (incoming.length < 1) return currentCheckpoint;
+
+  const prior = Array.isArray(currentCheckpoint?.miningReturnRoute)
+    && Number(currentCheckpoint?.miningReturnIndex) >= 0
+    ? [...currentCheckpoint.miningReturnRoute]
+    : [];
+  const incomingStart = incoming[0];
+  // The next bounded mining leg may first walk backward to stable ground on
+  // the preserved route, then extend from that earlier cell. Keep the proven
+  // prefix through the latest exact overlap and replace only its superseded
+  // tail. Requiring overlap at the old final cell forgets the real exit.
+  const overlapIndex = prior.findLastIndex(cell => (
+    cell.x === incomingStart.x
+    && cell.y === incomingStart.y
+    && cell.z === incomingStart.z
+  ));
+  // A collection action can walk through an already-open tunnel before it
+  // starts the next excavated fragment. In that case the new route has no
+  // exact cell overlap even though the same action physically traversed the
+  // gap. Keep the prior exit path and append the fragment; the existing
+  // no-dig route-cell capability will reverify that open gap during return.
+  const combined = prior.length > 0
+    ? overlapIndex >= 0
+      ? prior.slice(0, overlapIndex + 1)
+      : prior
+    : [];
+  for (const cell of incoming) {
     const previous = combined.at(-1);
     if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
     if (combined.length >= MAX_MINING_RETURN_CELLS) break;
     combined.push(cell);
   }
-  return combined.length > (currentCheckpoint?.miningReturnRoute?.length || 0)
-    ? normalizeCheckpoint({ ...currentCheckpoint, miningReturnRoute: combined })
-    : currentCheckpoint;
+  if (combined.length < 1) return currentCheckpoint;
+  return normalizeCheckpoint({
+    ...currentCheckpoint,
+    miningReturnRoute: combined,
+    miningReturnIndex: combined.length - 1,
+  });
 }
 
 function surfaceRecoveryObservation(result) {
@@ -479,6 +539,33 @@ function surfaceRecoveryObservation(result) {
       skill.supported === true
       && Number(skill.verticalProgress) >= 1
     ),
+  });
+}
+
+function miningSearchNoProgressCheckpoint(result) {
+  const skill = result?.evidence?.skill;
+  const progress = skill?.progress;
+  if (
+    result?.phase !== 'failed'
+    || result?.label !== 'action:mineSearchTunnel'
+    || skill?.kind !== 'mining_search'
+    || skill?.routeDigging !== true
+    || progress?.kind !== 'mining_search_physical'
+    || progress?.verified !== true
+    || progress?.changed !== false
+    || skill?.toolRequirement
+    || skill?.workstationRequirement
+    || skill?.accessRequirement
+    || !CANONICAL_NAME.test(boundedText(skill?.target?.name, 64))
+    || !['x', 'y', 'z'].every(axis => Number.isFinite(progress?.position?.[axis]))
+  ) return null;
+  return Object.freeze({
+    method: 'action:mineSearchTunnel',
+    target: boundedText(skill.target.name, 64),
+    x: Math.floor(progress.position.x),
+    y: Math.floor(progress.position.y),
+    z: Math.floor(progress.position.z),
+    code: boundedText(result.code, 80),
   });
 }
 
@@ -630,10 +717,21 @@ export function advanceWorkOrder(order, result, {
   now = Date.now(),
 } = {}) {
   const current = normalizeWorkOrder(order);
+  const {
+    miningSearchNoProgress: _clearedMiningSearchNoProgress,
+    ...checkpointAfterVerifiedProgress
+  } = current.checkpoint;
   const verifiedProgressCheckpoint = checkpointWithVerifiedMiningRoute(
     result,
-    current.checkpoint,
+    result?.phase === 'succeeded' ? checkpointAfterVerifiedProgress : current.checkpoint,
   );
+  const miningNoProgress = miningSearchNoProgressCheckpoint(result);
+  const failedCheckpoint = miningNoProgress
+    ? normalizeCheckpoint({
+        ...current.checkpoint,
+        miningSearchNoProgress: miningNoProgress,
+      })
+    : current.checkpoint;
   // A failed action selected while already recovering still belongs to the
   // original productive phase. Pointing recovery back at `recover` erases
   // that continuation and lets reducers skip required preparation forever.
@@ -777,7 +875,7 @@ export function advanceWorkOrder(order, result, {
         : [],
   }).failedTargets || [];
   const prerequisiteCheckpoint = discoveredPrerequisiteCheckpoint(result, current.checkpoint);
-  const recoveryCheckpoint = prerequisiteCheckpoint || current.checkpoint;
+  const recoveryCheckpoint = prerequisiteCheckpoint || failedCheckpoint;
   if (result.retryable === true && incomingFailedTargets.length > 0) {
     if (current.recoveries < current.maxRecoveries) {
       const method = boundedText(failedMethod, 160);
@@ -860,7 +958,7 @@ export function advanceWorkOrder(order, result, {
       resumePhase: recoveryResumePhase,
       attempts: current.attempts + 1,
       checkpoint: {
-        ...current.checkpoint,
+        ...failedCheckpoint,
         ...(failedMethods ? { failedMethods } : {}),
       },
       evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
@@ -897,6 +995,7 @@ export function resumeFailedWorkOrder(order, now = Date.now()) {
   if (current.phase !== 'failed' || current.source !== 'player') return current;
   const {
     failedMethods: _failedMethods,
+    miningSearchNoProgress: _miningSearchNoProgress,
     ...checkpoint
   } = current.checkpoint;
   return normalizeWorkOrder({

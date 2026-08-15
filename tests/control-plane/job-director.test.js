@@ -438,6 +438,15 @@ test('Given a resumable mining order, JobDirector dispatches one phase action an
 test('Given low food during durable work, JobDirector waits for SurvivalDirector without spending productive attempts', () => {
   const agent = createAgent();
   const commands = [];
+  const upkeepRequests = [];
+  agent.survival_director = {
+    jobFoodUpkeepOutcome: () => ({ phase: 'pending' }),
+    requestJobFoodUpkeep: request => {
+      upkeepRequests.push(request);
+      return true;
+    },
+    clearJobFoodUpkeep: () => false,
+  };
   const director = new JobDirector(agent, {
     store: memoryStore(),
     getSnapshot: () => ({
@@ -467,6 +476,59 @@ test('Given low food during durable work, JobDirector waits for SurvivalDirector
   assert.equal(director.activeOrder.attempts, 2);
   assert.equal(director.snapshot().phase, 'waiting');
   assert.equal(director.snapshot().code, 'food_resupply_required');
+  assert.deepEqual(upkeepRequests, [{
+    workOrderId: 'hungry-mine',
+    requester: 'Gabriel',
+    targetFoodPoints: 24,
+  }]);
+});
+
+test('Given exhausted correlated food recovery, JobDirector settles the durable work truthfully', () => {
+  const agent = createAgent();
+  agent.survival_director = {
+    jobFoodUpkeepOutcome: () => ({
+      phase: 'failed',
+      code: 'food_resupply_unavailable',
+      detail: 'No safe food source remained after bounded recovery.',
+    }),
+    requestJobFoodUpkeep: () => true,
+    clearJobFoodUpkeep: () => true,
+  };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({
+      ...safeMiningSnapshot({ cobblestone: 0 }),
+      hunger: 15,
+      foodPoints: 0,
+    }),
+    now: () => 10_000,
+    executeCommand: () => {},
+  });
+  director.submit(createWorkOrder({
+    id: 'hungry-scout',
+    role: 'scout',
+    kind: 'scout',
+    source: 'player',
+    requester: 'DadPlayer',
+    target: { name: 'scout_region', x: 0, y: 64, z: 0 },
+    phase: 'recover',
+    checkpoint: {
+      homeDimension: 'overworld',
+      scoutFindings: ['animal'],
+      scoutGuideFinding: 'animal',
+      scoutAnimalName: 'pig',
+      scoutAnimalX: 10,
+      scoutAnimalY: 64,
+      scoutAnimalZ: 0,
+    },
+  }));
+
+  director.update();
+
+  assert.equal(director.activeOrder, null);
+  assert.equal(director.lastOrder.phase, 'failed');
+  assert.equal(director.lastOrder.evidence.code, 'food_resupply_unavailable');
+  assert.equal(director.snapshot().code, 'food_resupply_unavailable');
 });
 
 test('Given a partial mixed-family handoff, JobDirector checkpoints only verified transfers', async () => {

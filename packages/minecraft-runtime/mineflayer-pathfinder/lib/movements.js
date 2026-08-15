@@ -374,6 +374,15 @@ class Movements {
     const blockH = this.getBlock(node, dir.x, 2, dir.z)
     const blockB = this.getBlock(node, dir.x, 1, dir.z)
     const blockC = this.getBlock(node, dir.x, 0, dir.z)
+    const block0 = this.getBlock(node, 0, -1, 0)
+
+    // Doors and gates are traversable body cells after activation, never a
+    // solid launch platform. Treating the lower half beneath a node as full
+    // support advertises a synthetic step-up from inside the fixture; the
+    // executor then jumps against its collision plane forever. Keep ordinary
+    // horizontal door traversal, but make A* leave the doorway before it may
+    // climb. Trapdoors retain their dedicated movement handling below.
+    if (block0.openable && !String(block0.name || '').includes('trapdoor')) return
 
     let cost = 2 // move cost (move+jump)
     const toBreak = []
@@ -417,7 +426,6 @@ class Movements {
       blockC.height += 1
     }
 
-    const block0 = this.getBlock(node, 0, -1, 0)
     const current = this.getBlock(node, 0, 0, 0)
     // In water the body launches from the occupied liquid cell, not from the
     // solid floor beneath the column. Measuring from that floor turns an

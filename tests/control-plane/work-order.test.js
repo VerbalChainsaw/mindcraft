@@ -184,6 +184,115 @@ test('Given action results, a phase advances only on a new verified success and 
   assert.equal(boundedRecovery.recoveries, 1);
 });
 
+test('Verified mining progress checkpoints the reverse-route cursor before replanning', () => {
+  const order = createWorkOrder({
+    id: 'mine-route-checkpoint',
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'iron_ore' },
+    quota: 8,
+    phase: 'execute',
+  });
+  const progressed = advanceWorkOrder(order, {
+    actionId: 'mining-prefix',
+    phase: 'succeeded',
+    code: 'capability_verified_partial_progress',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'mining_search',
+        outcome: 'search_advanced',
+        routeDigging: true,
+        returnable: true,
+        returnRoute: [
+          { x: 8, y: 53, z: 12 },
+          { x: 8, y: 52, z: 11 },
+        ],
+      },
+    },
+  }, { nextPhase: 'verify' });
+
+  assert.deepEqual(progressed.checkpoint.miningReturnRoute, [
+    { x: 8, y: 53, z: 12 },
+    { x: 8, y: 52, z: 11 },
+  ]);
+  assert.equal(progressed.checkpoint.miningReturnIndex, 1);
+
+  const rebound = advanceWorkOrder(normalizeWorkOrder({
+    ...progressed,
+    phase: 'execute',
+  }), {
+    actionId: 'mining-rebound',
+    phase: 'succeeded',
+    code: 'capability_verified_partial_progress',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'mining_search',
+        outcome: 'search_advanced',
+        routeDigging: true,
+        returnable: true,
+        returnRoute: [
+          { x: 8, y: 52, z: 11 },
+          { x: 9, y: 51, z: 11 },
+        ],
+      },
+    },
+  }, { nextPhase: 'verify' });
+
+  assert.deepEqual(rebound.checkpoint.miningReturnRoute, [
+    { x: 8, y: 53, z: 12 },
+    { x: 8, y: 52, z: 11 },
+    { x: 9, y: 51, z: 11 },
+  ]);
+  assert.equal(rebound.checkpoint.miningReturnIndex, 2);
+});
+
+test('Verified mining fragments retain the surface route across an open traversable gap', () => {
+  const order = createWorkOrder({
+    id: 'mine-route-open-gap',
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'iron_ore' },
+    quota: 8,
+    phase: 'execute',
+    checkpoint: {
+      miningReturnRoute: [
+        { x: 8103, y: 69, z: 7936 },
+        { x: 8116, y: 58, z: 7947 },
+      ],
+      miningReturnIndex: 1,
+    },
+  });
+
+  const progressed = advanceWorkOrder(order, {
+    actionId: 'mining-open-gap',
+    phase: 'succeeded',
+    code: 'capability_verified_partial_progress',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'collect',
+        outcome: 'resource_collected',
+        routeDigging: true,
+        returnable: true,
+        returnRoute: [
+          { x: 8123, y: 56, z: 7948 },
+          { x: 8124, y: 56, z: 7948 },
+        ],
+      },
+    },
+  }, { nextPhase: 'verify' });
+
+  assert.deepEqual(progressed.checkpoint.miningReturnRoute, [
+    { x: 8103, y: 69, z: 7936 },
+    { x: 8116, y: 58, z: 7947 },
+    { x: 8123, y: 56, z: 7948 },
+    { x: 8124, y: 56, z: 7948 },
+  ]);
+  assert.equal(progressed.checkpoint.miningReturnIndex, 3);
+});
+
 test('A newly discovered acquisition prerequisite is persisted without spending or blacklisting a productive attempt', () => {
   const order = createWorkOrder({
     id: 'build-tool-recovery',

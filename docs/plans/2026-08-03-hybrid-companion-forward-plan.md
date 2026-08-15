@@ -641,13 +641,78 @@ Only guardrails that protect the running product remain mandatory:
 
 Documentation, telemetry, and test infrastructure are supporting tools. They must not become independent workstreams unless a current gameplay failure requires them.
 
-## Immediate next coding move
+## Current strategic qualification and next coding move
 
 The cave/iron/coal blocker described in the historical checkpoint below is complete: the generic corridor alternative later acquired fresh iron and coal and finished the broader Resource-to-Project outcome. Explore-Remember-Guide also completed. A subsequent remembered-livestock campaign produced reusable canonical crop/breeding semantics, mature-crop harvest/replant, moving-region reacquisition, safe surface/perimeter binding, and repeated no-progress method exclusion, but was deliberately stopped after one physical gate crossing. Full containment and breeding are not accepted and are not the active lane.
 
-The active move is one **high-frequency mixed companion polish** tranche. Exercise the behavior used throughout normal play in one coherent session: Follow and attentive spacing, ordinary non-destructive locomotion, complete useful common-resource gathering with suitable tools, immediate changed-instruction/Stop authority, truthful current narration, requester return, and calm settled idle. Repair the first shared primitive or ownership defect that materially harms that loop. Do not reopen animal permutations, add a noun-specific route, raise attempt ceilings, invent another controller, or turn playtesting into a certification matrix.
+The high-frequency common-resource portion of that companion-polish tranche is
+now accepted at `a67f35f`. A subsequent bounded strategic qualification slice
+completed BQ0/BQ1 hardening and one BQ2 ordinary-play observation. The live
+request for one netherite pickaxe produced a complete zero-method capability
+gap with no physical attempt and no model call. This is truthful planning
+evidence, not selector authority; H1 remains blocked.
+
+The active move returns to one **broad ordinary mixed companion session**.
+Exercise the behavior used throughout normal play in one coherent session:
+conversation and addressed intent, Follow and attentive spacing, ordinary
+non-destructive locomotion, useful work through existing capabilities,
+immediate changed-instruction/Stop authority, truthful current narration,
+requester return, and calm settled idle. Repair the first shared primitive or
+ownership defect that materially harms that loop. Use the online flight
+recorder and player `WTF` bookmarks as evidence, not as a separate product
+lane. Reopen H1 review only if ordinary play records a repeatable unresolved
+frontier with at least two materially distinct feasible methods for one
+unchanged completion contract.
 
 Keep earlier accepted campaigns frozen unless this normal session provides new contradictory evidence. The desired output is not a new capability showcase; it is a companion whose already-working behavior feels dependable, responsive, and coherent to play beside.
+
+The 2026-08-11 family continuation sharpened that acceptance bar: observation
+now judges gameplay sense as well as terminal success. The mining tranche
+installed fresh-output baselines, proactive pick replacement, durable
+surface-origin route waypoints across exact overlaps and native-Pathfinder
+gaps, return before Miner settlement, and an explicit persisted `return and
+wait` hold. Live play accepted those shared seams but separately preserved
+safe-depth-region exhaustion and incomplete failure narration.
+
+Family workshop help then exposed gameplay judgment outside the blueprint.
+One selected doorway opened into a protected spruce canopy; a second footprint
+left its southeast service edge over a drop. Site binding now reserves each
+access door's exterior approach and requires a continuous supported work ring
+when Builder has no scaffold authority. The owned Pathfinder also no longer
+advertises a synthetic step-up launched from inside a door, while ordinary
+horizontal open/use/cross/close traversal remains delegated to that package.
+A loaded-world probe rejected both failed anchors and found no qualifying 5x5
+site inside the ordinary near-player radius, so current behavior must fail
+truthfully instead of starting a third shell. The two partial bot-owned shells
+remain exact cleanup debt. The next broad arc should begin from ordinary open
+player geometry and continue gameplay-sense observation without reopening
+increasingly narrow workshop placement permutations.
+
+That open-geometry arc then separated ordinary travel from interaction
+contracts. IronSuiteProof crossed 43 blocks from the base to Dad at the animal
+area, converged without terrain damage or visible thrash, and ended 2.7 blocks
+away under Stop/Hold. A natural remote bedtime request exposed a 32-block bed
+search ceiling and the missing deterministic `go sleep` phrasing, which caused
+the model path to drop the requested terminal wait. The typed parser now
+preserves sleep plus terminal hold, and loaded bed discovery remains bounded at
+64 blocks. The first corrected attempt found the family gray bed but generic
+coordinate proximity timed out beside stateful bed/door geometry. The sleep
+adapter now delegates approach to Pathfinder's existing `GoalLookAtBlock`; a
+compatibility-scaled live probe reached the exact bed-interaction stance.
+
+The unchanged rerun is not accepted: accumulated world geometry first left the
+bot in a three-to-four-block depression immediately outside the family-base
+door, at `(8104.42,65,7935.50)` below the `y=69` house floor. Later live evidence
+showed it had recovered without a player order to safe east-side grass at
+`(8108.39,68,7939.50)`, disproving permanent entrapment but exposing unwanted
+post-failure movement. The final unchanged night request still timed out twice
+without movement from that safe stance because the perimeter route could not
+reach the north-door interaction approach. This is a safety/stewardship and
+base-access `WTF`, not evidence that Mineflayer's sleep primitive is trash; the
+primitive was never reached. The request also reported `when it gets dark
+tonight` as unqueued and attempted sleep immediately, so temporal preconditions
+remain a separate language/Agenda gap. Checkpoint those blockers after the two
+shared repairs; do not teleport the companion and count bedtime as complete.
 
 ### Broad landing-area starter-supply checkpoint (2026-08-09)
 
@@ -690,3 +755,25 @@ The unchanged natural request was: `Instead, build your supplies up to at least 
 Focused collection, movement, GoalDirector, Agenda, and planner checks pass 89/89, syntax checks pass, and the owned dependency graph resolves cleanly. The broader quick validator reached its final managed-server group; its sole failure is an unrelated WSL loopback test that bound a temporary `localhost` server on IPv4 and then explicitly connected to `::1`. Record that as control-plane validation debt, not a gameplay blocker or a reason to reopen this accepted collection tranche.
 
 Freeze tree-height, wood-species, and inventory-floor permutations. Resume ordinary two-player supervised play. The next material player-visible failure chooses the tranche, with authority/stale work, world stewardship and infrastructure reuse, movement, truthful continuation, and genuinely missing gameplay domains prioritized in that order.
+
+### Strategic branch qualification checkpoint (2026-08-10)
+
+BQ0 and BQ1 are implemented and hardened as a shadow-only extension of the
+existing prerequisite planner. Canonical executable actions, completion
+identity, method ranking, feasibility, and plan fingerprints are bound into a
+stable frontier fingerprint. BQ0 recomputes that identity and accepts only
+terminal or capability-gap blocker classes; mechanical defects, state
+reconciliation, known recovery, clarification, incomplete evidence, and
+unknown classes fail closed. The focused and adjacent verification receipt is
+66/66, and the managed Paper runtime returned to `world_ready`.
+
+BQ2 then used a real temporary player, `BQ2Witness`, and the natural request
+`Bring me one netherite pickaxe.` The durable GoalDirector boundary reported
+`unsupported_acquisition_leaf`, `capability_gap`, a complete zero-candidate
+frontier, and zero physical attempts. No strategic branch, model prompt,
+strategy persistence, or new execution authority was created. This completes
+the qualification milestone at zero and stops the current selector rollout;
+H1 may be reconsidered only after later ordinary play produces the explicit
+repeatable unresolved two-or-more-method gate. Full evidence and review
+disposition are in
+[the strategic reasoning rollout](./2026-08-10-strategic-reasoning-rollout.md).

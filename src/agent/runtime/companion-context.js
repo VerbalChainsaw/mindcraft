@@ -35,12 +35,16 @@ export class CompanionContext {
     onReappeared = () => {},
     recentPresenceMs = RECENT_PRESENCE_MS,
     followGraceMs = FOLLOW_GRACE_MS,
+    directiveState = null,
   } = {}) {
     this.agent = agent;
     this.now = now;
     this.onReappeared = onReappeared;
     this.recentPresenceMs = recentPresenceMs;
     this.followGraceMs = followGraceMs;
+    this.directiveState = directiveState;
+    this.directivePersistenceError = null;
+    this.directiveAuthorizedAt = null;
     this.chatAlias = null;
     this.requestedName = null;
     this.canonicalUsername = null;
@@ -64,7 +68,59 @@ export class CompanionContext {
     this.protection = null;
     this.attention = null;
     this.waitingSince = null;
+    try {
+      const restored = this.directiveState?.snapshot?.();
+      this.directivePersistenceError = restored?.error || null;
+      if (restored?.directive === 'follow' || restored?.directive === 'guard') {
+        this.directive = restored.directive;
+        this.requestedName = boundedText(restored.requestedName, 64) || null;
+        this.canonicalUsername = boundedText(restored.canonicalUsername, 64) || null;
+        this.directiveAuthorizedAt = Number.isFinite(restored.authorizedAt)
+          ? restored.authorizedAt
+          : null;
+      }
+    } catch (error) {
+      this.directivePersistenceError = String(error?.message || error).slice(0, 280);
+      this.directive = null;
+      this.requestedName = null;
+      this.canonicalUsername = null;
+      this.directiveAuthorizedAt = null;
+    }
     bindCompanionContext(agent?.bot, this);
+  }
+
+  syncDirectiveState({ required = false } = {}) {
+    if (!this.directiveState) return null;
+    try {
+      const current = this.directiveState.snapshot();
+      const requestedName = this.directive ? this.requestedName : null;
+      const canonicalUsername = this.directive ? this.canonicalUsername : null;
+      if (
+        current.error === null
+        && current.directive === this.directive
+        && current.requestedName === requestedName
+        && current.canonicalUsername === canonicalUsername
+        && current.authorizedAt === this.directiveAuthorizedAt
+      ) {
+        this.directivePersistenceError = null;
+        return current;
+      }
+      const persisted = this.directive
+        ? this.directiveState.persist({
+            directive: this.directive,
+            requestedName,
+            canonicalUsername,
+            authorizedAt: this.directiveAuthorizedAt,
+            updatedAt: this.now(),
+          })
+        : this.directiveState.clear();
+      this.directivePersistenceError = persisted?.error || null;
+      return persisted;
+    } catch (error) {
+      this.directivePersistenceError = String(error?.message || error).slice(0, 280);
+      if (required) throw error;
+      return null;
+    }
   }
 
   resolve(requestedName = this.requestedName || this.chatAlias || this.canonicalUsername) {
@@ -85,7 +141,12 @@ export class CompanionContext {
     return resolution;
   }
 
-  observeResolution(requestedName, resolution, { lineOfSight, dimension, notify = true } = {}) {
+  observeResolution(requestedName, resolution, {
+    lineOfSight,
+    dimension,
+    notify = true,
+    persistDirective = true,
+  } = {}) {
     const now = this.now();
     const wasPresent = this.presence === 'present';
     const requested = boundedText(requestedName, 64) || this.requestedName;
@@ -126,6 +187,7 @@ export class CompanionContext {
     }
     this.lastSeenAt = now;
     this.waitingSince = null;
+    if (persistDirective && this.directive) this.syncDirectiveState();
     if (notify && !wasPresent && this.directive && !this.agent?.isOperatorHeld?.()) {
       queueMicrotask(() => this.onReappeared(this.snapshot()));
     }
@@ -160,7 +222,17 @@ export class CompanionContext {
     this.lastSeenAt = Number.isFinite(observation.observedAt) ? observation.observedAt : this.now();
     this.observedAt = this.lastSeenAt;
     if (!this.loaded) this.presence = 'recent';
+    if (this.directive) this.syncDirectiveState();
     return this.snapshot();
+  }
+
+  reconcileLoadedPlayer({ lineOfSight = null, dimension } = {}) {
+    const expected = this.canonicalUsername || this.requestedName || this.chatAlias;
+    if (!expected) return this.snapshot();
+    return this.observeResolution(expected, this.resolve(expected), {
+      lineOfSight,
+      dimension,
+    });
   }
 
   observeLoadedPlayer(name, entity, { lineOfSight = null, dimension } = {}) {
@@ -188,13 +260,37 @@ export class CompanionContext {
 
   setDirective(kind, requestedName, { chatAlias = null } = {}) {
     const directive = kind === 'guard' ? 'guard' : kind === 'follow' ? 'follow' : null;
-    if (chatAlias) this.chatAlias = boundedText(chatAlias, 64) || this.chatAlias;
     const requested = boundedText(requestedName, 64);
+    const resolution = requested ? this.resolve(requested) : null;
+    const previous = {
+      directive: this.directive,
+      requestedName: this.requestedName,
+      canonicalUsername: this.canonicalUsername,
+      authorizedAt: this.directiveAuthorizedAt,
+    };
+    this.directive = directive;
+    this.directiveAuthorizedAt = directive ? this.now() : null;
     if (requested) {
       this.requestedName = requested;
-      this.observeResolution(requested, this.resolve(requested), { lineOfSight: null, notify: false });
+      this.canonicalUsername = resolution?.canonical || null;
     }
-    this.directive = directive;
+    try {
+      this.syncDirectiveState({ required: true });
+    } catch (error) {
+      this.directive = previous.directive;
+      this.requestedName = previous.requestedName;
+      this.canonicalUsername = previous.canonicalUsername;
+      this.directiveAuthorizedAt = previous.authorizedAt;
+      throw error;
+    }
+    if (chatAlias) this.chatAlias = boundedText(chatAlias, 64) || this.chatAlias;
+    if (requested) {
+      this.observeResolution(requested, resolution, {
+        lineOfSight: null,
+        notify: false,
+        persistDirective: false,
+      });
+    }
     this.waitingSince = null;
     if (directive !== 'guard') this.clearProtection('directive_changed');
     if (directive !== 'guard' && this.agent?.runtime?.reflexes?.combat === 'off') {
@@ -293,6 +389,8 @@ export class CompanionContext {
 
   clearControl() {
     this.directive = null;
+    this.directiveAuthorizedAt = null;
+    this.syncDirectiveState();
     this.waitingSince = null;
     this.clearProtection('operator_stop');
     this.attention = null;
@@ -315,6 +413,30 @@ export class CompanionContext {
         : age !== null && age <= this.recentPresenceMs
           ? 'recent'
           : 'absent';
+    let directivePersistence = {
+      status: this.directiveState ? 'ready' : 'volatile',
+      updatedAt: null,
+      authorizedAt: this.directiveAuthorizedAt,
+      error: this.directivePersistenceError,
+    };
+    try {
+      const persisted = this.directiveState?.snapshot?.();
+      if (persisted) {
+        directivePersistence = {
+          status: persisted.error || this.directivePersistenceError ? 'error' : 'ready',
+          updatedAt: persisted.updatedAt,
+          authorizedAt: persisted.authorizedAt,
+          error: persisted.error || this.directivePersistenceError,
+        };
+      }
+    } catch (error) {
+      directivePersistence = {
+        status: 'error',
+        updatedAt: null,
+        authorizedAt: this.directiveAuthorizedAt,
+        error: String(error?.message || error).slice(0, 280),
+      };
+    }
     return {
       alias: this.chatAlias,
       requestedName: this.requestedName,
@@ -339,6 +461,8 @@ export class CompanionContext {
       authoritativeFound: this.authoritativeFound,
       authoritativePlayer: this.authoritativePlayer,
       directive: this.directive,
+      directiveAuthorizedAt: this.directiveAuthorizedAt,
+      directivePersistence,
       protection: this.protection ? { ...this.protection } : null,
       attention: this.currentAttention(),
       waitingSince: this.waitingSince,

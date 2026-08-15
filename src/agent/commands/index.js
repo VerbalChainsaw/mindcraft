@@ -17,6 +17,7 @@ const COMMAND_REQUEST_ROUTE_ORIGINS = new Set([
 ]);
 const MAX_COMMAND_REQUEST_ARGS = 8;
 const MAX_COMMAND_REQUEST_TEXT = 160;
+const SEMANTIC_CONSUMABLE_NAMES = new Set(['best_food', 'healing_potion']);
 
 function boundedRequestText(value, maxLength = MAX_COMMAND_REQUEST_TEXT) {
     return String(value || '')
@@ -80,7 +81,7 @@ const COMMAND_CATEGORIES = Object.freeze([
     Object.freeze({ category: 'Gathering', pattern: /^!(collect\w*|pickup\w*|fish|prepare\w*|breakBlock|digDown)$/ }),
     Object.freeze({ category: 'Crafting', pattern: /^!(craftRecipe|smeltItem|brewPotion|clearFurnace|enchantItem|repairItem)$/ }),
     Object.freeze({ category: 'Building', pattern: /^!(place\w*|build\w*|resumeStructureJob|repairHome|establishFarm|goToFarm|maintainFarm|rememberHome)$/ }),
-    Object.freeze({ category: 'Inventory', pattern: /^!(equip|consume|discard|give\w*|putIn\w*|putFamily\w*|takeFrom\w*|viewChest|deposit\w*|useItem|useOn)$/ }),
+    Object.freeze({ category: 'Inventory', pattern: /^!(equip|consume|discard|give\w*|putIn\w*|putFamily\w*|takeFrom\w*|viewChest\w*|deposit\w*|useItem|useOn)$/ }),
     Object.freeze({ category: 'Memory', pattern: /^!(rememberHere|forgetRememberedPlace|goToRememberedPlace|savedPlaces|recoverDeathItems)$/ }),
     Object.freeze({ category: 'Social', pattern: /^!(startConversation|endConversation|squadRadio|lookAt\w*|showVillagerTrades|tradeWithVillager)$/ }),
     Object.freeze({ category: 'Survival', pattern: /^!(goToBed|breedAnimals)$/ }),
@@ -257,6 +258,7 @@ function parseCommandArguments(command, commandName, args) {
             case 'BlockName':
             case 'BlockOrItemName':
             case 'ItemName':
+            case 'ConsumableName':
                 if (arg.endsWith('plank') || arg.endsWith('seed'))
                     arg += 's'; // add 's' to for common mistakes like "oak_plank" or "wheat_seed"
             case 'string':
@@ -288,6 +290,10 @@ function parseCommandArguments(command, commandName, args) {
             if(getBlockId(arg) == null) return  `Invalid block type: ${arg}.`
         } else if(param.type === 'ItemName') { //Check that there is an item with this name
             if(getItemId(arg) == null) return `Invalid item type: ${arg}.`
+        } else if(param.type === 'ConsumableName') {
+            if (!SEMANTIC_CONSUMABLE_NAMES.has(arg) && getItemId(arg) == null) {
+                return `Invalid consumable type: ${arg}.`;
+            }
         } else if(param.type === 'BlockOrItemName') {
             if(getBlockId(arg) == null && getItemId(arg) == null) return  `Invalid block or item type: ${arg}.`
         }

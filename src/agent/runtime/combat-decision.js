@@ -16,6 +16,8 @@ const RANGED_THREATS = new Set([
   'stray',
   'witch',
 ]);
+const LAST_RESORT_MELEE_DISTANCE = 3.5;
+const CRITICAL_HEALTH = 8;
 
 function normalizedName(value) {
   return String(value || '').trim().toLowerCase().replace(/^minecraft:/, '');
@@ -24,6 +26,23 @@ function normalizedName(value) {
 function finiteDistance(value) {
   const distance = Number(value);
   return Number.isFinite(distance) && distance >= 0 ? distance : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Route completion proves separation from the selected threat, not bodily
+ * safety. A retreat that loses health in the critical band is not a verified
+ * self-preservation success even when Pathfinder reached its goal.
+ */
+export function reconcileTacticalRetreatHealth(healthBefore, healthAfter) {
+  const before = Math.max(0, Number(healthBefore) || 0);
+  const after = Math.max(0, Number(healthAfter) || 0);
+  const verified = after >= before || after > CRITICAL_HEALTH;
+  return Object.freeze({
+    verified,
+    outcome: verified ? 'retreated' : 'retreat_health_deteriorated',
+    healthBefore: before,
+    healthAfter: after,
+  });
 }
 
 function threatClass(threat) {
@@ -42,27 +61,53 @@ function responseFor(threat, state) {
   const rangedReady = equipment.bow === true && equipment.arrows === true;
   const shieldReady = equipment.shield === true;
   const meleeReady = equipment.melee === true;
+  const retreat = (reason, desiredRange) => ({
+    response: 'retreat',
+    reason,
+    desiredRange,
+    ...(
+      classification === 'melee'
+      && finiteDistance(threat?.distance) <= LAST_RESORT_MELEE_DISTANCE
+      && threat?.localGeometry?.onGround !== false
+        ? {
+            fallbackResponse: 'melee',
+            fallbackReason: 'retreat_blocked_immediate_melee',
+          }
+        : {}
+    ),
+  });
 
+  if (normalizedName(state?.objective) === 'disengage') {
+    return retreat('self_preservation_disengage', 24);
+  }
   if (health <= 8) {
-    return { response: 'retreat', reason: 'critical_health', desiredRange: 16 };
+    // Critical health changes the objective to disengagement. Clear the
+    // reflex's 16-block admission envelope so the package-backed retreat buys
+    // enough time for SurvivalDirector to choose cover or a player rendezvous.
+    return retreat('critical_health', 24);
   }
   if (classification === 'avoid_only') {
-    return { response: 'retreat', reason: 'avoid_only_threat', desiredRange: 24 };
+    return retreat('avoid_only_threat', 24);
   }
   if (classification === 'explosive') {
     if (finiteDistance(threat?.distance) <= 6) {
-      return { response: 'retreat', reason: 'immediate_explosive_threat', desiredRange: 10 };
+      return retreat('immediate_explosive_threat', 24);
     }
     if (rangedReady) {
       return { response: 'ranged', reason: 'explosive_standoff', desiredRange: 8 };
     }
-    return { response: 'retreat', reason: 'explosive_without_ranged_option', desiredRange: 10 };
+    // Ten blocks clears the fuse radius but not the Creeper's pursuit or the
+    // reflex admission envelope. Stopping there let the same live Creeper
+    // catch up and repeatedly reacquire self-preservation until the bot died.
+    // Use the shared full-disengagement distance; Pathfinder still owns the
+    // physical route and may fail truthfully when the world cannot provide it.
+    return retreat('explosive_without_ranged_option', 24);
   }
   if (threat?.localGeometry?.onGround === false) {
     if (rangedReady) {
       return { response: 'ranged', reason: 'airborne_standoff', desiredRange: 8 };
     }
-    return { response: 'retreat', reason: 'airborne_without_ranged_option', desiredRange: 24 };
+    return retreat('airborne_without_ranged_option', 24);
   }
   if (classification === 'ranged') {
     if (shieldReady && meleeReady) {
@@ -75,11 +120,11 @@ function responseFor(threat, state) {
       // Do not stop on the edge of the same projectile engagement envelope.
       // The shared survival policy already defines 24 blocks as a bounded
       // disengagement distance; Pathfinder owns the physical retreat.
-      return { response: 'retreat', reason: 'unsafe_projectile_engagement', desiredRange: 24 };
+      return retreat('unsafe_projectile_engagement', 24);
     }
   }
   if (!meleeReady && health <= 12) {
-    return { response: 'retreat', reason: 'no_melee_weapon', desiredRange: 16 };
+    return retreat('no_melee_weapon', 24);
   }
   return { response: 'melee', reason: 'close_safe_hostile', desiredRange: 3 };
 }

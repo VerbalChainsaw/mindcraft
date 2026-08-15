@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { io } from 'socket.io-client';
 
 import { applyStateUpdate } from '../src/mindcraft/public/js/agent-state-protocol.js';
+import {
+  createFixtureAdmissionReceipt,
+  fixtureCheckStatus,
+  reconcileAdvisorySetupAcknowledgement,
+  requireFixtureAdmission,
+} from './validation/fixture-admission.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CASES_PATH = resolve(ROOT, 'tests/runtime/behavior-runtime-cases.json');
@@ -264,10 +270,11 @@ async function postJson(baseUrl, path, body, deadlineMs = 10_000) {
   }
 }
 
-async function proveWorldAvailable(baseUrl, options) {
+async function proveWorldAvailable(baseUrl, options, expectedPlayers = []) {
   if (options.authorizedActiveWorld) {
     return {
       provedEmpty: false,
+      provedExpectedOccupancy: false,
       authorizedOverride: true,
       playerCount: null,
       players: [],
@@ -300,12 +307,19 @@ async function proveWorldAvailable(baseUrl, options) {
     Math.min(10_000, options.deadlineMs),
   );
   const playerList = parsePlayerListAfterLatestCommand(listedPayload.server.logs);
-  if (playerList.count > 0) {
-    const detail = playerList.players.length ? `: ${playerList.players.join(', ')}` : '';
-    throw new Error(`Refusing an occupied Minecraft world with ${playerList.count} online player(s)${detail}.`);
+  const expected = [...new Set(expectedPlayers.map(player => String(player).trim()).filter(Boolean))].sort();
+  const actual = [...playerList.players].sort();
+  const exactOccupancy = playerList.count === expected.length
+    && actual.length === expected.length
+    && actual.every((player, index) => player === expected[index]);
+  if (!exactOccupancy) {
+    const expectedDetail = expected.length ? expected.join(', ') : 'no players';
+    const actualDetail = actual.length ? actual.join(', ') : `${playerList.count} unnamed player(s)`;
+    throw new Error(`Refusing unexpected Minecraft occupancy; expected ${expectedDetail}, observed ${actualDetail}.`);
   }
   return {
-    provedEmpty: true,
+    provedEmpty: expected.length === 0,
+    provedExpectedOccupancy: true,
     authorizedOverride: false,
     playerCount: playerList.count,
     players: playerList.players,
@@ -391,6 +405,7 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
     ready: null,
     isolationCommand: null,
     isolationObservedAt: null,
+    fixtureAdmission: null,
     commandIssuedAt: null,
     command: null,
     actionResultObservedAt: null,
@@ -432,10 +447,21 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
 
     startAttempted = true;
     observed.startRequestedAt = Date.now();
-    const startResult = await emitAcknowledged(socket, 'start-agent', [bot], options.deadlineMs);
-    observed.startAcknowledgedAt = Date.now();
+    const startDeadlineAt = observed.startRequestedAt + options.deadlineMs;
+    let startResult = null;
+    try {
+      startResult = await emitAcknowledged(
+        socket,
+        'start-agent',
+        [bot],
+        Math.min(5_000, options.deadlineMs),
+      );
+      observed.startAcknowledgedAt = Date.now();
+    } catch (error) {
+      observed.startAcknowledgementError = String(error?.message || error).slice(0, 240);
+    }
     observed.startAcknowledgement = startResult;
-    if (startResult?.success !== true) {
+    if (startResult?.success === false) {
       throw new Error(`Bot start failed: ${String(startResult?.error || 'no lifecycle result')}`);
     }
 
@@ -446,13 +472,15 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
         return agent?.state === 'running' && agent?.in_game === true && agent?.socket_connected === true;
       },
       `${bot} world-ready state`,
-      options.deadlineMs,
+      Math.max(1, startDeadlineAt - Date.now()),
     );
     observed.worldReadyObservedAt = Date.now();
     observed.worldReadyMs = observed.worldReadyObservedAt - observed.startRequestedAt;
     const readyAgent = agentFrom(readyPayload, bot);
     observed.ready = readyAgent;
+    observed.startReconciliation = reconcileAdvisorySetupAcknowledgement(startResult, true);
 
+    const isolationRequestedAt = Date.now();
     const isolationResult = await emitAcknowledged(
       socket,
       'send-message',
@@ -463,13 +491,166 @@ async function runBotLifecycle(baseUrl, bot, options, runtimeCase) {
     if (isolationResult?.success !== true) {
       throw new Error(`Could not isolate lifecycle action ownership: ${String(isolationResult?.error || 'no result')}`);
     }
-    await waitForCondition(
+    const isolatedState = await waitForCondition(
       () => latestStates?.[bot] || null,
       (state) => state?.identity?.runtime?.autonomy === 'command',
       `${bot} command-autonomy isolation`,
       Math.min(10_000, options.deadlineMs),
     );
     observed.isolationObservedAt = Date.now();
+
+    let dispatchState = isolatedState;
+    try {
+      dispatchState = await waitForCondition(
+        () => latestStates?.[bot] || null,
+        (state) => {
+          const velocity = state?.body?.velocity;
+          const velocityKnown = ['x', 'y', 'z']
+            .every(axis => Number.isFinite(Number(velocity?.[axis])));
+          return state?.identity?.runtime?.autonomy === 'command'
+            && state?.body?.onGround === true
+            && state?.action?.isIdle === true
+            && state?.action?.pathfinding === null
+            && velocityKnown
+            && Math.abs(Number(velocity.x)) <= 0.05
+            && Math.abs(Number(velocity.y)) <= 0.1
+            && Math.abs(Number(velocity.z)) <= 0.05;
+        },
+        `${bot} stable supported dispatch stance`,
+        Math.min(5_000, options.deadlineMs),
+      );
+    } catch {
+      dispatchState = latestStates?.[bot] || isolatedState;
+    }
+    observed.worldOccupancy = await proveWorldAvailable(baseUrl, options, [bot]);
+    const dispatchAgents = await fetchJson(baseUrl, '/api/agents');
+    const dispatchAgent = agentFrom(dispatchAgents, bot);
+    dispatchState = latestStates?.[bot] || dispatchState;
+    const sampledAt = Number(dispatchState?._meta?.sampledAt);
+    const velocity = dispatchState?.body?.velocity;
+    const velocityKnown = ['x', 'y', 'z'].every(axis => Number.isFinite(Number(velocity?.[axis])));
+    const stationary = velocityKnown
+      ? Math.abs(Number(velocity.x)) <= 0.05
+        && Math.abs(Number(velocity.y)) <= 0.1
+        && Math.abs(Number(velocity.z)) <= 0.05
+      : undefined;
+    observed.fixtureAdmission = createFixtureAdmissionReceipt({
+      id: runtimeCase.id,
+      observedAt: Date.now(),
+      request: {
+        message: runtimeCase.command,
+        maximumLength: 256,
+        singleAuthorityUnit: true,
+      },
+      checks: [
+        {
+          id: 'start_reconciled',
+          status: observed.startReconciliation.status,
+          code: observed.startReconciliation.code,
+          detail: 'The advisory lifecycle callback was reconciled against authoritative managed state.',
+          source: 'dashboard callback + /api/agents',
+          observed: `ack=${observed.startReconciliation.acknowledgement} state=${observed.startReconciliation.authoritativeState}`,
+        },
+        {
+          id: 'managed_world_available',
+          status: fixtureCheckStatus(
+            observed.worldOccupancy?.provedEmpty === true
+            || observed.worldOccupancy?.provedExpectedOccupancy === true
+            || observed.worldOccupancy?.authorizedOverride === true,
+          ),
+          code: 'managed_world_available',
+          detail: 'Managed Paper occupancy was reconciled immediately before dispatch.',
+          source: 'managed Paper /list',
+          observed: observed.worldOccupancy?.provedEmpty === true
+            ? 'empty world proved'
+            : observed.worldOccupancy?.provedExpectedOccupancy === true
+              ? 'expected occupancy proved'
+              : observed.worldOccupancy?.authorizedOverride === true ? 'authorized active world' : 'unproved',
+        },
+        {
+          id: 'agent_world_ready',
+          status: fixtureCheckStatus(
+            dispatchAgent
+              ? dispatchAgent.state === 'running'
+                && dispatchAgent.in_game === true
+                && dispatchAgent.socket_connected === true
+              : undefined,
+          ),
+          code: 'agent_world_ready',
+          detail: 'The selected agent remained connected and in game immediately before dispatch.',
+          source: '/api/agents',
+          observed: dispatchAgent
+            ? `state=${dispatchAgent.state} in_game=${dispatchAgent.in_game} socket=${dispatchAgent.socket_connected}`
+            : 'agent missing',
+        },
+        {
+          id: 'dashboard_state_fresh',
+          status: fixtureCheckStatus(
+            Number.isFinite(sampledAt)
+              ? sampledAt >= isolationRequestedAt && Date.now() - sampledAt <= 5_000
+              : undefined,
+          ),
+          code: 'dashboard_state_fresh',
+          detail: 'The state sample postdates command isolation and is no more than five seconds old.',
+          source: 'dashboard state protocol',
+          observed: Number.isFinite(sampledAt) ? `sampledAt=${sampledAt}` : 'sample missing',
+        },
+        {
+          id: 'command_autonomy',
+          status: fixtureCheckStatus(
+            dispatchState?.identity?.runtime?.autonomy === undefined
+              ? undefined
+              : dispatchState.identity.runtime.autonomy === 'command',
+          ),
+          code: 'command_autonomy',
+          detail: 'Autonomous work is isolated before the intended command.',
+          source: 'dashboard state protocol',
+          observed: dispatchState?.identity?.runtime?.autonomy || 'unknown',
+        },
+        {
+          id: 'body_supported',
+          status: fixtureCheckStatus(
+            dispatchState?.body?.onGround === undefined ? undefined : dispatchState.body.onGround === true,
+          ),
+          code: 'body_supported',
+          detail: 'The bot body is on supported ground at the dispatch sample.',
+          source: 'Mineflayer body state',
+          observed: dispatchState?.body?.onGround === undefined ? 'unknown' : String(dispatchState.body.onGround),
+        },
+        {
+          id: 'body_stationary',
+          status: fixtureCheckStatus(stationary),
+          code: 'body_stationary',
+          detail: 'The bot has no material velocity at the dispatch sample.',
+          source: 'Mineflayer body state',
+          observed: velocityKnown ? `x=${velocity.x} y=${velocity.y} z=${velocity.z}` : 'velocity unknown',
+        },
+        {
+          id: 'action_idle',
+          status: fixtureCheckStatus(
+            dispatchState?.action?.isIdle === undefined ? undefined : dispatchState.action.isIdle === true,
+          ),
+          code: 'action_idle',
+          detail: 'No prior action owns the bot at request dispatch.',
+          source: 'ActionManager state',
+          observed: dispatchState?.action?.isIdle === undefined ? 'unknown' : String(dispatchState.action.isIdle),
+        },
+        {
+          id: 'path_execution_idle',
+          status: fixtureCheckStatus(
+            dispatchState?.action && Object.hasOwn(dispatchState.action, 'pathfinding')
+              ? dispatchState.action.pathfinding === null
+              : undefined,
+          ),
+          code: 'path_execution_idle',
+          detail: 'Pathfinder is not executing an unintended route before dispatch.',
+          source: 'Pathfinder state',
+          observed: dispatchState?.action?.pathfinding === null
+            ? 'no active path' : String(dispatchState?.action?.pathfinding ?? 'unknown'),
+        },
+      ],
+    });
+    requireFixtureAdmission(observed.fixtureAdmission);
 
     const commandIssuedAt = Date.now();
     observed.commandIssuedAt = commandIssuedAt;

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { collectionPositionExcluded } from '../../src/agent/library/skills.js';
+import { requesterTerrainCollectionExclusion } from '../../src/agent/runtime/collection-candidate-selector.js';
 import { builderWorksiteCollectionExclusion } from '../../src/agent/runtime/jobs/builder-plan.js';
 import {
   advanceWorkOrder,
@@ -58,6 +59,26 @@ test('inactive or unrelated jobs do not claim a collection region', () => {
   };
 
   assert.equal(builderWorksiteCollectionExclusion(order), null);
+});
+
+test('terrain extraction excludes the active requester area without blocking non-terrain collection', () => {
+  const exclusion = requesterTerrainCollectionExclusion('stone', {
+    x: 8106.5,
+    y: 64,
+    z: 7949.5,
+  });
+
+  assert.deepEqual(exclusion, {
+    x: 8106.5,
+    y: 64,
+    z: 7949.5,
+    radius: 8,
+    reason: 'active_requester_shared_area',
+  });
+  assert.equal(collectionPositionExcluded({ x: 8110, y: 63, z: 7949 }, [exclusion]), true);
+  assert.equal(collectionPositionExcluded({ x: 8115, y: 63, z: 7949 }, [exclusion]), false);
+  assert.equal(requesterTerrainCollectionExclusion('spruce_log', { x: 8106.5, y: 64, z: 7949.5 }), null);
+  assert.equal(requesterTerrainCollectionExclusion('stone', null), null);
 });
 
 test('an active expedition protects its bound home base from prerequisite collection', () => {

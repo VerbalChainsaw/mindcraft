@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import minecraftData from 'minecraft-data';
+import Vec3 from 'vec3';
 
 import { GoalDirector } from '../../src/agent/runtime/goal-director.js';
+import { MemoryBank } from '../../src/agent/memory_bank.js';
 import { capabilityCommand } from '../../src/agent/runtime/capability-catalogue.js';
 import { createItemGoalContract, normalizeGoalContract } from '../../src/agent/runtime/goal-contract.js';
 
@@ -63,6 +69,881 @@ function boundaryGoal(subgoals) {
   });
   return normalizeGoalContract({ ...base, maxSubgoals: 4, subgoals });
 }
+
+test('daylight spider prerequisite returns to a distant live requester before waiting', () => {
+  const director = createDirector();
+  const commands = [];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+  ];
+  const position = { x: 8106.5, y: 68, z: 7944.5 };
+  director.agent.bot = {
+    registry,
+    health: 20,
+    entities: {},
+    players: {
+      DadPlayer: {
+        entity: {
+          type: 'player',
+          username: 'DadPlayer',
+          // The former 16-block delivery-reacquire radius left an interrupted
+          // return visibly remote from the companion. A 12-block separation
+          // must still finish the player-relative return before waiting.
+          position: { x: 8118.5, y: 68, z: 7944.5 },
+        },
+      },
+    },
+    time: { timeOfDay: 8_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  director.now = () => 100_000;
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'acquire' });
+
+  director.update();
+
+  assert.equal(director.status.phase, 'acting');
+  assert.equal(director.status.code, 'goal_recover');
+  assert.equal(director.lastPlan.nextStep.capability.id, 'harvest_entity_drop');
+  assert.deepEqual(commands, ['!goToPlayer("DadPlayer", 3)']);
+  assert.equal(director.activeGoal.subgoals.length, 1);
+  assert.equal(director.activeGoal.subgoals[0].kind, 'recover');
+  assert.equal(director.activeGoal.evidence.code, 'environmental_wait_returning_to_requester');
+  assert.deepEqual(director.agent.bot.entity.position, position);
+});
+
+test('daylight requester return waits after damage while the requester region remains hostile', () => {
+  const director = createDirector();
+  const commands = [];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+  ];
+  director.agent.bot = {
+    registry,
+    health: 18,
+    entities: {
+      4: {
+        id: 4,
+        name: 'skeleton',
+        type: 'hostile',
+        position: new Vec3(8101.1, 56, 7940.6),
+      },
+    },
+    players: {
+      DadPlayer: {
+        entity: {
+          id: 2,
+          type: 'player',
+          username: 'DadPlayer',
+          position: new Vec3(8104.5, 69, 7939.5),
+        },
+      },
+    },
+    time: { timeOfDay: 8_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position: new Vec3(8119.5, 70, 7939.5) },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  director.now = () => 100_000;
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'acquire' });
+
+  director.update();
+
+  assert.equal(director.status.phase, 'waiting');
+  assert.equal(director.status.code, 'waiting_for_safe_requester_return');
+  assert.deepEqual(commands, []);
+  assert.equal(director.activeGoal.subgoals.length, 0);
+  assert.ok(director.nextAttemptAt > 100_000);
+});
+
+test('daylight spider prerequisite waits in place when the requester is not physically resolved', () => {
+  const director = createDirector();
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+  ];
+  director.agent.bot = {
+    registry,
+    health: 20,
+    entities: {},
+    players: {},
+    time: { timeOfDay: 8_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position: { x: 8106.5, y: 68, z: 7944.5 } },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  director.now = () => 100_000;
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'acquire' });
+
+  director.update();
+
+  assert.equal(director.status.phase, 'waiting');
+  assert.equal(director.status.code, 'waiting_for_hostile_spawn_window');
+  assert.equal(director.activeGoal.subgoals.length, 0);
+  assert.ok(director.nextAttemptAt > 100_000);
+});
+
+test('night source-search exhaustion returns to a distant requester before waiting', () => {
+  const director = createDirector();
+  const registry = minecraftData('1.21.11');
+  const commands = [];
+  director.now = () => 105_001;
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+    { name: 'wooden_sword', type: registry.itemsByName.wooden_sword.id, count: 1 },
+  ];
+  director.agent.bot = {
+    registry,
+    health: 20,
+    heldItem: carried[2],
+    entities: {},
+    players: {
+      DadPlayer: {
+        entity: {
+          type: 'player',
+          username: 'DadPlayer',
+          position: new Vec3(8104.5, 69, 7939.5),
+        },
+      },
+    },
+    time: { timeOfDay: 14_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position: new Vec3(8146.5, 72, 7984.33) },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'acquire',
+    memory: {
+      ...goal.memory,
+      sourceSearchPending: {
+        outcome: 'source_search_advanced',
+        observedAt: 100_000,
+        replay: {
+          source: 'spider',
+          output: 'string',
+          method: 'kill',
+          count: 2,
+          range: 64,
+          allowAlternative: false,
+          expectedIncrease: 2,
+          learningKey: 'harvest:kill:spider->string',
+          reason: 'A spider is the verified String source.',
+        },
+      },
+    },
+    subgoals: [{
+      id: `${goal.id}:subgoal-1`,
+      kind: 'recover',
+      state: 'succeeded',
+      commandName: '!goToSurface',
+      attempt: 1,
+      actionId: 'surface-staging',
+      code: 'skill_surface_reached',
+      detail: 'A supported surface stance was verified.',
+      targetName: null,
+      targetFamily: null,
+      expectedIncrease: 0,
+      targetInventoryBefore: 0,
+      targetInventoryAfter: 0,
+      learningKey: null,
+      reason: '',
+      inventoryBefore: 0,
+      inventoryAfter: 0,
+      startedAt: 100_001,
+      finishedAt: 100_100,
+    }],
+  });
+
+  director.update();
+
+  assert.equal(director.status.phase, 'acting');
+  assert.equal(director.status.code, 'goal_recover');
+  assert.deepEqual(commands, ['!goToPlayer("DadPlayer", 3)']);
+  assert.equal(director.activeGoal.subgoals.at(-1).commandName, '!goToPlayer');
+  assert.equal(director.activeGoal.evidence.code, 'environmental_wait_returning_to_requester');
+});
+
+test('night source pending preserves the productive budget and waits for new loaded evidence', () => {
+  const director = createDirector();
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+    { name: 'wooden_sword', type: registry.itemsByName.wooden_sword.id, count: 1 },
+  ];
+  let now = 100_000;
+  const commands = [];
+  const learned = [];
+  director.now = () => now;
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  director.agent.memory_bank = {
+    outcomePreference: () => 0,
+    rememberOutcome: (learningKey, outcome) => learned.push({ learningKey, outcome }),
+  };
+  director.agent.bot = {
+    registry,
+    health: 20,
+    heldItem: carried[2],
+    entities: {},
+    players: {},
+    time: { timeOfDay: 14_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position: new Vec3(8102.5, 68, 7939.5) },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'acquire' });
+  director.appendActingSubgoal(
+    'plan',
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64, false)',
+    {
+      expectedName: 'string',
+      expectedIncrease: 2,
+      learningKey: 'harvest:kill:spider->string',
+      reason: 'A spider is the verified String source.',
+    },
+  );
+
+  director.handleResult('plan', {
+    actionId: 'night-source-pending',
+    phase: 'failed',
+    code: 'skill_source_spawn_pending',
+    detail: 'No usable spider appeared after the bounded night settlement and search.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'entity_harvest',
+        outcome: 'source_spawn_pending',
+        target: { source: 'spider', output: 'string', method: 'kill' },
+        searchAdvanced: false,
+        relocationDistance: 0,
+        spawnWaits: 1,
+        spawnWaitMs: 10_000,
+        retryable: true,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_source_spawn_pending');
+  assert.equal(director.status.code, 'waiting_for_hostile_source_change');
+  assert.equal(learned[0].outcome.classification, 'censored');
+
+  // This test isolates replay-budget behavior after the shared staging edge;
+  // the production-path test below proves that the Director dispatches this
+  // recovery exactly once when the edge is absent.
+  director.appendActingSubgoal('recover', '!goToSurface');
+  director.handleResult('recover', {
+    actionId: 'already-verified-source-wait-stance',
+    phase: 'succeeded',
+    code: 'skill_surface_reached',
+    detail: 'The bot already occupies a supported surface wait stance.',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'surface_navigation',
+        outcome: 'surface_reached',
+        target: { x: 8102, y: 68, z: 7939 },
+        observed: { x: 8102.5, y: 68, z: 7939.5 },
+        verticalProgress: 0,
+        supported: true,
+        retryable: false,
+      },
+    },
+  });
+
+  now += 5_001;
+  director.update();
+  assert.equal(director.status.code, 'waiting_for_hostile_source_change');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.deepEqual(commands, []);
+
+  director.agent.bot.entities = {
+    12: { id: 12, name: 'spider', position: new Vec3(8110.5, 68, 7939.5) },
+  };
+  now += 5_001;
+  director.update();
+  assert.equal(director.status.phase, 'acting');
+  assert.equal(director.activeGoal.subgoals.at(-1).commandName, '!harvestEntityDrop');
+  assert.equal(commands.length, 1);
+});
+
+test('live source access pending persists and reopens only after material source movement', () => {
+  const director = createDirector();
+  const registry = minecraftData('1.21.11');
+  let now = 120_000;
+  director.now = () => now;
+  const commands = [];
+  const learned = [];
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+    { name: 'wooden_sword', type: registry.itemsByName.wooden_sword.id, count: 1 },
+  ];
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  director.agent.memory_bank = {
+    outcomePreference: learningKey => (
+      learningKey === 'harvest:kill:spider->string' ? -12
+        : learningKey === 'collect:tripwire->string' ? 12
+          : 0
+    ),
+    rememberOutcome: (learningKey, outcome) => learned.push({ learningKey, outcome }),
+  };
+  director.agent.bot = {
+    registry,
+    health: 20,
+    heldItem: carried[2],
+    entities: {
+      12: { id: 12, name: 'spider', position: new Vec3(8122.5, 68, 7939.5) },
+    },
+    players: {},
+    time: { timeOfDay: 14_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position: new Vec3(8102.5, 68, 7939.5) },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({ ...goal, phase: 'acquire' });
+  director.appendActingSubgoal(
+    'plan',
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64, false)',
+    {
+      expectedName: 'string',
+      expectedIncrease: 2,
+      learningKey: 'harvest:kill:spider->string',
+      reason: 'A spider is the verified String source.',
+    },
+  );
+
+  // A prior runtime already persisted one censored access receipt. The live
+  // regression appeared only after the restored goal recorded a second one:
+  // generic repeated-method filtering then treated both as method failures.
+  director.finishLatestSubgoal({
+    actionId: 'prior-source-access-pending',
+    phase: 'failed',
+    code: 'skill_source_access_pending',
+    detail: 'The prior runtime also saw this loaded Spider without a usable path.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'entity_harvest',
+        outcome: 'source_access_pending',
+        target: { source: 'spider', output: 'string', method: 'kill', entityId: 12 },
+      },
+    },
+  });
+  director.appendActingSubgoal(
+    'plan',
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64, false)',
+    {
+      expectedName: 'string',
+      expectedIncrease: 2,
+      learningKey: 'harvest:kill:spider->string',
+      reason: 'A spider is the verified String source.',
+    },
+  );
+
+  director.handleResult('plan', {
+    actionId: 'live-source-access-pending',
+    phase: 'failed',
+    code: 'skill_source_access_pending',
+    detail: 'The selected Spider is loaded but its current pursuit has no usable path.',
+    retryable: true,
+    evidence: {
+      request: {
+        routeOrigin: 'goal-director',
+        selectedSkill: '!harvestEntityDrop',
+        args: ['spider', 'string', 'kill', 2, 64],
+      },
+      skill: {
+        kind: 'entity_harvest',
+        outcome: 'source_access_pending',
+        target: { source: 'spider', output: 'string', method: 'kill', entityId: 12 },
+        sourceAccess: {
+          source: 'spider',
+          entityId: 12,
+          position: { x: 8122.5, y: 68, z: 7939.5 },
+          stage: 'path_not_found',
+          movementOutcome: 'unreachable',
+          observedAt: now,
+        },
+        retryable: true,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.deepEqual(director.activeGoal.memory.sourceAccessPending, {
+    source: 'spider',
+    entityId: 12,
+    position: { x: 8122, y: 68, z: 7939 },
+    stage: 'path_not_found',
+    movementOutcome: 'unreachable',
+    observedAt: now,
+    replay: {
+      source: 'spider',
+      output: 'string',
+      method: 'kill',
+      count: 2,
+      range: 64,
+      allowAlternative: false,
+      expectedIncrease: 2,
+      learningKey: 'harvest:kill:spider->string',
+      reason: 'A spider is the verified String source.',
+    },
+  });
+  assert.equal(director.status.code, 'waiting_for_hostile_source_access_change');
+  assert.equal(learned[0].outcome.classification, 'censored');
+
+  director.activeGoal = normalizeGoalContract(JSON.parse(JSON.stringify(director.activeGoal)));
+  assert.equal(
+    director.activeGoal.memory.sourceAccessPending.replay.learningKey,
+    'harvest:kill:spider->string',
+  );
+
+  now += 5_001;
+  director.update();
+  assert.equal(director.status.code, 'waiting_for_hostile_source_access_change');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.deepEqual(commands, []);
+
+  director.agent.bot.entities[13] = {
+    id: 13,
+    name: 'spider',
+    position: new Vec3(8119.5, 68, 7939.5),
+  };
+  now += 5_001;
+  director.update();
+  assert.equal(director.status.phase, 'acting');
+  assert.equal(director.activeGoal.subgoals.at(-1).commandName, '!harvestEntityDrop');
+  assert.deepEqual(commands, [
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64, false, 13)',
+  ]);
+});
+
+test('a settled source search persists exact replay authority and waits for a new qualified source', async () => {
+  const director = createDirector();
+  const registry = minecraftData('1.21.11');
+  let now = 150_000;
+  const carried = [
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 3 },
+    { name: 'crafting_table', type: registry.itemsByName.crafting_table.id, count: 1 },
+    { name: 'wooden_sword', type: registry.itemsByName.wooden_sword.id, count: 1 },
+  ];
+  const commands = [];
+  director.now = () => now;
+  director.executeGoalCommand = (agent, command) => {
+    commands.push(command);
+    if (commands.length === 1) {
+      agent.bot.entity.position = new Vec3(8134.5, 68, 7939.5);
+      agent.last_action_result = {
+        actionId: 'bounded-source-search-advanced',
+        phase: 'failed',
+        code: 'skill_source_search_advanced',
+        detail: 'The bounded search reached one distinct region without finding a usable Spider.',
+        retryable: true,
+        evidence: {
+          request: {
+            routeOrigin: 'goal-director',
+            selectedSkill: '!harvestEntityDrop',
+            args: ['spider', 'string', 'kill', 2, 64],
+          },
+          skill: {
+            kind: 'entity_harvest',
+            outcome: 'source_search_advanced',
+            target: { source: 'spider', output: 'string', method: 'kill' },
+            searchAdvanced: true,
+            origin: { x: 8102.5, y: 68, z: 7939.5 },
+            observedPosition: { x: 8134.5, y: 68, z: 7939.5 },
+            relocationDistance: 32,
+            spawnWaits: 2,
+            spawnWaitMs: 20_000,
+            retryable: true,
+          },
+        },
+      };
+      return false;
+    }
+    if (command === '!goToSurface') {
+      agent.bot.entity.position = new Vec3(8134.5, 69, 7939.5);
+      agent.last_action_result = {
+        actionId: 'verified-hostile-source-surface-staging',
+        phase: 'succeeded',
+        code: 'skill_surface_reached',
+        detail: 'Reached a supported surface stance before waiting for a new Spider.',
+        retryable: false,
+        evidence: {
+          skill: {
+            kind: 'surface_navigation',
+            outcome: 'surface_reached',
+            target: { x: 8134, y: 69, z: 7939 },
+            observed: { x: 8134.5, y: 69, z: 7939.5 },
+            verticalProgress: 1,
+            supported: true,
+            retryable: false,
+          },
+        },
+      };
+      return true;
+    }
+    return new Promise(() => {});
+  };
+  director.agent.bot = {
+    registry,
+    health: 20,
+    heldItem: carried[2],
+    entities: {},
+    players: {},
+    time: { timeOfDay: 14_000 },
+    game: { dimension: 'minecraft:overworld' },
+    entity: { position: new Vec3(8102.5, 68, 7939.5) },
+    inventory: { slots: carried, items: () => carried },
+    findBlock: () => null,
+  };
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DadPlayer',
+    target: {
+      requestedName: 'fishing_rod',
+      canonicalName: 'fishing_rod',
+      inventoryName: 'fishing_rod',
+      acquisitionName: 'fishing_rod',
+      family: null,
+      acquisitionKind: 'craft',
+    },
+    quantity: 1,
+  });
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'acquire',
+    attempts: 1,
+    memory: {
+      ...goal.memory,
+      sourceAccessPending: {
+        source: 'spider',
+        entityId: 12,
+        position: { x: 8122, y: 68, z: 7939 },
+        stage: 'path_not_found',
+        movementOutcome: 'unreachable',
+        observedAt: 140_000,
+        replay: {
+          source: 'spider',
+          output: 'string',
+          method: 'kill',
+          count: 2,
+          range: 64,
+          allowAlternative: false,
+          expectedIncrease: 2,
+          learningKey: 'harvest:kill:spider->string',
+          reason: 'A spider is the verified String source.',
+        },
+      },
+    },
+  });
+
+  director.update();
+
+  assert.equal(director.status.phase, 'acting');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.memory.sourceAccessPending.entityId, 12);
+  assert.equal(director.activeGoal.subgoals.at(-1).commandName, '!harvestEntityDrop');
+  assert.deepEqual(commands, [
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64)',
+  ]);
+
+  await settle();
+  await settle();
+
+  assert.equal(director.status.code, 'waiting_for_hostile_source_change');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.memory.sourceAccessPending, undefined);
+  assert.equal(director.activeGoal.memory.sourceSearchPending.outcome, 'source_search_advanced');
+  assert.equal(
+    director.activeGoal.memory.sourceSearchPending.replay.learningKey,
+    'harvest:kill:spider->string',
+  );
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'capability_verified_partial_progress');
+
+  director.activeGoal = normalizeGoalContract(JSON.parse(JSON.stringify(director.activeGoal)));
+  assert.equal(
+    director.activeGoal.memory.sourceSearchPending.replay.output,
+    'string',
+  );
+
+  now += 5_001;
+  director.update();
+  assert.equal(director.status.code, 'goal_recover');
+  assert.deepEqual(commands, [
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64)',
+    '!goToSurface',
+  ]);
+
+  await settle();
+  await settle();
+
+  now += 101;
+  director.update();
+  assert.equal(director.status.code, 'waiting_for_hostile_source_change');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(commands.length, 2);
+  assert.equal(director.activeGoal.subgoals.at(-1).commandName, '!goToSurface');
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_surface_reached');
+
+  director.agent.bot.entities[13] = {
+    id: 13,
+    name: 'spider',
+    position: new Vec3(8118.5, 68, 7939.5),
+  };
+  now += 5_001;
+  director.update();
+  assert.equal(director.status.phase, 'acting');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.deepEqual(commands, [
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64)',
+    '!goToSurface',
+    '!harvestEntityDrop("spider", "string", "kill", 2, 64, false, 13)',
+  ]);
+});
+
+test('death charges a censored goal once, recovers recorded items, and ignores the late interruption', async () => {
+  const director = createDirector();
+  let now = 100_000;
+  const deathRecordedAt = 99_999;
+  director.now = () => now;
+  const originalAction = deferred();
+  const commands = [];
+  director.agent.memory_bank = {
+    recallDeath: recordedAt => recordedAt === deathRecordedAt ? ({
+      position: { x: 8144, y: 67, z: 7929 },
+      dimension: 'overworld',
+      inventory: { spruce_log: 5, stick: 4, string: 1 },
+      recordedAt: deathRecordedAt,
+      recoveredAt: null,
+    }) : null,
+  };
+  director.executeGoalCommand = async (agent, command) => {
+    commands.push(command);
+    if (command.startsWith('!collectBlocksInRange')) {
+      await originalAction.promise;
+      agent.last_action_result = {
+        actionId: 'late-interrupted-action',
+        phase: 'interrupted',
+        code: 'interrupted',
+        detail: 'Death cleanup stopped the old action.',
+        retryable: true,
+      };
+      return false;
+    }
+    agent.last_action_result = {
+      actionId: 'death-items-recovered',
+      phase: 'succeeded',
+      code: 'skill_items_recovered',
+      detail: 'Recovered the recorded dropped inventory.',
+      retryable: false,
+      evidence: { skill: { kind: 'death_recovery', outcome: 'items_recovered' } },
+    };
+    return true;
+  };
+  director.activeGoal = boundaryGoal([]);
+
+  assert.equal(director.dispatch('plan', '!collectBlocksInRange("stone", 1, 64)'), true);
+  assert.equal(director.reconcileDeath({
+    position: { x: 8144, y: 67, z: 7929 },
+    dimension: 'overworld',
+    recoverableItems: 10,
+    deathRecord: director.agent.memory_bank.recallDeath(deathRecordedAt),
+    deathPersistenceCode: 'death_recorded',
+  }), true);
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.evidence.code, 'goal_owner_died');
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'goal_owner_died');
+
+  now += 750;
+  director.update();
+  await settle();
+  await settle();
+  assert.deepEqual(commands, [
+    '!collectBlocksInRange("stone", 1, 64)',
+    `!recoverDeathItems(${deathRecordedAt})`,
+  ]);
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_items_recovered');
+
+  originalAction.resolve();
+  await settle();
+  await settle();
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_items_recovered');
+});
+
+test('a full death ledger admits the current death and Goal binds its exact identity', () => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'mindcraft-death-binding-'));
+  try {
+    const memory = new MemoryBank('BudgetBot', { rootDir });
+    memory.load();
+    for (let index = 0; index < 8; index += 1) {
+      const stored = memory.recordDeath(
+        { x: index + 0.5, y: 64, z: index + 0.5 },
+        'overworld',
+        { spruce_log: index + 1 },
+      );
+      assert.equal(stored.stored, true);
+    }
+    const staleHead = memory.recallDeath();
+    const current = memory.recordDeath(
+      { x: 8098.37, y: 58, z: 7943.45 },
+      'overworld',
+      { spruce_log: 4, stick: 3, crafting_table: 1, wooden_sword: 1 },
+    );
+    assert.equal(current.stored, true);
+    assert.equal(current.code, 'death_recorded_after_capacity_displacement');
+    assert.equal(current.pending, 8);
+    assert.equal(current.displacedRecordedAt, staleHead.recordedAt);
+    assert.equal(current.record.position.x, 8098.37);
+
+    let staleRecallCount = 0;
+    const director = createDirector();
+    director.agent.memory_bank = {
+      recallDeath(recordedAt) {
+        if (recordedAt == null) staleRecallCount += 1;
+        return memory.recallDeath(recordedAt);
+      },
+    };
+    director.activeGoal = boundaryGoal([subgoal('plan', 1, 'acting')]);
+
+    assert.equal(director.reconcileDeath({
+      position: { x: 8098.37, y: 58, z: 7943.45 },
+      dimension: 'overworld',
+      recoverableItems: 9,
+      deathRecord: current.record,
+      deathPersistenceCode: current.code,
+    }), true);
+    assert.equal(staleRecallCount, 0);
+    assert.equal(director.activeGoal.phase, 'recover');
+    assert.equal(director.activeGoal.evidence.code, 'goal_owner_died');
+    assert.equal(
+      director.activeGoal.memory.deathRecovery.recordedAt,
+      current.record.recordedAt,
+    );
+    assert.equal(director.activeGoal.attempts, 1);
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
 
 test('recovery history does not spend the productive-step ceiling, which still fails closed', () => {
   const director = createDirector();
@@ -609,6 +1490,66 @@ test('delivery preserves attempts, resolves an unloaded player, and returns thro
   assert.equal(director.activeGoal.attempts, 2);
 });
 
+test('failed delivery relocation is terminal and cannot clone the unchanged handoff through Agenda', () => {
+  const director = createDirector();
+  const terminalBoundaries = [];
+  director.recordTerminalBoundary = (boundary, evidence) => {
+    terminalBoundaries.push({ boundary, evidence });
+    return true;
+  };
+  const goal = createItemGoalContract({
+    kind: 'deliver',
+    requester: 'DadPlayer',
+    destinationPlayer: 'DadPlayer',
+    target: {
+      requestedName: 'raw_iron',
+      canonicalName: 'raw_iron',
+      inventoryName: 'raw_iron',
+      acquisitionName: 'raw_iron',
+      family: null,
+      acquisitionKind: 'planned',
+    },
+    quantity: 8,
+    completion: 'delivery',
+  });
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'recover',
+    attempts: 1,
+    subgoals: [
+      {
+        ...subgoal('deliver', 1, 'failed'),
+        commandName: '!givePlayer',
+        actionId: 'delivery-no-path',
+        code: 'skill_path_not_found',
+      },
+      subgoal('recover', 2, 'acting'),
+    ],
+  });
+
+  director.handleResult('recover', {
+    actionId: 'delivery-relocation-no-region',
+    phase: 'failed',
+    code: 'skill_no_safe_region',
+    detail: 'No safe relocation region was reachable from the current stance.',
+    retryable: true,
+  });
+
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.phase, 'failed');
+  assert.equal(director.lastGoal.evidence.code, 'no_deterministic_recovery');
+  assert.equal(director.lastGoal.evidence.retryable, false);
+  assert.equal(director.lastGoal.attempts, 1);
+  assert.equal(director.lastGoal.subgoals.at(-1).code, 'skill_no_safe_region');
+  assert.deepEqual(terminalBoundaries, [{
+    boundary: 'no_deterministic_recovery',
+    evidence: {
+      code: 'no_deterministic_recovery',
+      detail: 'No safe relocation region was reachable from the current stance.',
+    },
+  }]);
+});
+
 test('delivery routes to the newest complete shared player observation', () => {
   const director = createDirector();
   director.now = () => 100_000;
@@ -921,7 +1862,7 @@ test('one no-progress concrete failure relocates before the same regional signat
   director.update();
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.deepEqual(commands, ['!moveAway(32, false)']);
+  assert.deepEqual(commands, ['!moveAway(32, true)']);
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 2);
   assert.equal(director.activeGoal.subgoals.at(-1).kind, 'recover');

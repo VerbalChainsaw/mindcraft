@@ -23,6 +23,11 @@ test('food cooking semantics use current registry names and generated recipes', 
   assert.equal(isCookableFood(registry, 'cooked_beef'), false);
   assert.equal(itemMatchesFamily({ registry }, { name: 'beef' }, 'food'), false);
   assert.equal(itemMatchesFamily({ registry }, { name: 'cooked_beef' }, 'food'), true);
+  assert.equal(itemMatchesFamily({ registry }, { name: 'cod' }, 'raw_fish'), true);
+  assert.equal(itemMatchesFamily({ registry }, { name: 'salmon' }, 'raw_fish'), true);
+  assert.equal(itemMatchesFamily({ registry }, { name: 'pufferfish' }, 'raw_fish'), false);
+  assert.equal(itemMatchesFamily({ registry }, { name: 'cooked_cod' }, 'cooked_fish'), true);
+  assert.equal(itemMatchesFamily({ registry }, { name: 'cooked_salmon' }, 'cooked_fish'), true);
 });
 
 test('animal food drops and reverse lookup share canonical item identities', () => {

@@ -1,5 +1,5 @@
 {
-  "name": "MindcraftBot",
+  "name": "Kevin",
   "model": [
     { "api": "openai", "model": "gpt-4.1", "params": { "timeout": 12 } },
     { "api": "openai", "model": "gpt-4.1-mini", "params": { "timeout": 10 } }

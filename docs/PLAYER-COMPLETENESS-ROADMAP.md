@@ -9,7 +9,9 @@ quartz round trip, fight tactically, explore landmarks, recover death items,
 brew potions, establish and maintain a farm, breed animals, remember and
 repair a home structure, and execute bounded general construction projects.
 The advanced mechanics table below remains an explicit backlog rather than
-an implied capability claim.
+an implied capability claim. Strategic branch qualification is online only as
+shadow telemetry; it does not add a gameplay mechanic or model execution
+authority.
 
 ## Active V2 playable checkpoint — 2026-08-09
 
@@ -138,6 +140,17 @@ settled under durable Operator Stop. Target-scoped Pathfinder movement no
 longer prices explicitly authorized canopy cells as unreachable, and a failed
 physical cleanup obligation now survives GoalDirector and Agenda persistence
 so a later inventory checklist cannot conceal a half-finished tree or scaffold.
+
+The 2026-08-10 strategic qualification checkpoint adds observability, not
+capability breadth. BQ0/BQ1 now preserve a canonical, fail-closed fingerprint
+of the deterministic planner frontier in shadow telemetry. A real disposable
+player then requested one netherite pickaxe. Because smithing/netherite remains
+in the advanced backlog, the planner truthfully produced zero feasible
+methods, zero physical attempts, and `unsupported_acquisition_leaf` /
+`capability_gap`; the model was not called. BQ2 is therefore complete as a
+truthful zero-method receipt, while H1 remains unauthorized. The product lane
+returns to ordinary mixed companion play, and only a later repeatable
+unresolved two-or-more-method frontier can reopen selector review.
 
 Return-safe mining routes, non-constructive ordinary movement, owned
 CollectBlock cancellation/target ordering, whole-tree settlement, aggregate
@@ -318,7 +331,7 @@ Good next bounded additions:
 | Fishing | Medium, deferred | Needs a bounded cast/reel state machine, water proof, pickup, interruption, and rod-durability evidence |
 | Enchanting | Medium, deferred | Needs exact table-window option, item/lapis/level preflight, and changed enchantment evidence |
 | Anvil/Mending repair | Medium, deferred | Needs exact input/material/level contract and before/after durability, XP, and enchantment proof |
-| Smithing/netherite | Medium, deferred | Needs version-aware template/window handling with exact consumed inputs and output |
+| Smithing/netherite | Medium, deferred; BQ2 live gap confirmed | Needs version-aware template/window handling with exact consumed inputs and output; the natural netherite-pickaxe request correctly failed before action rather than inventing a route |
 | Villager economy | Medium/large | Persist profession/trade observations and restock state around the existing verified trade skill |
 | End progression/dragon | Large | New cross-dimension progression contract, stronghold/portal proof, bounded combat, return/recovery |
 | Elytra flight/fireworks | Large | Dedicated flight controller, collision model, landing proof, and durability policy |

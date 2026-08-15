@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /mnt/c/Users/zerop/.codex/.chatgpt-projects/g-p-6a70db47a298819189533a6bea70a46d 2>/dev/null || echo \"WSL path not reachable from this shell\")",
+      "Bash(ls -la \"C:/Users/zerop/.codex/.chatgpt-projects/g-p-6a70db47a298819189533a6bea70a46d\" 2>/dev/null | head -50)",
+      "Bash(git status *)",
+      "Bash(git branch *)",
+      "Bash(git log *)"
+    ]
+  }
+}

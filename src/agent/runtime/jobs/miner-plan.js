@@ -106,10 +106,116 @@ function inventoryCount(snapshot, name) {
   return Math.max(0, Number(snapshot?.inventory?.[name]) || 0);
 }
 
+function pendingMiningReturn(order) {
+  const route = order.checkpoint?.miningReturnRoute || [];
+  const index = Number.isFinite(order.checkpoint?.miningReturnIndex)
+    ? Math.min(route.length - 1, Math.floor(order.checkpoint.miningReturnIndex))
+    : route.length - 1;
+  if (index < 0 || !route[index]) return null;
+  return { cell: route[index], index };
+}
+
+function provedUnchangedMiningSearch(order, snapshot, result, naturalTarget) {
+  const skill = result?.evidence?.skill;
+  const liveProgress = skill?.progress;
+  if (
+    result?.phase === 'failed'
+    && result?.label === 'action:mineSearchTunnel'
+    && skill?.kind === 'mining_search'
+    && skill?.routeDigging === true
+    && liveProgress?.kind === 'mining_search_physical'
+    && liveProgress?.verified === true
+    && liveProgress?.changed === false
+    && skill?.target?.name === naturalTarget
+  ) return true;
+
+  const persisted = order.checkpoint?.miningSearchNoProgress;
+  return Boolean(
+    persisted?.method === 'action:mineSearchTunnel'
+    && persisted?.target === naturalTarget
+    && [snapshot?.x, snapshot?.y, snapshot?.z].every(Number.isFinite)
+    && Math.floor(snapshot.x) === persisted.x
+    && Math.floor(snapshot.y) === persisted.y
+    && Math.floor(snapshot.z) === persisted.z
+  );
+}
+
+function toolPrerequisiteStep(order, planItem) {
+  const requirement = order.checkpoint?.toolRequirement;
+  if (!requirement?.name) return null;
+  if (typeof planItem !== 'function') {
+    return {
+      terminal: true,
+      code: 'tool_planner_unavailable',
+      detail: `No prerequisite planner is available for ${requirement.name}.`,
+      retryable: false,
+    };
+  }
+  const plan = planItem({
+    target: requirement.name,
+    quantity: 1,
+    completion: 'inventory',
+    range: order.constraints?.maxDistance,
+    toolRequirement: requirement,
+    excludedMethods: order.checkpoint?.failedMethods || [],
+    allowEntityAlternatives: false,
+  });
+  if (plan?.status === 'complete') {
+    return {
+      phase: order.resumePhase || 'assess',
+      code: 'tool_prerequisite_ready',
+      checkpoint: {
+        ...order.checkpoint,
+        toolRequirement: null,
+      },
+    };
+  }
+  if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
+    return {
+      terminal: true,
+      code: plan?.code || 'tool_plan_blocked',
+      detail: plan?.detail || `No deterministic prerequisite plan exists for ${requirement.name}.`,
+      retryable: false,
+    };
+  }
+  return {
+    capability: plan.nextStep.capability,
+    methodKey: plan.nextStep.learningKey || null,
+    nextPhase: 'recover',
+    code: 'tool_prerequisite_planned',
+    target: { name: requirement.name },
+    reason: plan.nextStep.reason,
+    checkpoint: {
+      ...order.checkpoint,
+      toolRequirement: requirement,
+    },
+  };
+}
+
 function deliveryStep(order, snapshot, amount) {
   const item = miningOutputName(order.target.name);
   const delivered = Math.max(0, Number(order.checkpoint?.delivered) || 0);
   const retained = inventoryCount(snapshot, item);
+  const returnStep = pendingMiningReturn(order);
+  if (returnStep) {
+    const { cell, index } = returnStep;
+    return createCapabilityRequest('traverse_mining_route_cell', {
+      x: cell.x,
+      y: cell.y,
+      z: cell.z,
+      dimension: snapshot.dimension,
+    }, {
+      nextPhase: 'deliver',
+      code: 'mining_return_route',
+      target: { name: 'mining_return_cell', x: cell.x, y: cell.y, z: cell.z },
+      keepAnchor: true,
+      recoveryAction: true,
+      checkpointOnSuccess: {
+        ...order.checkpoint,
+        miningReturnIndex: index - 1,
+      },
+    });
+  }
   if (snapshot.deposit?.mode === 'inventory') {
     // `deliver` can survive a restart or a transient inventory observation.
     // Keeping the output is complete only while fresh Minecraft inventory
@@ -158,7 +264,7 @@ function deliveryStep(order, snapshot, amount) {
   return { complete: true, code: 'mining_quota_retained' };
 }
 
-export function nextMinerStep(order, snapshot = {}) {
+export function nextMinerStep(order, snapshot = {}, lastResult = null, { planItem = null } = {}) {
   const requested = order.target?.name;
   const naturalTarget = canonicalMiningTarget(requested);
   if (!naturalTarget) return { terminal: true, code: 'invalid_mining_target', retryable: false };
@@ -182,6 +288,41 @@ export function nextMinerStep(order, snapshot = {}) {
     return deliveryStep(order, snapshot, Math.min(current, Math.max(0, order.quota - delivered)));
   }
   if (order.phase === 'recover') {
+    const returnStep = pendingMiningReturn(order);
+    if (returnStep) {
+      const { cell, index } = returnStep;
+      return createCapabilityRequest('traverse_mining_route_cell', {
+        x: cell.x,
+        y: cell.y,
+        z: cell.z,
+        dimension: snapshot.dimension,
+      }, {
+        nextPhase: 'recover',
+        code: 'mining_return_route',
+        target: { name: 'mining_return_cell', x: cell.x, y: cell.y, z: cell.z },
+        keepAnchor: true,
+        recoveryAction: true,
+        checkpointOnSuccess: {
+          ...order.checkpoint,
+          miningReturnIndex: index - 1,
+        },
+      });
+    }
+    const prerequisite = toolPrerequisiteStep(order, planItem);
+    if (prerequisite) return prerequisite;
+    // Failure-code names describe why a mining plan stopped, not whether it
+    // changed the world. Consume the skill-owned physical receipt instead:
+    // the same tunnel is ineligible only when the action verified no movement
+    // and no excavation, and the durable work-order latch still matches the
+    // current standing cell.
+    if (provedUnchangedMiningSearch(order, snapshot, lastResult, naturalTarget)) {
+      return {
+        terminal: true,
+        code: 'mining_search_no_progress',
+        detail: lastResult?.detail || 'The bounded mining search proved no physical progress from this standing cell.',
+        retryable: false,
+      };
+    }
     const depthTarget = downwardMiningDepthTarget(knowledge, snapshot.y, 10);
     if (depthTarget !== null) {
       return {

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import prismarineWorld from 'prismarine-world';
+import Vec3 from 'vec3';
 
 import {
   SurvivalDirector,
   summarizeSurvivalSituation,
 } from '../../src/agent/runtime/survival-director.js';
+import { getSurvivalDirectorState } from '../../src/agent/library/full_state.js';
 
 const POLICY = Object.freeze({
   mode: 'full',
@@ -62,8 +65,10 @@ test('Given low hunger, SurvivalDirector dispatches one verified consume action 
 
   assert.deepEqual(commands, ['!consume("bread")']);
   const status = director.snapshot();
+  const { decision, safetyIncident, ...statusWithoutDecision } = status;
+  assert.equal(safetyIncident, null);
   assert.deepEqual({
-    ...status,
+    ...statusWithoutDecision,
     nextEligibleAt: '<bounded cooldown>',
   }, {
     name: 'survival',
@@ -74,7 +79,222 @@ test('Given low hunger, SurvivalDirector dispatches one verified consume action 
     retryable: false,
     nextEligibleAt: '<bounded cooldown>',
   });
+  assert.equal(decision.outcomeCode, 'schedule_in_flight');
+  assert.equal(decision.gate.inFlight, true);
   assert.equal(Number.isFinite(status.nextEligibleAt), true);
+});
+
+test('SurvivalDirector publishes the exact schedule gate and critical intent through canonical state', async () => {
+  const agent = createAgent();
+  agent.bot.health = 8;
+  agent.bot.food = 9;
+  agent.isIdle = () => false;
+  agent.goal_director = { activeGoal: { id: 'family-iron' } };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: false,
+      health: 8,
+      hunger: 9,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'critical-health-food-1',
+        phase: 'failed',
+        code: 'skill_no_food_sources',
+        detail: 'No safe food source was found.',
+        target: { name: 'safe_food' },
+        retryable: true,
+      };
+    },
+  });
+  agent.survival_director = director;
+
+  director.nextEligibleAt = Date.now() + 10_000;
+  director.update();
+  let canonical = getSurvivalDirectorState(agent).decision;
+  assert.equal(canonical.gate.allowed, false);
+  assert.equal(canonical.gate.code, 'cooldown');
+  assert.equal(canonical.outcomeCode, 'schedule_cooldown');
+  assert.deepEqual(canonical.situation, {
+    health: 8,
+    hunger: 9,
+    held: false,
+    urgentDanger: null,
+    idle: false,
+  });
+
+  director.nextEligibleAt = 0;
+  director.update();
+  canonical = getSurvivalDirectorState(agent).decision;
+  assert.equal(Object.isFrozen(director.snapshot().decision), true);
+  assert.equal(Object.isFrozen(director.snapshot().decision.gate), true);
+  assert.equal(canonical.gate.allowed, true);
+  assert.deepEqual(canonical.selectedIntent, {
+    kind: 'acquire_food',
+    reason: 'missing_safe_food',
+    preempt: true,
+  });
+  assert.equal(canonical.durablePlayerWorkActive, true);
+  assert.equal(canonical.outcomeCode, 'action_dispatched');
+  assert.equal(canonical.scheduled, true);
+  await settle();
+  assert.deepEqual(commands, ['!prepareFood(1, 24)']);
+});
+
+test('Given a critical body and an exact queued gift-food remedy, survival yields pickup and consumption to Agenda', () => {
+  const agent = createAgent();
+  agent.bot.registry = { foodsByName: { bread: { foodPoints: 5, saturation: 6 } } };
+  const pickup = {
+    id: 'gift-pickup',
+    kind: 'pickup_item',
+    target: 'bread',
+    requester: 'DadPlayer',
+  };
+  const consume = {
+    id: 'gift-consume',
+    kind: 'consume_item',
+    target: 'bread',
+    requester: 'DadPlayer',
+    dependsOnEntryId: pickup.id,
+    dependencyPolicy: 'requires_success',
+  };
+  let active = null;
+  let pending = [pickup, consume];
+  let carriedFood = [];
+  agent.agenda_director = {
+    hasUnfinished: () => true,
+    activeEntry: () => active,
+    pending: () => pending,
+  };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 7,
+      hunger: 15,
+      urgentDanger: false,
+      food: carriedFood,
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => commands.push(command),
+  });
+
+  director.update();
+  assert.deepEqual(commands, []);
+  assert.equal(director.snapshot().decision.outcomeCode, 'durable_agenda_food_remedy');
+  assert.equal(director.blocksLowerPriority(), false);
+
+  active = pickup;
+  pending = [consume];
+  director.finish({ phase: 'failed', code: 'skill_no_food_sources', retryable: true });
+  director.nextEligibleAt = Date.now() + 10_000;
+  assert.equal(director.blocksLowerPriority(), false);
+
+  active = consume;
+  pending = [];
+  carriedFood = [{ name: 'bread', count: 1, foodPoints: 5, saturation: 6 }];
+  director.nextEligibleAt = 0;
+  director.update();
+  assert.deepEqual(commands, []);
+  assert.equal(director.snapshot().decision.outcomeCode, 'durable_agenda_food_remedy');
+});
+
+test('SurvivalDirector honors a correlated durable-job food upkeep request without critical hunger', async () => {
+  const agent = createAgent();
+  agent.agenda_director = { hasUnfinished: () => true };
+  agent.job_director = { activeOrder: { id: 'family-scout', source: 'player' } };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 20,
+      hunger: 15,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'job-food-1',
+        phase: 'succeeded',
+        code: 'skill_prepared_food',
+        detail: 'Prepared a safe food reserve.',
+        target: { name: 'safe_food' },
+        retryable: false,
+      };
+    },
+  });
+  agent.survival_director = director;
+
+  assert.equal(director.requestJobFoodUpkeep({
+    workOrderId: 'family-scout',
+    requester: 'DadPlayer',
+    targetFoodPoints: 24,
+  }), true);
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!prepareFood(24, 64)']);
+  assert.equal(director.snapshot().code, 'skill_prepared_food');
+  assert.deepEqual(director.snapshot().decision.jobFoodUpkeep, {
+    workOrderId: 'family-scout',
+    requester: 'DadPlayer',
+    targetFoodPoints: 24,
+  });
+  assert.equal(Object.isFrozen(director.snapshot().decision.jobFoodUpkeep), true);
+});
+
+test('Given critical health and a verified healing potion, SurvivalDirector dispatches semantic healing consumption', async () => {
+  const agent = createAgent();
+  agent.isIdle = () => false;
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: false,
+      health: 4,
+      hunger: 20,
+      urgentDanger: false,
+      healingConsumables: [
+        { item: 'healing_potion', effect: 'healing', count: 1, potency: 1 },
+      ],
+      food: [],
+      timeOfDay: 18_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'survival-heal-1',
+        phase: 'succeeded',
+        code: 'skill_consumed',
+        detail: 'Consumed a healing potion.',
+        target: { name: 'healing_potion' },
+        retryable: false,
+      };
+    },
+  });
+
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!consume("healing_potion")']);
+  assert.equal(director.snapshot().code, 'skill_consumed');
 });
 
 test('Given operator hold, SurvivalDirector does not schedule hunger, sleep, or shelter upkeep', async () => {
@@ -222,6 +442,545 @@ test('Given an unresolved critical bodily need, SurvivalDirector acquires food a
   assert.equal(director.blocksLowerPriority(), true);
 });
 
+test('Given a still-critical body, survival settlement cooldowns do not lease it back to player work', () => {
+  const agent = createAgent();
+  let hunger = 3;
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 20,
+      hunger,
+      urgentDanger: false,
+      food: [],
+      timeOfDay: 6000,
+      weather: 'Clear',
+    }),
+  });
+  director.finish({
+    phase: 'interrupted',
+    code: 'interrupted',
+    detail: 'Critical food acquisition yielded during an ownership handoff.',
+    retryable: true,
+  });
+  director.nextEligibleAt = Date.now() + 10_000;
+
+  assert.equal(director.blocksLowerPriority(), true);
+
+  director.finish({
+    phase: 'succeeded',
+    code: 'skill_prepared',
+    detail: 'One immediately edible item was acquired.',
+    retryable: false,
+  });
+  director.nextEligibleAt = Date.now() + 2_000;
+
+  assert.equal(director.blocksLowerPriority(), true);
+
+  hunger = 12;
+  assert.equal(director.blocksLowerPriority(), false);
+});
+
+test('Given critical hunger before a typed goal starts, no-source recovery inherits the durable Agenda requester', async () => {
+  const agent = createAgent();
+  agent.name = 'IronSuiteProof';
+  agent.bot.username = 'IronSuiteProof';
+  agent.bot.entity.position = { x: 100, y: 68, z: 100 };
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.goal_director = { activeGoal: null };
+  agent.agenda_director = {
+    activeEntry: () => null,
+    pending: () => [{ requester: 'DadPlayer' }],
+  };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 20,
+      hunger: 3,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      dimension: 'overworld',
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = command.startsWith('!prepareFood')
+        ? {
+            actionId: `critical-hunger-food-${commands.length}`,
+            phase: 'failed',
+            code: 'skill_no_food_sources',
+            target: { name: 'safe_food' },
+            retryable: true,
+          }
+        : {
+            actionId: `critical-hunger-return-${commands.length}`,
+            phase: 'succeeded',
+            code: 'skill_arrived',
+            target: { name: 'DadPlayer' },
+            retryable: false,
+          };
+    },
+  });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    director.nextEligibleAt = 0;
+    director.update();
+    await settle();
+  }
+
+  assert.deepEqual(commands, [
+    '!prepareFood(1, 24)',
+    '!goToPlayer("DadPlayer", 3, true)',
+  ]);
+  assert.equal(director.snapshot().code, 'recovery_food_sources_exhausted');
+});
+
+test('food recovery adopts a present non-attacking companion and keeps an interrupted return pending', () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.entity.position = { x: 10, y: 64, z: 10 };
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.companion_context = {
+    snapshot: () => ({ presence: 'present', canonicalUsername: 'DadPlayer' }),
+  };
+  const director = new SurvivalDirector(agent);
+  director.foodSourceBlocker = {
+    position: { x: 10, y: 64, z: 10 },
+    dimension: 'overworld',
+    requester: null,
+    returnAttempted: false,
+    returnSucceeded: false,
+    homeAttempted: false,
+    homeSucceeded: false,
+  };
+
+  const intent = director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 8,
+    food: [],
+    healingConsumables: [],
+  }, POLICY);
+  assert.deepEqual(intent, {
+    kind: 'return_to_player',
+    target: { name: 'DadPlayer' },
+    reason: 'food_sources_exhausted_returning_to_requester',
+  });
+
+  director.settleFoodRecovery(intent, { phase: 'interrupted', code: 'interrupted' });
+  assert.equal(director.foodSourceBlocker.returnAttempted, false);
+});
+
+test('food recovery never selects a companion who caused the fresh damage as safety', () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.entity.position = { x: 10, y: 64, z: 10 };
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.bot.lastDamageSource = {
+    matchesSelf: true,
+    kind: 'requester_player',
+    observedAt: Date.now(),
+  };
+  agent.companion_context = {
+    snapshot: () => ({ presence: 'present', canonicalUsername: 'DadPlayer' }),
+  };
+  const director = new SurvivalDirector(agent);
+
+  director.captureFoodSourceBlocker({ kind: 'acquire_food' });
+
+  assert.equal(director.foodSourceBlocker.requester, null);
+});
+
+test('terminal food recovery permits eye contact without releasing unsafe autonomous work', () => {
+  const agent = createAgent();
+  const director = new SurvivalDirector(agent);
+  director.finish({
+    phase: 'waiting',
+    code: 'recovery_food_sources_exhausted',
+    retryable: true,
+  });
+
+  assert.equal(director.permitsIdleEmbodiment(), true);
+  assert.equal(director.blocksLowerPriority(), false, 'noncritical fixture does not seize lower work');
+  agent.bot.health = 6;
+  agent.bot.food = 8;
+  director.getSituation = () => ({ health: 6, hunger: 8 });
+  assert.equal(director.blocksLowerPriority(), true);
+  assert.equal(director.permitsIdleEmbodiment(), true);
+});
+
+test('a tactical retreat remains an unresolved survival incident until Kevin reaches a non-attacking companion', async () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 6;
+  agent.bot.food = 20;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {
+    44: { id: 44, name: 'skeleton', position: { x: 18, y: 64, z: 0 } },
+  };
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.companion_context = {
+    snapshot: () => ({
+      presence: 'present',
+      canonicalUsername: 'DadPlayer',
+      position: { x: 30, y: 64, z: 0 },
+    }),
+  };
+  agent.behavior_arbiter = { wake() {} };
+  agent.openChat = () => {};
+  const commands = [];
+  let attempt = 0;
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 6,
+      hunger: 20,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      shelters: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      attempt += 1;
+      agent.last_action_result = attempt === 1
+        ? {
+            actionId: 'safety-return-1',
+            phase: 'interrupted',
+            code: 'interrupted',
+            retryable: true,
+          }
+        : {
+            actionId: 'safety-return-2',
+            phase: 'succeeded',
+            code: 'skill_arrived',
+            target: { name: 'DadPlayer' },
+            retryable: false,
+          };
+    },
+  });
+  agent.survival_director = director;
+  const damageReceipt = {
+    matchesSelf: true,
+    kind: 'hostile',
+    source: { id: 44, name: 'skeleton', type: 'mob' },
+    observedAt: Date.now(),
+  };
+  agent.bot.lastDamageSource = damageReceipt;
+
+  director.observeDamageSource(damageReceipt);
+  director.observeActionResult({
+    actionId: 'reflex-1',
+    label: 'mode:self_preservation',
+    phase: 'succeeded',
+    code: 'skill_retreated',
+    finishedAt: Date.now(),
+    evidence: { skill: { kind: 'tactical_combat', outcome: 'retreated' } },
+  });
+
+  assert.equal(director.snapshot().safetyIncident.active, true);
+  assert.equal(director.snapshot().safetyIncident.stage, 'disengaged');
+  assert.equal(director.blocksLowerPriority(), true);
+  assert.deepEqual(getSurvivalDirectorState(agent).safetyIncident.source, {
+    kind: 'hostile',
+    id: 44,
+    name: 'skeleton',
+    username: null,
+  });
+
+  director.update();
+  await settle();
+  assert.equal(director.snapshot().safetyIncident.active, true, 'preemption is censored');
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, [
+    '!goToPlayer("DadPlayer", 3, true)',
+    '!goToPlayer("DadPlayer", 3, true)',
+  ]);
+  assert.equal(director.snapshot().safetyIncident.active, false);
+  assert.equal(director.snapshot().safetyIncident.resolutionCode, 'safety_rendezvous_reached');
+});
+
+test('a player-caused hit waits for clarification and a fresh explicit order resolves it', () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 7;
+  agent.bot.food = 20;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {};
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.companion_context = {
+    snapshot: () => ({
+      presence: 'present',
+      canonicalUsername: 'DadPlayer',
+      position: { x: 10, y: 64, z: 0 },
+    }),
+  };
+  const messages = [];
+  agent.openChat = message => messages.push(message);
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 7,
+      hunger: 20,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      shelters: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+  });
+  const receipt = {
+    matchesSelf: true,
+    kind: 'requester_player',
+    source: { id: 8, username: 'DadPlayer', type: 'player' },
+    observedAt: Date.now(),
+  };
+
+  director.observeDamageSource(receipt);
+  director.update();
+
+  assert.equal(director.snapshot().code, 'safety_waiting_for_intent_clarification');
+  assert.equal(director.permitsIdleEmbodiment(), true);
+  assert.equal(director.blocksLowerPriority(), true);
+  assert.equal(messages.length, 1);
+
+  assert.equal(director.observePlayerOrder('DadPlayer', 'goToPlayer'), true);
+  assert.equal(director.snapshot().safetyIncident.active, false);
+  assert.equal(director.snapshot().safetyIncident.resolutionCode, 'player_intent_clarified');
+});
+
+test('a settled failed help route is not retried unchanged and unproven cover is rejected', async () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 6;
+  agent.bot.food = 20;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {
+    45: { id: 45, name: 'skeleton', position: { x: 12, y: 64, z: 0 } },
+  };
+  agent.companion_context = {
+    snapshot: () => ({
+      presence: 'present',
+      canonicalUsername: 'DadPlayer',
+      position: { x: 30, y: 64, z: 0 },
+    }),
+  };
+  agent.openChat = () => {};
+  const commands = [];
+  const situation = {
+    held: false,
+    idle: true,
+    health: 6,
+    hunger: 20,
+    urgentDanger: false,
+    food: [],
+    healingConsumables: [],
+    shelters: [{
+      name: 'roof_only_guess',
+      x: 4,
+      y: 64,
+      z: 4,
+      distance: 6,
+      reachable: true,
+      safe: true,
+    }],
+    timeOfDay: 6_000,
+    weather: 'Clear',
+  };
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => situation,
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'failed-help-route',
+        phase: 'failed',
+        code: 'skill_unreachable',
+        retryable: true,
+      };
+    },
+  });
+  const receipt = {
+    matchesSelf: true,
+    kind: 'hostile',
+    source: { id: 45, name: 'skeleton', type: 'mob' },
+    observedAt: Date.now(),
+  };
+
+  director.observeDamageSource(receipt);
+  director.update();
+  await settle();
+  director.nextEligibleAt = 0;
+  director.update();
+
+  assert.deepEqual(commands, ['!goToPlayer("DadPlayer", 3, true)']);
+  assert.equal(director.snapshot().code, 'safety_cover_unavailable');
+  assert.equal(director.snapshot().safetyIncident.active, true);
+
+  situation.shelters = [{
+    name: 'verified_cover',
+    x: 5,
+    y: 64,
+    z: 5,
+    distance: 7,
+    reachable: true,
+    safe: true,
+    pathStatus: 'success',
+    coverStatus: 'blocked_threat_line_of_sight',
+  }];
+  assert.equal(director.safetyIncidentIntent(situation).kind, 'seek_shelter');
+});
+
+test('a blocked safety incident consumes carried emergency food instead of starving behind help-unavailable', async () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 1;
+  agent.bot.food = 0;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {
+    46: { id: 46, name: 'zombie', position: { x: 20, y: 64, z: 0 } },
+  };
+  agent.companion_context = { snapshot: () => ({ presence: 'absent' }) };
+  agent.openChat = () => {};
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 1,
+      hunger: 0,
+      urgentDanger: false,
+      food: [{ name: 'rotten_flesh', count: 4, foodPoints: 4, saturation: 0.8 }],
+      healingConsumables: [],
+      shelters: [],
+      canShelterInPlace: false,
+      timeOfDay: 18_000,
+      difficulty: 'normal',
+      weather: 'Rain',
+      sheltered: false,
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'incident-food-1',
+        phase: 'succeeded',
+        code: 'skill_consumed',
+        target: { name: 'rotten_flesh' },
+        retryable: false,
+      };
+    },
+  });
+  agent.survival_director = director;
+  const receipt = {
+    matchesSelf: true,
+    kind: 'hostile',
+    source: { id: 46, name: 'zombie', type: 'mob' },
+    observedAt: Date.now(),
+  };
+
+  director.observeDamageSource(receipt);
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!consume("rotten_flesh")']);
+  assert.equal(director.snapshot().code, 'skill_consumed');
+  assert.equal(director.snapshot().safetyIncident.active, true);
+});
+
+test('Given exhausted food sources and a failed requester return, survival routes once to remembered home', async () => {
+  const agent = createAgent();
+  agent.name = 'IronSuiteProof';
+  agent.bot.username = 'IronSuiteProof';
+  agent.bot.entity.position = { x: 100, y: 58, z: 100 };
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.goal_director = { activeGoal: { requester: 'DadPlayer' } };
+  agent.home_state = {
+    snapshot: () => ({
+      home: { x: 80, y: 64, z: 80, dimension: 'overworld' },
+    }),
+  };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 3,
+      hunger: 16,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      timeOfDay: 18_000,
+      dimension: 'overworld',
+      weather: 'Clear',
+      sheltered: true,
+      shelters: [],
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = command.startsWith('!prepareFood')
+        ? {
+            actionId: `survival-food-${commands.length}`,
+            phase: 'failed',
+            code: 'skill_no_food_sources',
+            target: { name: 'safe_food' },
+            retryable: true,
+          }
+        : command.startsWith('!goToPlayer')
+          ? {
+            actionId: `survival-return-${commands.length}`,
+            phase: 'failed',
+            code: 'skill_path_not_found',
+            target: { name: 'DadPlayer' },
+            retryable: true,
+          }
+          : {
+            actionId: `survival-home-${commands.length}`,
+            phase: 'succeeded',
+            code: 'skill_arrived',
+            target: { name: 'remembered_home', x: 80, y: 64, z: 80 },
+            retryable: false,
+          };
+    },
+  });
+
+  director.update();
+  await settle();
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, [
+    '!prepareFood(1, 24)',
+    '!goToPlayer("DadPlayer", 3, true)',
+    '!goToCoordinates(80, 64, 80, 2, true)',
+  ]);
+  assert.equal(director.snapshot().phase, 'succeeded');
+  assert.equal(director.snapshot().code, 'skill_arrived');
+  assert.equal(director.blocksLowerPriority(), true);
+});
+
 test('Given live inventory and cover, survival situation reports armor upgrades and verified shelter state', () => {
   const leatherBoots = { name: 'leather_boots', count: 1 };
   const ironBoots = { name: 'iron_boots', count: 1 };
@@ -282,6 +1041,149 @@ test('Given live inventory and cover, survival situation reports armor upgrades 
   ]);
   assert.equal(situation.sheltered, true);
   assert.equal(situation.difficulty, 'peaceful');
+});
+
+test('Given a bed inside 24 blocks but outside Mineflayer\'s narrow section envelope, survival selection retains it', () => {
+  const origin = new Vec3(-368.5, 70, -166.69);
+  const blocks = new Map();
+  const addBed = (x, y, z, part, occupied = false) => {
+    const block = {
+      name: 'orange_bed',
+      boundingBox: 'block',
+      position: new Vec3(x, y, z),
+      part,
+      occupied,
+    };
+    blocks.set(`${x}:${y}:${z}`, block);
+    return block.position;
+  };
+  const locations = [
+    addBed(-370, 70, -162, 'foot', true),
+    addBed(-371, 70, -162, 'head', true),
+    addBed(-370, 70, -169, 'foot', true),
+    addBed(-371, 70, -169, 'head', true),
+    addBed(-351, 71, -159, 'foot'),
+    addBed(-352, 71, -159, 'head'),
+    addBed(-340, 70, -166, 'foot'),
+    addBed(-341, 70, -166, 'head'),
+  ];
+  let searchOptions = null;
+  const bot = {
+    entity: { position: origin },
+    entities: {},
+    health: 20,
+    food: 20,
+    lastDamageTime: 0,
+    inventory: { slots: [], items: () => [] },
+    registry: { foodsByName: {} },
+    modes: { getStatus: () => [] },
+    time: { timeOfDay: 13_000 },
+    game: { dimension: 'minecraft:overworld', difficulty: 'normal' },
+    rainState: 0,
+    thunderState: 0,
+    findBlocks(options) {
+      searchOptions = options;
+      const point = (options.point || this.entity.position).floored();
+      const start = new Vec3(
+        Math.floor(point.x / 16),
+        Math.floor(point.y / 16),
+        Math.floor(point.z / 16),
+      );
+      const iterator = new prismarineWorld.iterators.OctahedronIterator(
+        start,
+        Math.ceil((options.maxDistance + 8) / 16),
+      );
+      const visitedSections = new Set();
+      let next = start;
+      while (next) {
+        visitedSections.add(next.toString());
+        next = iterator.next();
+      }
+      return locations
+        .filter(location => visitedSections.has(new Vec3(
+          Math.floor(location.x / 16),
+          Math.floor(location.y / 16),
+          Math.floor(location.z / 16),
+        ).toString()))
+        .filter(location => location.distanceTo(point) <= options.maxDistance)
+        .sort((left, right) => left.distanceTo(point) - right.distanceTo(point))
+        .slice(0, options.count);
+    },
+    blockAt(position) {
+      assert.equal(typeof position?.floored, 'function');
+      return blocks.get(`${position.x}:${position.y}:${position.z}`)
+        || { name: 'air', boundingBox: 'empty', position };
+    },
+    parseBedMetadata(block) {
+      return {
+        part: block.part === 'head',
+        headOffset: { x: -1, y: 0, z: 0 },
+        occupied: block.occupied,
+      };
+    },
+    nearestEntity: () => null,
+  };
+  const situation = summarizeSurvivalSituation({
+    bot,
+    runtime: { survival: { ...POLICY, shelter: 'off' } },
+    isOperatorHeld: () => false,
+    isIdle: () => true,
+  });
+
+  assert.deepEqual(situation.beds.map(({ x, y, z }) => ({ x, y, z })), [
+    { x: -370, y: 70, z: -169 },
+    { x: -370, y: 70, z: -162 },
+    { x: -351, y: 71, z: -159 },
+  ]);
+  assert.equal(searchOptions.maxDistance, 48);
+  assert.equal(searchOptions.count, 64);
+  assert.deepEqual(situation.beds.map(bed => bed.occupied), [true, true, false]);
+  assert.ok(origin.distanceTo(new Vec3(-351, 71, -159)) < 24);
+  assert.ok(origin.distanceTo(new Vec3(-340, 70, -166)) > 24);
+});
+
+test('Given a bed head without a native vector, survival bed selection fails closed', () => {
+  const origin = new Vec3(0, 64, 0);
+  const headLocation = new Vec3(3, 64, 0);
+  const situation = summarizeSurvivalSituation({
+    bot: {
+      entity: { position: origin },
+      entities: {},
+      health: 20,
+      food: 20,
+      lastDamageTime: 0,
+      inventory: { slots: [], items: () => [] },
+      registry: { foodsByName: {} },
+      modes: { getStatus: () => [] },
+      time: { timeOfDay: 13_000 },
+      game: { dimension: 'minecraft:overworld', difficulty: 'normal' },
+      rainState: 0,
+      thunderState: 0,
+      findBlocks: () => [headLocation],
+      blockAt(position) {
+        assert.equal(typeof position?.floored, 'function');
+        if (position.equals(headLocation)) {
+          return {
+            name: 'orange_bed',
+            boundingBox: 'block',
+            position: { x: 3, y: 64, z: 0 },
+            part: 'head',
+          };
+        }
+        return { name: 'air', boundingBox: 'empty', position };
+      },
+      parseBedMetadata: () => ({
+        part: true,
+        headOffset: { x: -1, y: 0, z: 0 },
+      }),
+      nearestEntity: () => null,
+    },
+    runtime: { survival: { ...POLICY, shelter: 'off' } },
+    isOperatorHeld: () => false,
+    isIdle: () => true,
+  });
+
+  assert.deepEqual(situation.beds, []);
 });
 
 test('Given nearly broken high-tier armor and a healthy replacement, survival situation makes the replacement actionable', () => {
@@ -394,4 +1296,214 @@ test('Given emergency shelter policy, SurvivalDirector requests exactly one vali
   assert.equal(requests[0].blueprint.id, 'emergency_3x3');
   assert.equal(requests[0].blueprint.cells.length > 0, true);
   assert.equal(director.snapshot().phase, 'requested');
+});
+
+// Reproduces the 2026-08-14 night: 35 identical `skill_bed_occupied` attempts
+// against one bed, zero displacement, at the 10s failure cooldown. Sleep is not
+// optional comfort — insomnia is what spawns the phantoms that later killed the
+// bot — so the loop must stop without suppressing sleep itself.
+//
+// These assert the exact dispatched command. An earlier version only counted
+// generic `!goToBed` strings, which cannot observe which bed was attempted and
+// so could not see the executor re-searching and substituting a nearer bed.
+function createSleeperAgent(position = { x: 0, y: 64, z: 0 }) {
+  return {
+    bot: {
+      entity: { id: 1, position },
+      game: { dimension: 'overworld' },
+      time: { timeOfDay: 14_000 },
+    },
+    runtime: { survival: POLICY },
+    last_action_result: null,
+    isIdle: () => true,
+    isOperatorHeld: () => false,
+  };
+}
+
+function sleeperSituation(beds, overrides = {}) {
+  return {
+    held: false,
+    idle: true,
+    health: 20,
+    hunger: 20,
+    recentDamage: false,
+    urgentDanger: false,
+    food: [],
+    armor: [],
+    timeOfDay: 14_000,
+    dimension: 'overworld',
+    difficulty: 'normal',
+    weather: 'Clear',
+    sheltered: false,
+    shelters: [],
+    beds,
+    ...overrides,
+  };
+}
+
+// A is nearer and occupied; B is farther and available. This is the exact shape
+// that defeated the coordinate filter when dispatch was generic.
+const BED_A = Object.freeze({
+  name: 'orange_bed', x: -370, y: 70, z: -162, distance: 3, reachable: true, safe: true,
+});
+const BED_B = Object.freeze({
+  name: 'red_bed', x: -352, y: 70, z: -160, distance: 19, reachable: true, safe: true,
+});
+
+const BED_A_COMMAND = '!goToBedAt(-370, 70, -162, "overworld")';
+const BED_B_COMMAND = '!goToBedAt(-352, 70, -160, "overworld")';
+
+// The executor answers as the real skill does: it reports the bed it actually
+// attempted, taken from the exact coordinates in the dispatched command.
+function bedDirector(agent, situationRef, { occupied }) {
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => situationRef.value,
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      const match = /^!goToBedAt\((-?\d+), (-?\d+), (-?\d+)/.exec(command);
+      const attempted = match
+        ? { name: 'bed', x: Number(match[1]), y: Number(match[2]), z: Number(match[3]) }
+        : { name: 'bed' };
+      const blocked = occupied.some(bed => (
+        bed.x === attempted.x && bed.y === attempted.y && bed.z === attempted.z
+      ));
+      agent.last_action_result = blocked
+        ? {
+            actionId: `sleep-${commands.length}`,
+            phase: 'failed',
+            code: 'skill_bed_occupied',
+            detail: 'The bed is occupied.',
+            target: attempted,
+            retryable: true,
+          }
+        : {
+            actionId: `sleep-${commands.length}`,
+            phase: 'succeeded',
+            code: 'skill_slept',
+            detail: 'Slept through the night.',
+            target: attempted,
+            retryable: false,
+          };
+    },
+  });
+  return { director, commands };
+}
+
+test('Given an occupied bed and unchanged evidence, SurvivalDirector refuses a second identical sleep attempt', async () => {
+  const agent = createSleeperAgent();
+  const situationRef = { value: sleeperSituation([BED_A]) };
+  const { director, commands } = bedDirector(agent, situationRef, { occupied: [BED_A] });
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+
+  // Bypass the cooldown deliberately: unchanged evidence, not elapsed time, is
+  // what must stop the retry.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    director.nextEligibleAt = 0;
+    director.update();
+    await settle();
+  }
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+});
+
+test('Given a nearer occupied bed and a farther available bed, the farther bed is the one actually attempted', async () => {
+  const agent = createSleeperAgent();
+  const situationRef = { value: sleeperSituation([BED_A, BED_B]) };
+  const { director, commands } = bedDirector(agent, situationRef, { occupied: [BED_A] });
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+
+  // The decisive assertion: the second dispatch must bind bed B by coordinate.
+  // Generic `!goToBed` would re-search and take nearer bed A again.
+  assert.deepEqual(commands, [BED_A_COMMAND, BED_B_COMMAND]);
+  assert.equal(agent.last_action_result.phase, 'succeeded');
+  assert.equal(director.sleepBlocker, null);
+});
+
+test('Given same-night displacement to another fallback, the blocked bed remains ineligible', async () => {
+  const agent = createSleeperAgent();
+  const situationRef = { value: sleeperSituation([BED_A]) };
+  const { director, commands } = bedDirector(agent, situationRef, { occupied: [BED_A] });
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+
+  agent.bot.entity.position = { x: 40, y: 64, z: 40 };
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+});
+
+test('Given two occupied beds and a third available bed, same-night fallback visits each physical bed at most once', async () => {
+  const agent = createSleeperAgent();
+  const bedC = Object.freeze({
+    name: 'orange_bed', x: -370, y: 70, z: -169, distance: 10, reachable: true, safe: true,
+  });
+  const situationRef = { value: sleeperSituation([BED_A, bedC, BED_B]) };
+  const { director, commands } = bedDirector(agent, situationRef, { occupied: [BED_A, bedC] });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    director.nextEligibleAt = 0;
+    director.update();
+    await settle();
+    if (attempt === 0) agent.bot.entity.position = { x: -369, y: 70, z: -167 };
+  }
+
+  assert.deepEqual(commands, [
+    BED_A_COMMAND,
+    '!goToBedAt(-370, 70, -169, "overworld")',
+    BED_B_COMMAND,
+  ]);
+  assert.equal(agent.last_action_result.phase, 'succeeded');
+  assert.equal(director.sleepBlockers.size, 0);
+});
+
+test('Given authoritative occupied-state change, a blocked bed becomes eligible again', async () => {
+  const agent = createSleeperAgent();
+  const situationRef = { value: sleeperSituation([{ ...BED_A, occupied: true }]) };
+  const { director, commands } = bedDirector(agent, situationRef, { occupied: [BED_A] });
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+
+  situationRef.value = sleeperSituation([{ ...BED_A, occupied: false }]);
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND, BED_A_COMMAND]);
+});
+
+test('Given missing position evidence, the sleep blocker is retained rather than released', async () => {
+  const agent = createSleeperAgent();
+  const situationRef = { value: sleeperSituation([BED_A]) };
+  const { director, commands } = bedDirector(agent, situationRef, { occupied: [BED_A] });
+
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+
+  // Unknown is not material change.
+  agent.bot.entity.position = null;
+  director.nextEligibleAt = 0;
+  director.update();
+  await settle();
+  assert.deepEqual(commands, [BED_A_COMMAND]);
+  assert.notEqual(director.sleepBlocker, null);
 });

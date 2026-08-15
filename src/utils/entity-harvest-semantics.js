@@ -59,6 +59,21 @@ function sheepWoolState(entity) {
  */
 export function entityHarvestSources(registry, itemName) {
   const output = canonicalName(itemName);
+  if (
+    output === 'string'
+    && registry?.itemsByName?.string
+    && registry?.entitiesByName?.spider
+  ) {
+    return [{
+      entity: 'spider',
+      output,
+      method: 'kill',
+      requiredItem: null,
+      minimumYield: 0,
+      naturalFrequency: 0.25,
+      searchRange: 64,
+    }];
+  }
   const color = output.endsWith('_wool') ? output.slice(0, -'_wool'.length) : null;
   if (
     !SHEEP_WOOL_COLORS.includes(color)
@@ -78,6 +93,9 @@ export function entityHarvestSources(registry, itemName) {
 
 export function entityMatchesHarvestSource(entity, source) {
   if (!entity || !source || entity.name !== source.entity) return false;
+  if (source.method === 'kill' && source.entity === 'spider' && source.output === 'string') {
+    return true;
+  }
   if (source.method === 'shear' && source.entity === 'sheep') {
     const state = sheepWoolState(entity);
     return Boolean(state && !state.baby && !state.sheared && state.item === source.output);
@@ -86,6 +104,7 @@ export function entityMatchesHarvestSource(entity, source) {
 }
 
 export function entityHarvestOutput(entity, method='shear') {
+  if (method === 'kill' && entity?.name === 'spider') return 'string';
   if (method !== 'shear') return null;
   const state = sheepWoolState(entity);
   return state && !state.baby && !state.sheared ? state.item : null;

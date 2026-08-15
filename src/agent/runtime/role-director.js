@@ -3,6 +3,7 @@ import { executeCommand } from '../commands/index.js';
 import * as world from '../library/world.js';
 import * as mc from '../../utils/mcdata.js';
 import { resolvePlayerTarget } from '../player-target.js';
+import { hasPendingDeathRecovery } from '../memory_bank.js';
 
 const STARTUP_DELAY_MS = 5_000;
 const MANUAL_COMMAND_GRACE_MS = 120_000;
@@ -149,6 +150,10 @@ function chooseIntent(agent) {
   const autonomy = agent.runtime?.autonomy || 'balanced';
   const leader = resolveLeader(agent);
 
+  if (hasPendingDeathRecovery(agent.memory_bank)) {
+    return { blocked: 'death_recovery_pending', target: 'last_death_position' };
+  }
+
   if (role === 'companion') {
     if (!leader) return { blocked: 'waiting_for_player', target: null };
     return {
@@ -265,6 +270,18 @@ function shouldRelocateForResource(result) {
   );
 }
 
+export function roleIntentActionOwner(agent, intent) {
+  const directive = agent?.companion_context?.snapshot?.().directive;
+  const companionLeaderFollow = agent?.runtime?.role === 'companion'
+    && intent?.behavior === 'follow';
+  const explicitCompanionContinuation = (
+    companionLeaderFollow
+    || (directive === 'follow' && intent?.behavior === 'follow')
+    || (directive === 'guard' && intent?.behavior === 'guard')
+  );
+  return explicitCompanionContinuation ? 'player' : 'job';
+}
+
 export class RoleDirector {
   constructor(agent) {
     this.agent = agent;
@@ -342,7 +359,11 @@ export class RoleDirector {
     this.setStatus('acting', `role_${intent.behavior}`, intent.target, `Dispatching ${intent.behavior} through the verified command path.`, true);
     const previousActionId = this.agent.last_action_result?.actionId || null;
 
-    void Promise.resolve(executeCommand(this.agent, intent.command, { owner: 'job' }))
+    const actionOwner = roleIntentActionOwner(this.agent, intent);
+    void Promise.resolve(executeCommand(this.agent, intent.command, {
+      owner: actionOwner,
+      routeOrigin: actionOwner === 'player' ? 'companion-directive' : 'role-director',
+    }))
       .then(() => {
         const result = this.agent.last_action_result;
         const changed = Boolean(result?.actionId && result.actionId !== previousActionId);

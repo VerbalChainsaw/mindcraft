@@ -325,6 +325,15 @@ function collectAll(bot, options) {
                 if (options.ignoreNoPath && SKIPPABLE_TARGET_ERRORS.has(err === null || err === void 0 ? void 0 : err.name)) {
                     targetFailures += 1;
                     if (targetFailures >= options.maxTargetFailures) {
+                        if (options.deferDropPickupUntilBlocksComplete) {
+                            // The block route budget is exhausted, not the
+                            // already-mined output. Keep exact bound drops in
+                            // the queue and let the ordinary entity collector
+                            // finish those physical transactions before this
+                            // pass settles.
+                            options.targets.removeBlocks();
+                            continue;
+                        }
                         options.targets.clear();
                         break;
                     }

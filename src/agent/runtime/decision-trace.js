@@ -367,7 +367,13 @@ export class DecisionTraceRecorder {
     if (normalizedEvaluationLane) this.finishLane(normalizedEvaluationLane, { status, reasonCode });
     const active = this.current.activeAction;
     const preemptingLane = ['emergency_self_preservation', 'attributed_protection'].includes(normalizedLane);
-    const preemptionInvolved = Boolean(active.actionId && preemptingLane && active.owner !== 'reflex');
+    const criticalSurvivalPreemption = normalizedLane === 'basic_survival'
+      && ['background', 'autonomy', 'job', 'player'].includes(active.owner);
+    const preemptionInvolved = Boolean(
+      active.actionId
+      && (preemptingLane || criticalSurvivalPreemption)
+      && active.owner !== 'reflex'
+    );
     const retains = Boolean(active.actionId && !preemptionInvolved);
     this.current.winner = {
       lane: normalizedLane,

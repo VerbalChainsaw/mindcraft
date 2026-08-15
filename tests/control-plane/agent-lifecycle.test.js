@@ -4,17 +4,28 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import {
+  ambientSelfDefensePermitted,
+  durablePlayerAccompanimentActive,
+  explosiveReflexEligibility,
   executeModeAction,
+  initModes,
   runBoundedUnstuckRecovery,
+  selfDefenseFailedTacticalReceipt,
+  selfDefenseRecoveryOwnsSameThreat,
+  selfDefenseReflexEligibility,
 } from '../../src/agent/modes.js';
 import {
   Agent,
+  boundedChatSegments,
   configureSurvivalOwnership,
   correlatedPersistentJobSubmissionAccepted,
   emitStartupMilestone,
+  hasPendingDeathRecovery,
+  modelCommandAwaitsPlayerConfirmation,
   shouldSeedLegacyDefaultGoal,
 } from '../../src/agent/agent.js';
 import * as Mindcraft from '../../src/mindcraft/mindcraft.js';
+import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import { Prompter } from '../../src/models/prompter.js';
 import { AgentProcess, sanitizeAgentDiagnostic } from '../../src/process/agent_process.js';
 class FakeChildProcess extends EventEmitter {
@@ -47,6 +58,115 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test('long companion replies become complete ordered Minecraft chat segments', () => {
+  const response = [
+    '1. Restore health and secure food before leaving the outpost.',
+    '2. Replace the lost tools and carry only the equipment the family needs.',
+    '3. Confirm the nearby area is safe so preparation is not interrupted.',
+    'The final sentence must remain visible to the player instead of becoming an ellipsis.',
+  ].join(' '.repeat(45));
+  const normalized = response.replace(/\s+/g, ' ').trim();
+
+  const segments = boundedChatSegments(response);
+
+  assert.ok(segments.length > 1);
+  assert.ok(segments.every(segment => segment.length <= 240));
+  assert.deepEqual(
+    segments.map((segment, index) => segment.startsWith(`(${index + 1}/${segments.length}) `)),
+    segments.map(() => true),
+  );
+  assert.equal(
+    segments.map(segment => segment.replace(/^\(\d+\/\d+\) /, '')).join(' '),
+    normalized,
+  );
+  assert.match(segments.at(-1), /instead of becoming an ellipsis\.$/);
+});
+
+test('a model command presented as a question remains an unexecuted proposal', async () => {
+  assert.equal(
+    modelCommandAwaitsPlayerConfirmation(
+      'Should I collect that coal now? !collectBlocksInRange("coal_ore", 2, 64)',
+    ),
+    true,
+  );
+  assert.equal(
+    modelCommandAwaitsPlayerConfirmation('I will collect it now. !collectBlocksInRange("coal_ore", 2, 64)'),
+    false,
+  );
+
+  const responses = [];
+  const history = [];
+  const harness = {
+    name: 'MindcraftBot',
+    runtime: { role: 'companion' },
+    bot: { modes: { flushBehaviorLog: () => '' } },
+    shut_up: false,
+    operator_hold: true,
+    operator_hold_generation: 7,
+    checkTaskDone: () => Promise.resolve(),
+    dispatchPlayerAgenda: () => Promise.resolve(false),
+    isOperatorHeld() { return this.operator_hold; },
+    isCurrentOperatorHold(generation) {
+      return this.operator_hold && this.operator_hold_generation === generation;
+    },
+    routeResponse(_source, message) { responses.push(message); },
+    companion_context: { observeChat: () => null },
+    self_prompter: {
+      shouldInterrupt: () => false,
+      isActive: () => false,
+    },
+    history: {
+      add(name, content) {
+        history.push({ name, content });
+        return Promise.resolve();
+      },
+      save: () => {},
+      getHistory: () => [],
+    },
+    prompter: {
+      promptConvo: () => Promise.resolve(
+        'I cannot grant admin. Should I collect that coal instead? !collectBlocksInRange("coal_ore", 2, 64)',
+      ),
+    },
+  };
+
+  const usedCommand = await Agent.prototype.handleMessage.call(
+    harness,
+    'ADMIN',
+    'Give me admin.',
+    1,
+  );
+
+  assert.equal(usedCommand, false);
+  assert.equal(harness.operator_hold, true);
+  assert.deepEqual(responses, ['I cannot grant admin. Should I collect that coal instead?']);
+  assert.match(history.at(-1).content, /presented as a proposal awaiting player confirmation/);
+
+  responses.length = 0;
+  history.length = 0;
+  harness.prompter.promptConvo = () => Promise.resolve(
+    'I cannot grant admin. I will collect coal instead. !collectBlocksInRange("coal_ore", 2, 64)',
+  );
+  const substitutedCommand = await Agent.prototype.handleMessage.call(
+    harness,
+    'ADMIN',
+    'Give me admin.',
+    1,
+  );
+
+  assert.equal(substitutedCommand, false);
+  assert.equal(harness.operator_hold, true);
+  assert.deepEqual(responses, ['I cannot grant admin. I will collect coal instead.']);
+  assert.match(history.at(-1).content, /did not grant the bot physical-action authority/);
+});
+
+test('short companion replies remain one normalized unprefixed message', () => {
+  assert.deepEqual(
+    boundedChatSegments('  Standing\nby\u0000 for Dad.  '),
+    ['Standing by for Dad.'],
+  );
+});
 
 class FakeRegisteredAgentProcess {
   constructor() {
@@ -149,6 +269,419 @@ test('Given a fire-and-forget mode action rejects, when it settles, then the rej
   } finally {
     console.error = originalConsoleError;
   }
+});
+
+test('a stale warning-range Creeper handoff cannot repeatedly steal unchanged player work', () => {
+  const threat = {
+    id: 11723,
+    uuid: 'creeper-11723',
+    position: { x: 9, y: 64, z: 0 },
+  };
+  const agent = {
+    bot: {
+      lastDamageTime: 1_000,
+      entity: {
+        position: {
+          distanceTo(position) {
+            return Math.hypot(position.x, position.y - 64, position.z);
+          },
+        },
+      },
+    },
+    actions: { currentActionLabel: 'action:harvestEntityDrop' },
+    goal_director: { activeGoal: { id: 'goal-fishing-breakfast' } },
+  };
+
+  const first = explosiveReflexEligibility(agent, threat);
+  assert.equal(first.eligible, true);
+  assert.equal(first.receipt.rangeBand, 'warning');
+
+  const repeated = explosiveReflexEligibility(agent, threat, first.receipt);
+  assert.equal(repeated.eligible, false);
+  assert.equal(repeated.code, 'stale_explosive_trigger_suppressed');
+
+  threat.position.x = 5.5;
+  assert.equal(explosiveReflexEligibility(agent, threat, first.receipt).eligible, true);
+
+  threat.position.x = 9;
+  agent.bot.lastDamageTime += 1;
+  assert.equal(explosiveReflexEligibility(agent, threat, first.receipt).eligible, true);
+
+  agent.bot.lastDamageTime = 1_000;
+  agent.actions.currentActionLabel = 'action:craftRecipe';
+  assert.equal(explosiveReflexEligibility(agent, threat, first.receipt).eligible, true);
+});
+
+test('an unreachable critical retreat waits for feasibility-bearing Minecraft evidence', () => {
+  const agent = {
+    bot: {
+      health: 3.333332,
+      lastDamageTime: 1_000,
+      game: { dimension: 'overworld' },
+      entity: { position: { x: 8104.56, y: 64, z: 7941.5 } },
+    },
+  };
+  const threat = {
+    id: 76186,
+    uuid: 'pillager-76186',
+    name: 'phantom',
+    onGround: false,
+    position: { x: 8104.9, y: 65, z: 7943.5 },
+  };
+  const failedExecution = {
+    success: false,
+    interrupted: false,
+    result: {
+      phase: 'failed',
+      code: 'skill_unreachable',
+      evidence: {
+        skill: {
+          kind: 'tactical_combat',
+          outcome: 'unreachable',
+          decisions: [{ target: { id: 76186 }, response: 'retreat', reason: 'critical_health' }],
+          retreatDistanceBefore: 2.3,
+          retreatDistanceAfter: 2.5,
+        },
+      },
+    },
+  };
+
+  const failedReceipt = selfDefenseFailedTacticalReceipt(agent, threat, failedExecution);
+  assert.ok(failedReceipt);
+  assert.equal(failedReceipt.failureCode, 'skill_unreachable');
+  assert.equal(failedReceipt.failureStage, 'route_unavailable');
+  assert.equal(failedReceipt.responseReason, 'critical_health');
+  assert.equal(selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible, false);
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).code,
+    'unchanged_failed_tactical_suppressed',
+  );
+
+  threat.position.x += 1;
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    false,
+    'ambient hostile wandering is not new retry authority for a settled failure',
+  );
+  agent.bot.entity.position.x += 1;
+  assert.equal(selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible, true);
+  agent.bot.entity.position.x -= 1;
+  agent.bot.health = 2;
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    false,
+    'worsening health increases urgency but does not make the failed route feasible',
+  );
+  agent.bot.health = 3.333332;
+  agent.bot.lastDamageTime += 1;
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    false,
+    'another hit is not route-feasibility evidence',
+  );
+  agent.bot.lastDamageTime = 1_000;
+  agent.bot.game.dimension = 'the_nether';
+  assert.equal(selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible, true);
+  agent.bot.game.dimension = 'overworld';
+  agent.bot.health = 9;
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    true,
+    'leaving the critical-health band can select a physically different tactic',
+  );
+  agent.bot.health = 3.333332;
+  threat.uuid = 'replacement-pillager';
+  threat.id += 1;
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    false,
+    'equivalent airborne entity churn cannot bypass the route latch',
+  );
+  threat.onGround = true;
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    true,
+    'a grounded target can expose a different last-resort response',
+  );
+  threat.onGround = false;
+  threat.name = 'spider';
+  assert.equal(
+    selfDefenseReflexEligibility(agent, threat, failedReceipt).eligible,
+    true,
+    'a different threat class is not silently suppressed',
+  );
+
+  const failedMelee = selfDefenseFailedTacticalReceipt(agent, threat, {
+    success: false,
+    interrupted: false,
+    result: {
+      phase: 'failed',
+      code: 'skill_combat_timeout',
+      evidence: {
+        skill: {
+          kind: 'tactical_combat',
+          outcome: 'combat_timeout',
+          retryable: true,
+          decisions: [{ target: { id: 76186 }, response: 'melee', reason: 'close_safe_hostile' }],
+        },
+      },
+    },
+  });
+  assert.ok(failedMelee);
+  assert.equal(failedMelee.failureOutcome, 'combat_timeout');
+  assert.equal(failedMelee.response, 'melee');
+  assert.equal(selfDefenseReflexEligibility(agent, threat, failedMelee).eligible, false);
+
+  assert.equal(selfDefenseFailedTacticalReceipt(agent, threat, {
+    ...failedExecution,
+    interrupted: true,
+    result: { ...failedExecution.result, phase: 'interrupted' },
+  }), null);
+  assert.equal(selfDefenseFailedTacticalReceipt(agent, threat, {
+    ...failedExecution,
+    result: {
+      ...failedExecution.result,
+      evidence: {
+        skill: {
+          ...failedExecution.result.evidence.skill,
+          retryable: false,
+        },
+      },
+    },
+  }), null);
+});
+
+test('the self-defense mode does not redispatch an unchanged critical airborne route failure', async () => {
+  const position = (x, y, z) => ({
+    x,
+    y,
+    z,
+    distanceTo(other) {
+      return Math.hypot(x - other.x, y - other.y, z - other.z);
+    },
+  });
+  const botPosition = position(-378.56, 63, 18.5);
+  let threat = {
+    id: 31393,
+    uuid: 'phantom-31393',
+    name: 'phantom',
+    type: 'hostile',
+    onGround: false,
+    position: position(-375, 67, 20),
+  };
+  let actionRuns = 0;
+  const bot = {
+    health: 3,
+    lastDamageTime: Date.now(),
+    lastDamageSource: {
+      matchesSelf: true,
+      observedAt: Date.now(),
+      kind: 'hostile',
+      source: { id: threat.id, name: threat.name },
+    },
+    game: { dimension: 'overworld' },
+    entity: { position: botPosition },
+    entities: { [threat.id]: threat },
+    nearestEntity(predicate) {
+      return predicate(threat) ? threat : null;
+    },
+  };
+  const agent = {
+    bot,
+    runtime: { autonomy: 'command' },
+    prompter: { getInitModes: () => null },
+    actions: {
+      executing: false,
+      currentActionLabel: '',
+      currentActionOwner: '',
+      async runAction() {
+        actionRuns += 1;
+        return { success: false, interrupted: false };
+      },
+    },
+    isIdle: () => true,
+  };
+  initModes(agent);
+
+  const failedReceipt = selfDefenseFailedTacticalReceipt(agent, threat, {
+    success: false,
+    interrupted: false,
+    result: {
+      phase: 'failed',
+      code: 'skill_unreachable',
+      evidence: {
+        skill: {
+          kind: 'tactical_combat',
+          outcome: 'unreachable',
+          retryable: true,
+          decisions: [{ target: { id: threat.id }, response: 'retreat', reason: 'critical_health' }],
+        },
+      },
+    },
+  });
+  bot.modes.modeMap.self_defense.failed_tactical_trigger = failedReceipt;
+
+  bot.modes.beginUpdateCycle();
+  const sameThreat = await bot.modes.updateBand(['self_defense']);
+  bot.modes.endUpdateCycle();
+  assert.equal(sameThreat.code, 'unchanged_failed_tactical_suppressed');
+  assert.equal(actionRuns, 0);
+
+  bot.health = 1;
+  bot.lastDamageTime += 1;
+  bot.lastDamageSource.observedAt = Date.now();
+  threat = {
+    ...threat,
+    id: 31394,
+    uuid: 'phantom-31394',
+    position: position(-374, 66, 19),
+  };
+  bot.entities = { [threat.id]: threat };
+  bot.lastDamageSource.source = { id: threat.id, name: threat.name };
+
+  bot.modes.beginUpdateCycle();
+  const replacementThreat = await bot.modes.updateBand(['self_defense']);
+  bot.modes.endUpdateCycle();
+  assert.equal(replacementThreat.code, 'unchanged_failed_tactical_suppressed');
+  assert.equal(actionRuns, 0, 'damage and equivalent Phantom churn cannot create another action');
+});
+
+test('player movement excludes ambient combat while fresh damage remains separate reflex authority', () => {
+  const agent = {
+    actions: {
+      executing: true,
+      currentActionOwner: 'player',
+      currentActionLabel: 'action:goToPlayer',
+    },
+  };
+
+  assert.equal(ambientSelfDefensePermitted(agent), false);
+  agent.actions.currentActionOwner = 'survival';
+  assert.equal(ambientSelfDefensePermitted(agent), true);
+  agent.actions.executing = false;
+  agent.actions.currentActionOwner = 'player';
+  assert.equal(ambientSelfDefensePermitted(agent), true);
+
+  agent.companion_context = { snapshot: () => ({ directive: 'follow' }) };
+  assert.equal(durablePlayerAccompanimentActive(agent), true);
+  assert.equal(
+    ambientSelfDefensePermitted(agent),
+    false,
+    'the standing follow commitment survives the idle reflex handoff gap',
+  );
+  agent.companion_context.snapshot = () => ({ directive: 'guard' });
+  assert.equal(ambientSelfDefensePermitted(agent), false);
+  agent.companion_context.snapshot = () => ({ directive: null });
+  assert.equal(durablePlayerAccompanimentActive(agent), false);
+  assert.equal(ambientSelfDefensePermitted(agent), true);
+});
+
+test('a safety reflex explains and resumes a standing follow commitment on quiet narration', async () => {
+  const chat = [];
+  let resumes = 0;
+  let result = { success: true, interrupted: false };
+  const mode = { name: 'self_defense', active: false };
+  const agent = {
+    bot: {},
+    actions: {
+      currentActionLabel: '',
+      async runAction(_label, action) {
+        await action();
+        return result;
+      },
+    },
+    companion_context: { snapshot: () => ({ directive: 'follow' }) },
+    self_prompter: { isActive: () => false, stopLoop() {} },
+    openChat(message) { chat.push(message); },
+    behavior_arbiter: { requestDirectiveResume() { resumes += 1; } },
+  };
+
+  await executeModeAction(mode, agent, async () => true);
+  await Promise.resolve();
+
+  assert.deepEqual(chat, [
+    'Something is attacking me. I am breaking contact, then I will resume your order.',
+    'I am clear. Resuming your order now.',
+  ]);
+  assert.equal(resumes, 1);
+
+  result = { success: false, interrupted: false, message: 'The bot died.' };
+  await executeModeAction(mode, agent, async () => false);
+  await Promise.resolve();
+  assert.equal(resumes, 1, 'failed safety settlement cannot resume a standing directive');
+});
+
+test('pending death inventory blocks stale companion continuation after respawn', () => {
+  let resumeReads = 0;
+  const pending = {
+    recallDeath: () => ({ inventory: { stone_pickaxe: 1, bread: 2 }, recoveredAt: null }),
+  };
+  assert.equal(hasPendingDeathRecovery(pending), true);
+  assert.equal(hasPendingDeathRecovery({ recallDeath: () => ({ inventory: {}, recoveredAt: null }) }), false);
+  assert.equal(hasPendingDeathRecovery({ recallDeath: () => ({ inventory: { bread: 2 }, recoveredAt: 123 }) }), false);
+  assert.equal(hasPendingDeathRecovery({
+    recallLatestDeath: () => ({
+      inventory: { bread: 2 },
+      recoveredAt: null,
+      recordedAt: 100,
+    }),
+  }, { after: 200 }), false, 'later explicit player authority supersedes an older recovery obligation');
+  assert.equal(hasPendingDeathRecovery({
+    recallLatestDeath: () => ({
+      inventory: { bread: 2 },
+      recoveredAt: null,
+      recordedAt: 300,
+    }),
+  }, { after: 200 }), true, 'a death newer than the standing order still censors automatic resume');
+
+  const resumed = Agent.prototype.resumeCompanionDirective.call({
+    _runtimeStopped: false,
+    isOperatorHeld: () => false,
+    isIdle: () => true,
+    memory_bank: pending,
+    companion_context: {
+      resumeCommand() {
+        resumeReads += 1;
+        return '!followPlayer("KidPlayer", 3)';
+      },
+    },
+  });
+
+  assert.equal(resumed, false);
+  assert.equal(resumeReads, 0);
+});
+
+test('a disengaged incident keeps its same-hostile recovery action from combat reentry', () => {
+  const incident = {
+    active: true,
+    stage: 'disengaged',
+    source: { kind: 'hostile', id: 2055, name: 'skeleton' },
+  };
+  const agent = {
+    actions: {
+      executing: true,
+      currentActionOwner: 'survival',
+      currentActionLabel: 'action:goToPlayer',
+    },
+    survival_director: {
+      safetyIncident: incident,
+      status: { code: 'return_to_player' },
+      snapshot: () => ({ safetyIncident: incident, code: 'return_to_player' }),
+    },
+  };
+
+  assert.equal(selfDefenseRecoveryOwnsSameThreat(agent, { id: 2055 }), true);
+  assert.equal(selfDefenseRecoveryOwnsSameThreat(agent, { id: 2056 }), false);
+
+  incident.stage = 'threat_response';
+  assert.equal(
+    selfDefenseRecoveryOwnsSameThreat(agent, { id: 2055 }),
+    false,
+    'a fresh damage receipt reopens immediate self-defense authority',
+  );
+  incident.stage = 'disengaged';
+  agent.actions.currentActionOwner = 'player';
+  assert.equal(selfDefenseRecoveryOwnsSameThreat(agent, { id: 2055 }), false);
 });
 
 function createChildFactory(children) {
@@ -429,6 +962,24 @@ test('Given an intentional stop, when the child exits with SIGINT, then the agen
   assert.deepEqual(child.killCalls, ['SIGINT']);
   assert.equal(factory.calls.length, 1);
   assert.equal(agentProcess.state, 'stopped');
+});
+
+test('Given a graceful code-zero self-exit, when no stop was requested, then the lifecycle stays stopped', async () => {
+  // Given
+  const child = new FakeChildProcess();
+  const factory = createChildFactory([child]);
+  const agentProcess = new AgentProcess('safe-held-unload', 8080, factory);
+  await startFakeAgent(agentProcess, child);
+
+  // When
+  child.emit('exit', 0, null);
+
+  // Then
+  assert.equal(factory.calls.length, 1);
+  assert.equal(agentProcess.running, false);
+  assert.equal(agentProcess.state, 'stopped');
+  assert.equal(agentProcess.readinessStage, 'stopped');
+  assert.equal(agentProcess.process, null);
 });
 
 test('Given repeated unexpected exits, when automatic restart is bounded, then no launcher exit or unbounded respawn occurs', async () => {
@@ -1009,6 +1560,194 @@ test('dashboard commands cannot replace the tracked Minecraft companion', async 
   await Agent.prototype.handleMessage.call(harness, 'phixxation', '!unavailablePlayerCommand', 1);
 
   assert.deepEqual(observed, ['phixxation']);
+});
+
+test('clearing a durable agenda does not release an existing operator Hold', async () => {
+  const responses = [];
+  let cleared = 0;
+  let released = 0;
+  const harness = {
+    name: 'MindcraftBot',
+    checkTaskDone: async () => {},
+    companion_context: { observeChat: () => null },
+    agenda_director: {
+      clear() {
+        cleared += 1;
+        return { cleared: 2 };
+      },
+    },
+    releaseOperatorHold() { released += 1; },
+    recordPlayerOrder() {},
+    routeResponse(_source, message) { responses.push(message); },
+  };
+
+  const handled = await Agent.prototype.handleMessage.call(
+    harness,
+    'DadPlayer',
+    '!clearAgenda',
+    1,
+  );
+
+  assert.equal(handled, true);
+  assert.equal(cleared, 1);
+  assert.equal(released, 0);
+  assert.deepEqual(responses, ['Cleared 2 agenda step(s).']);
+});
+
+test('fresh direct authority durably cancels a stopped Agenda before releasing Hold', () => {
+  let persisted = [];
+  const store = {
+    lastError: null,
+    load: () => persisted.map(entry => ({ ...entry, evidence: { ...entry.evidence } })),
+    save(entries) {
+      persisted = entries.map(entry => ({ ...entry, evidence: { ...entry.evidence } }));
+      this.lastError = null;
+      return true;
+    },
+  };
+  let releases = 0;
+  const agent = {
+    name: 'MindcraftBot',
+    operator_hold: true,
+    operator_hold_reason: 'operator stop command',
+    isOperatorHeld() { return this.operator_hold; },
+    releaseOperatorHold() {
+      releases += 1;
+      this.operator_hold = false;
+      return true;
+    },
+  };
+  const director = new AgendaDirector(agent, { store, now: () => 12_000 });
+  agent.agenda_director = director;
+  director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+
+  const authority = Agent.prototype.claimFreshPlayerActionAuthority.call(
+    agent,
+    '!lookAtPlayer',
+    'player directive',
+  );
+
+  assert.deepEqual(authority, { ready: true, released: true });
+  assert.equal(releases, 1);
+  assert.equal(agent.operator_hold, false);
+  assert.equal(director.hasUnfinished(), false);
+  assert.equal(persisted[0].state, 'cancelled');
+  assert.equal(persisted[0].evidence.code, 'agenda_cleared');
+
+  const restored = new AgendaDirector({ name: 'MindcraftBot' }, { store, now: () => 13_000 });
+  assert.equal(restored.hasUnfinished(), false);
+  assert.equal(restored.entries[0].state, 'cancelled');
+});
+
+test('fresh direct authority fails closed when stopped Agenda cancellation is not durable', () => {
+  let rejectWrites = false;
+  const store = {
+    lastError: null,
+    load: () => [],
+    save() {
+      if (rejectWrites) {
+        this.lastError = 'fixture write rejected';
+        return false;
+      }
+      return true;
+    },
+  };
+  let releases = 0;
+  const agent = {
+    name: 'MindcraftBot',
+    operator_hold: true,
+    operator_hold_reason: 'operator stop command',
+    isOperatorHeld() { return this.operator_hold; },
+    releaseOperatorHold() {
+      releases += 1;
+      this.operator_hold = false;
+      return true;
+    },
+  };
+  const director = new AgendaDirector(agent, { store, now: () => 14_000 });
+  agent.agenda_director = director;
+  director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+  rejectWrites = true;
+
+  const authority = Agent.prototype.claimFreshPlayerActionAuthority.call(
+    agent,
+    '!lookAtPlayer',
+    'player directive',
+  );
+
+  assert.equal(authority.ready, false);
+  assert.equal(authority.code, 'fresh_player_authority_persist_failed');
+  assert.equal(releases, 0);
+  assert.equal(agent.operator_hold, true);
+  assert.equal(director.status.code, 'agenda_clear_persist_failed');
+});
+
+test('explicit held-work resume preserves the paused Agenda', () => {
+  let clears = 0;
+  let releases = 0;
+  const agent = {
+    operator_hold: true,
+    operator_hold_reason: 'operator stop command',
+    isOperatorHeld() { return this.operator_hold; },
+    agenda_director: {
+      hasUnfinished: () => true,
+      clear() { clears += 1; return { cleared: 1, persisted: true }; },
+    },
+    releaseOperatorHold() {
+      releases += 1;
+      this.operator_hold = false;
+      return true;
+    },
+  };
+
+  const authority = Agent.prototype.claimFreshPlayerActionAuthority.call(
+    agent,
+    '!resumeStructureJob',
+    'player command',
+  );
+
+  assert.deepEqual(authority, { ready: true, released: true });
+  assert.equal(clears, 0);
+  assert.equal(releases, 1);
+});
+
+test('a failed construction compiler releases only its exact temporary Hold for queued continuation', () => {
+  const makeHarness = ({ holdGeneration = 7, currentGeneration = 7, unfinished = true } = {}) => {
+    let releases = 0;
+    const harness = {
+      operator_hold: true,
+      operator_hold_generation: currentGeneration,
+      isCurrentOperatorHold(generation) {
+        return this.operator_hold && this.operator_hold_generation === generation;
+      },
+      releaseOperatorHold() {
+        releases += 1;
+        this.operator_hold = false;
+        return true;
+      },
+      agenda_director: { hasUnfinished: () => unfinished },
+    };
+    const released = Agent.prototype.releaseFailedConstructionCompilationHold.call(
+      harness,
+      { kind: 'construction', holdGeneration },
+      { settled: true, state: 'failed', retryable: false },
+    );
+    return { harness, released, releases };
+  };
+
+  const exact = makeHarness();
+  assert.equal(exact.released, true);
+  assert.equal(exact.releases, 1);
+  assert.equal(exact.harness.operator_hold, false);
+
+  const newerStop = makeHarness({ currentGeneration: 8 });
+  assert.equal(newerStop.released, false);
+  assert.equal(newerStop.releases, 0, 'a newer player Stop must remain authoritative');
+  assert.equal(newerStop.harness.operator_hold, true);
+
+  const noContinuation = makeHarness({ unfinished: false });
+  assert.equal(noContinuation.released, false);
+  assert.equal(noContinuation.releases, 0, 'without later work the failed compiler stays safely held');
 });
 
 test('a held construction request keeps physical Stop until a valid work order exists', async () => {

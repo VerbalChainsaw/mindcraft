@@ -24,6 +24,46 @@ test('general construction compiler creates bounded supported shapes with a safe
   assert.match(compactDocs, /Fixtures MUST use put, never block/);
   assert.match(compactDocs, /torch may stand above a solid floor or attach beside a same-height solid wall/);
   assert.match(compactDocs, /bed occupies its anchor plus one block in its facing direction/i);
+  assert.match(compactDocs, /put X Y Z EXACT_STAIRS FACING/);
+  assert.match(compactDocs, /translate symmetric layouts so every coordinate is nonnegative/i);
+
+  const picnicSeats = expandStructureDesign(
+    'put 0 0 0 spruce_stairs east; put 4 0 0 spruce_stairs west',
+    'auto',
+    { canSupportMaterial: () => true },
+  );
+  assert.deepEqual(
+    picnicSeats.fixtures.map(({ kind, material, function: fixtureFunction, facing, occupiedOffsets, supportOffsets }) => ({
+      kind,
+      material,
+      function: fixtureFunction,
+      facing,
+      occupiedOffsets,
+      supportOffsets,
+    })),
+    [
+      {
+        kind: 'stair',
+        material: 'spruce_stairs',
+        function: 'seating',
+        facing: 'east',
+        occupiedOffsets: [{ x: 0, y: 0, z: 0 }],
+        supportOffsets: [],
+      },
+      {
+        kind: 'stair',
+        material: 'spruce_stairs',
+        function: 'seating',
+        facing: 'west',
+        occupiedOffsets: [{ x: 0, y: 0, z: 0 }],
+        supportOffsets: [],
+      },
+    ],
+  );
+  assert.throws(
+    () => parseStructureDesign('put 0 0 0 spruce_stairs'),
+    /stair fixture requires north, south, east, or west facing/i,
+  );
 
   const mixed = expandStructureDesign(
     'slab 0 0 0 5 5 cobblestone; ring 0 1 0 5 5 rail; block 2 1 0 powered_rail; block 2 1 1 redstone_torch',

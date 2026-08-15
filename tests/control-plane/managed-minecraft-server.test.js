@@ -77,7 +77,10 @@ test('managed player lookups serialize unqualified console results and preserve 
     const command = String(chunk).trim();
     commands.push(command);
     queueMicrotask(() => {
-      if (command === 'data get entity Missing Pos') {
+      if (
+        command === 'data get entity Missing Pos'
+        || command === 'data get entity .Missing Pos'
+      ) {
         manager.appendLog('[12:00:00 INFO]: No entity was found\n');
       } else if (command === 'data get entity .Bubby Pos') {
         manager.appendLog('[12:00:00 INFO]: .Bubby has the following entity data: [8.0d, 70.0d, -4.0d]\n');
@@ -100,6 +103,7 @@ test('managed player lookups serialize unqualified console results and preserve 
   assert.equal(present.dimension, 'minecraft:overworld');
   assert.deepEqual(commands, [
     'data get entity Missing Pos',
+    'data get entity .Missing Pos',
     'data get entity .Bubby Pos',
     'data get entity .Bubby Dimension',
   ]);
@@ -107,6 +111,40 @@ test('managed player lookups serialize unqualified console results and preserve 
     () => manager.locatePlayerPosition('seventeen_lettersx'),
     /not valid/i,
   );
+});
+
+test('authoritative player lookup tries a Floodgate alias only after the exact Java name is absent', async () => {
+  const manager = new managedServerModule.ManagedMinecraftServer();
+  const stdin = new PassThrough();
+  const commands = [];
+  manager.child = { stdin };
+  manager.phase = 'running';
+  stdin.on('data', (chunk) => {
+    const command = String(chunk).trim();
+    commands.push(command);
+    queueMicrotask(() => {
+      if (command === 'data get entity LittleBubby9352 Pos') {
+        manager.appendLog('[12:00:00 INFO]: No entity was found\n');
+      } else if (command === 'data get entity .LittleBubby9352 Pos') {
+        manager.appendLog('[12:00:00 INFO]: .LittleBubby9352 has the following entity data: [8.0d, 70.0d, -4.0d]\n');
+      } else if (command === 'data get entity .LittleBubby9352 Dimension') {
+        manager.appendLog('[12:00:00 INFO]: .LittleBubby9352 has the following entity data: "minecraft:overworld"\n');
+      }
+    });
+  });
+
+  const observation = await manager.locatePlayerPosition('LittleBubby9352');
+
+  assert.equal(observation.success, true);
+  assert.equal(observation.found, true);
+  assert.equal(observation.player, '.LittleBubby9352');
+  assert.deepEqual(observation.position, { x: 8, y: 70, z: -4 });
+  assert.equal(observation.dimension, 'minecraft:overworld');
+  assert.deepEqual(commands, [
+    'data get entity LittleBubby9352 Pos',
+    'data get entity .LittleBubby9352 Pos',
+    'data get entity .LittleBubby9352 Dimension',
+  ]);
 });
 
 function requestJson(server, requestPath, { method = 'GET', body, headers = {} } = {}) {
@@ -1706,6 +1744,8 @@ test('Given an installed local server and current Java, when lifecycle controls 
 
     child.stdout.write('[Server thread/INFO]: Done (1.234s)! For help, type "help"\n');
     await waitFor(async () => (await manager.getStatus()).phase === 'running', 'server readiness');
+    assert.ok(stdinWrites.includes('difficulty normal\n'));
+    assert.match((await manager.getStatus()).logs.join('\n'), /\[runtime-config\] > difficulty normal/);
     await manager.sendCommand('say hello from Mindcraft');
     assert.ok(stdinWrites.includes('say hello from Mindcraft\n'));
     const longCommand = `say ${'x'.repeat(512)}`;

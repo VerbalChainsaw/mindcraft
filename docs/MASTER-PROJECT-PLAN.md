@@ -1,6 +1,6 @@
 # Minecraft Companion Master Project Plan
 
-**Last updated:** 2026-08-09
+**Last updated:** 2026-08-11
 
 **Canonical workspace:** `/mnt/c/Users/zerop/Development/minecraft-companion-brain-v2`
 
@@ -29,6 +29,12 @@ Build a trustworthy Minecraft companion that a player can start locally, direct 
 
 - [x] The hybrid architecture is locked: GoalDirector owns durable player outcomes, ActionManager owns one physical lease, and deterministic Mineflayer skills execute and verify Minecraft effects.
 - [x] The planner consumes a typed capability catalogue for collect, craft, smelt, fuel, equip, and delivery operations; it is not an item-specific route table.
+- [x] The bounded behavioral flight recorder and player `WTF` bookmarks are online. BQ0/BQ1 now add a fail-closed, fingerprinted planner-frontier qualification event in shadow mode without model, persistence, dispatch, or physical authority.
+- [~] The Director-authorized family mining continuation now counts requested ore above a live inventory baseline, replaces and switches to a healthy pickaxe before reserve exhaustion, retains exact-overlap and open-Pathfinder-gap route fragments, retraces them before Miner completion, returns to the requester after partial mining failure, and persists an explicit terminal `wait` as safe Operator Hold. A single unchanged eight-fresh-iron-plus-return success remains pending because the latest real pocket exhausted safe depth corridors after two fresh iron.
+- [~] Family workshop observation now judges the surrounding Minecraft site, not only blueprint occupancy. Access doors reserve supported exterior approaches; scaffold-free Builder sites require a continuous one-cell service ring; and the owned Pathfinder no longer advertises a step-up launched from inside a door while retaining horizontal openable traversal. Live Paper evidence rejected a spruce-canopy doorway and a cliff-edge footprint, then found no qualifying 5x5 site within the ordinary near-player radius. The correct current result is a truthful site failure; a farther-site or explicit scaffold/cleanup product choice remains, and two exact bot-owned partial shells are preserved as cleanup debt rather than multiplied.
+- [~] Family Follow now physically crossed 43 ordinary blocks to Dad without digging, scaffolding, or path thrash and ended 2.7 blocks away under Stop/Hold. The following bedtime tranche repaired two shared seams: ordinary `go sleep` phrasing now remains a typed sleep Agenda with terminal hold, loaded bed discovery reaches 64 blocks, and bed approach delegates to Pathfinder's native `GoalLookAtBlock`. A scaled live package probe reached the exact family-bed interaction stance from the north-door approach. Full bedtime acceptance remains blocked by unsafe/discontinuous base-perimeter geometry: the bot temporarily dropped to `y=65`, later recovered without an order to safe east-side grass, and still could not route around to the entrance. The temporal clause `when it gets dark tonight` is also reported as unqueued and is not honored.
+- [~] Fishing breakfast now remains one durable player outcome instead of collapsing to `!fish`: acquire a rod, catch only three fresh cod/salmon, cook only that fresh catch at the exact loaded furnace, deliver only fresh cooked fish, then hold position. Missing equipment no longer abandons the outcome or asks the family to design the implementation; junk fishing loot cannot satisfy it. The rod planner now recognizes bounded spider combat for string through installed `mineflayer-pvp`, but the final Paper replay ran in morning with no loaded spider, advanced two search regions, fell back to placed-block sources, and failed before casting. That run also exposed generic spherical retreat counting a 23-block cave descent as useful distance; owned Pathfinder now has a horizontal/Y-bounded outside-radius goal, and GoalDirector regional recovery requires a probed loaded surface stance or does not move. The bot physically recovered from y41 to verified open sky at y51, health 20. Fishing/cooking/delivery acceptance remains pending a temporal or authorized-storage string strategy.
+- [x] BQ2 ordinary play completed truthfully at zero methods: `BQ2Witness` requested one netherite pickaxe, the planner terminated at `unsupported_acquisition_leaf` / `capability_gap`, and IronSuiteProof performed zero physical attempts. This completes qualification but does not authorize H1; selector review remains gated on a repeatable unresolved frontier with at least two materially distinct feasible methods for one unchanged completion contract.
 - [x] Broad physical campaigns have crossed stone, iron, bucket, shield, clock, interruption/resumption, exact/family delivery, glass, escort, and companion-control boundaries.
 - [x] Checkpoint `bd2bd12` physically completed the natural request `Please make and equip an iron sword.` from a deep mine: surfaced, collected fuel, reused an existing furnace, smelted, crafted, reclaimed a temporary table, equipped, and passed Paper verification.
 - [x] Checkpoint `3db8228` physically completed the natural request `Please make 16 stone bricks and keep them in your inventory.` twice through the generic fuel, smelting, crafting, and inventory contracts; Paper verified 32 total bricks and furnace reclamation.
@@ -95,6 +101,12 @@ The supervised-play entry gate has passed. The next objective is to turn the pro
 5. **Broaden gameplay by outcomes:** add exploration, farming, combat, building, transport, and advanced mechanics through useful natural requests—not mechanic inventories or item-by-item certification.
 
 Known bounded defects remain visible without becoming preemptive projects: table crafting still bypasses the container-open generation gate; indefinite manufactured delivery may transfer only the parsed requested quantity rather than the full recipe batch; runtime learning can rank sources but cannot yet switch between genuinely different acquisition strategies; planner workstation perception is capped below the executor's approach range; and identical retryable capability signatures can still be replayed across nested GoalDirector/Agenda budgets. Activate each only when broad play reaches it, except that a repeated identical signature must terminate or change method promptly if observed again.
+
+The strategic qualifier does not replace this playtest-first order. Its first
+live receipt was a truthful zero-method capability gap, so the current selector
+rollout stops at BQ2. Resume normal mixed play; use flight records to inspect
+observed failures, and reopen H1 only when the recorded gate is met rather than
+manufacturing a branch campaign.
 
 ## Broad campaign program
 

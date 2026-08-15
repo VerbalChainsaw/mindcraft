@@ -45,6 +45,21 @@ export function mentionsName(message, name) {
 }
 
 /**
+ * Remove one explicit leading address before deterministic intent routing.
+ * Open chat still keeps the original text for dialogue/history; this only
+ * prevents an addressed request such as "IronSuiteProof, follow me while we
+ * look around" from hiding its leading verb behind the bot name.
+ */
+export function stripLeadingAgentAddress(message, name) {
+  const text = String(message || '').trim();
+  const agentName = String(name || '').trim();
+  if (!text || !agentName) return text;
+  const escaped = agentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const addressed = new RegExp(`^(?:hey\\s+)?${escaped}(?=$|[\\s,:;.!?-])(?:[\\s,:;.!?-]+)?`, 'i');
+  return text.replace(addressed, '').trim();
+}
+
+/**
  * The squad prefix a member name was minted from. `Probe_1` belongs to
  * `Probe`, so "Probe, come here" reaches the whole team rather than nobody.
  * Deliberately conservative: only a trailing separator-and-number is stripped.

@@ -3,6 +3,20 @@ import test from 'node:test';
 
 import { getCommand, parseCommandMessage } from '../../src/agent/commands/index.js';
 
+test('consume admits the verified semantic healing selector', () => {
+  assert.deepEqual(parseCommandMessage('!consume("healing_potion")'), {
+    commandName: '!consume',
+    args: ['healing_potion'],
+  });
+});
+
+test('consume admits the verified semantic best-food selector', () => {
+  assert.deepEqual(parseCommandMessage('!consume("best_food")'), {
+    commandName: '!consume',
+    args: ['best_food'],
+  });
+});
+
 test('Phase 0 parser accepts equivalent single-quoted and double-quoted follow commands', () => {
   const doubleQuoted = parseCommandMessage('!followPlayer("PlayerName", 4)');
   const singleQuoted = parseCommandMessage("!followPlayer('PlayerName', 4)");
@@ -30,4 +44,25 @@ test('Command parsing preserves existing callers when a trailing parameter is op
     },
   );
   assert.equal(getCommand('!harvestEntityDrop').params.allow_alternative.optional, true);
+});
+
+test('Fishing breakfast commands preserve durable baselines and exact furnace coordinates', () => {
+  assert.deepEqual(
+    parseCommandMessage('!fish(3, "cod:1|salmon:2")'),
+    { commandName: '!fish', args: [3, 'cod:1|salmon:2'] },
+  );
+  assert.deepEqual(
+    parseCommandMessage('!cookCaughtFish(3, 8102, 70, 7938, "overworld", "none", "cooked_cod:2")'),
+    {
+      commandName: '!cookCaughtFish',
+      args: [3, 8102, 70, 7938, 'overworld', 'none', 'cooked_cod:2'],
+    },
+  );
+  assert.deepEqual(
+    parseCommandMessage('!giveFamilyToPlayer("cooked_fish", "DadPlayer", 3, "none")'),
+    {
+      commandName: '!giveFamilyToPlayer',
+      args: ['cooked_fish', 'DadPlayer', 3, 'none'],
+    },
+  );
 });

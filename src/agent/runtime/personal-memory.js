@@ -12,6 +12,8 @@ const MAX_PLACES = 128;
 const MAX_FACTS = 256;
 const MAX_EPISODES = 64;
 const MAX_OUTCOMES = 128;
+const MAX_DEATH_RECOVERIES = 8;
+const MAX_DEATH_INVENTORY_TYPES = 36;
 
 function text(value, max = 400) {
   if (typeof value !== 'string') return '';
@@ -34,13 +36,78 @@ function finite(value) {
   return Number.isFinite(value) ? Number(value) : null;
 }
 
+function deathItemName(value) {
+  return text(value, 80).toLowerCase().replace(/[^a-z0-9_:.-]/g, '');
+}
+
+function normalizeDeathRecovery(value, { settled = false } = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const x = finite(value.position?.x);
+  const y = finite(value.position?.y);
+  const z = finite(value.position?.z);
+  if (x === null || y === null || z === null) return null;
+  const inventory = Object.fromEntries(Object.entries(value.inventory || {})
+    .map(([rawName, rawCount]) => [
+      deathItemName(rawName),
+      Math.max(0, Math.min(1_000_000, Math.floor(Number(rawCount) || 0))),
+    ])
+    .filter(([name, count]) => name && count > 0)
+    .slice(0, MAX_DEATH_INVENTORY_TYPES));
+  if (Object.keys(inventory).length === 0) return null;
+  const recoveredAt = settled ? finite(value.recoveredAt) : null;
+  if (settled && recoveredAt === null) return null;
+  return {
+    position: { x, y, z },
+    dimension: text(value.dimension, 80),
+    inventory,
+    recordedAt: finite(value.recordedAt) || Date.now(),
+    recoveredAt,
+    recovered: settled
+      ? Math.max(0, Math.min(1_000_000, Math.floor(Number(value.recovered) || 0)))
+      : 0,
+  };
+}
+
+function normalizeDisplacedDeath(value) {
+  const death = normalizeDeathRecovery(value);
+  const displacedAt = finite(value?.displacedAt);
+  const displacementCode = text(value?.displacementCode, 80);
+  if (!death || displacedAt === null || !displacementCode) return null;
+  return {
+    ...death,
+    displacedAt,
+    displacementCode,
+  };
+}
+
+function normalizeDeathRecoveryLedger(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      initialized: false,
+      pending: [],
+      lastSettled: null,
+      lastDisplaced: null,
+    };
+  }
+  return {
+    initialized: value.initialized === true,
+    pending: (Array.isArray(value.pending) ? value.pending : [])
+      .map(entry => normalizeDeathRecovery(entry))
+      .filter(Boolean)
+      .slice(0, MAX_DEATH_RECOVERIES),
+    lastSettled: normalizeDeathRecovery(value.lastSettled, { settled: true }),
+    lastDisplaced: normalizeDisplacedDeath(value.lastDisplaced),
+  };
+}
+
 function emptyState() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     places: {},
     facts: {},
     episodes: [],
     outcomes: {},
+    deathRecoveryLedger: normalizeDeathRecoveryLedger(null),
     updatedAt: null,
   };
 }
@@ -95,6 +162,7 @@ function normalizeState(value) {
       .slice(0, MAX_OUTCOMES);
     state.outcomes = Object.fromEntries(entries);
   }
+  state.deathRecoveryLedger = normalizeDeathRecoveryLedger(value.deathRecoveryLedger);
   state.updatedAt = finite(value.updatedAt);
   return state;
 }
@@ -165,6 +233,20 @@ export class PersonalMemory {
     if (!factKey || !factValue) return false;
     if (!Object.hasOwn(this.state.facts, factKey) && Object.keys(this.state.facts).length >= MAX_FACTS) return false;
     this.state.facts[factKey] = { value: factValue, updatedAt: Date.now() };
+    this.save();
+    return true;
+  }
+
+  recallDeathRecoveryLedger() {
+    return structuredClone(this.state.deathRecoveryLedger);
+  }
+
+  replaceDeathRecoveryLedger(value) {
+    const rawPending = Array.isArray(value?.pending) ? value.pending : [];
+    if (rawPending.length > MAX_DEATH_RECOVERIES) return false;
+    const normalized = normalizeDeathRecoveryLedger({ ...value, initialized: true });
+    if (normalized.pending.length !== rawPending.length) return false;
+    this.state.deathRecoveryLedger = normalized;
     this.save();
     return true;
   }
