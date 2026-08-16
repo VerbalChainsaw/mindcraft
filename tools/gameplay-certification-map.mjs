@@ -2,7 +2,9 @@
 
 import process from 'node:process';
 
-const DEFAULT_BASE_URL = 'http://localhost:8080';
+import { resolveMindserverUrl } from './mindserver-url.mjs';
+
+const DEFAULT_BASE_URL = resolveMindserverUrl();
 const MAP_TAG = 'mindcraft_cert_map';
 const OVERWORLD_BOUNDS = {
     x1: 990,

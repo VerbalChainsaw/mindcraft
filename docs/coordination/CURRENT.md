@@ -9382,3 +9382,396 @@ bounded adjacent run passes 98/98 across tactical choice, self-preservation,
 mode lifecycle, and arbiter ordering. No live acceptance or bot restart was
 attempted without a human player, and no commit, push, reset, stash, clean, or
 dependency change occurred.
+
+### Unattended dangerous-night acceptance — outcome achieved
+
+The first fully unattended campaign under the rewritten governor. No human was
+in the world at any point, no Director presence was consumed, and no run was
+rationed.
+
+Runtime: launcher on control 8081, managed Paper 1.21.11 on Java 25579. One
+harness fact worth pinning: MindServer binds IPv6 loopback, so `[::1]:8081` and
+`localhost:8081` answer while `127.0.0.1:8081` is refused. A healthy launcher
+looks absent over IPv4.
+
+Run 1 admitted a valid fixture (health 3, hunger 9, four rotten flesh, night,
+nearer bed occupied, farther bed available, spawns isolated). Emergency food
+passed physically: two `skill_consumed` rotten flesh receipts carried health
+3 -> 14 and hunger 9 -> 17. The player-sense verdict then failed. Instead of
+sleeping in the free bed five blocks away, the injury-recovery branch answered
+`acquire_food` and walked Kevin roughly thirty blocks into open water, where
+`prepareFood` and `mode:self_preservation` drowning escape oscillated seven
+times in twelve seconds.
+
+First divergence: recovering past the critical band re-entered the pathology the
+critical rung was added to fix. The `health <= 14` branch returns
+`recovery_missing_food` before the sleep and shelter rungs are ever reached, so
+health 14 with hunger 17 forages at night while a bed sits adjacent. Owner is
+judgment, in survival policy ordering.
+
+Repair: one guard at the branch entry. When it is night in the overworld, a safe
+reachable bed exists, and neither health nor hunger is critical, the
+injury-recovery branch is skipped so the existing sleep rung selects the bed. No
+bed selection is duplicated, and critical need still outranks rest.
+
+Run 2 was censored: a blind hunger drain overshot to foodLevel 0 and starvation
+was already ticking, so the declared precondition did not hold. It is retained
+only as evidence that `!goToBedAt` bound the exact farther available bed at
+(-365,70,-162) and slept there without touching the occupied bed.
+
+Run 3 admitted a valid corrected fixture (health 3, foodLevel 10, four rotten
+flesh, night 13111). Kevin consumed all four rotten flesh, recovered, and slept
+through `goToBedAt` at (-370,70,-169), finishing at health 10 and hunger 17 with
+no unchanged retry, no water excursion, and no terrain damage. Player-sense
+verdict passed against the counterfactual registered before dispatch.
+
+Frozen: emergency food at critical bodily need; exact-bed binding through
+`!goToBedAt`; night rest ahead of foraging in the injury-recovery band.
+
+Not proven live: the occupied-bed blocker never fired in run 3 because a free
+bed was selected directly, so unchanged-retry suppression on beds still rests on
+focused checks alone. A third pre-existing bed at (-370,70,-169) was present and
+uncontrolled, which is exactly why the eight-block bed scan mattered.
+
+Focused and adjacent suites pass 194/194 with the new night-rest regressions;
+lint is clean on the changed files. World, body, inventory, beds, gamerules, and
+persisted Operator Hold were all restored and verified. Nothing was committed.
+
+### Unattended seam campaign — retry suppression and shelter construction accepted
+
+Two seams that had never run in the real world were exercised unattended, with
+no Director presence and no code change required. Both passed.
+
+Seam B, occupied-bed retry suppression. Every reachable bed was set occupied and
+Kevin was placed at (-368.5,70,-159.5) at health 12, hunger 20, night 13000,
+spawns isolated. Over a 95-second window at the 10-second failure cooldown, he
+produced exactly three `skill_bed_occupied` receipts against three distinct
+beds: (-370,70,-169), (-370,70,-162), and a fourth pre-existing bed at
+(-351,71,-159) that was already occupied and was never touched by the fixture.
+One attempt per bed, zero repeats, no oscillation between beds. He then settled
+as `player_job_failed_awaiting_direction` and reported that he could not finish.
+The original pathology was 35 identical attempts on one bed in seven minutes, so
+this is the unchanged-retry class suppressed under live conditions rather than
+under focused checks alone. The eight-block bed scan mattered: a fourth bed
+existed that no fixture controlled.
+
+Seam A, shelter-in-place construction. Kevin was given 32 cobblestone on natural
+grass floor at health 5, night, beds free, spawns isolated. Critical exposure
+selected `shelter_in_place` ahead of sleep, and `action:shelterInPlace` settled
+`skill_sheltered_in_place`. Physical verification, not the receipt alone, proves
+the pocket: body at (-361.5,67,-169.5), solid cap at (-362,69,-170), head clear
+at 68, feet clear at 67, support at 66, open shaft above the cap. Inventory went
+from 32 cobblestone to 31 with 3 dirt gained, so the descent was exactly three
+blocks, self-supplied, and cost exactly one placed block. This closes the
+remaining risk recorded earlier that successful three-block construction still
+needed Paper acceptance.
+
+Player-sense verdicts passed for both. Deferred, non-material observations: the
+bed-exhaustion message names one bed rather than saying every nearby bed is
+taken, and the emergency pocket is left open on exit rather than backfilled,
+which is temporary state that stewardship would eventually reclaim.
+
+World, body, inventory, terrain, beds, gamerules, forceloads, and persisted
+Operator Hold were all restored and verified: Kevin at his exact baseline
+(-379.5,71,-45.426109716230656) with health 20, food 20, four rotten flesh; the
+dug shaft backfilled; all three beds free; the temporary bed slot cleared;
+spawn_mobs true; no force-loaded chunks. Nothing was committed.
+
+### Four-seam unattended campaign — logs accepted, two repairs, one route finding
+
+Seam 1, natural log request. "Kevin, get four logs" compiled to a typed goal and
+settled `skill_collected` with exactly four oak logs and one sapling in 38
+seconds, reporting "Inventory contains 4; required post-goal count was 4". The
+brief's never-accepted mining replay is therefore accepted. The player-sense
+verdict initially looked like a failure because an acacia log sat 4 blocks away
+while Kevin walked 21 blocks to oak, but block probes disproved that reading:
+the acacia is intact, the oak trunk is fully cleared with no stump or floating
+remnant, and selection ran through quota-aware whole-tree ranking. Taking a
+complete component that matches the quota exactly, instead of mutilating a
+nearby stray, is the stewardship contract working.
+
+Seam 2, stale requester identity. A `goToPlayer("ADMIN")` attempt settled
+`skill_target_offline`. `activePlayerRequester` accepts any chat sender matching
+the username shape, so an operator label became a rendezvous target for someone
+who was never in the world. The receipt is truthful and the failure is safe, so
+this is recorded as a deferred observation rather than an acceptance failure.
+
+Seam 3, exhausted-bed reporting. With every reachable bed occupied Kevin stopped
+correctly but said "I couldn't finish orange bed", naming one arbitrary bed
+rather than the exhausted rung. `SurvivalDirector.announceSleepExhausted` now
+emits one bounded receipt-grounded statement per exhausted set, naming the count
+and the shared cause, and stays silent while any bed remains selectable.
+
+Seam 4, death-item recovery. Kevin died carrying seven diamonds and five gold,
+respawned 122 blocks away, and did nothing for 150 seconds; the manifest
+recorded correctly but no owner acted. Cause: `death_recovery` is the final
+milestone and `milestones.find(entry => !entry.complete)` returns the first
+incomplete one, so an emptied inventory always resolves to an earlier gathering
+step and recovery is unreachable exactly when it matters. A pending manifest now
+overrides the ladder through the existing override channel while keeping its own
+`death_recovery` stage identity, and bodily survival still outranks it. Live
+before and after on the same body: stage `wood` with `!collectWoodInRange(4,64)`
+became stage `death_recovery` with `!recoverDeathItems()`.
+
+The subsequent physical recovery trip then failed truthfully as
+`skill_death_position_unreachable` with a Pathfinder decision timeout over the
+122-block return. That is fresh evidence for the approved but unimplemented
+segmented-navigation contract: a monolithic route proof blocks a real standing
+obligation. `deathRecoveryPending` remains true and the dropped stack was
+cleared during restoration, so that manifest now points at nothing and will
+settle truthfully rather than recover.
+
+Focused and adjacent suites pass 161/161 with new regressions for both repairs,
+each verified to fail with its fix reverted. Lint clean on changed files. World,
+body, inventory, gamerules, forceloads and persisted Operator Hold restored and
+verified. Nothing committed.
+
+### Segmented-navigation contract implemented
+
+The approved contract in `SHARED-CONTRACT-SPINE.md` had governance but no
+implementation; the complete-route gate remained the fail-closed behavior. The
+live death-recovery trip earlier tonight failed
+`skill_death_position_unreachable` on a Pathfinder decision timeout over a
+122-block return, which is a standing obligation blocked by a monolithic route
+proof rather than by terrain.
+
+`goToGoal` now accepts `allowSegmentedJourney`. When the whole-journey proof
+fails, `runSegmentedJourney` picks one bounded waypoint toward the retained
+exact destination, proves it, executes it through the ordinary
+`requirePlannedRoute` path with recursion disabled, reconciles actual measured
+progress, and repeats. `segmentWaypointCandidates` admits only loaded, clear,
+safely supported, non-hazardous cells with no adjacent liquid and at most one
+block of elevation change, ordered by remaining distance.
+
+The first version enabled this on player pursuit and broke two accepted
+returnability checks: the cave-stance binding test and local navigation
+recovery. That was a real defect in the implementation, not an over-strict
+test. Endpoint geometry is not returnability evidence, because a cave mouth on
+the same level passes an elevation filter. Rather than relax those gates, every
+segment now proves the native reverse route to the journey origin through the
+existing `probeSafeRoundTripNavigationStances`, which is contract point 7. Both
+checks pass with the feature enabled.
+
+Bounds: at most ten segments, a two-block minimum measured gain per segment, a
+visited-cell set against oscillation, and termination after two consecutive
+no-progress segments. Only a journey that physically advanced is retryable.
+Completing segments is reported as progress and never as arrival; the original
+destination-relative postcondition still decides success.
+
+Seven focused checks cover destination extraction from coordinate and
+entity-tracking goals, best-first waypoint ordering, and refusal on unsupported
+ground, water, hazards, unloaded terrain, and an already-satisfied destination;
+the refusal path was verified to fail with its guard removed. Adjacent suites
+pass 231/231. The five remaining `semi` lint errors in `skills.js` are the same
+pre-existing ones from the start of the session, shifted by insertions.
+
+Note for coordination: `skills.js` was being edited concurrently during this
+work, and `allowSegmentedJourney` now also appears at call sites this session
+did not write. Intermediate file states produced one misleading test run.
+Physical acceptance of a segmented journey has not been attempted. Nothing
+committed.
+
+### Broad live continuation — protection truth, escorted smelting, and M4 accepted
+
+A natural farm-companion session asked Kevin to follow FarmGuide, protect the
+guide from an actual hostile, and continue following afterward. Kevin killed
+the attributed Husk and resumed Follow without a new order, but initially told
+the player that something was attacking Kevin before Kevin had been hurt. The
+first divergence was reporting: the exact protected-player hurt receipt already
+existed, while `modes.js` discarded its subject and selected narration only from
+the self-defense mode name. The shared handoff now names the protected player
+and attributed threat, keeps self-attack wording only for a self-damage receipt,
+and uses neutral wording when the subject is unknown. The unchanged replay
+protected FarmGuide within 300 ms, defeated the Husk, resumed Follow, settled at
+3.229 blocks, and maintained 0.9994 gaze alignment without emitting the false
+self-attack sentence. The focused and adjacent checks pass 132/132. Freeze the
+follow/protection/interruption/truthful-handoff outcome to that live evidence.
+
+A second broad request asked Kevin to cross a river with WorksiteGuide, use the
+guide's exact workshop Furnace to smelt one carried Raw Iron, and come back with
+the guide. Kevin reached stable far-shore ground, approached the exact Furnace
+at `(-659,71,-459)`, returned with one Iron Ingot, and followed the guide safely
+back across the river to within 6.693 blocks. Health remained 20; the temporary
+known-air fixture cell, inventory, difficulty, gamerule, body position, and
+persistent Hold were restored. The first attempt was censored while smelting
+because the disposable observer assumed a nonempty inventory; accepting an
+empty authoritative inventory receipt corrected only the harness. No product
+repair, movement algorithm, dependency, or terrain mutation was introduced.
+Freeze this escorted crossing → exact worksite interaction → return outcome.
+
+M4 complete-intent compilation is now physically accepted. DadPlayer's natural
+request named KidPlayer, the bedside Chest, exact reporting, requester return,
+and terminal wait. Kevin admitted exactly three ordered effects, visited Kid at
+one block, opened the exact Chest at `(8104,69,7940)`, reported the complete
+authoritative contents—including two Iron Pickaxes and one each Iron Axe, Iron
+Shovel, and Iron Hoe—returned one block from Dad, and entered persistent Hold
+with zero drift. Before/after Paper receipts prove the Chest plus Dad, Kid, and
+Kevin inventories were byte-for-byte unchanged after normalized receipt
+prefixes. The family-base fixture used only existing supported interior cells;
+the known unsafe yard gap was neither hidden nor repaired. Cleanup restored
+Kevin's exact baseline, Normal difficulty, `spawn_mobs true`, zero humans, and
+held safe unload. M4 is frozen; the next active milestone is M5 component-level
+resource and terrain stewardship. Nothing committed.
+
+### Complete-intent seam — phantom identities admitted into durable obligations
+
+Segmented-movement hardening is Codex's lane, so this work deliberately avoided
+`skills.js` navigation after concurrent edits produced one misleading test run.
+
+Live test of the plan's priority-4 seam. "Kevin, collect wood and make charcoal"
+queued two steps: "go to RouteGuide" and "harvest 32 logs". The charcoal clause
+produced no smelt entry at all, and the persisted agenda shows why the first
+step was nonsense:
+
+  {kind: goto,    target: "",     requester: RouteGuide, state: complete}
+  {kind: harvest, target: "logs", requester: ADMIN,      state: pending}
+
+`goto` needs a recipient rather than a target, so "go to RouteGuide" meant go to
+the player RouteGuide. Zero players were online and neither RouteGuide nor ADMIN
+has ever been one. The step nonetheless settled `skill_arrived` and announced
+"Agenda step done", which is a false-success claim against an identity that does
+not exist.
+
+Root cause is shared and explains the earlier deferred ADMIN rendezvous too:
+`normalizeAgendaEntry` validated a recipient only against `SAFE_PLAYER`, a name
+shape. Any string shaped like a username became a durable bound identity.
+
+`normalizeAgendaEntry` now accepts an optional authoritative `knownPlayers`
+roster and `AgendaDirector.knownPlayerNames()` supplies it from the tab list at
+the `stageMany` admission point. An unrecognised recipient is refused, because a
+destination that has never existed can only fail. An unrecognised requester is
+dropped instead of rejecting the work, because attribution is optional while a
+destination is not, and a stray sender label must not survive to become a
+rendezvous target. A null roster means unknown, so callers that cannot read one
+keep the previous shape-only behaviour rather than inventing a rejection.
+
+Four focused checks cover refusal, case-insensitive acceptance, requester
+dropping, and unchanged no-roster behaviour; refusal was verified to fail with
+its guard removed. Adjacent suites pass 206/206, lint clean.
+
+Still open and recorded rather than repaired: the "make charcoal" clause was
+silently dropped, so compound intent still loses a clause even when identity is
+sound, and the invented quantity of 32 logs was never requested. Arrival
+verification itself was not changed; the phantom-arrival path is now closed at
+admission rather than at the postcondition. Nothing committed.
+
+### Clause loss root-caused; proven unfixable at the splitter layer
+
+The Director asked why these phrases are hardcoded. They are not a design; they
+grew by accretion, one connective pattern per reported phrasing. The bare-"and"
+pattern at the head of `CONNECTIVE_PATTERNS` exists solely for "and wait"/"and
+stay" from the packet-split construction work, and the comma-"and" pattern was
+added later for its own phrasing.
+
+The defect is real and evidenced by pure parser checks, no live run needed. The
+splitter requires a comma before "and", so ordinary unpunctuated speech loses its
+second clause with no receipt:
+
+  "collect wood and make charcoal"      -> 1 segment, charcoal dropped
+  "get four logs and come back to me"   -> 1 segment, the return dropped
+  "mine some iron and craft a pickaxe"  -> 1 segment, the craft dropped
+
+The second of those is the brief's own representative promise.
+
+Making the comma optional was implemented, tested, and reverted. It fixed all
+three phrasings and preserved every noun conjunction, but it broke three frozen
+construction checks: "Then go inside and sleep in the bed" split into "go inside"
+and "sleep in the bed" and destroyed the accepted construction-barrier sleep
+step. The same "and" joins two independent clauses in one sentence and two halves
+of a single instruction in the other. No action-verb list distinguishes those,
+so the fix cannot live at this layer; it trades one silent clause loss for
+another and damages physically accepted behavior.
+
+Recorded rather than patched. The verb list is also hand maintained and can never
+be complete — fetch, grab, chop, dig, haul, plant, cook, light, and feed are all
+absent, and each gap drops a clause silently. Clause segmentation is a language
+task and belongs with the model proposal step, with this layer validating the
+proposed typed effects against the capability registry instead of parsing
+English. The interim contract-consistent behavior is to report an unmatched
+conjunction as unresolved rather than silently treating it as a single clause.
+
+Three checks now pin the safety properties any future fix must preserve: a noun
+conjunction is one request, a comma-separated conjunction splits, and one
+instruction spanning "and" stays whole. Adjacent suites pass 214/214, lint clean.
+Nothing committed.
+
+### Clause loss repaired at the right layer, and proven live
+
+The earlier finding stands: the connective splitter cannot fix this, because the
+same "and" joins two clauses in "collect wood and make charcoal" and two halves
+of one instruction in "go inside and sleep in the bed". A verb list cannot tell
+those apart, and making the comma optional broke three frozen construction
+checks.
+
+The discriminator is evidence rather than vocabulary. `splitResolvableConjunction`
+separates a bare conjunction only when each half independently resolves to real
+work through the existing capability registry, using `resolvePlayerDirective`
+plus `directiveToAgendaEntry` and the standing companion-directive path as the
+oracle. Deferred construction and site errors resolve to nothing on purpose, so
+a construction utterance is never torn apart.
+
+`swallowedUnsupportedClause` closes the other half. When a resolved segment
+still hides a conjunction whose tail the registry cannot satisfy, that tail is
+reported as unresolved instead of disappearing, so the intent ledger raises
+`unresolved_clauses` and can ask.
+
+Parser behaviour now:
+
+  "get four logs and come back to me"   -> acquire + goto, nothing unresolved
+  "mine some iron and craft a pickaxe"  -> mine + craft
+  "go inside and sleep in the bed"      -> one sleep step, unchanged
+  "collect wood and make charcoal"      -> harvest, with "make charcoal" reported
+  "collect wood and stone"              -> mine, with "stone" reported
+
+Widening the oracle was required after two accepted checks failed: "wait" and
+"stay" resolve as standing companion directives rather than agenda entries, and
+treating them as unsupported both mis-reported an accepted clause and split
+sentences that must stay whole.
+
+Live proof on the running bot. "Kevin, get four logs and come back to me" now
+recovers the return clause, and the identity guard added earlier then refuses
+the plan truthfully: "I did not start that request because its complete effect
+list was rejected: Agenda goto names 'ADMIN', who is not a player I can see."
+Before tonight that sentence queued the logs alone and dropped the return in
+silence.
+
+Residual exposed by the same run: "me" resolved to a stale ADMIN rather than the
+actual sender, so requester binding still needs its own repair. Recorded, not
+patched.
+
+Four focused checks pin separation, the whole-instruction case, unsupported-tail
+reporting, and the ambiguous noun conjunction; separation was verified to fail
+with the expansion disabled. Adjacent suites pass 244/244, lint clean. Nothing
+committed.
+
+### Phantom identities closed at dispatch, and their retry loop with them
+
+Admission-time identity validation only covers new entries. Entries restored
+from disk call `normalizeAgendaEntry` with no options, and restore runs before
+login, so no roster exists to check against. A goto bound to "RouteGuide"
+therefore survived a process restart untouched and reported `skill_arrived` with
+zero players online. Persisted state confirms the pattern is not one stray
+label: `agenda.json` held a goto for RouteGuide and `goal-state.json` a goal
+requester of "LogWitness", alongside the earlier ADMIN rendezvous. All three are
+harness labels that became durable bound identities.
+
+`AgendaDirector.dispatch` now checks the recipient against the authoritative
+roster immediately before building a direct command, which is the first point in
+the lifecycle where that roster is real. An unrecognised recipient is refused as
+`unknown_recipient` and no command is executed.
+
+Refusing it initially created a new instance of the loop class this session has
+been removing: the caller treated the refusal as retryable and would have spent
+the whole attempt budget against evidence that cannot change, because retrying
+does not put a player in the world. `unknown_recipient` now joins
+`unsupported_target` as terminal, so the step fails once and truthfully and the
+player can ask again when they are present.
+
+Three focused checks cover refusal of a restored phantom, normal dispatch to a
+real roster member, and terminal single-failure settlement; refusal was verified
+to fail with the guard disabled. Adjacent suites pass 272/272, lint clean.
+
+Still open: "me" resolved to a stale ADMIN rather than the actual sender during
+the live clause-recovery run, so requester binding itself is unrepaired. The
+persisted RouteGuide entry remains in `agenda.json` and is now refused at
+dispatch rather than executed. Nothing committed.

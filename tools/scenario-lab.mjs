@@ -11,6 +11,11 @@ export const FAMILIES = Object.freeze([
   'chunk-unloaded-confirmed-air-semantics',
   'doorway-corridor-follow',
   'elevation-follow',
+  // Following a player when terrain is in the way. The doorway-corridor family
+  // runs on open ground and passes identically with digging disabled, so it
+  // cannot catch a companion that has lost the ability to break a block to
+  // reach its player. This family exists to cover that.
+  'obstruction-follow',
   'operator-stop-quiescence',
 ]);
 export const DEFAULT_MANIFEST_PATH = fileURLToPath(

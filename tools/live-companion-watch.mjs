@@ -5,6 +5,7 @@ import path from 'node:path';
 import { io } from 'socket.io-client';
 
 import { applyStateUpdate } from '../src/mindcraft/public/js/agent-state-protocol.js';
+import { resolveMindserverUrl } from './mindserver-url.mjs';
 
 const DEFAULT_REQUEST = 'Help me establish this landing area. Don\'t damage what I\'ve already built. Gather a sensible starter supply, make whatever basic tools you need, and return here when you\'re finished.';
 
@@ -16,7 +17,7 @@ Read-only live companion observer. It never sends a bot command.
 Options:
   --bot <name>               Managed bot name (default: IronSuiteProof)
   --player <name>            Human player to follow (default: phixxation)
-  --url <url>                MindServer URL (default: http://127.0.0.1:8080)
+  --url <url>                MindServer URL (default: derived from launcher-config.json)
   --request <text>           Graduation request recorded with this session
   --site <x,y,z>             Fixed landing-area anchor; otherwise lock player position
   --site-radius <blocks>     Informational site radius (default: 12)
@@ -45,7 +46,7 @@ function parseArgs(argv) {
   const options = {
     bot: 'IronSuiteProof',
     player: 'phixxation',
-    url: 'http://127.0.0.1:8080',
+    url: '',
     request: DEFAULT_REQUEST,
     site: null,
     siteRadius: 12,
@@ -76,6 +77,7 @@ function parseArgs(argv) {
   if (!/^[A-Za-z0-9_. -]{1,64}$/.test(options.bot)) {
     throw new TypeError('--bot contains unsupported characters.');
   }
+  options.url = resolveMindserverUrl({ explicitUrl: options.url });
   return options;
 }
 

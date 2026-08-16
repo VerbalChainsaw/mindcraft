@@ -4,6 +4,24 @@ This is the durable failure-attribution vocabulary for the Minecraft companion. 
 
 The common progression is **selection → feasibility → planning → execution → reconciliation → verified outcome**. A domain can omit a boundary that genuinely does not apply, but it must not merge materially different boundaries into one generic failure.
 
+## How to load this document
+
+Enforcement plus sections 1–16 are the mandatory vocabulary. They are short, change rarely, and apply to every capability.
+
+The `Current executable …` sections record the accepted contract and its physical acceptance evidence for one domain each. Load only the ones matching the capability in scope; they are why this file is long, and reading all of them for an unrelated repair spends context that belongs to the repair. Find the right one by domain:
+
+- fixtures, stances, placement — Current executable stance receipt
+- player targets and returnability — Current executable target/returnability enforcement
+- movement in stages — Approved segmented-navigation contract
+- surfacing and egress — Current executable surface-access semantics
+- hostiles, harvest, healing — Current executable environment/combat enforcement
+- death, trees, scaffolds — Current executable death and tree reconciliation; Durable death recovery and fresh player authority
+- food, shelter, critical bodily need — Critical survival ownership and no-source recovery
+- Hold and unattended lifecycle — Operator Hold mortal-survival boundary
+- retreating from an entity — Surface-safe moving-entity retreat
+- multi-part requests and builds — Packet-split construction sequencing and terminal companionship
+- retry authority and fallback — Confusion, explicit retry authority, and terminal Hold
+
 ## Enforcement
 
 - Emit bounded, normalized, immutable receipts in structured action evidence. Promote high-value contract state into the flight recorder and dashboard telemetry.
@@ -230,6 +248,21 @@ For player pursuit, `probeSafeNavigationGoal` requires native Pathfinder to retu
 When ordinary navigation recovery is allowed elsewhere, `localNavigationEscapeStances` enumerates only loaded supported nearby body cells. `probeSafeRoundTripNavigationStances` must prove both the native inbound path and the reverse route to the origin before an exact `GoalBlock` is executed. Mere displacement after a rejected Pathfinder attempt is never recovery success.
 
 These gates enforce target identity, planning, execution authority, and returnability without replacing Mineflayer Pathfinder mechanics. Their focused acceptance lives in `tests/control-plane/player-directives-routing.test.js` and `tests/critical-runtime-output.test.js`.
+
+## Approved segmented-navigation contract
+
+The complete-route gate above is the current safe implementation baseline, not a product requirement that every journey be planned end to end before the bot takes one step. Player pursuit, follow, return, and ordinary local escape may evolve to a segmented, receding-horizon journey under this contract:
+
+1. The project retains the exact final destination, named-player identity, outstanding obligation, permissions, and preservation constraints for the whole journey. A waypoint cannot replace or silently weaken them.
+2. Project judgment selects one bounded waypoint that represents sensible progress a competent Minecraft player could make from the loaded world. The endpoint must be a loaded, supported, clear, non-hazardous body cell within the original movement and terrain-mutation authority.
+3. Native Pathfinder must produce a complete `success` route to that waypoint before locomotion. Its raw `partial`, `noPath`, timed-out frontier, or search error remains planning evidence and must never be executed directly.
+4. The segment receipt records bounded origin, waypoint, final destination, native route status and length, safety/returnability classification, and the expected progress relation. Mineflayer/Pathfinder owns physical execution.
+5. After execution, project reconciliation samples the actual supported body state and verifies material journey progress before another segment is authorized. A justified obstacle detour may temporarily increase direct distance only when its receipt explains the progress relation.
+6. Repeated waypoint/body cells, oscillation, unchanged failed planning evidence, or bounded segments that make no overall progress terminate the segmented attempt and enter the shared fallback contract. Elapsed time or fresh narration alone never authorizes another segment.
+7. A native reverse-route proof is required before a returnability-sensitive segment: one-way drops, cave or water entry, hazardous crossings, destructive access, or leaving a verified safe region. Ordinary level supported movement does not require an end-to-end reverse proof.
+8. Final success still requires the original destination-relative physical postcondition. Completing one or more waypoint segments is progress, never arrival by itself.
+
+This contract authorizes a thin orchestration layer around installed Pathfinder; it does not authorize custom movement, arbitrary frontier walking, a parallel path engine, or relaxing complete native planning for each executed segment. Until an implementation emits these receipts and passes a live player-valued acceptance, the current full-route gate remains the fail-closed executable behavior.
 
 ## Current executable surface-access semantics
 
@@ -702,8 +735,16 @@ Flight `flight-2026-08-14T17-28-32-859Z-167556-000.jsonl` records the correlated
 
 This document is the canonical detailed contract record. Repository
 `AGENTS.md` supplies the mandatory local enforcement summary. The reusable
-`mindcraft-minecraft-development` skill is validated and requires this document
-to be loaded whenever gameplay, evidence, telemetry, recovery, interruption,
-or ownership is in scope. That three-layer path keeps the rules discoverable to
-new agents while executable schemas and focused checks prevent documentation
-from becoming the only enforcement.
+`mindcraft-minecraft-development` skill requires Enforcement plus sections 1–16
+whenever gameplay, evidence, telemetry, recovery, interruption, or ownership is
+in scope, together with the `Current executable` sections matching the
+capability being changed. Loading the entire file for every task is not
+required. That layered path keeps the rules discoverable to new agents while
+executable schemas and focused checks prevent documentation from becoming the
+only enforcement.
+
+Each `Current executable` section deliberately carries both a contract and the
+physical evidence that froze it. Preserve both. The contract without its
+acceptance evidence cannot be safely reopened or rescoped, and the evidence
+without its contract cannot be enforced; that pairing, not narrative habit, is
+why these sections are long.

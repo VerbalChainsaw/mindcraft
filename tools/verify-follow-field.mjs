@@ -29,6 +29,19 @@ const DOORWAY_CAPTURE = Object.freeze({
   z1: 1007.35,
   z2: 1009.65,
 });
+// Obstruction variant. The doorway-corridor course leaves open ground south of
+// the wall (wall z1006..z1012, course z1006..z1016), so a companion can walk
+// around it -- which is why that course passes identically with digging
+// disabled. This variant spans the full course width and fills the doorway with
+// an ordinary breakable block, so the only route to the player is through it.
+//
+// This is the test that would have caught the 2026-08-16 defect, where
+// `canDig = false` on all ordinary locomotion produced eight consecutive
+// `noPath` follow failures against a real player. See ARCHITECTURE.md.
+const OBSTRUCTION_WALL = Object.freeze({ x: 1033, y1: 100, y2: 102, z1: 1006, z2: 1016 });
+const OBSTRUCTION_PLUG = Object.freeze({ x: 1033, y1: 100, y2: 101, z: 1008 });
+const OBSTRUCTION_PLUG_BLOCK = 'dirt';
+
 const OBJECTIVE = 'fol001proof';
 const COMMAND = '!followPlayer("FollowTarget", 3)';
 const POLL_MS = 100;
@@ -67,8 +80,8 @@ function parseArgs(argv) {
     throw new Error('Attempts must be an integer from 1 through 3.');
   }
   if (!['follow', 'stop'].includes(options.mode)) throw new Error('Mode must be follow or stop.');
-  if (!['full', 'doorway-corridor'].includes(options.course)) {
-    throw new Error('Course must be full or doorway-corridor.');
+  if (!['full', 'doorway-corridor', 'obstruction-follow'].includes(options.course)) {
+    throw new Error('Course must be full, doorway-corridor, or obstruction-follow.');
   }
   if (options.mode === 'stop' && options.course !== 'full') {
     throw new Error('Stop verification requires the full course.');
@@ -497,12 +510,14 @@ async function run() {
     const wall = marker(runId, phase, 'WALL');
     const opening = marker(runId, phase, 'OPEN');
     const step = marker(runId, phase, 'STEP');
+    const plug = marker(runId, phase, 'PLUG');
     await paperCommand(`scoreboard players set ${begin} ${OBJECTIVE} 1`);
     await paperCommand(`data get entity ${options.bot} Pos`);
     await paperCommand(`data get entity ${TARGET_NAME} Pos`);
     await paperCommand(`execute if block 1033 100 1007 minecraft:stone_bricks run scoreboard players set ${wall} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block 1033 100 1008 minecraft:air run scoreboard players set ${opening} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set ${step} ${OBJECTIVE} 1`);
+    await paperCommand(`execute if block ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} minecraft:${OBSTRUCTION_PLUG_BLOCK} run scoreboard players set ${plug} ${OBJECTIVE} 1`);
     await paperCommand(`scoreboard players set ${end} ${OBJECTIVE} 1`);
     await delay(250);
     const status = await fetchJson(options.url, '/api/minecraft-server');
@@ -515,6 +530,7 @@ async function run() {
       botPosition: paperPosition(window, options.bot),
       targetPosition: paperPosition(window, TARGET_NAME),
       wallVerified: markerObserved(window, wall),
+      plugVerified: markerObserved(window, plug),
       doorwayVerified: markerObserved(window, opening),
       platformVerified: markerObserved(window, step),
       lines: window,
@@ -536,8 +552,19 @@ async function run() {
     fixtureMutated = true;
     const commands = [
       `fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`,
-      `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} stone_bricks`,
-      `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
+      ...(options.course === 'obstruction-follow'
+        ? [
+            // Full-width wall so the companion cannot simply walk around it,
+            // but the doorway starts OPEN: the controlled target moves with
+            // canDig=false and must be able to path east. The doorway is sealed
+            // behind it mid-run, once it is through.
+            `fill ${OBSTRUCTION_WALL.x} ${OBSTRUCTION_WALL.y1} ${OBSTRUCTION_WALL.z1} ${OBSTRUCTION_WALL.x} ${OBSTRUCTION_WALL.y2} ${OBSTRUCTION_WALL.z2} stone_bricks`,
+            `fill ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y2} ${OBSTRUCTION_PLUG.z} air`,
+          ]
+        : [
+            `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} stone_bricks`,
+            `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
+          ]),
       `fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`,
       // The acceptance fixture must not be preempted by a natural mob from an
       // adjacent prior test. This bounded margin contains no player entities;
@@ -760,6 +787,21 @@ async function run() {
       if (observedBotPosition && activeAttempt.physicalSamples.length < 600) {
         activeAttempt.physicalSamples.push({ sampledAt, position: observedBotPosition });
       }
+      // Obstruction course: once the target is clear of the wall, seal the
+      // doorway behind it. From here the only way to keep following is to break
+      // through -- which is precisely what a companion with canDig disabled
+      // cannot do, and what it reported as `noPath` against a real player.
+      if (
+        options.course === 'obstruction-follow'
+        && !activeAttempt.obstructionSealedAt
+        && Number(positionOf(target.entity)?.x) > OBSTRUCTION_WALL.x + 1
+      ) {
+        activeAttempt.obstructionSealedAt = sampledAt;
+        paperCommand(
+          `fill ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} `
+          + `${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y2} ${OBSTRUCTION_PLUG.z} ${OBSTRUCTION_PLUG_BLOCK}`,
+        ).catch(() => { activeAttempt.obstructionSealedAt = null; });
+      }
     }, POLL_MS);
     targetPathListener = path => {
       if (!activeAttempt || activeAttempt.targetPathUpdates.length >= 80) return;
@@ -790,6 +832,7 @@ async function run() {
         outputs: [],
         traceMap: new Map(),
         terminal: null,
+        obstructionSealedAt: null,
         resyncRequests: 0,
         waypoints: [],
         paperBefore,
@@ -906,8 +949,24 @@ async function run() {
           && actuatorVelocityIsQuiescent(sample)
           && distance(sample.position, stopPosition) <= 0.05;
       });
-      const fixtureVerified = [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
-        .every(snapshot => snapshot.wallVerified && snapshot.doorwayVerified && snapshot.platformVerified);
+      // On the obstruction course the doorway starts plugged with a breakable
+      // block, so `doorwayVerified` (block is air) is FALSE at the start by
+      // design and only becomes true once the companion breaks through. That
+      // transition -- plugged before, open after -- IS the proof, so it
+      // replaces the static doorway check rather than failing it.
+      const obstructionCourse = options.course === 'obstruction-follow';
+      // Sealed behind the target, then open again at the end = the companion
+      // broke through. `plugVerified` at paperBefore is intentionally false
+      // here: the doorway starts open so the target can path east.
+      const obstructionDugThrough = obstructionCourse
+        ? Boolean(activeAttempt.obstructionSealedAt) && Boolean(paperAfter.doorwayVerified)
+        : null;
+      const fixtureVerified = obstructionCourse
+        ? [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
+            .every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
+          && obstructionDugThrough === true
+        : [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
+            .every(snapshot => snapshot.wallVerified && snapshot.doorwayVerified && snapshot.platformVerified);
       const targetReachedRequiredWaypoints = options.mode === 'follow'
         ? activeAttempt.waypoints.length === activeWaypoints.length
         : activeAttempt.waypoints.length === WAYPOINTS.length;
@@ -967,6 +1026,8 @@ async function run() {
           doorwayObservation,
           corridorCompleted,
           finalWaypointReached,
+          obstructionDugThrough,
+          obstructionSealedAt: activeAttempt.obstructionSealedAt || null,
           twoTurnsCompleted: activeAttempt.waypoints.length === 3,
           oneBlockElevationCompleted: elevated,
           finalDistanceToTarget: distance(paperAfter.botPosition, paperAfter.targetPosition),

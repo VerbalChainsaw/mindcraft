@@ -6,7 +6,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
 const outputDir = process.argv[2];
 const label = process.argv[3] || 'sample';
-if (!outputDir) throw new Error('Usage: node capture-agent-state.mjs <output-dir> [label]');
+// MindServer's port comes from launcher-config.json and is not 8080 any more.
+// This was hardcoded, so state capture connected to a dead port and the run
+// died with a bare "websocket error" one step before the harness ever started.
+const baseUrl = process.argv[4]
+  || process.env.SCENARIO_LAB_MINDSERVER_URL
+  || 'http://localhost:8080';
+if (!outputDir) throw new Error('Usage: node capture-agent-state.mjs <output-dir> [label] [base-url]');
 fs.mkdirSync(outputDir, { recursive: true });
 
 const requireFromRepo = createRequire(path.join(repo, 'package.json'));
@@ -20,7 +26,7 @@ let revisions = {};
 let finished = false;
 let captureTimer;
 let hardTimer;
-const socket = io('http://localhost:8080', {
+const socket = io(baseUrl, {
   transports: ['websocket'],
   timeout: 5000,
   reconnection: false,

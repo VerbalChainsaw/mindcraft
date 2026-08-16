@@ -31,12 +31,47 @@ param(
     [ValidateRange(1000, 3600000)]
     [int]$TimeoutMs = 180000,
 
+    # Certification mode (the default) aborts unless the working tree is clean
+    # and every bound file is byte-identical to the registered candidate
+    # commit, so a recorded result provably describes that exact code.
+    # Regression mode keeps all of those hashes as evidence but does not abort,
+    # so the same scenario can gate ordinary day-to-day development. Without
+    # it this harness can only ever verify one commit, once.
+    [switch]$RegressionMode,
+
+    # Which physical course to lay. 'doorway-corridor' is the registered
+    # scenario. 'obstruction-follow' spans the wall across the full course width
+    # and plugs the doorway with a breakable block, so following the player
+    # REQUIRES breaking it -- the case the registered course does not exercise.
+    [ValidateSet('doorway-corridor', 'obstruction-follow')]
+    [string]$Course = 'doorway-corridor',
+
     [string]$FixtureRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+# This repository is commonly checked out as a git worktree whose `.git` file
+# points at a gitdir using a WSL-style path (/mnt/c/...). Plain `git -C $repo`
+# then fails with "fatal: not a git repository: (NULL)" and every provenance
+# probe below throws before any gameplay runs. Resolve the real gitdir once and
+# export it so the ordinary git invocations work on this machine.
+function Initialize-ScenarioGitEnvironment {
+    param([Parameter(Mandatory = $true)][string]$RepoPath)
+    $pointer = Join-Path $RepoPath '.git'
+    if (-not (Test-Path -LiteralPath $pointer -PathType Leaf)) { return }
+    $line = (Get-Content -LiteralPath $pointer -TotalCount 1).Trim()
+    if ($line -notmatch '^gitdir:\s*(.+)$') { return }
+    $gitDir = $Matches[1].Trim()
+    if ($gitDir -match '^/mnt/([a-zA-Z])/(.*)$') {
+        $gitDir = ($Matches[1].ToUpperInvariant() + ':/' + $Matches[2])
+    }
+    if (-not (Test-Path -LiteralPath $gitDir)) { return }
+    $env:GIT_DIR = $gitDir
+    $env:GIT_WORK_TREE = $RepoPath
+}
+Initialize-ScenarioGitEnvironment -RepoPath $repo
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
     $FixtureRoot = $env:SCENARIO_LAB_FOLLOW_FIXTURE_ROOT
 }
@@ -57,7 +92,26 @@ $evidenceAdapter = Join-Path $PSScriptRoot 'follow-field-evidence.mjs'
 $harness = Join-Path $repo 'tools\verify-follow-field.mjs'
 $directiveRouter = Join-Path $repo 'src\agent\player-directives.js'
 $skills = Join-Path $repo 'src\agent\library\skills.js'
-$baseUrl = 'http://localhost:8080'
+# MindServer's port comes from launcher-config.json, not from this worker. It
+# was 8080 when this scenario was frozen and is 8081 now, so the hardcoded URL
+# silently polled a dead port and the run died in `waiting-for-world-ready`
+# after burning its full three-minute budget. Derive it, and assert the derived
+# port is free below so the isolation guarantee still holds.
+$mindserverPort = 8080
+try {
+    $launcherConfigPath = Join-Path $repo 'launcher-config.json'
+    if (Test-Path -LiteralPath $launcherConfigPath) {
+        $launcherConfig = Get-Content -LiteralPath $launcherConfigPath -Raw | ConvertFrom-Json
+        foreach ($candidate in @($launcherConfig.mindserver_port, $launcherConfig.port_scan_start)) {
+            $parsed = 0
+            if ([int]::TryParse([string]$candidate, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le 65535) {
+                $mindserverPort = $parsed
+                break
+            }
+        }
+    }
+} catch { $mindserverPort = 8080 }
+$baseUrl = "http://localhost:$mindserverPort"
 $expectedMetadataHash = 'ddcc34aba25090cbc1e760c3a8dca2883ed47f35337f8d55ab3f1c235cc49a67'
 $expectedProfileHash = 'e82b8f03e0411678073191db52b35c9ad74d6cfe8e36572db07c866f0817ae57'
 $expectedBaselineHash = '850d7cd7abd6410be3a6a3becd87bc6f4914dac6cc0ac18c38a9cd700fe13a42'
@@ -228,7 +282,7 @@ function Summarize-State($state) {
 }
 
 function Capture-State([string]$label) {
-    $captureOutput = @(& $nodePath $captureScript $runDir $label 2>&1)
+    $captureOutput = @(& $nodePath $captureScript $runDir $label $baseUrl 2>&1)
     $captureExit = $LASTEXITCODE
     if ($captureExit -ne 0) {
         throw "State capture failed ($captureExit): $($captureOutput -join ' ')"
@@ -300,7 +354,10 @@ try {
         throw "Candidate commit $ExpectedCandidateCommit is not an ancestor of current HEAD $head."
     }
     $dirty = @(& git -C $repo status --porcelain=v1 --untracked-files=all)
-    if ($dirty.Count -ne 0) {
+    $report.regression_mode = [bool]$RegressionMode
+    $report.working_tree_dirty_count = $dirty.Count
+    $report.working_tree_dirty = @($dirty | Select-Object -First 200)
+    if ($dirty.Count -ne 0 -and -not $RegressionMode) {
         throw "Repository must be clean for a registered live replay: $($dirty -join '; ')"
     }
 
@@ -362,18 +419,27 @@ try {
         $absolutePath = [string]$entry.Value.path
         $candidateBlob = ((& git -C $repo rev-parse "${ExpectedCandidateCommit}:$relativePath" 2>&1 | Out-String).Trim())
         $currentBlob = ((& git -C $repo hash-object "--path=$relativePath" -- $absolutePath 2>&1 | Out-String).Trim())
-        if ($candidateBlob -notmatch '^[a-f0-9]{40}$' -or $currentBlob -ne $candidateBlob) {
+        $blobMatched = ($candidateBlob -match '^[a-f0-9]{40}$') -and ($currentBlob -eq $candidateBlob)
+        if (-not $blobMatched -and -not $RegressionMode) {
             throw "$($entry.Key) does not match the registered candidate commit."
         }
         $blobChecks[$entry.Key] = [ordered]@{
             relative_path = $relativePath
             candidate_blob = $candidateBlob
             current_blob = $currentBlob
-            matched = $true
+            matched = $blobMatched
         }
     }
     $report.candidate_blob_checks = $blobChecks
-    if ($skillsHash -ne [string]$metadata.candidate.gameplay_skills_sha256) { throw 'Gameplay controller drifted from the frozen fixture contract.' }
+    # The fixture records the gameplay controller hash it was frozen against.
+    # In certification mode any drift aborts, which is correct for a result that
+    # claims to describe that exact code -- and is also why this scenario could
+    # only ever verify one commit. In regression mode the drift is recorded and
+    # the run proceeds, because the whole point is to test the code as it is now.
+    $skillsDrifted = $skillsHash -ne [string]$metadata.candidate.gameplay_skills_sha256
+    $report.gameplay_skills_drifted = $skillsDrifted
+    $report.fixture_gameplay_skills_sha256 = [string]$metadata.candidate.gameplay_skills_sha256
+    if ($skillsDrifted -and -not $RegressionMode) { throw 'Gameplay controller drifted from the frozen fixture contract.' }
     $report.fixture_authorized = $true
 
     if (Test-Path -LiteralPath $worldPath) { throw "Replay world already exists: $worldPath" }
@@ -382,7 +448,7 @@ try {
         $report.conflict = $true
         throw 'Java is already running.'
     }
-    foreach ($port in @(8080, 25579)) {
+    foreach ($port in @($mindserverPort, 25579)) {
         if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
             $report.conflict = $true
             throw "Port $port is already listening."
@@ -452,6 +518,12 @@ try {
     $previousSettingsJson = [Environment]::GetEnvironmentVariable('SETTINGS_JSON', [EnvironmentVariableTarget]::Process)
     try {
         [Environment]::SetEnvironmentVariable('SETTINGS_JSON', $launchSettingsJson, [EnvironmentVariableTarget]::Process)
+        # Keep the held replay bot loaded. The harness requires an Operator Hold
+        # (waitForHeld), and a held bot with no human online otherwise unloads
+        # after a 10s grace -- which raced the measurement and killed roughly a
+        # third of invocations mid-run. This suppresses only the process unload;
+        # the Operator Hold itself is untouched.
+        $env:MINDCRAFT_HELD_UNLOAD_GRACE_MS = '-1'
         $mainProcess = Start-Process -FilePath $nodePath -ArgumentList @('main.js', '--profile', $scenarioProfilePath) -WorkingDirectory $repo -PassThru -WindowStyle Hidden -RedirectStandardOutput $stackStdout -RedirectStandardError $stackStderr
     } finally {
         [Environment]::SetEnvironmentVariable('SETTINGS_JSON', $previousSettingsJson, [EnvironmentVariableTarget]::Process)
@@ -488,12 +560,19 @@ try {
     }
     if (-not $ready) { throw 'Runtime did not become world-ready within three minutes.' }
 
+    # The measurement harness REQUIRES this hold: verify-follow-field.mjs calls
+    # waitForHeld() and will not begin until the bot reports held + idle +
+    # not-pathfinding + actuator-quiescent. That quiescent baseline is what makes
+    # the follow measurement meaningful, so the hold is a precondition, not an
+    # obstacle. An earlier attempt to skip it here (on a misdiagnosis that it
+    # triggered the zero-human unload) simply timed the harness out.
     Save-Status 'placing-operator-hold'
     $hold = Invoke-JsonPost "$baseUrl/api/director/command" @{
         agent = 'MindcraftBot'
         message = '!stop'
     }
     if ($hold.success -ne $true) { throw 'Could not place the replay bot under operator hold.' }
+    $report.startup_isolation.operator_hold_placed = $true
     Start-Sleep -Seconds 3
 
     $beforeState = Capture-State 'before-harness'
@@ -528,7 +607,7 @@ try {
         '--attempts', '1',
         '--evidence', $harnessEvidencePath,
         '--mode', 'follow',
-        '--course', 'doorway-corridor',
+        '--course', $Course,
         '--request-file', $requestPath,
         '--authorized-active-world'
     )

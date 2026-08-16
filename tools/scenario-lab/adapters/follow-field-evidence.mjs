@@ -115,8 +115,14 @@ function corridorComplete(attempt) {
   const botTravel = attempt?.performance?.botTrajectoryDistance;
   const targetTravel = attempt?.performance?.targetTrajectoryDistance;
   const finalDistance = physical?.finalDistanceToTarget;
-  return physical?.course === 'doorway-corridor'
-    && physical?.corridorCompleted === true
+  // Both follow courses run the same corridor geometry and the same distance
+  // thresholds. The obstruction course additionally requires proof that the
+  // companion broke through the sealed doorway, so it is strictly stronger --
+  // reaching the far waypoint without digging cannot satisfy it.
+  const course = physical?.course;
+  if (course !== 'doorway-corridor' && course !== 'obstruction-follow') return false;
+  if (course === 'obstruction-follow' && physical?.obstructionDugThrough !== true) return false;
+  return physical?.corridorCompleted === true
     && physical?.finalWaypointReached === true
     && [botTravel, targetTravel, finalDistance].every(Number.isFinite)
     && botTravel >= 7

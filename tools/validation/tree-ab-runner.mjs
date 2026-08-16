@@ -6,7 +6,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const defaultRepo = fileURLToPath(new URL('../../', import.meta.url));
 const repo = path.resolve(process.argv[2] || defaultRepo);
 const outputFile = path.resolve(process.argv[3] || path.join(repo, 'validation-output', 'tree-ab-result.json'));
-const baseUrl = process.argv[4] || 'http://localhost:8080';
+import { resolveMindserverUrl } from '../mindserver-url.mjs';
+
+const baseUrl = resolveMindserverUrl({ explicitUrl: process.argv[4] });
 const actionTimeoutMs = Math.max(1_000, Number(process.argv[5]) || 120_000);
 
 const requireFromRepo = createRequire(path.join(repo, 'package.json'));

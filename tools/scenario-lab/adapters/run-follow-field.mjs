@@ -15,8 +15,14 @@ import {
   observeFollowFieldRun,
 } from './follow-field-evidence.mjs';
 
-const SCENARIO_ID = 'doorway-corridor-follow';
+const DEFAULT_SCENARIO_ID = 'doorway-corridor-follow';
 const ADAPTER_ID = 'follow-field-live-replay-v1';
+// Which physical course each registered scenario lays. Both are driven by the
+// same adapter and worker; they differ only in the geometry provisioned.
+const SCENARIO_COURSE = Object.freeze({
+  'doorway-corridor-follow': 'doorway-corridor',
+  'obstruction-follow': 'obstruction-follow',
+});
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(SCRIPT_DIRECTORY, 'follow-field-worker.ps1');
 
@@ -25,7 +31,7 @@ function parseOptions(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
-    if (!['--output-dir', '--fixture-root', '--manifest'].includes(flag) || Object.hasOwn(options, flag)) {
+    if (!['--output-dir', '--fixture-root', '--manifest', '--regression-mode', '--scenario'].includes(flag) || Object.hasOwn(options, flag)) {
       throw new Error(`Unsupported or repeated option: ${flag}`);
     }
     options[flag] = argv[index + 1];
@@ -98,6 +104,8 @@ async function executeInvocation({
   outputDirectory,
   fixtureRoot,
   repo,
+  regressionMode = false,
+  course = 'doorway-corridor',
 }) {
   const invocationDirectory = path.join(
     outputDirectory,
@@ -118,6 +126,11 @@ async function executeInvocation({
     '-InstrumentationMode', plan.instrumentationMode,
   ];
   if (fixtureRoot) args.push('-FixtureRoot', fixtureRoot);
+  // Keeps the bound-file and clean-tree hashes as recorded evidence instead of
+  // aborting, so this scenario can gate ordinary development rather than
+  // certifying exactly one frozen commit.
+  if (regressionMode) args.push('-RegressionMode');
+  args.push('-Course', course);
 
   const processResult = await spawnBounded('powershell.exe', args, {
     cwd: repo,
@@ -181,20 +194,25 @@ async function main(argv = process.argv.slice(2)) {
   if (diagnostics.length) {
     throw new Error(`Scenario manifest is invalid: ${canonicalJson(diagnostics)}`);
   }
-  const plan = createExecutionPlan(manifest, SCENARIO_ID);
+  const scenarioId = options['--scenario'] || DEFAULT_SCENARIO_ID;
+  if (!Object.hasOwn(SCENARIO_COURSE, scenarioId)) {
+    throw new Error(`Unknown scenario '${scenarioId}'. Known: ${Object.keys(SCENARIO_COURSE).join(', ')}`);
+  }
+  const course = SCENARIO_COURSE[scenarioId];
+  const plan = createExecutionPlan(manifest, scenarioId);
   if (
     plan.status !== 'not-run'
     || plan.executor?.safe !== true
     || plan.executor?.adapterId !== ADAPTER_ID
   ) {
-    throw new Error('Doorway/corridor scenario is not registered to this safe adapter.');
+    throw new Error(`Scenario '${scenarioId}' is not registered to this safe adapter.`);
   }
 
   const outputDirectory = path.resolve(options['--output-dir']);
   await mkdir(path.dirname(outputDirectory), { recursive: true });
   await mkdir(outputDirectory);
   await writeFile(
-    path.join(outputDirectory, `${SCENARIO_ID}.plan.v1.json`),
+    path.join(outputDirectory, `${scenarioId}.plan.v1.json`),
     `${canonicalJson(plan)}\n`,
     { encoding: 'utf8', flag: 'wx' },
   );
@@ -207,6 +225,8 @@ async function main(argv = process.argv.slice(2)) {
       outputDirectory,
       fixtureRoot: options['--fixture-root'],
       repo,
+      regressionMode: /^(1|true|yes|on)$/i.test(String(options['--regression-mode'] ?? '')),
+      course,
     });
     executions.push(execution);
     if (execution.observation.safetyInvariantViolations.includes('runtime-restoration-required')) break;
@@ -216,8 +236,8 @@ async function main(argv = process.argv.slice(2)) {
     plan,
     executions.map(({ observation: item }) => item),
   );
-  const result = createExecutionResult(manifest, SCENARIO_ID, observation);
-  const resultFile = `${SCENARIO_ID}.result.v1.json`;
+  const result = createExecutionResult(manifest, scenarioId, observation);
+  const resultFile = `${scenarioId}.result.v1.json`;
   await writeFile(
     path.join(outputDirectory, resultFile),
     `${canonicalJson(result)}\n`,
@@ -227,7 +247,7 @@ async function main(argv = process.argv.slice(2)) {
     path.join(outputDirectory, 'run-summary.v1.json'),
     `${canonicalJson({
       schemaVersion: 'scenario-lab.follow-field-run.v1',
-      scenarioId: SCENARIO_ID,
+      scenarioId,
       manifest: plan.manifest,
       planHash: plan.planHash,
       instrumentationMode: plan.instrumentationMode,

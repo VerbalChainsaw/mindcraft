@@ -11,8 +11,14 @@ persisted MindServer port and scan start are `8081`. Port 8080 has been observed
 to accept a listener bind while dropping local connections; it is not a valid
 readiness target here.
 
+MindServer binds the IPv6 loopback. `localhost:8081` and `[::1]:8081` answer,
+while `127.0.0.1:8081` is refused with connection-refused even when the launcher
+is completely healthy. Probing the IPv4 literal makes a running launcher look
+absent, and the failure table below would then tell you to start a second one.
+Always probe `localhost`.
+
 ```bash
-CONTROL_URL=http://127.0.0.1:8081
+CONTROL_URL=http://localhost:8081
 curl -fsS "$CONTROL_URL/api/identity"
 ```
 
@@ -75,7 +81,7 @@ profiles, and auto-starts selected profiles when `auto_start` is true.
    ```bash
    node --input-type=module <<'NODE'
    import { io } from 'socket.io-client';
-   const controlUrl = 'http://127.0.0.1:8081';
+   const controlUrl = 'http://localhost:8081';
    const agentName = 'MindcraftBot';
    const socket = io(controlUrl, { reconnection: false, timeout: 5000 });
    const deadline = setTimeout(() => {
@@ -126,7 +132,7 @@ live campaign is ready to dispatch.
 
 | Observation | Meaning | Next action |
 | --- | --- | --- |
-| Identity does not answer | Launcher absent, wrong configured port, or invalid control endpoint | Inspect configured port/processes; start one launcher only if absent |
+| Identity does not answer | Launcher absent, wrong configured port, invalid control endpoint, or an IPv4-literal probe against the IPv6-bound MindServer | Re-probe `localhost` before concluding anything; then inspect configured port/processes and start one launcher only if genuinely absent |
 | Identity answers; Paper is not `running` | Managed server stopped, starting, crashed, or failed | Use the managed-server endpoint and reconcile authoritative status/error |
 | Paper runs; bot is `stopped` and registered/disconnected | Profile exists but bot is unloaded | Start that named agent through `start-agent` |
 | Bot is `starting` | Lifecycle is in progress | Wait for `world_ready`; do not issue another start |

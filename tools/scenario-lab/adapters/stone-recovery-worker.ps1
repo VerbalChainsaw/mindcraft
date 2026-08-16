@@ -29,6 +29,26 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
+# This repository is commonly checked out as a git worktree whose `.git` file
+# points at a gitdir using a WSL-style path (/mnt/c/...). Plain `git -C $repo`
+# then fails with "fatal: not a git repository: (NULL)" and every provenance
+# probe below throws before any gameplay runs. Resolve the real gitdir once and
+# export it so the ordinary git invocations work on this machine.
+function Initialize-ScenarioGitEnvironment {
+    param([Parameter(Mandatory = $true)][string]$RepoPath)
+    $pointer = Join-Path $RepoPath '.git'
+    if (-not (Test-Path -LiteralPath $pointer -PathType Leaf)) { return }
+    $line = (Get-Content -LiteralPath $pointer -TotalCount 1).Trim()
+    if ($line -notmatch '^gitdir:\s*(.+)$') { return }
+    $gitDir = $Matches[1].Trim()
+    if ($gitDir -match '^/mnt/([a-zA-Z])/(.*)$') {
+        $gitDir = ($Matches[1].ToUpperInvariant() + ':/' + $Matches[2])
+    }
+    if (-not (Test-Path -LiteralPath $gitDir)) { return }
+    $env:GIT_DIR = $gitDir
+    $env:GIT_WORK_TREE = $RepoPath
+}
+Initialize-ScenarioGitEnvironment -RepoPath $repo
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
     $FixtureRoot = $env:SCENARIO_LAB_STONE_FIXTURE_ROOT
 }

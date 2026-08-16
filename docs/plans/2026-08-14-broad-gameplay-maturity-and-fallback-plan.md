@@ -41,7 +41,7 @@ The receipt should cover the facts the scenario actually depends on, including:
 - Paper and the managed runtime are ready, relevant chunks and exact blocks are loaded, and the intended agent is the only command recipient.
 - Required fixtures, inventories, identities, health, hunger, modes, and custody match the declared scenario.
 - Body cells are supported, clear, and stationary at the final sample; workstations and containers have usable clearance.
-- Fixture-critical travel has a complete native Pathfinder route and required interaction targets have a legal stance. A partial search is not authority.
+- Fixture-critical travel has either a complete native Pathfinder route to the final target or a complete native route to the next waypoint admitted under the shared segmented-navigation contract; required interaction targets also have a legal stance. A raw partial search is not authority.
 - The request fits the real Minecraft relay boundary and is delivered as one intended authority unit.
 - No unintended bot movement or world mutation occurs between the final fixture sample and request dispatch.
 
@@ -85,7 +85,7 @@ Use this bounded ladder, in order:
 
 The player-facing summary should be concise and receipt-grounded, for example: “I completed X. Y is blocked because Z. I have not changed A. I can try B or C, or wait here. Which do you want?” This exposes the actionable decision boundary, not raw private chain-of-thought or model narration.
 
-The fallback contract must never invent completion, identity, custody, progress, or a contract stage; weaken safety, protection, durability, stance, or route gates; repeat an unchanged attempt; silently substitute a person, item, site, or objective; promote a partial Pathfinder route into authority; damage terrain merely to escape confusion; or ask a question whose answer is already present in authoritative state.
+The fallback contract must never invent completion, identity, custody, progress, or a contract stage; weaken safety, protection, durability, stance, or route gates; repeat an unchanged attempt; silently substitute a person, item, site, or objective; promote a raw partial Pathfinder result into authority; damage terrain merely to escape confusion; or ask a question whose answer is already present in authoritative state. A fully planned, admitted waypoint segment is not a promoted partial result.
 
 ## 4. Complete intent compilation and clarification
 
@@ -110,7 +110,7 @@ Apply this judgment to whole trees, ore and stone bodies, dropped-item clusters,
 
 ## 6. Interruption and obligation liveness
 
-Interruption must settle at safe cancellation edges, preserve resumable work, and never erase an accepted player obligation. A zero-progress retreat needs a supported fallback or a truthful terminal result. Near-goal failures may try another already-proved supported stance, but repeated short-range failure must stop, explain, or ask. A terminal failure is reported once after settlement rather than silently looping or silently abandoning the task.
+Interruption must settle at safe cancellation edges, preserve resumable work, and never erase an accepted player obligation. A zero-progress retreat needs a supported fallback or a truthful terminal result. Near-goal failures may try another already-proved supported stance. Longer pursuit or ordinary obstruction recovery may advance through fully planned safe waypoint segments while preserving the final destination, but repeated cells, oscillation, or zero overall progress must stop, explain, or ask. A terminal failure is reported once after settlement rather than silently looping or silently abandoning the task.
 
 ## Testable milestones
 
@@ -157,15 +157,15 @@ Interruption must settle at safe cancellation edges, preserve resumable work, an
 ## Execution and stopping discipline
 
 - M1 is a substantial engineering repair, not a gameplay campaign. Its acceptance is the shared gate, one representative integration, and focused proof.
-- Live campaigns still declare one player-visible outcome and obey the two-repair, three-gameplay governor plus one setup retry (two total setup attempts). Setup budget is charged only after the bounded authoritative reconciliation rule above.
+- Live campaigns declare one player-visible outcome and follow the campaign governor in `AGENTS.md`. Unattended agent-driven runs are the default and are bounded by convergence, not by a run count; only runs that consume the Director's presence keep the tight two-repair, three-tranche budget. Setup budget is charged only after the bounded authoritative reconciliation rule above.
 - Reach real Paper as soon as the changed seam can be exercised. Use narrow fixtures only after a broad live observation identifies the need.
 - Add no dependency, package replacement, custom mechanic engine, scenario matrix, or broad verification framework.
 - Preserve the dirty project WIP, telemetry, managed runtime, and Operator Hold. Do not commit or push without explicit authority.
-- Stop a milestone when its stated outcome is materially proved. A distinct third defect becomes evidence for the next campaign rather than expansion of the current one.
+- Stop a milestone when its stated outcome is materially proved and passes the player-sense gate. While an unattended campaign is still converging, a newly found defect is evidence to repair and rerun, not a reason to close; rotate only when the outcome stops converging.
 
 ## Current action
 
-M0, M1, M2, and M3 are complete. The repository has a zero-dependency pure fixture-admission receipt and fail-closed assertion, and the existing lifecycle verifier rechecks exact managed-world occupancy, live agent readiness, state freshness, command isolation, supported/stationary body state, ActionManager/Pathfinder idleness, and request transport facts immediately before dispatch. Its start callback is advisory: a bounded authoritative `world_ready` reconciliation can confirm setup without consuming a retry.
+M0, M1, M2, M3, and M4 are complete. The repository has a zero-dependency pure fixture-admission receipt and fail-closed assertion, and the existing lifecycle verifier rechecks exact managed-world occupancy, live agent readiness, state freshness, command isolation, supported/stationary body state, ActionManager/Pathfinder idleness, and request transport facts immediately before dispatch. Its start callback is advisory: a bounded authoritative `world_ready` reconciliation can confirm setup without consuming a retry.
 
 Focused valid, failed, and unknown diagnostics pass 7/7 with the adjacent runtime-verifier checks. A real managed-Paper run correctly censored the request with exact `body_supported` evidence after the bot remained slightly airborne through a bounded settlement wait; `!stay(1)` was never dispatched and cleanup returned IronSuiteProof to stopped/unloaded persistent Operator Hold. That live result proves the gate rejects an invalid physical fixture. It does not claim the current saved login position is usable.
 
@@ -173,21 +173,17 @@ Do not teleport or reshape the world merely to manufacture a green fixture sampl
 
 M3 makes retry authority fail-closed at the durable Agenda boundary. A terminal GoalDirector result can receive another Agenda dispatch only when its correlated receipt explicitly records `retryable: true`; an omitted flag no longer clones the goal with a fresh ID and budget. Existing explicit checkpointed retries and supported alternatives remain intact. Terminal Agenda failure reports the exact blocker once, states that no unchanged retry occurred, and enters Hold when no already-authorized continuation remains.
 
-The accepted live ambiguity scenario gave IronSuiteProof sole custody of one Bread while DadPlayer and KidPlayer were present. Dad asked it to give the Bread to “one of us” and wait. The bot retained exact custody and Hold, asked exactly once whether Dad or Kid should receive it, accepted Dad's named Kid answer, delivered exactly one Bread to Kid, retained none, and settled with an empty Agenda under Hold. Flight `flight-2026-08-14T17-28-32-859Z-167556-000.jsonl` records the correlated `skill_delivered` receipt. The adjacent Agenda, parser, and work-order suites pass 103/103. M3 is frozen to this evidence; the next active milestone is M4 complete-intent compilation.
+The accepted live ambiguity scenario gave IronSuiteProof sole custody of one Bread while DadPlayer and KidPlayer were present. Dad asked it to give the Bread to “one of us” and wait. The bot retained exact custody and Hold, asked exactly once whether Dad or Kid should receive it, accepted Dad's named Kid answer, delivered exactly one Bread to Kid, retained none, and settled with an empty Agenda under Hold. Flight `flight-2026-08-14T17-28-32-859Z-167556-000.jsonl` records the correlated `skill_delivered` receipt. The adjacent Agenda, parser, and work-order suites pass 103/103. M3 is frozen to this evidence.
 
-M4's shared engineering boundary is implemented but not physically accepted.
-Natural plans now produce an immutable complete/incomplete effect receipt,
-reject unresolved clauses before takeover, normalize the whole typed list
-before surrendering current action authority, and install every admitted effect
-with one atomic Agenda mutation. Plan-local dependencies bind exact generated
-predecessor IDs and a malformed later effect publishes nothing. Focused parser
-and Agenda checks pass 95/95.
-
-The first M4 live campaign closed with zero valid gameplay tranches after both
-permitted setup attempts reproduced the same loopback harness failure: Paper
-started normally, but the agent child could not connect to the loopback-only
-MindServer. No request was dispatched, no fixture or world state was mutated,
-and the owned runtime was stopped. Do not attempt a third setup or change the
-MindServer bind policy inside that closed campaign. Recover the previously
-working live harness/session context, then declare a fresh M4 acceptance
-campaign for visit → exact chest inspection/report → requester return → Hold.
+M4's immutable complete-intent boundary is physically accepted. In a fresh
+managed-Paper campaign, DadPlayer naturally asked Kevin to visit exact
+KidPlayer, inspect and report the bedside Chest, return to DadPlayer, and wait.
+Kevin admitted all three ordered effects atomically, reached Kid at one block,
+opened the exact Chest at `(8104,69,7940)`, and reported the authoritative
+manifest, including two Iron Pickaxes and one each Iron Axe, Iron Shovel, and
+Iron Hoe. Kevin then returned one block from Dad and entered persistent Hold
+with zero measured drift. Before/after Paper receipts prove that the Chest and
+all three player inventories were unchanged. The earlier loopback setup failure
+was operational only; the documented 8081 control path removed it without a
+product or world workaround. Freeze M4 to this evidence. The next active
+milestone is M5 component-level resource and terrain stewardship.
