@@ -189,3 +189,56 @@ test('a bounded blocker survives persistence round-trips', async () => {
   assert.equal(restored.holdMs, 6_000);
   assert.equal(restored.createdAt, 42);
 });
+
+// Every owner that can park on a material-change blocker must be bounded.
+// Only the player-directive path was bounded initially; agenda and survival
+// kept releasing on world predicates alone, which is the same defect class
+// that left a companion standing still after a failed follow.
+test('every material-change blocker owner carries a retry bound', async () => {
+  const [{ AGENDA_RETRY_HOLD_MS }, { SLEEP_RETRY_HOLD_MS }, { DIRECTIVE_RETRY_HOLD_MS }] =
+    await Promise.all([
+      import('../../src/agent/runtime/agenda-director.js'),
+      import('../../src/agent/runtime/survival-director.js'),
+      import('../../src/agent/runtime/behavior-arbiter.js'),
+    ]);
+
+  for (const [name, value] of Object.entries({
+    DIRECTIVE_RETRY_HOLD_MS,
+    AGENDA_RETRY_HOLD_MS,
+    SLEEP_RETRY_HOLD_MS,
+  })) {
+    assert.ok(Number.isFinite(value), `${name} must be a finite bound`);
+    assert.ok(value > 0, `${name} must be positive`);
+    assert.ok(value <= 600_000, `${name} must stay inside the blocker clamp`);
+  }
+
+  // A directive is the player talking; it must retry sooner than background work.
+  assert.ok(
+    DIRECTIVE_RETRY_HOLD_MS < AGENDA_RETRY_HOLD_MS,
+    'an explicit player directive must retry sooner than an agenda entry',
+  );
+
+  // And each bound must actually release an otherwise-unchanged world.
+  const checkpoint = { position: { x: 0, y: 64, z: 0 }, dimension: 'overworld' };
+  for (const holdMs of [DIRECTIVE_RETRY_HOLD_MS, AGENDA_RETRY_HOLD_MS, SLEEP_RETRY_HOLD_MS]) {
+    const blocker = createMaterialChangeBlocker({
+      owner: 'test',
+      obligationId: 'o1',
+      code: 'x',
+      checkpoint,
+      releasePredicates: ['dimension', 'position_region'],
+      holdMs,
+      createdAt: 1_000,
+    });
+    assert.equal(
+      evaluateMaterialChange(blocker, checkpoint, { now: 1_000 + holdMs - 1 }).state,
+      'unchanged',
+      `holdMs ${holdMs} must still be waiting just inside the bound`,
+    );
+    assert.equal(
+      evaluateMaterialChange(blocker, checkpoint, { now: 1_000 + holdMs + 1 }).state,
+      'changed',
+      `holdMs ${holdMs} must release just outside the bound`,
+    );
+  }
+});

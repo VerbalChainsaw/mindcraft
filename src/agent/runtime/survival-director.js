@@ -722,6 +722,9 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
   };
 }
 
+// Backstop for a sleep blocker whose world predicates may never change.
+export const SLEEP_RETRY_HOLD_MS = 60_000;
+
 export class SurvivalDirector extends BehaviorDirector {
   constructor(agent, {
     getSituation = summarizeSurvivalSituation,
@@ -1098,6 +1101,11 @@ export class SurvivalDirector extends BehaviorDirector {
         ...(code === 'skill_bed_occupied' ? ['target_signature'] : []),
         ...(night ? ['cycle_signature'] : []),
       ],
+      // Backstop. The cycle predicate releases this at dawn, but only when the
+      // blocker was created at night; a daytime rejection would otherwise wait
+      // on dimension or bed occupancy alone and could park indefinitely.
+      holdMs: SLEEP_RETRY_HOLD_MS,
+      createdAt: Date.now(),
     });
     if (!materialChangeBlocker) return;
     const blocker = Object.freeze({

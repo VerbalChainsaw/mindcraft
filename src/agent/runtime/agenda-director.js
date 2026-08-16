@@ -178,6 +178,14 @@ function agendaMaterialObservation(agent, entry) {
   };
 }
 
+// How long an agenda entry may sit parked after a no-progress result before it
+// is retried regardless of the world. The agenda carries explicit player
+// requests, so an unbounded blocker means "get me some wood" silently stalls
+// until the player happens to walk eight blocks or change dimension. Longer
+// than the directive bound because agenda work is coarser-grained and retrying
+// it is more expensive. See behavior-arbiter DIRECTIVE_RETRY_HOLD_MS.
+export const AGENDA_RETRY_HOLD_MS = 30_000;
+
 function agendaMaterialBlocker(agent, entry, settled) {
   const checkpoint = agendaMaterialObservation(agent, entry);
   return createMaterialChangeBlocker({
@@ -191,6 +199,8 @@ function agendaMaterialBlocker(agent, entry, settled) {
       ...(checkpoint.targetSignature ? ['target_signature'] : []),
     ],
     positionRegionDistance: 8,
+    holdMs: AGENDA_RETRY_HOLD_MS,
+    createdAt: Date.now(),
   });
 }
 
