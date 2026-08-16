@@ -33,3 +33,6 @@ src/mindcraft-py/__pycache__/
 /launcher.log
 /hs_err_pid*.log
 /src.zip
+
+# Scenario Lab run artifacts (evidence, worlds, logs) -- reproducible, not source
+validation-output/
