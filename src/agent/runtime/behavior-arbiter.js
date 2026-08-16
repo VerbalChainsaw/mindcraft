@@ -1,6 +1,11 @@
 import { comportmentPauseMs, normalizeComportment } from './comportment.js';
 import settings from '../settings.js';
 import { DecisionTraceRecorder } from './decision-trace.js';
+import { chooseCompanionAction } from './companion-action-policy.js';
+import {
+  createMaterialChangeBlocker,
+  evaluateMaterialChange,
+} from './obligation-settlement.js';
 
 // Fallback for bots whose runtime config predates comportment. Neutral is the
 // exact pre-comportment pacing, so an unconfigured bot behaves as it always did.
@@ -36,6 +41,21 @@ const TERMINAL_HANDOFF_MAX_MS = 5_000;
 // in the world for a meaningful part of a hostile night.
 export const HELD_NO_HUMAN_UNLOAD_GRACE_MS = 10_000;
 const SAFE_UNLOAD_HOLD_REASON = /^(?:operator stop(?: command| restored after restart)?|companion wait requested by\s)/i;
+const STANDING_DIRECTIVE_ACTIONS = new Set([
+  'action:follow',
+  'action:followPlayer',
+  'action:guardPlayer',
+]);
+const DIRECTIVE_NO_PROGRESS_OUTCOMES = new Set([
+  'waiting_for_material_change',
+]);
+// How long an explicit follow/guard may sit parked after a no-progress result
+// before it is retried regardless of the world. Without this the companion
+// waited for the player to move eight blocks, change dimension, or change the
+// world signature -- so a failed route left it standing still indefinitely
+// while it had already announced it was following. A player directive is a
+// promise to keep trying; see ARCHITECTURE.md.
+export const DIRECTIVE_RETRY_HOLD_MS = 6_000;
 
 // Per-lane base tick period. Reflex lanes re-evaluate quickly so a threat is
 // answered in one frame rather than one third of a second; cosmetic and idle
@@ -123,6 +143,67 @@ function identityKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function directiveIdentity(value) {
+  const directive = String(value?.directive || '').trim().toLowerCase();
+  const username = identityKey(value?.canonicalUsername);
+  const authorizedAt = value?.authorizedAt ?? value?.directiveAuthorizedAt;
+  if (!['follow', 'guard'].includes(directive) || !username || !Number.isFinite(authorizedAt)) return null;
+  return `${directive}:${username}:${authorizedAt}`;
+}
+
+function directiveTargetSignature(companion) {
+  const username = identityKey(companion?.canonicalUsername);
+  if (!username || !Number.isFinite(companion?.entityEpoch)) return null;
+  return `${username}:${companion.entityEpoch}`;
+}
+
+function directiveTargetWorldSignature(agent, companion) {
+  if (companion?.presence !== 'present') return null;
+  const bot = agent?.bot;
+  const player = bot?.entities?.[companion.entityId]
+    || bot?.players?.[companion.canonicalUsername]?.entity;
+  const origin = player?.position?.floored?.();
+  const bodyOrigin = bot?.entity?.position?.floored?.();
+  if (!origin?.offset || !bodyOrigin?.offset || typeof bot?.blockAt !== 'function') return null;
+  const offsets = [
+    [0, -1, 0], [0, 0, 0], [0, 1, 0],
+    [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+    [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
+  ];
+  try {
+    const blocks = offsets.map(([x, y, z]) => (
+      String(bot.blockAt(origin.offset(x, y, z))?.name || 'unloaded').slice(0, 48)
+    ));
+    const bodyBlocks = offsets.map(([x, y, z]) => (
+      String(bot.blockAt(bodyOrigin.offset(x, y, z))?.name || 'unloaded').slice(0, 48)
+    ));
+    const liquid = player?.isInWater === true
+      || player?.isInLava === true
+      || blocks.slice(1, 3).some(name => name === 'water' || name === 'lava');
+    return `${liquid ? 'liquid' : 'non_liquid'}:${blocks.join(',')}|body:${bodyBlocks.join(',')}`;
+  } catch {
+    return null;
+  }
+}
+
+function resultSkillOutcome(result) {
+  return String(result?.evidence?.skill?.outcome || '').trim().toLowerCase();
+}
+
+/**
+ * A completed drowning reflex is a settlement boundary, not authority for the
+ * interrupted standing directive to retake the body. This semantic family
+ * deliberately includes stable, open-water, and unconfirmed receipts so a
+ * failed or partial escape cannot become an unchanged immediate retry. An
+ * interrupted action is censored before this predicate is consulted.
+ */
+export function isDirectiveHazardSettlementEvidence(result) {
+  return result?.phase !== 'interrupted'
+    && result?.code !== 'interrupted'
+    && result?.label === 'mode:self_preservation'
+    && resultSkillOutcome(result).startsWith('drowning_escape_');
+}
+
 /**
  * Full tab-roster human presence. An entity-only scan would miss a distant
  * player and could unload a companion that is still sharing their world.
@@ -161,6 +242,8 @@ export class BehaviorArbiter {
     this.stopped = false;
     this.updating = false;
     this.directiveResumeRequested = false;
+    this.directiveResumeRequest = null;
+    this.directiveMaterialChangeBlocker = null;
     this.terminalHandoff = null;
     this.terminalHandoffGeneration = 0;
     this.tick = 0;
@@ -175,10 +258,13 @@ export class BehaviorArbiter {
       code: 'inactive',
       updatedAt: null,
     };
-    this.heldNoHumanUnloadGraceMs = Math.max(
-      0,
-      Number(heldNoHumanUnloadGraceMs) || 0,
-    );
+    // A negative grace disables the safe unload entirely and keeps a held bot
+    // loaded. Used by unattended measurement, where the Hold is a required
+    // precondition rather than an idle state. The Operator Hold is untouched.
+    const configuredGraceMs = Number(heldNoHumanUnloadGraceMs);
+    this.heldNoHumanUnloadGraceMs = Number.isFinite(configuredGraceMs) && configuredGraceMs < 0
+      ? -1
+      : Math.max(0, configuredGraceMs || 0);
     // Wake channel. Perception was previously sampled purely on a schedule, so
     // a hostile that loaded right after a tick went unnoticed for the whole
     // selected period, and an idle lane had selected a period of half a second.
@@ -226,6 +312,8 @@ export class BehaviorArbiter {
     if (this.stopped) return false;
     this.stopped = true;
     this.directiveResumeRequested = false;
+    this.directiveResumeRequest = null;
+    this.directiveMaterialChangeBlocker = null;
     this.terminalHandoff = null;
     this.comportmentPauseUntil = 0;
     this.wasActing = false;
@@ -238,11 +326,99 @@ export class BehaviorArbiter {
     return true;
   }
 
-  requestDirectiveResume() {
+  requestDirectiveResume(interruptedDirective = null) {
     if (this.stopped) return false;
     this.releaseTerminalHandoff('An explicit companion directive resumed.', false);
+    const current = interruptedDirective || this.agent.companion_context?.snapshot?.() || null;
+    const directive = String(current?.directive || '').toLowerCase();
+    this.directiveResumeRequest = directive === 'follow' || directive === 'guard'
+      ? Object.freeze({
+          directive,
+          canonicalUsername: boundedText(current?.canonicalUsername, ''),
+          authorizedAt: current?.authorizedAt ?? current?.directiveAuthorizedAt ?? null,
+        })
+      : null;
     this.directiveResumeRequested = true;
     this.wake('directive_resume');
+    return true;
+  }
+
+  directiveObservation(companion = this.agent.companion_context?.snapshot?.()) {
+    return {
+      position: companion?.position || null,
+      dimension: companion?.dimension || null,
+      targetSignature: directiveTargetSignature(companion),
+      worldSignature: directiveTargetWorldSignature(this.agent, companion),
+    };
+  }
+
+  directiveSettlement(companion = this.agent.companion_context?.snapshot?.()) {
+    const blocker = this.directiveMaterialChangeBlocker;
+    if (!blocker) return Object.freeze({ active: false, state: 'changed', code: null });
+    const obligationId = directiveIdentity(companion);
+    if (!obligationId || blocker.obligationId !== obligationId) {
+      this.directiveMaterialChangeBlocker = null;
+      return Object.freeze({ active: false, state: 'changed', code: 'directive_authority_changed' });
+    }
+    const materialChange = evaluateMaterialChange(
+      blocker,
+      this.directiveObservation(companion),
+      { now: this.now() },
+    );
+    if (materialChange.state === 'changed') {
+      this.directiveMaterialChangeBlocker = null;
+      return Object.freeze({
+        active: false,
+        state: 'changed',
+        code: blocker.code,
+        changedBy: materialChange.changedBy,
+      });
+    }
+    return Object.freeze({
+      active: true,
+      state: materialChange.state,
+      code: blocker.code,
+      changedBy: materialChange.changedBy,
+      unknownPredicates: materialChange.unknownPredicates,
+    });
+  }
+
+  observeDirectiveOutcome(result) {
+    if (!result || result.phase === 'interrupted' || result.code === 'interrupted') return false;
+    const companion = this.agent.companion_context?.snapshot?.();
+    const obligationId = directiveIdentity(companion);
+    if (!obligationId) return false;
+    const outcome = resultSkillOutcome(result);
+    const observation = this.directiveObservation(companion);
+    let code = null;
+    let releasePredicates = null;
+    if (
+      isDirectiveHazardSettlementEvidence(result)
+      && String(observation.worldSignature || '').startsWith('liquid:')
+    ) {
+      code = 'directive_hazard_unchanged';
+      releasePredicates = ['dimension', 'target_signature', 'world_signature'];
+    } else if (
+      STANDING_DIRECTIVE_ACTIONS.has(result.label)
+      && DIRECTIVE_NO_PROGRESS_OUTCOMES.has(outcome)
+    ) {
+      code = 'directive_route_unchanged';
+      releasePredicates = ['dimension', 'position_region', 'target_signature', 'world_signature'];
+    }
+    if (!releasePredicates) return false;
+    const blocker = createMaterialChangeBlocker({
+      owner: 'player_directive',
+      obligationId,
+      code,
+      checkpoint: observation,
+      releasePredicates,
+      positionRegionDistance: 8,
+      holdMs: DIRECTIVE_RETRY_HOLD_MS,
+      createdAt: this.now(),
+    });
+    if (!blocker) return false;
+    this.directiveMaterialChangeBlocker = blocker;
+    this.wake('directive_material_change_blocked');
     return true;
   }
 
@@ -475,6 +651,7 @@ export class BehaviorArbiter {
   }
 
   recordOutcome(result) {
+    this.observeDirectiveOutcome(result);
     return this.traceRecorder.linkOutcome(result);
   }
 
@@ -502,6 +679,11 @@ export class BehaviorArbiter {
       this.heldNoHumanSince = null;
       this.heldUnloadRequested = false;
       return Object.freeze({ code: 'human_player_online', humans, elapsedMs: 0, due: false });
+    }
+    if (this.heldNoHumanUnloadGraceMs < 0) {
+      this.heldNoHumanSince = null;
+      this.heldUnloadRequested = false;
+      return Object.freeze({ code: 'held_unload_disabled', humans, elapsedMs: 0, due: false });
     }
     const now = this.now();
     if (!Number.isFinite(this.heldNoHumanSince)) this.heldNoHumanSince = now;
@@ -704,10 +886,10 @@ export class BehaviorArbiter {
     }
   }
 
-  async evaluateModeBand(lane, names, perception) {
+  async evaluateModeBand(lane, names, perception, options = {}) {
     this.traceRecorder.startLane(lane);
     try {
-      const result = await this.agent.bot?.modes?.updateBand?.(names);
+      const result = await this.agent.bot?.modes?.updateBand?.(names, options);
       if (result?.active || result?.scheduled) {
         this.traceRecorder.finishLane(lane, {
           status: 'eligible',
@@ -839,17 +1021,78 @@ export class BehaviorArbiter {
       // same exact reflex labels. Evaluate both bands before the hold gate so
       // mortal danger can settle without releasing Hold or authorizing ambient
       // combat.
-      let selected = await this.evaluateModeBand('emergency_self_preservation', EMERGENCY_MODES, perception);
+      let accompanimentProposal = null;
+      try {
+        accompanimentProposal = modes?.proposeAttributedAccompaniment?.() || null;
+      } catch (error) {
+        return this.select(
+          'degraded',
+          'accompaniment_proposal_failed',
+          `Companion decision facts failed safely: ${boundedText(error?.message || error)}`,
+          true,
+          perception,
+        );
+      }
+      const sharedAccompanimentOwnsThreat = accompanimentProposal?.applicable === true;
+      const migratedModeOptions = { skipAttributedAccompaniment: sharedAccompanimentOwnsThreat };
+      let selected = await this.evaluateModeBand(
+        'emergency_self_preservation',
+        EMERGENCY_MODES,
+        perception,
+        migratedModeOptions,
+      );
       if (selected) return selected;
 
-      selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
-      if (selected) return selected;
+      if (sharedAccompanimentOwnsThreat) {
+        this.traceRecorder.startLane('attributed_protection');
+        const companionDecision = chooseCompanionAction({
+          ...accompanimentProposal,
+          operatorHeld: this.agent.isOperatorHeld?.() === true,
+          runtimeStopped: this.stopped,
+        });
+        if (companionDecision.intent === 'retreat' || companionDecision.intent === 'protect') {
+          const dispatch = modes?.dispatchAttributedAccompaniment?.(
+            companionDecision.intent,
+            accompanimentProposal,
+          );
+          if (dispatch?.active || dispatch?.scheduled) {
+            return this.select(
+              'attributed_protection',
+              companionDecision.code,
+              companionDecision.reason,
+              true,
+              perception,
+            );
+          }
+          this.traceRecorder.finishLane('attributed_protection', {
+            status: 'ineligible',
+            reasonCode: dispatch?.code || 'selected_capability_unavailable',
+          });
+        } else if (companionDecision.intent === 'wait_material_change') {
+          return this.select(
+            'attributed_protection',
+            companionDecision.code,
+            companionDecision.reason,
+            true,
+            perception,
+          );
+        } else {
+          this.traceRecorder.finishLane('attributed_protection', {
+            status: 'ineligible',
+            reasonCode: companionDecision.code,
+          });
+        }
+      } else {
+        selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
+        if (selected) return selected;
+      }
 
       const heldPresence = this.observeHeldPresence();
       const heldSurfaceStance = this.updateHeldSurfaceStance(heldPresence);
       this.traceRecorder.startLane('operator_hold');
       if (this.agent.isOperatorHeld?.()) {
         this.directiveResumeRequested = false;
+        this.directiveResumeRequest = null;
         if (heldPresence.due) {
           this.requestHeldSafeUnload();
           return this.select(
@@ -1008,7 +1251,11 @@ export class BehaviorArbiter {
 
       const companion = this.agent.companion_context?.snapshot?.();
       const deferredPlayerAction = this.agent.actions?.hasDeferredPlayerAction?.() === true;
-      if (!companion?.directive && !deferredPlayerAction) this.directiveResumeRequested = false;
+      if (!companion?.directive && !deferredPlayerAction) {
+        this.directiveResumeRequested = false;
+        this.directiveResumeRequest = null;
+        this.directiveMaterialChangeBlocker = null;
+      }
       this.traceRecorder.startLane('player_directive');
       if (deferredPlayerAction && this.agent.isIdle?.()) {
         const operation = this.agent.actions.resumeDeferredPlayerAction();
@@ -1023,30 +1270,71 @@ export class BehaviorArbiter {
           perception,
         );
       }
+      const safetyIncident = survival?.safetyIncident || survival?.snapshot?.()?.safetyIncident;
+      const standingResumeAvailable = Boolean(
+        companion?.directive
+        && (this.agent.actions?.resume_func || this.directiveResumeRequested)
+      );
+      const directiveSettlement = standingResumeAvailable
+        ? this.directiveSettlement(companion)
+        : Object.freeze({ active: false, state: 'changed', code: null });
+      const directiveResumeDecision = standingResumeAvailable
+        ? chooseCompanionAction({
+            directive: companion,
+            resumeRequested: true,
+            resumeRequest: this.directiveResumeRequest || companion,
+            bodyIdle: this.agent.isIdle?.() === true,
+            safetyIncidentActive: safetyIncident?.active === true,
+            directiveSettlement,
+            operatorHeld: this.agent.isOperatorHeld?.() === true,
+            runtimeStopped: this.stopped,
+          })
+        : null;
+      if (directiveResumeDecision?.intent === 'cancel_stale_resume'
+        || directiveResumeDecision?.intent === 'hold') {
+        this.directiveResumeRequested = false;
+        this.directiveResumeRequest = null;
+      }
+      const exactDirectiveResume = directiveResumeDecision?.intent === 'resume_directive';
+      const directiveWaitDecision = directiveResumeDecision?.intent === 'wait_material_change'
+        ? directiveResumeDecision
+        : null;
       if (
         companion?.directive
         && companion.presence === 'present'
         && (this.agent.actions?.resume_func || this.directiveResumeRequested)
         && this.agent.isIdle?.()
         && (this.directiveResumeRequested || !this.agent.self_prompter?.isActive?.())
+        && exactDirectiveResume
       ) {
         const resumedExistingAction = Boolean(this.agent.actions?.resume_func && !this.directiveResumeRequested);
         const operation = resumedExistingAction
           ? this.agent.actions.resumeAction()
           : this.agent.resumeCompanionDirective?.();
         this.directiveResumeRequested = false;
-        void Promise.resolve(operation).catch(error => {
-          console.error(`[behavior-arbiter] Companion continuation failed: ${boundedText(error?.message || error)}`);
-        });
-        return this.select(
-          'player_directive',
-          resumedExistingAction ? 'continuation_resumed' : 'directive_reappeared',
-          'Resuming the existing explicit follow or guard action.',
-          true,
-          perception,
-        );
+        this.directiveResumeRequest = null;
+        if (operation === false) {
+          this.traceRecorder.finishLane('player_directive', {
+            status: 'ineligible',
+            reasonCode: resumedExistingAction ? 'continuation_rejected' : 'directive_resume_rejected',
+          });
+        } else {
+          void Promise.resolve(operation).catch(error => {
+            console.error(`[behavior-arbiter] Companion continuation failed: ${boundedText(error?.message || error)}`);
+          });
+          return this.select(
+            'player_directive',
+            resumedExistingAction ? 'continuation_resumed' : 'exact_directive_resumed',
+            'Resuming the existing explicit follow or guard action.',
+            true,
+            perception,
+          );
+        }
       }
-      this.traceRecorder.finishLane('player_directive', { status: 'ineligible', reasonCode: 'directive_not_resumable' });
+      this.traceRecorder.finishLane('player_directive', {
+        status: directiveWaitDecision ? 'deferred' : 'ineligible',
+        reasonCode: directiveWaitDecision?.code || 'directive_not_resumable',
+      });
 
       if (!survivalEvaluated) {
         this.traceRecorder.startLane('basic_survival');
@@ -1069,6 +1357,17 @@ export class BehaviorArbiter {
           }
         }
         this.traceRecorder.finishLane('basic_survival', { status: 'ineligible', reasonCode: 'survival_not_selected' });
+      }
+
+      if (directiveWaitDecision) {
+        this.traceRecorder.startLane('player_directive');
+        return this.select(
+          'player_directive',
+          directiveWaitDecision.code,
+          directiveWaitDecision.reason,
+          true,
+          perception,
+        );
       }
 
       const job = this.agent.job_director;

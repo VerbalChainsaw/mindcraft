@@ -546,6 +546,161 @@ test('the self-defense mode does not redispatch an unchanged critical airborne r
   assert.equal(actionRuns, 0, 'damage and equivalent Phantom churn cannot create another action');
 });
 
+test('a standing follow gets one immutable attributed-threat proposal and bypasses legacy reflex choice', async () => {
+  const threat = {
+    id: 442,
+    uuid: 'skeleton-442',
+    name: 'skeleton',
+    type: 'hostile',
+    position: { x: 3, y: 64, z: 0 },
+  };
+  let actionRuns = 0;
+  const bot = {
+    health: 7,
+    lastDamageTaken: 4,
+    lastDamageTime: Date.now(),
+    lastDamageSource: {
+      matchesSelf: true,
+      observedAt: Date.now(),
+      kind: 'hostile',
+      source: { id: threat.id, name: threat.name },
+    },
+    game: { dimension: 'overworld' },
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    entities: { [threat.id]: threat },
+    nearestEntity(predicate) { return predicate(threat) ? threat : null; },
+  };
+  const agent = {
+    bot,
+    runtime: { autonomy: 'command' },
+    prompter: { getInitModes: () => null },
+    companion_context: {
+      directive: 'follow',
+      canonicalUsername: 'DadPlayer',
+      directiveAuthorizedAt: 700,
+      presence: 'present',
+      protection: null,
+    },
+    actions: {
+      executing: false,
+      currentActionLabel: '',
+      currentActionOwner: '',
+      runAction() { actionRuns += 1; },
+    },
+    isIdle: () => true,
+  };
+  initModes(agent);
+
+  const proposal = bot.modes.proposeAttributedAccompaniment();
+  assert.equal(Object.isFrozen(proposal), true);
+  assert.equal(Object.isFrozen(proposal.threat), true);
+  assert.deepEqual({
+    applicable: proposal.applicable,
+    directive: proposal.directive.directive,
+    player: proposal.directive.canonicalUsername,
+    threatId: proposal.threat.entityId,
+    attribution: proposal.threat.attribution,
+    retreatRequired: proposal.retreatRequired,
+  }, {
+    applicable: true,
+    directive: 'follow',
+    player: 'DadPlayer',
+    threatId: 442,
+    attribution: 'self_damage',
+    retreatRequired: true,
+  });
+
+  bot.modes.beginUpdateCycle();
+  const legacy = await bot.modes.updateBand(
+    ['self_defense', 'cowardice'],
+    { skipAttributedAccompaniment: true },
+  );
+  bot.modes.endUpdateCycle();
+  assert.equal(legacy.code, 'shared_accompaniment_policy_owns_threat');
+  assert.equal(actionRuns, 0);
+});
+
+test('an attributed tactical dispatch fails closed unless survival accepts the same live threat first', async () => {
+  const threat = {
+    id: 443,
+    uuid: 'skeleton-443',
+    name: 'skeleton',
+    type: 'hostile',
+    position: { x: 3, y: 64, z: 0 },
+  };
+  let actionRuns = 0;
+  let acceptIncident = false;
+  const observed = [];
+  const bot = {
+    health: 7,
+    lastDamageTaken: 4,
+    lastDamageTime: Date.now(),
+    lastDamageSource: {
+      matchesSelf: true,
+      observedAt: Date.now(),
+      kind: 'hostile',
+      source: { id: threat.id, name: threat.name },
+    },
+    game: { dimension: 'overworld' },
+    entity: { position: { x: 0, y: 64, z: 0 } },
+    entities: { [threat.id]: threat },
+    nearestEntity(predicate) { return predicate(threat) ? threat : null; },
+  };
+  const agent = {
+    bot,
+    runtime: { autonomy: 'command' },
+    prompter: { getInitModes: () => null },
+    companion_context: {
+      directive: 'follow',
+      canonicalUsername: 'DadPlayer',
+      directiveAuthorizedAt: 701,
+      presence: 'present',
+      protection: null,
+    },
+    survival_director: {
+      observeAttributedThreat(receipt) {
+        observed.push(receipt);
+        return acceptIncident;
+      },
+    },
+    self_prompter: { isActive: () => false, stopLoop() {} },
+    actions: {
+      executing: false,
+      currentActionLabel: '',
+      currentActionOwner: '',
+      runAction() {
+        actionRuns += 1;
+        return Promise.resolve({ success: false, interrupted: false });
+      },
+    },
+    isIdle: () => true,
+    openChat() {},
+  };
+  initModes(agent);
+
+  const proposal = bot.modes.proposeAttributedAccompaniment();
+  const dispatch = bot.modes.dispatchAttributedAccompaniment('retreat', proposal);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(observed, [proposal.threat]);
+  assert.deepEqual(dispatch, {
+    active: false,
+    scheduled: false,
+    mode: 'self_preservation',
+    code: 'safety_incident_unavailable',
+  });
+  assert.equal(actionRuns, 0, 'combat cannot take the body without a durable recovery obligation');
+
+  acceptIncident = true;
+  const accepted = bot.modes.dispatchAttributedAccompaniment('retreat', proposal);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(observed.length, 2);
+  assert.equal(observed[1], proposal.threat);
+  assert.equal(accepted.scheduled, true);
+  assert.equal(accepted.code, 'shared_accompaniment_intent_scheduled');
+  assert.equal(actionRuns, 1, 'accepted survival ownership permits exactly one tactical action');
+});
+
 test('player movement excludes ambient combat while fresh damage remains separate reflex authority', () => {
   const agent = {
     actions: {
@@ -576,7 +731,7 @@ test('player movement excludes ambient combat while fresh damage remains separat
   assert.equal(ambientSelfDefensePermitted(agent), true);
 });
 
-test('a safety reflex explains and resumes a standing follow commitment on quiet narration', async () => {
+test('a protection reflex names the attacked player and resumes a standing follow commitment', async () => {
   const chat = [];
   let resumes = 0;
   let result = { success: true, interrupted: false };
@@ -596,17 +751,21 @@ test('a safety reflex explains and resumes a standing follow commitment on quiet
     behavior_arbiter: { requestDirectiveResume() { resumes += 1; } },
   };
 
-  await executeModeAction(mode, agent, async () => true);
+  await executeModeAction(mode, agent, () => true, -1, {
+    handoffMessage: 'FarmGuide was attacked by husk. I am stepping in, then I will resume your order.',
+  });
   await Promise.resolve();
 
   assert.deepEqual(chat, [
-    'Something is attacking me. I am breaking contact, then I will resume your order.',
+    'FarmGuide was attacked by husk. I am stepping in, then I will resume your order.',
     'I am clear. Resuming your order now.',
   ]);
   assert.equal(resumes, 1);
 
   result = { success: false, interrupted: false, message: 'The bot died.' };
-  await executeModeAction(mode, agent, async () => false);
+  await executeModeAction(mode, agent, () => false, -1, {
+    handoffMessage: 'FarmGuide was attacked by husk. I am stepping in, then I will resume your order.',
+  });
   await Promise.resolve();
   assert.equal(resumes, 1, 'failed safety settlement cannot resume a standing directive');
 });

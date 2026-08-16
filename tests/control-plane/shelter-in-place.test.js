@@ -75,6 +75,18 @@ test('crafted floor fails before shelter execution digs or reports a canopy as a
   assert.equal(digCalls(), 0);
 });
 
+test('a natural courtyard floor remains protected when nearby build evidence exists', async () => {
+  const overrides = new Map([['2,63,0', 'oak_planks']]);
+  const { bot, digCalls } = shelterBot({ material: 'cobblestone', overrides });
+
+  const result = await shelterInPlace(bot);
+
+  assert.equal(result, false);
+  assert.equal(bot.lastActionEvidence.outcome, 'protected_site');
+  assert.equal(bot.lastActionEvidence.feasibility.modificationAuthority.site.evidence[0].name, 'oak_planks');
+  assert.equal(digCalls(), 0);
+});
+
 test('adjacent liquid in the loaded shaft is terminal fixture evidence, not permission to try digging', () => {
   const overrides = new Map([['1,62,0', 'water']]);
   const { bot } = shelterBot({ material: 'dirt', overrides });

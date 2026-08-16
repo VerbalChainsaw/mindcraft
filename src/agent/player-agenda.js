@@ -60,6 +60,25 @@ const LEADING_FILLER = /^(?:and\s+|then\s+|also\s+|next\s+|please\s+|now\s+|so\s
 // Connective phrases that separate one step from the next. Multi-word phrases
 // are listed before bare "then"/"next" so the longer match wins. Each becomes a
 // split point; order within the sentence is preserved.
+//
+// Known defect, 2026-08-15, proven not fixable at this layer.
+//
+// The comma before "and" is required, so ordinary unpunctuated speech loses its
+// second clause silently: "collect wood and make charcoal" queues only the wood,
+// and "get four logs and come back to me" drops the return. Making the comma
+// optional was tried and reverted, because "Then go inside and sleep in the bed"
+// then splits into "go inside" and "sleep in the bed" and loses the accepted
+// construction-barrier sleep step. The same "and" joins two independent clauses
+// in one sentence and two halves of a single instruction in the other, and no
+// verb list can tell those apart.
+//
+// The action-verb list is also hand maintained and grew one pattern per reported
+// phrasing; fetch, grab, chop, dig, haul, plant, cook, light, and feed are all
+// absent, and every gap drops a clause with no receipt. Clause segmentation is a
+// language task and belongs with the model proposal step, with this layer
+// validating the proposed typed effects against the capability registry rather
+// than parsing English. Until that moves, an unmatched conjunction should be
+// reported as unresolved instead of silently becoming a single-clause request.
 const CONNECTIVE_PATTERNS = [
   /\s+and\s+(?=(?:wait|stay)(?:\s+(?:here|there|with\s+me))?\s*[.!?]*$)/gi,
   /\band\s+then\b/gi,
@@ -1857,6 +1876,86 @@ export function directiveToAgendaEntry(command, { requester = '' } = {}) {
  * @param {object} context passed through to the resolver (e.g. { bot, role })
  * @param {object} [deps] injectable resolver for testing
  */
+/**
+ * Does this text stand on its own as real agenda work?
+ *
+ * The capability registry answers, not a verb list. Deferred construction and
+ * site errors deliberately return null so a construction utterance is never
+ * torn apart: those must reach the barrier compiler whole.
+ */
+function resolvedAgendaEntry(playerName, text, context, resolveDirective) {
+  let directive = null;
+  try {
+    directive = resolveDirective(playerName, text, context);
+  } catch {
+    return null;
+  }
+  if (!directive || directive.deferToModel === true || directive.constructionSiteError) return null;
+  try {
+    const entry = directiveToAgendaEntry(directive.command, { requester: playerName });
+    if (entry) return entry;
+  } catch { /* fall through to the standing-directive check */ }
+  // "wait", "stay", "follow me" are real resolved work that lands as a standing
+  // companion directive rather than an agenda entry. Ignoring them would report
+  // an accepted clause as unsupported and split sentences that must stay whole.
+  try {
+    return companionDirective(directive.command, 0) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recover a clause the connective splitter swallowed.
+ *
+ * "collect wood and make charcoal" carries two clauses but no comma, so the
+ * pattern list leaves it whole and the charcoal is lost with no receipt. A
+ * bare "and" is genuinely ambiguous — it joins two independent clauses in that
+ * sentence and two halves of one instruction in "go inside and sleep in the
+ * bed" — so the discriminator is evidence rather than vocabulary: split only
+ * when each half independently resolves to real agenda work. A noun
+ * conjunction such as "wood and stone" never splits, because "stone" alone
+ * resolves to nothing.
+ */
+function splitResolvableConjunction(playerName, segment, context, resolveDirective, depth = 0) {
+  if (depth >= 3 || typeof segment !== 'string') return [segment];
+  for (const match of [...segment.matchAll(/\s+and\s+/gi)]) {
+    const head = segment.slice(0, match.index).trim();
+    const tail = segment.slice(match.index + match[0].length).trim();
+    if (!head || !tail) continue;
+    if (
+      !resolvedAgendaEntry(playerName, head, context, resolveDirective)
+      || !resolvedAgendaEntry(playerName, tail, context, resolveDirective)
+    ) continue;
+    return [
+      ...splitResolvableConjunction(playerName, head, context, resolveDirective, depth + 1),
+      ...splitResolvableConjunction(playerName, tail, context, resolveDirective, depth + 1),
+    ];
+  }
+  return [segment];
+}
+
+/**
+ * The tail of a conjunction that the registry cannot satisfy, or null.
+ *
+ * Only reported when the head is real work on its own, so an ordinary noun
+ * conjunction is not mistaken for a lost instruction: in "collect wood and
+ * stone" the head "collect wood" resolves and the tail "stone" does not, which
+ * is exactly the ambiguity worth surfacing rather than resolving by guess.
+ */
+function swallowedUnsupportedClause(playerName, segment, context, resolveDirective) {
+  if (typeof segment !== 'string') return null;
+  for (const match of [...segment.matchAll(/\s+and\s+/gi)]) {
+    const head = segment.slice(0, match.index).trim();
+    const tail = segment.slice(match.index + match[0].length).trim();
+    if (!head || !tail) continue;
+    if (!resolvedAgendaEntry(playerName, head, context, resolveDirective)) continue;
+    if (resolvedAgendaEntry(playerName, tail, context, resolveDirective)) continue;
+    return tail;
+  }
+  return null;
+}
+
 export function parsePlayerAgenda(playerName, message, context = {}, {
   resolveDirective = resolvePlayerDirective,
 } = {}) {
@@ -2140,10 +2239,15 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const segments = splitAgendaSegments(body);
   if (segments.length === 0) return null;
 
+  const expandedSegments = [];
+  for (const segment of segments) {
+    expandedSegments.push(...splitResolvableConjunction(playerName, segment, context, resolveDirective));
+  }
+
   const steps = [];
   const unresolved = [];
   const standing = [];
-  for (const [segmentIndex, segment] of segments.entries()) {
+  for (const [segmentIndex, segment] of expandedSegments.entries()) {
     const directive = resolveDirective(playerName, segment, context);
     if (directive?.constructionSiteError) {
       return {
@@ -2175,6 +2279,15 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
       if (!duplicate) {
         steps.push({ segment, command: directive.command, response: directive.response, entry: agendaEntry, segmentIndex });
       }
+      // The segment resolved, but a conjunction inside it may still hide a
+      // clause this registry cannot satisfy — "collect wood and make charcoal"
+      // resolves as the wood alone and the charcoal disappears with no receipt.
+      // Report that tail as unresolved so the ledger asks instead of silently
+      // delivering half the request. A tail that resolves on its own was
+      // already separated earlier, so anything reaching here is genuinely
+      // unsupported rather than merely unpunctuated.
+      const swallowed = swallowedUnsupportedClause(playerName, segment, context, resolveDirective);
+      if (swallowed) unresolved.push({ segment: swallowed, directive: null });
     } else {
       const companion = directive ? companionDirective(directive.command, segmentIndex) : null;
       if (companion) standing.push({ ...companion, segment, directive });

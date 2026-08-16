@@ -46,14 +46,59 @@ test('Lumberjack recognizes canonical log families and keeps a small wood chore 
   assert.equal(bootstrap.command, '!collectWoodInRange(3, 64, false, true)');
   assert.equal(bootstrap.nextPhase, 'assess');
   assert.equal(bootstrap.code, 'wooden_axe_material_bootstrap');
+  const plannerCalls = [];
+  const plannedCapability = Object.freeze({ id: 'planner_test_step', arguments: Object.freeze({}) });
   const prepare = nextLumberjackStep(larger, {
     inventory: { spruce_log: 7 },
     tools: { axeTier: 0 },
     freeSlots: 10,
     safeTrunks: true,
+  }, null, {
+    planItem(options) {
+      plannerCalls.push(options);
+      return {
+        status: 'ready',
+        nextStep: {
+          capability: plannedCapability,
+          learningKey: 'craft:oak_planks->wooden_axe',
+          reason: 'Use the connected recipe graph.',
+        },
+      };
+    },
   });
-  assert.equal(prepare.command, '!prepareTool("wooden_axe")');
+  assert.equal(prepare.command, undefined);
+  assert.equal(prepare.capability, plannedCapability);
   assert.equal(prepare.phase, 'prepare');
+  assert.equal(prepare.code, 'axe_prerequisite_planned');
+  assert.deepEqual(plannerCalls, [{
+    target: 'wooden_axe',
+    quantity: 1,
+    completion: 'inventory',
+    range: 64,
+    toolRequirement: { name: 'wooden_axe', minimumUsableDurability: 1 },
+    allowEntityAlternatives: false,
+  }]);
+});
+
+test('a large lumberjack job fails closed instead of falling back to recursive tool preparation', () => {
+  const order = createWorkOrder({
+    id: 'logs-no-planner',
+    role: 'lumberjack',
+    kind: 'harvest',
+    target: { name: 'logs' },
+    quota: 32,
+  });
+
+  const step = nextLumberjackStep(order, {
+    inventory: { oak_log: 7 },
+    tools: { axeTier: 0 },
+    freeSlots: 10,
+    safeTrunks: true,
+  });
+
+  assert.equal(step.terminal, true);
+  assert.equal(step.code, 'tool_planner_unavailable');
+  assert.equal(step.command, undefined);
 });
 
 test('Lumberjack collects only safe reachable trunks and replants only with every verified prerequisite', () => {

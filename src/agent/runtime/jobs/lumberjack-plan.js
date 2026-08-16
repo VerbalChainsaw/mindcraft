@@ -101,7 +101,7 @@ function deliveryStep(order, snapshot, amount) {
     : { phase: 'assess', code: 'log_quota_revalidation_required' };
 }
 
-export function nextLumberjackStep(order, snapshot = {}) {
+export function nextLumberjackStep(order, snapshot = {}, _priorResult = null, { planItem = null } = {}) {
   const log = order.target?.name;
   const constraints = order.constraints || {};
   const family = log === 'logs' ? 'any' : canonicalLogFamily(log);
@@ -185,11 +185,41 @@ export function nextLumberjackStep(order, snapshot = {}) {
         target: { name: log },
       };
     }
+    if (typeof planItem !== 'function') {
+      return {
+        terminal: true,
+        code: 'tool_planner_unavailable',
+        detail: 'No shared prerequisite planner is available for wooden_axe.',
+        retryable: false,
+      };
+    }
+    const plan = planItem({
+      target: 'wooden_axe',
+      quantity: 1,
+      completion: 'inventory',
+      range,
+      toolRequirement: { name: 'wooden_axe', minimumUsableDurability: 1 },
+      allowEntityAlternatives: false,
+    });
+    if (plan?.status === 'complete') {
+      return { phase: 'assess', code: 'axe_prerequisite_ready' };
+    }
+    if (plan?.status !== 'ready' || !plan.nextStep?.capability) {
+      return {
+        terminal: true,
+        code: plan?.code || 'tool_plan_blocked',
+        detail: plan?.detail || 'No deterministic prerequisite plan exists for wooden_axe.',
+        retryable: false,
+      };
+    }
     return {
       phase: 'prepare',
-      command: '!prepareTool("wooden_axe")',
+      capability: plan.nextStep.capability,
+      methodKey: plan.nextStep.learningKey || null,
       nextPhase: 'assess',
-      code: 'axe_required',
+      code: 'axe_prerequisite_planned',
+      target: { name: 'wooden_axe' },
+      reason: plan.nextStep.reason,
     };
   }
   if (['assess', 'prepare'].includes(order.phase)) {

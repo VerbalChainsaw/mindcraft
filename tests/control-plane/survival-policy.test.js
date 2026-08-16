@@ -411,3 +411,65 @@ test('Given noncritical hunger, desperation food stays rejected exactly as befor
 
   assert.notEqual(intent?.kind, 'eat');
 });
+
+// Live campaign 2026-08-15, unattended. After emergency food lifted Kevin from
+// health 3 to 14, the injury-recovery branch answered `acquire_food` and walked
+// him ~30 blocks into open water at night while a free bed sat 5 blocks away.
+// Recovering past the critical band must not re-enter the pathology the
+// critical rung was added to fix.
+const NIGHT_RECOVERY_STATE = Object.freeze({
+  held: false,
+  idle: true,
+  health: 14,
+  hunger: 17,
+  recentDamage: true,
+  urgentDanger: false,
+  hostiles: [],
+  food: [],
+  armor: [],
+  timeOfDay: 14000,
+  dimension: 'overworld',
+  difficulty: 'normal',
+  weather: 'Clear',
+  sheltered: false,
+  shelters: [],
+  beds: [
+    { name: 'orange_bed', x: -365, y: 70, z: -162, distance: 5, reachable: true, safe: true },
+  ],
+});
+
+test('Given recoverable injury at night beside a safe bed, survival sleeps instead of foraging', () => {
+  const intent = chooseSurvivalIntent(NIGHT_RECOVERY_STATE, POLICY);
+
+  assert.equal(intent.kind, 'sleep');
+  assert.equal(intent.target.x, -365);
+  assert.equal(intent.target.dimension, 'overworld');
+});
+
+test('Given recoverable injury at night with no reachable bed, survival still acquires food', () => {
+  const intent = chooseSurvivalIntent(
+    { ...NIGHT_RECOVERY_STATE, beds: [] },
+    POLICY,
+  );
+
+  assert.equal(intent.kind, 'acquire_food');
+  assert.equal(intent.reason, 'recovery_missing_food');
+});
+
+test('Given critical health at night beside a safe bed, bodily survival still outranks rest', () => {
+  const intent = chooseSurvivalIntent(
+    { ...NIGHT_RECOVERY_STATE, health: 6, hunger: 17 },
+    POLICY,
+  );
+
+  assert.notEqual(intent.kind, 'sleep');
+});
+
+test('Given daytime recoverable injury, the night rest preference does not apply', () => {
+  const intent = chooseSurvivalIntent(
+    { ...NIGHT_RECOVERY_STATE, timeOfDay: 6000 },
+    POLICY,
+  );
+
+  assert.equal(intent.kind, 'acquire_food');
+});

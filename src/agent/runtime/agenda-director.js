@@ -1,5 +1,5 @@
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
-import { isPreemption } from './action-result.js';
+import { classifyMethodOutcome, isPreemption } from './action-result.js';
 import { createWorkOrder } from './work-order.js';
 import { createBuilderShelterOrder } from './jobs/builder-plan.js';
 import { createAccessRepairWorkOrder } from './access-repair.js';
@@ -19,6 +19,12 @@ import {
   normalizeAgendaEntry,
 } from './agenda.js';
 import { familyFoodPoints } from './item-family.js';
+import {
+  classifyObligationSettlement,
+  createMaterialChangeBlocker,
+  evaluateMaterialChange,
+  receiptShowsMaterialProgress,
+} from './obligation-settlement.js';
 
 // The agenda deliberately does not act. It decides what comes next and hands it
 // to goal_director or job_director, which already own dispatch, verification,
@@ -133,6 +139,59 @@ function sleepIsCurrentlyAllowed(bot) {
   const isNight = Number.isFinite(timeOfDay) && timeOfDay >= 12541 && timeOfDay <= 23458;
   const isThunderstorm = bot?.isRaining === true && Number(bot?.thunderState) > 0;
   return isNight || isThunderstorm;
+}
+
+function agendaDimension(bot) {
+  return String(bot?.game?.dimension || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '')
+    .replace(/^the_nether$/, 'nether')
+    .replace(/^the_end$/, 'end') || null;
+}
+
+function observedPosition(value) {
+  if (!value || ![value.x, value.y, value.z].every(Number.isFinite)) return null;
+  return { x: Number(value.x), y: Number(value.y), z: Number(value.z) };
+}
+
+function agendaParticipantPosition(bot, requestedName) {
+  const requested = String(requestedName || '').trim().toLowerCase();
+  if (!requested) return null;
+  const entry = Object.values(bot?.players || {}).find(candidate => (
+    String(candidate?.username || '').trim().toLowerCase() === requested
+  ));
+  return observedPosition(entry?.entity?.position);
+}
+
+function agendaTargetSignature(bot, entry) {
+  const target = agendaParticipantPosition(bot, entry?.recipient);
+  if (!target) return null;
+  return `${Math.floor(target.x)}:${Math.floor(target.y)}:${Math.floor(target.z)}`;
+}
+
+function agendaMaterialObservation(agent, entry) {
+  return {
+    position: observedPosition(agent?.bot?.entity?.position),
+    dimension: agendaDimension(agent?.bot),
+    targetSignature: agendaTargetSignature(agent?.bot, entry),
+  };
+}
+
+function agendaMaterialBlocker(agent, entry, settled) {
+  const checkpoint = agendaMaterialObservation(agent, entry);
+  return createMaterialChangeBlocker({
+    owner: 'agenda',
+    obligationId: entry?.id,
+    code: settled?.code,
+    checkpoint,
+    releasePredicates: [
+      'dimension',
+      'position_region',
+      ...(checkpoint.targetSignature ? ['target_signature'] : []),
+    ],
+    positionRegionDistance: 8,
+  });
 }
 
 export class AgendaDirector {
@@ -360,6 +419,24 @@ export class AgendaDirector {
    * action; addMany repeats the same deterministic gate immediately before its
    * one durable commit.
    */
+  /**
+   * The authoritative tab roster, lowercased, or null when it cannot be read.
+   * Null means unknown, so entry admission keeps its shape-only check rather
+   * than inventing a rejection from absent evidence.
+   */
+  knownPlayerNames() {
+    const players = this.agent?.bot?.players;
+    if (!players || typeof players !== 'object' || Array.isArray(players)) return null;
+    const names = new Set();
+    for (const [key, player] of Object.entries(players)) {
+      for (const alias of [key, player?.username, player?.entity?.username]) {
+        const name = String(alias || '').trim().toLowerCase();
+        if (name) names.add(name);
+      }
+    }
+    return names.size > 0 ? names : null;
+  }
+
   stageMany(rawEntries, { replaceUnfinished = false } = {}) {
     if (!Array.isArray(rawEntries) || rawEntries.length < 1) {
       return { accepted: false, code: 'invalid_agenda_plan', detail: 'An agenda plan needs at least one typed step.' };
@@ -397,7 +474,7 @@ export class AgendaDirector {
         const inferred = inferredLegacyDependency(previous, linked);
         const entry = normalizeAgendaEntry(
           { ...linked, ...inferred, id: '', createdAt: this.now() },
-          { now: this.now, sequence: stagedSequence },
+          { now: this.now, sequence: stagedSequence, knownPlayers: this.knownPlayerNames() },
         );
         if (
           this.entries.some(existing => existing.id === entry.id)
@@ -1039,12 +1116,23 @@ export class AgendaDirector {
   }
 
   directSettlement(result, entry = null) {
+    const skillReceipt = result?.evidence?.skill;
+    const composed = skillReceipt?.receiptSchemaVersion === 1
+      && skillReceipt?.source === 'action_context';
+    const sharedSettlement = composed
+      ? {
+          settlementSchemaVersion: 1,
+          sampleClass: classifyMethodOutcome(result),
+          materialChanged: receiptShowsMaterialProgress(skillReceipt),
+        }
+      : {};
     if (result?.phase !== 'succeeded' && WAITABLE_DIRECT_OUTCOMES.has(result?.code)) {
       return {
         state: 'waiting',
         code: result.code,
         detail: result.detail || '',
         retryable: true,
+        ...sharedSettlement,
       };
     }
     if (
@@ -1104,6 +1192,7 @@ export class AgendaDirector {
         detail: result.detail || '',
         report: boundedText(report, 1_200),
         retryable: false,
+        ...sharedSettlement,
       };
     }
     return {
@@ -1115,6 +1204,7 @@ export class AgendaDirector {
       // authorize automatic continuation. Only the shared structured code for
       // a higher-priority lane borrowing ActionManager is resumable here.
       preempted: isResumableSafetyPreemption(result),
+      ...sharedSettlement,
     };
   }
 
@@ -1283,14 +1373,50 @@ export class AgendaDirector {
         retryable: false,
       };
     }
-    const attempts = active.attempts + (preemptionExhausted ? 0 : 1);
-    const retryable = settled.state === 'failed'
-      && settled.retryable === true
-      && attempts < MAX_ENTRY_ATTEMPTS;
+    const obligationDecision = settled.settlementSchemaVersion === 1
+      ? classifyObligationSettlement({
+          sampleClass: settled.sampleClass,
+          externalWait: settled.state === 'waiting',
+          methodRetryable: settled.retryable,
+          retryAuthority: true,
+          materialChanged: settled.materialChanged,
+          budgetAvailable: active.attempts + 1 < MAX_ENTRY_ATTEMPTS,
+        })
+      : null;
+    // `attempts` is the bounded method-failure budget, not a count of ownership
+    // changes. A censored sample says nothing about the attempted method and
+    // therefore cannot consume that budget. Successful legacy settlements keep
+    // their historical accounting until the metrics schema is split explicitly.
+    const attempts = active.attempts + (
+      preemptionExhausted || obligationDecision?.state === 'censored' ? 0 : 1
+    );
+    const censored = obligationDecision?.state === 'censored';
+    const waitingForMaterialChange = obligationDecision?.state === 'waiting_for_material_change';
+    const retryable = obligationDecision
+      ? obligationDecision.state === 'retry_authorized'
+      : settled.state === 'failed'
+        && settled.retryable === true
+        && attempts < MAX_ENTRY_ATTEMPTS;
+    const materialChangeBlocker = waitingForMaterialChange
+      ? agendaMaterialBlocker(this.agent, active, settled)
+      : null;
     const assignmentPatch = settled.assignmentState ? { assignmentState: settled.assignmentState } : {};
     const appliesTerminalHold = settled.state === 'complete'
       && this.applyTerminalDisposition(active);
-    const activePatch = retryable
+    const activePatch = censored
+      ? {
+          state: 'pending',
+          startedAt: null,
+          executorId: '',
+          attempts,
+          evidence: {
+            ...settled,
+            code: 'censored',
+            detail: settled.detail || 'Action ownership changed before the method could be evaluated.',
+            retryable: true,
+          },
+        }
+      : retryable
       ? {
           state: 'pending',
           startedAt: null,
@@ -1303,6 +1429,21 @@ export class AgendaDirector {
             ? { acquisitionCheckpoint: settled.acquisitionCheckpoint }
             : {}),
         }
+      : waitingForMaterialChange && materialChangeBlocker
+        ? {
+            state: 'pending',
+            startedAt: null,
+            executorId: '',
+            attempts,
+            preemptions: 0,
+            materialChangeBlocker,
+            evidence: {
+              ...settled,
+              code: 'waiting_for_material_change',
+              detail: settled.detail || settled.code,
+              retryable: true,
+            },
+          }
       : {
           state: settled.state,
           finishedAt: this.now(),
@@ -1318,7 +1459,8 @@ export class AgendaDirector {
     // A retryable failure returns the parent to pending. Its dependents must
     // remain pending too; only the committed terminal parent state can make a
     // requires-success dependency impossible.
-    const parentTerminallyFailed = !retryable
+    const parentTerminallyFailed = !censored
+      && !retryable
       && activePatch.state !== 'complete'
       && isTerminalAgendaState(activePatch.state);
     const blockedDependents = parentTerminallyFailed
@@ -1365,12 +1507,26 @@ export class AgendaDirector {
     });
     this.persist();
     this.setStatus(
-      settled.state === 'complete' ? 'succeeded' : retryable ? 'recovering' : 'failed',
-      settled.code,
+      settled.state === 'complete'
+        ? 'succeeded'
+        : censored
+          ? 'waiting'
+        : waitingForMaterialChange
+          ? 'waiting'
+          : retryable ? 'recovering' : 'failed',
+      censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.code,
       `${describeAgendaEntry(active)}: ${settled.state === 'complete' ? 'done' : settled.detail || settled.code}`,
     );
     this.nextEligibleAt = this.now() + (settled.state === 'complete' ? DISPATCH_COOLDOWN_MS : REJECTED_COOLDOWN_MS);
-    if (retryable) {
+    if (censored) {
+      const censoredMessage = `I had to pause ${describeAgendaEntry(active)} before its method could be evaluated. The obligation is still queued and its failure budget is unchanged.`;
+      void Promise.resolve(this.agent.openChat?.(censoredMessage))
+        .catch(() => { /* chat is best effort */ });
+    } else if (waitingForMaterialChange) {
+      const waitingMessage = `I did not finish ${describeAgendaEntry(active)}. Blocker: ${settled.detail || settled.code}. I am keeping the same obligation queued, but I will not repeat it until the position, target, or dimension materially changes.`;
+      void Promise.resolve(this.agent.openChat?.(waitingMessage))
+        .catch(() => { /* chat is best effort */ });
+    } else if (retryable) {
       const blocker = settled.code === 'skill_died'
         ? 'I died before the step completed.'
         : `Blocker: ${settled.detail || settled.code}.`;
@@ -1401,7 +1557,12 @@ export class AgendaDirector {
       void Promise.resolve(this.agent.openChat?.(failureMessage))
         .catch(() => { /* chat is best effort */ });
     }
-    return { settled: true, state: settled.state, retryable, code: settled.code };
+    return {
+      settled: true,
+      state: censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.state,
+      retryable,
+      code: censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.code,
+    };
   }
 
   /**
@@ -1593,6 +1754,25 @@ export class AgendaDirector {
         : { accepted: false, code: result?.code || 'job_director_unavailable', detail: result?.detail || '' };
     }
 
+    // A recipient accepted at admission can still be a phantom by the time it
+    // dispatches. Entries restored from disk never saw a roster, because restore
+    // runs before login, so a stale obligation toward somebody who has never
+    // been in the world survives a restart untouched. Walking toward them can
+    // only fail, and on 2026-08-15 it instead reported arrival. The roster is
+    // authoritative here, unlike at restore, so check it once before executing.
+    const dispatchRoster = this.knownPlayerNames();
+    if (
+      entry.recipient
+      && dispatchRoster
+      && !dispatchRoster.has(String(entry.recipient).toLowerCase())
+    ) {
+      return {
+        accepted: false,
+        code: 'unknown_recipient',
+        detail: `${entry.recipient} is not a player I can see.`,
+      };
+    }
+
     // Direct steps build their command in code from already-validated fields.
     // Every interpolated value has passed `normalizeAgendaEntry`: coordinates are
     // numbers, names match the canonical pattern. No stored text is executed.
@@ -1740,7 +1920,7 @@ export class AgendaDirector {
     }
 
     if (this.now() < this.nextEligibleAt || !this.executorsIdle()) return;
-    const next = this.pending()[0];
+    let next = this.pending()[0];
     if (!next) {
       if (this.status.code !== 'agenda_complete' && this.entries.length) {
         this.setStatus('idle', 'agenda_complete', 'Every queued agenda step is finished.');
@@ -1749,6 +1929,33 @@ export class AgendaDirector {
         }
       }
       return;
+    }
+
+    if (next.materialChangeBlocker) {
+      const materialChange = evaluateMaterialChange(
+        next.materialChangeBlocker,
+        agendaMaterialObservation(this.agent, next),
+      );
+      if (materialChange.materialChanged !== true) {
+        this.nextEligibleAt = this.now() + REJECTED_COOLDOWN_MS;
+        this.setStatus(
+          'waiting',
+          'waiting_for_material_change',
+          `${describeAgendaEntry(next)} remains queued; its failed position, target, and dimension are materially unchanged.`,
+          next.id,
+        );
+        return;
+      }
+      this.replace(next.id, {
+        materialChangeBlocker: null,
+        evidence: {
+          code: 'material_change_observed',
+          detail: `Retry authority released by: ${materialChange.changedBy.join(', ')}.`,
+          retryable: true,
+        },
+      });
+      next = this.entries.find(entry => entry.id === next.id);
+      this.nextEligibleAt = 0;
     }
 
     if (next.dependsOnEntryId) {
@@ -1909,7 +2116,12 @@ export class AgendaDirector {
     const outcome = this.dispatch(next);
     if (!outcome.accepted) {
       const attempts = next.attempts + 1;
-      const retryable = attempts < MAX_ENTRY_ATTEMPTS && outcome.code !== 'unsupported_target';
+      // An absent recipient is terminal, not transient. Retrying cannot put a
+      // player in the world, so burning the attempt budget against unchanged
+      // evidence would be the same unchanged-retry loop this contract bans.
+      // Fail truthfully instead; the player can ask again once they are here.
+      const terminalCodes = ['unsupported_target', 'unknown_recipient'];
+      const retryable = attempts < MAX_ENTRY_ATTEMPTS && !terminalCodes.includes(outcome.code);
       this.replace(next.id, retryable
         ? { attempts, evidence: { code: outcome.code, detail: outcome.detail } }
         : { state: 'failed', finishedAt: this.now(), attempts, evidence: { code: outcome.code, detail: outcome.detail } });

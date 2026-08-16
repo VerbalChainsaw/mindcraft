@@ -18,6 +18,21 @@ const MAX_MEMORY_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_HISTORY_FILES = 20;
 const MAX_STORED_TURNS = 100;
 const MAX_STORED_TURN_CHARS = 32_000;
+/**
+ * Prose-memory budget.
+ *
+ * This memory is recompressed on every drain: the saving_memory prompt feeds
+ * the previous memory back in alongside new turns and asks for one summary of
+ * both. That is recursive lossy compression, so whatever the budget is, the
+ * oldest facts erode. A 500-character ceiling made that erosion fast -- a real
+ * bot memory on 2026-08-16 sat at 438 chars, meaning nearly every new fact
+ * displaced an old one, and it had degraded into telegraphese.
+ *
+ * Raising the budget slows the erosion. It does not cure it; the structural fix
+ * is to stop recompressing durable facts at all and let the structured recall
+ * in runtime-memory.json own them. See ARCHITECTURE.md.
+ */
+const MEMORY_CHAR_BUDGET = 1_500;
 const MAX_STORED_MEMORY_CHARS = 4_000;
 const MAX_STORED_PROMPT_CHARS = 4_000;
 
@@ -119,9 +134,24 @@ export class History {
         console.log("Storing memories...");
         this.memory = await this.agent.prompter.promptMemSaving(turns);
 
-        if (this.memory.length > 500) {
-            this.memory = this.memory.slice(0, 500);
-            this.memory += '...(Memory truncated to 500 chars. Compress it more next time)';
+        if (this.memory.length > MEMORY_CHAR_BUDGET) {
+            // Slicing mid-character corrupted the memory and then fed that
+            // corruption back in as "Old Memory" on the next pass, so a single
+            // overlong summary degraded every summary after it. Cut on the last
+            // sentence or clause boundary inside the budget instead, and only
+            // fall back to a hard slice when there is no boundary to use.
+            const head = this.memory.slice(0, MEMORY_CHAR_BUDGET);
+            let cut = Math.max(
+                head.lastIndexOf('. '),
+                head.lastIndexOf('; '),
+                head.lastIndexOf('! '),
+                head.lastIndexOf('? '),
+            );
+            if (cut < MEMORY_CHAR_BUDGET * 0.5) cut = head.lastIndexOf(' ');
+            this.memory = cut > 0 ? head.slice(0, cut + 1).trimEnd() : head;
+            console.warn(
+                `${this.name}'s memory exceeded ${MEMORY_CHAR_BUDGET} chars and was trimmed to a boundary.`,
+            );
         }
 
         console.log("Memory updated to: ", this.memory);

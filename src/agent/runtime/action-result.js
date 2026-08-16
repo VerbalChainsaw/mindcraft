@@ -1,4 +1,5 @@
 import { normalizeInteractionStanceReceipt } from './interaction-stance.js';
+import { normalizeActionReceiptValue } from './action-receipt-ledger.js';
 
 const MAX_DETAIL_LENGTH = 1_200;
 const ACTION_PHASES = new Set(['succeeded', 'requested', 'failed', 'blocked', 'interrupted', 'cancelled']);
@@ -38,6 +39,40 @@ function safeTarget(value) {
   return Object.keys(target).length ? target : null;
 }
 
+function actionReceiptTelemetry(value) {
+  if (value?.receiptSchemaVersion !== 1 || typeof value?.source !== 'string') return null;
+  const children = {};
+  if (value.children && typeof value.children === 'object' && !Array.isArray(value.children)) {
+    for (const relationship of Object.keys(value.children).slice(0, 9)) {
+      const receipts = Array.isArray(value.children[relationship])
+        ? value.children[relationship].slice(0, 16)
+        : [];
+      if (receipts.length === 0) continue;
+      children[relationship] = receipts.map(receipt => normalizeActionReceiptValue({
+        sequence: receipt?.sequence,
+        relationship: receipt?.relationship,
+        stage: receipt?.stage,
+        kind: receipt?.kind,
+        outcome: receipt?.outcome,
+        code: receipt?.code,
+        target: safeTarget(receipt?.target),
+        progressed: receipt?.progressed,
+        segmentCount: Array.isArray(receipt?.segments) ? receipt.segments.length : undefined,
+        summarized: receipt?.summarized === true,
+        originalByteCount: receipt?.originalByteCount,
+      }));
+    }
+  }
+  return normalizeActionReceiptValue({
+    receiptSchemaVersion: 1,
+    actionId: value.actionId,
+    source: value.source,
+    contract: value.contract,
+    overflow: value.overflow,
+    children,
+  });
+}
+
 export function createActionResult({
   actionId = null,
   label = '',
@@ -56,8 +91,10 @@ export function createActionResult({
     phase: ACTION_PHASES.has(phase) ? phase : 'failed',
     code: text(code, 'unknown').slice(0, 80),
     detail: text(detail),
-    target: safeTarget(target),
-    evidence: evidence && typeof evidence === 'object' && !Array.isArray(evidence) ? structuredClone(evidence) : null,
+    target: normalizeActionReceiptValue(safeTarget(target)),
+    evidence: evidence && typeof evidence === 'object' && !Array.isArray(evidence)
+      ? normalizeActionReceiptValue(evidence)
+      : null,
     retryable: retryable === true,
     startedAt: Number.isFinite(startedAt) ? startedAt : null,
     finishedAt: Number.isFinite(finishedAt) ? finishedAt : Date.now(),
@@ -194,6 +231,43 @@ export function actionResultToMessage(result) {
 // intentionally smaller than the stored result: tool evidence can be useful to
 // the bot, but can contain noisy implementation details that do not belong in a
 // browser state stream.
+/**
+ * Bounded request correlation for live telemetry.
+ *
+ * `action_manager` already records which request produced an action at
+ * `result.evidence.request` (requestId, routeOrigin, selectedSkill, args), but
+ * the telemetry projection never exposed it, so nothing observing live state
+ * could tie an action back to the request that caused it.
+ *
+ * That gap made `request-correlation` unsatisfiable for any Scenario Lab run
+ * declaring `instrumentationMode: off`: the only other source is the arbiter
+ * decision trace, which that mode explicitly requires to be absent. The August
+ * 2026 baseline only passed because the trace leaked through before that
+ * enforcement existed -- so the evidence was never actually proven under the
+ * declared configuration.
+ *
+ * This is deliberately small and bounded: identity of the request, not its
+ * contents.
+ */
+function actionRequestTelemetry(request) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
+  const requestId = text(request.requestId).slice(0, 80);
+  if (!requestId) return null;
+  return {
+    requestId,
+    routeOrigin: text(request.routeOrigin).slice(0, 40) || 'internal',
+    selectedSkill: text(request.selectedSkill).slice(0, 80),
+    args: (Array.isArray(request.args) ? request.args : [])
+      .slice(0, 8)
+      .map(argument => {
+        if (argument === null || typeof argument === 'boolean') return argument;
+        if (typeof argument === 'number') return Number.isFinite(argument) ? argument : null;
+        if (typeof argument === 'string') return text(argument).slice(0, 120);
+        return null;
+      }),
+  };
+}
+
 export function actionResultToTelemetry(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   const phase = ACTION_PHASES.has(result.phase)
@@ -202,6 +276,8 @@ export function actionResultToTelemetry(result) {
   const interactionStance = normalizeInteractionStanceReceipt(
     result.evidence?.skill?.interactionStance,
   );
+  const receipt = actionReceiptTelemetry(result.evidence?.skill);
+  const request = actionRequestTelemetry(result.evidence?.request);
   return {
     actionId: typeof result.actionId === 'string' ? result.actionId.slice(0, 80) : null,
     phase,
@@ -216,5 +292,9 @@ export function actionResultToTelemetry(result) {
     startedAt: Number.isFinite(result.startedAt) ? result.startedAt : null,
     finishedAt: Number.isFinite(result.finishedAt) ? result.finishedAt : null,
     ...(interactionStance ? { interactionStance } : {}),
+    ...(receipt ? { receipt } : {}),
+    // Projected as `evidence.request` so a live observer can correlate an
+    // action to its originating request without the decision trace.
+    ...(request ? { evidence: { request } } : {}),
   };
 }

@@ -304,3 +304,46 @@ test('an already-secure tactical check does not claim a hostile encounter', () =
     assert.equal(progression.currentStage, 'tactical_combat');
     assert.equal(progression.recommendedCommand, '!resolveTacticalCombat(16)');
 });
+
+// Live seam campaign 2026-08-15: Kevin died carrying seven diamonds, respawned
+// 122 blocks away, and did nothing for 150 seconds. `death_recovery` is the last
+// milestone and dying empties the inventory the earlier milestones test, so the
+// first incomplete entry was always a gathering step and recovery was
+// unreachable exactly when it mattered.
+const HEALTHY_EMPTY_BODY = Object.freeze({
+    gameplay: { health: 20, hunger: 20, dimension: 'overworld' },
+    inventory: { counts: {} },
+    perception: { hostiles: [], hazards: [], usefulBlocks: [] },
+});
+
+test('a pending death manifest overrides the progression ladder instead of queueing behind it', () => {
+    const progression = evaluateGameplayProgression({
+        ...HEALTHY_EMPTY_BODY,
+        memory: { deathRecoveryPending: true },
+    });
+
+    assert.equal(progression.currentStage, 'death_recovery');
+    assert.equal(progression.safetyOverride.code, 'death_recovery_pending');
+    assert.equal(progression.recommendedCommand, '!recoverDeathItems()');
+});
+
+test('without a pending manifest the ladder is unchanged', () => {
+    const progression = evaluateGameplayProgression({
+        ...HEALTHY_EMPTY_BODY,
+        memory: { deathRecoveryPending: false },
+    });
+
+    assert.notEqual(progression.recommendedCommand, '!recoverDeathItems()');
+    assert.equal(progression.safetyOverride, null);
+});
+
+test('bodily survival still outranks an unrecovered death manifest', () => {
+    const progression = evaluateGameplayProgression({
+        gameplay: { health: 4, hunger: 20, dimension: 'overworld' },
+        inventory: { counts: {} },
+        perception: { hostiles: [], hazards: [], usefulBlocks: [] },
+        memory: { deathRecoveryPending: true },
+    });
+
+    assert.equal(progression.safetyOverride.code, 'critical_health');
+});

@@ -484,7 +484,12 @@ test('a final inventory checklist cannot erase an acquire step physical postcond
 // append / interrupt / takeover branching is verified without spinning a bot.
 // The real directive resolver runs; the messages used resolve without a bot
 // registry (mining, harvest, come-here).
-function makeFakeAgent({ remaining = 0, held = false, stopResult = { stopped: true } } = {}) {
+function makeFakeAgent({
+  remaining = 0,
+  held = false,
+  stopResult = { stopped: true },
+  companion = null,
+} = {}) {
   const calls = {
     added: [],
     cleared: 0,
@@ -551,7 +556,10 @@ function makeFakeAgent({ remaining = 0, held = false, stopResult = { stopped: tr
     actions: { cancelResume() { calls.cancelResume += 1; }, stop() { calls.stop += 1; return stopResult; } },
     goal_director: { cancel() { calls.goalCancel += 1; } },
     job_director: { cancel() { calls.jobCancel += 1; } },
-    companion_context: { setDirective() { calls.directiveCleared += 1; } },
+    companion_context: {
+      snapshot() { return companion; },
+      setDirective() { calls.directiveCleared += 1; },
+    },
     self_prompter: { interruptForManualCommand() { calls.selfPromptInterrupt += 1; } },
     prompter: { cancelPendingModelGeneration() { calls.modelCancel += 1; return 1; } },
     role_director: { deferForManualCommand() { calls.roleDefer += 1; } },
@@ -738,6 +746,29 @@ test('dispatchPlayerAgenda persists a lone rendezvous so reflex preemption canno
   }]);
   assert.equal(calls.stop, 1);
   assert.match(calls.responses[0], /Queued 1 step/);
+});
+
+test('dispatchPlayerAgenda does not downgrade a same-player standing follow into a finite rendezvous', async () => {
+  const { agent, calls } = makeFakeAgent({
+    remaining: 0,
+    companion: {
+      directive: 'follow',
+      requestedName: 'Gabriel',
+      canonicalUsername: 'Gabriel',
+      alias: 'Gabriel',
+    },
+  });
+  const handled = await Agent.prototype.dispatchPlayerAgenda.call(
+    agent,
+    'Gabriel',
+    'Gabriel',
+    'come to me',
+  );
+
+  assert.equal(handled, false, 'the standing command must continue to the direct command path');
+  assert.equal(calls.added.length, 0);
+  assert.equal(calls.stop, 0);
+  assert.equal(calls.directiveCleared, 0);
 });
 
 test('dispatchPlayerAgenda queues a construction barrier and returns it for model binding', async () => {
@@ -1811,6 +1842,144 @@ test('a retryable death tells the player that the agenda remains queued and anno
   assert.ok(messages.some(message => /retrying go to DadPlayer now \(2\/2\)/i.test(message)));
 });
 
+test('a composed no-progress failure waits durably for material change before redispatch', async () => {
+  let now = 90_000;
+  let dispatches = 0;
+  let persisted = [];
+  const playerPosition = { x: 20, y: 64, z: 20 };
+  const botPosition = { x: 0, y: 64, z: 0 };
+  const agent = {
+    name: 'TestBot',
+    bot: {
+      entity: { position: botPosition },
+      game: { dimension: 'minecraft:overworld' },
+      players: {
+        DadPlayer: {
+          username: 'DadPlayer',
+          entity: { position: playerPosition },
+        },
+      },
+    },
+    last_action_result: null,
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+    openChat() {},
+  };
+  const store = {
+    lastError: null,
+    load: () => JSON.parse(JSON.stringify(persisted)),
+    save(entries) {
+      persisted = JSON.parse(JSON.stringify(entries));
+      return true;
+    },
+  };
+  const director = new AgendaDirector(agent, {
+    now: () => now,
+    store,
+    executeCommand(_agent, _command, options) {
+      dispatches += 1;
+      agent.last_action_result = dispatches === 1
+        ? {
+            actionId: 'composed-no-progress',
+            phase: 'failed',
+            code: 'path_stalled',
+            detail: 'No traversable segment made progress.',
+            retryable: true,
+            evidence: {
+              request: { routeOrigin: options.routeOrigin },
+              skill: {
+                receiptSchemaVersion: 1,
+                source: 'action_context',
+                actionId: 'composed-no-progress',
+                children: {
+                  navigation: [{ outcome: 'no_progress', progressed: 0 }],
+                },
+              },
+            },
+          }
+        : {
+            actionId: 'composed-after-change',
+            phase: 'succeeded',
+            code: 'skill_arrived',
+            detail: 'Reached DadPlayer.',
+            retryable: false,
+            evidence: {
+              request: { routeOrigin: options.routeOrigin },
+              skill: {
+                receiptSchemaVersion: 1,
+                source: 'action_context',
+                actionId: 'composed-after-change',
+                children: {},
+              },
+            },
+          };
+      return Promise.resolve();
+    },
+  });
+  const added = director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  let entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(dispatches, 1);
+  assert.equal(entry.state, 'pending');
+  assert.equal(entry.attempts, 1);
+  assert.equal(entry.evidence.code, 'waiting_for_material_change');
+  assert.equal(entry.materialChangeBlocker?.schemaVersion, 1);
+
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dispatches, 1, 'elapsed time alone must not redispatch the failed method');
+
+  botPosition.x = 8;
+  now += 6_000;
+  director.update();
+  await new Promise(resolve => setImmediate(resolve));
+  entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(dispatches, 2, 'a real position-region change releases the same queued obligation');
+  assert.equal(entry.state, 'complete');
+  assert.equal(entry.materialChangeBlocker, undefined);
+});
+
+test('a composed censored sample preserves the obligation without spending its failure budget', () => {
+  const director = new AgendaDirector({
+    actions: { executing: false },
+    goal_director: { activeGoal: null },
+    job_director: { activeOrder: null },
+    openChat() {},
+  }, {
+    now: () => 91_000,
+    store: { lastError: null, load: () => [], save: () => true },
+  });
+  const added = director.add({ kind: 'goto', requester: 'DadPlayer', recipient: 'DadPlayer' });
+  director.replace(added.id, { state: 'active', executorId: 'direct:test' });
+  const active = director.entries.find(entry => entry.id === added.id);
+
+  const result = director.commitSettlement(active, director.directSettlement({
+    phase: 'cancelled',
+    code: 'owner_replaced',
+    detail: 'A higher-priority owner took the action slot.',
+    retryable: true,
+    evidence: {
+      skill: {
+        receiptSchemaVersion: 1,
+        source: 'action_context',
+        actionId: 'cancelled-composed-action',
+        children: {},
+      },
+    },
+  }));
+
+  const entry = director.entries.find(candidate => candidate.id === added.id);
+  assert.equal(result.state, 'censored');
+  assert.equal(entry.state, 'pending');
+  assert.equal(entry.attempts, 0);
+  assert.equal(entry.evidence.code, 'censored');
+});
+
 test('a successful terminal return enters the durable companion wait hold', async () => {
   const holds = [];
   const messages = [];
@@ -2440,4 +2609,106 @@ test('death durably rearms the immediate inventory prerequisite and censors its 
   director = new AgendaDirector(agent, { store, now: () => now });
   assert.equal(director.entries.find(entry => entry.id === acquire.id).state, 'pending');
   assert.equal(director.entries.find(entry => entry.id === catchFish.id).state, 'pending');
+});
+
+// Live seam campaign 2026-08-15. Agenda entries restored from disk never see a
+// player roster, because restore runs before login. A goto bound to "RouteGuide"
+// therefore survived a restart and reported skill_arrived with zero players
+// online. Admission cannot catch that; dispatch can, because the roster is
+// authoritative by then.
+function rosterAgent(players) {
+  return {
+    name: 'Kevin',
+    bot: { players },
+    job_director: { submit: () => ({ accepted: true, id: 'job-1' }) },
+  };
+}
+
+const emptyStore = () => ({ lastError: null, load: () => [], save: () => true });
+
+test('a restored goto toward a player who is not on the roster is refused at dispatch', () => {
+  const executed = [];
+  const agent = rosterAgent({ Bubby: { username: 'Bubby' } });
+  const director = new AgendaDirector(agent, {
+    store: emptyStore(),
+    now: () => 10_000,
+    executeCommand: (_agent, command) => { executed.push(command); },
+  });
+
+  // Bypass admission the way a disk restore does, so only the dispatch guard
+  // stands between a phantom identity and a real command.
+  director.entries = [{
+    id: 'agenda-restored-1',
+    kind: 'goto',
+    executor: 'direct',
+    target: '',
+    recipient: 'RouteGuide',
+    requester: 'RouteGuide',
+    quantity: 0,
+    state: 'pending',
+    createdAt: 1,
+  }];
+
+  const outcome = director.dispatch(director.entries[0]);
+
+  assert.equal(outcome?.accepted, false);
+  assert.equal(outcome?.code, 'unknown_recipient');
+  assert.match(String(outcome?.detail), /RouteGuide/);
+  assert.deepEqual(executed, []);
+});
+
+test('a goto toward a player who is on the roster still dispatches', () => {
+  const agent = rosterAgent({ Bubby: { username: 'Bubby' } });
+  const director = new AgendaDirector(agent, {
+    store: emptyStore(),
+    now: () => 10_000,
+    executeCommand: () => {},
+  });
+
+  director.entries = [{
+    id: 'agenda-restored-2',
+    kind: 'goto',
+    executor: 'direct',
+    target: '',
+    recipient: 'Bubby',
+    requester: 'Bubby',
+    quantity: 0,
+    state: 'pending',
+    createdAt: 1,
+  }];
+
+  const outcome = director.dispatch(director.entries[0]);
+
+  assert.notEqual(outcome?.code, 'unknown_recipient');
+});
+
+test('an absent recipient fails once rather than burning the retry budget', () => {
+  const agent = rosterAgent({ Bubby: { username: 'Bubby' } });
+  const director = new AgendaDirector(agent, {
+    store: emptyStore(),
+    now: () => 10_000,
+    executeCommand: () => {},
+  });
+  director.entries = [{
+    id: 'agenda-restored-3',
+    kind: 'goto',
+    executor: 'direct',
+    target: '',
+    recipient: 'RouteGuide',
+    requester: 'RouteGuide',
+    quantity: 0,
+    attempts: 0,
+    preemptions: 0,
+    state: 'pending',
+    createdAt: 1,
+  }];
+
+  director.nextEligibleAt = 0;
+  director.update();
+
+  // Retrying cannot put a player in the world, so this must settle terminally
+  // instead of repeating against identical evidence.
+  const settled = director.entries[0];
+  assert.equal(settled.state, 'failed');
+  assert.equal(settled.evidence.code, 'unknown_recipient');
 });

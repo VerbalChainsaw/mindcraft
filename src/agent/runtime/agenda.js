@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+
+import { isStaleActivityState, staleActivityReason } from './activity-freshness.js';
 import path from 'node:path';
 
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
@@ -6,6 +8,7 @@ import {
   normalizeMiningReturnCheckpoint,
   normalizeWorkstationConstraint,
 } from './goal-contract.js';
+import { normalizeMaterialChangeBlocker } from './obligation-settlement.js';
 
 // An agenda is an ordered plan the player states once and the bot works through
 // on its own. Both executors are single-slot — goal_director holds one goal and
@@ -591,7 +594,7 @@ function normalizeExplorationOutputs(raw) {
  * Validate and canonicalize one agenda entry. Throws with a specific reason so
  * a rejected request can tell the player exactly what was wrong.
  */
-export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = {}) {
+export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, knownPlayers = null } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new TypeError('Agenda entry must be an object.');
   }
@@ -610,11 +613,23 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (spec.needsRecipient && !SAFE_PLAYER.test(recipient)) {
     throw new TypeError(`Agenda ${kind} needs a valid player name.`);
   }
+  // Name shape is not identity. A caller that can see the authoritative roster
+  // supplies it, and an unrecognised recipient is refused rather than installed:
+  // a durable obligation toward somebody who has never been in the world can
+  // only fail, and on 2026-08-15 it instead reported arrival at a player who did
+  // not exist. Callers without a roster keep the shape-only check.
+  if (spec.needsRecipient && knownPlayers && !knownPlayers.has(recipient.toLowerCase())) {
+    throw new TypeError(`Agenda ${kind} names '${recipient}', who is not a player I can see.`);
+  }
 
-  const requester = boundedText(raw.requester, 16);
+  // A requester is attribution, not a destination. An unrecognised one is
+  // dropped instead of rejecting otherwise valid work, so a stray sender label
+  // cannot become a rendezvous target later.
+  let requester = boundedText(raw.requester, 16);
   if (requester && !SAFE_PLAYER.test(requester)) {
     throw new TypeError('Agenda requester is invalid.');
   }
+  if (requester && knownPlayers && !knownPlayers.has(requester.toLowerCase())) requester = '';
 
   const point = spec.needsPoint
     ? { x: finiteInteger(raw.x, NaN, -30e6, 30e6), y: finiteInteger(raw.y, NaN, -256, 512), z: finiteInteger(raw.z, NaN, -30e6, 30e6) }
@@ -794,6 +809,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
   if (terminalDisposition && !TERMINAL_DISPOSITIONS.has(terminalDisposition)) {
     throw new TypeError('Agenda terminal disposition is unsupported.');
   }
+  const materialChangeBlocker = normalizeMaterialChangeBlocker(raw.materialChangeBlocker);
 
   return Object.freeze({
     id: identity,
@@ -871,6 +887,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null } = 
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
     attempts: finiteInteger(raw.attempts, 0, 0, 16),
     preemptions: finiteInteger(raw.preemptions, 0, 0, MAX_PREEMPTIONS),
+    ...(materialChangeBlocker ? { materialChangeBlocker } : {}),
     evidence: Object.freeze({
       code: boundedText(raw.evidence?.code, 64),
       detail: boundedText(raw.evidence?.detail, 240),
@@ -955,6 +972,14 @@ export class AgendaStore {
         throw new TypeError(`Unsupported agenda version '${document?.version}'.`);
       }
       if (!Array.isArray(document.entries)) return [];
+      // The whole queue is in-flight activity. Restoring a plan from an earlier
+      // play session resurrects work the player already moved on from -- a real
+      // agenda.json on 2026-08-16 still held a failed `goto` with an empty
+      // target. See activity-freshness.js.
+      if (document.entries.length > 0 && isStaleActivityState(document.savedAt)) {
+        this.lastError = staleActivityReason('agenda', document.savedAt);
+        return [];
+      }
       const restored = [];
       for (const raw of document.entries.slice(0, MAX_ENTRIES)) {
         try {

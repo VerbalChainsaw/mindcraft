@@ -489,6 +489,186 @@ function getAttributedProtectionThreat(agent) {
     return Number.isFinite(distance) && distance <= SELF_DEFENSE_RANGE ? threat : null;
 }
 
+function standingDirectiveIdentity(agent) {
+    const context = agent?.companion_context;
+    const snapshot = context && typeof context.directive !== 'undefined'
+        ? context
+        : context?.snapshot?.() || {};
+    const directive = String(snapshot?.directive || '').toLowerCase();
+    if (directive !== 'follow' && directive !== 'guard') return null;
+    return Object.freeze({
+        directive,
+        canonicalUsername: String(snapshot.canonicalUsername || '').slice(0, 64),
+        authorizedAt: snapshot.directiveAuthorizedAt ?? null,
+        presence: String(snapshot.presence || 'unknown'),
+    });
+}
+
+function peekAttributedProtectionThreat(agent, now = Date.now()) {
+    const protection = agent?.companion_context?.protection;
+    if (
+        protection?.state !== 'attributed'
+        || !Number.isFinite(Number(protection.threatEntityId))
+        || !Number.isFinite(Number(protection.expiresAt))
+        || now >= Number(protection.expiresAt)
+    ) return null;
+    const entity = agent?.bot?.entities?.[Number(protection.threatEntityId)] || null;
+    if (!entity?.position || !mc.isCombatSafeHostile(entity)) return null;
+    const position = agent?.bot?.entity?.position;
+    if (!position) return null;
+    const distance = Math.hypot(
+        Number(entity.position.x) - Number(position.x),
+        Number(entity.position.y) - Number(position.y),
+        Number(entity.position.z) - Number(position.z),
+    );
+    return Number.isFinite(distance) && distance <= SELF_DEFENSE_RANGE ? entity : null;
+}
+
+function safetyRecoveryOwnsThreat(agent, threat) {
+    const director = agent?.survival_director;
+    const incident = director?.safetyIncident || director?.snapshot?.()?.safetyIncident;
+    return Boolean(
+        incident?.active === true
+        && incident.stage === 'disengaged'
+        && Number.isFinite(Number(incident.source?.id))
+        && Number(incident.source.id) === Number(threat?.id)
+    );
+}
+
+function attributedAccompanimentProposal(agent, selfPreservationMode, selfDefenseMode, now = Date.now()) {
+    const directive = standingDirectiveIdentity(agent);
+    if (!directive) return Object.freeze({ applicable: false, code: 'standing_directive_absent' });
+
+    const damageReceipt = freshReceivedDamageReceipt(agent);
+    const recentDamageThreat = damageReceipt?.kind === 'hostile'
+        ? getRecentDamageCombatThreat(agent)
+        : null;
+    const protectionThreat = peekAttributedProtectionThreat(agent, now);
+    const retreatRequired = Boolean(recentDamageThreat && recentDamageRequiresRetreat(agent?.bot, now));
+    const threat = retreatRequired
+        ? recentDamageThreat
+        : protectionThreat || recentDamageThreat;
+    if (!threat) {
+        return Object.freeze({
+            applicable: false,
+            code: 'attributed_threat_absent',
+            directive,
+        });
+    }
+
+    const attribution = protectionThreat === threat ? 'protected_player' : 'self_damage';
+    const failedReceipt = retreatRequired
+        ? selfPreservationMode?.failed_tactical_trigger
+        : selfDefenseMode?.failed_tactical_trigger;
+    const eligibility = selfDefenseReflexEligibility(agent, threat, failedReceipt);
+    return Object.freeze({
+        applicable: true,
+        code: 'attributed_accompaniment_observed',
+        directive,
+        threat: Object.freeze({
+            entityId: Number(threat.id),
+            entityUuid: typeof threat.uuid === 'string' ? threat.uuid.slice(0, 80) : null,
+            name: String(threat.name || threat.username || 'threat').slice(0, 64),
+            attribution,
+        }),
+        retreatRequired,
+        recoveryOwnsThreat: safetyRecoveryOwnsThreat(agent, threat),
+        tacticalEligible: eligibility.eligible,
+        tacticalCode: eligibility.code,
+        handoffMessage: selfDefenseHandoffMessage(
+            agent,
+            attribution === 'protected_player' ? threat : null,
+            attribution === 'self_damage' ? damageReceipt : null,
+            threat,
+        ),
+    });
+}
+
+function liveProposalThreat(agent, proposal) {
+    const expectedId = Number(proposal?.threat?.entityId);
+    if (!Number.isFinite(expectedId)) return null;
+    const entity = agent?.bot?.entities?.[expectedId] || null;
+    if (!entity?.position || !mc.isCombatSafeHostile(entity)) return null;
+    const expectedUuid = proposal?.threat?.entityUuid || null;
+    if (expectedUuid && entity.uuid !== expectedUuid) return null;
+    return entity;
+}
+
+function dispatchAttributedRetreat(mode, agent, proposal) {
+    const threat = liveProposalThreat(agent, proposal);
+    if (!threat) return { scheduled: false, code: 'proposal_stale' };
+    if (agent.survival_director?.observeAttributedThreat?.(proposal.threat) !== true) {
+        return { scheduled: false, code: 'safety_incident_unavailable' };
+    }
+    mode.failed_tactical_trigger = null;
+    mode.last_retreat_at = Date.now();
+    say(agent, `I'm badly hurt—breaking contact with the ${threat.name.replaceAll('_', ' ')} that hit me!`);
+    void execute(mode, agent, async () => {
+        if (shouldUseCriticalHealingPotion(agent.bot)) {
+            await skills.consume(agent.bot, 'healing_potion');
+            if (agent.bot.interrupt_code) return false;
+        }
+        return await skills.resolveTacticalCombat(
+            agent.bot,
+            SURVIVAL_RETREAT_DISTANCE,
+            threat.id,
+            { objective: 'disengage' },
+        );
+    }).then(execution => {
+        mode.failed_tactical_trigger = selfDefenseFailedTacticalReceipt(agent, threat, execution) || null;
+        rearmDeterioratingSelfPreservationRetreat(mode, agent, execution);
+    });
+    return { scheduled: true, code: 'shared_accompaniment_intent_scheduled' };
+}
+
+function dispatchAttributedProtection(mode, agent, proposal) {
+    const threat = liveProposalThreat(agent, proposal);
+    if (!threat) return { scheduled: false, code: 'proposal_stale' };
+    if (agent.survival_director?.observeAttributedThreat?.(proposal.threat) !== true) {
+        return { scheduled: false, code: 'safety_incident_unavailable' };
+    }
+    mode.failed_tactical_trigger = null;
+    say(agent, proposal.threat.attribution === 'protected_player'
+        ? `Protecting ${agent.companion_context?.canonicalUsername || 'the guarded player'} from ${threat.name}!`
+        : `Fighting ${threat.name}!`);
+    void execute(mode, agent, async () => {
+        try {
+            return await skills.resolveTacticalCombat(agent.bot, SELF_DEFENSE_RANGE, threat.id);
+        } finally {
+            if (proposal.threat.attribution === 'protected_player') {
+                agent.companion_context?.clearProtection?.('engagement_finished');
+            }
+        }
+    }, -1, { handoffMessage: proposal.handoffMessage }).then(execution => {
+        mode.failed_tactical_trigger = selfDefenseFailedTacticalReceipt(agent, threat, execution) || null;
+    });
+    return { scheduled: true, code: 'shared_accompaniment_intent_scheduled' };
+}
+
+function handoffSubject(value, fallback) {
+    const normalized = String(value || '')
+        .replaceAll('_', ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 64);
+    return normalized || fallback;
+}
+
+function selfDefenseHandoffMessage(agent, protectionThreat, damageReceipt, enemy) {
+    const threatName = handoffSubject(enemy?.name || enemy?.username, 'threat');
+    if (protectionThreat) {
+        const playerName = handoffSubject(
+            agent?.companion_context?.canonicalUsername,
+            'the player I am protecting',
+        );
+        return `${playerName} was attacked by ${threatName}. I am stepping in, then I will resume your order.`;
+    }
+    if (damageReceipt) {
+        return `${threatName} attacked me. I am responding, then I will resume your order.`;
+    }
+    return 'I need to respond to a nearby threat, then I will resume your order.';
+}
+
 function hasFreshPlayerAction(agent) {
     const actions = agent?.actions;
     if (actions?.executing !== true || actions.currentActionOwner !== 'player') return false;
@@ -630,7 +810,8 @@ const modes_list = [
         fall_blocks: ['sand', 'red_sand', 'gravel'],
         last_retreat_at: 0,
         stale_explosive_trigger: null,
-        update: function (agent) {
+        failed_tactical_trigger: null,
+        update: function (agent, { skipAttributedAccompaniment = false } = {}) {
             const bot = agent.bot;
             let explosiveThreat = null;
             let block = bot.blockAt(bot.entity.position);
@@ -710,6 +891,8 @@ const modes_list = [
                 });
             }
             else if (
+                !skipAttributedAccompaniment
+                &&
                 recentDamageRequiresRetreat(bot)
                 && Date.now() - this.last_retreat_at >= SURVIVAL_RETREAT_COOLDOWN_MS
             ) {
@@ -863,7 +1046,8 @@ const modes_list = [
         interrupts: ['all'],
         on: true,
         active: false,
-        update: async function (agent) {
+        update: async function (agent, { skipAttributedAccompaniment = false } = {}) {
+            if (skipAttributedAccompaniment) return { code: 'shared_accompaniment_policy_owns_threat' };
             const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 16);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Aaa! A ${enemy.name.replace("_", " ")}!`);
@@ -880,7 +1064,8 @@ const modes_list = [
         on: true,
         active: false,
         failed_tactical_trigger: null,
-        update: function (agent) {
+        update: function (agent, { skipAttributedAccompaniment = false } = {}) {
+            if (skipAttributedAccompaniment) return { code: 'shared_accompaniment_policy_owns_threat' };
             const protectionThreat = getAttributedProtectionThreat(agent);
             const damageReceipt = freshReceivedDamageReceipt(agent);
             const enemy = protectionThreat || (damageReceipt
@@ -919,6 +1104,13 @@ const modes_list = [
                 } finally {
                     if (protectionThreat) agent.companion_context?.clearProtection?.('engagement_finished');
                 }
+            }, -1, {
+                handoffMessage: selfDefenseHandoffMessage(
+                    agent,
+                    protectionThreat,
+                    damageReceipt,
+                    enemy,
+                ),
             }).then(execution => {
                 const failedTactical = selfDefenseFailedTacticalReceipt(agent, enemy, execution);
                 this.failed_tactical_trigger = failedTactical || null;
@@ -1127,11 +1319,14 @@ const modes_list = [
     }
 ];
 
-async function execute(mode, agent, func, timeout=-1) {
+async function execute(mode, agent, func, timeout=-1, { handoffMessage = null } = {}) {
     if (agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
     const continuingAccompaniment = durablePlayerAccompanimentActive(agent);
+    const interruptedDirective = continuingAccompaniment
+        ? standingDirectiveIdentity(agent)
+        : null;
     const announcesSafetyHandoff = continuingAccompaniment
         && ['self_defense', 'self_preservation'].includes(mode.name);
     mode.active = true;
@@ -1142,7 +1337,7 @@ async function execute(mode, agent, func, timeout=-1) {
                 announceAccompanimentHandoff(
                     agent,
                     mode.name === 'self_defense'
-                        ? 'Something is attacking me. I am breaking contact, then I will resume your order.'
+                        ? handoffMessage || 'I need to respond to a nearby threat, then I will resume your order.'
                         : 'I need to get safe for a moment, then I will resume your order.',
                 );
             }
@@ -1170,9 +1365,16 @@ async function execute(mode, agent, func, timeout=-1) {
         // to do here added a full inference delay and commonly produced status or
         // awareness commands while the original action still owned control.
         if (announcesSafetyHandoff) {
-            announceAccompanimentHandoff(agent, 'I am clear. Resuming your order now.');
+            const skillOutcome = code_return?.result?.evidence?.skill?.outcome;
+            const recoveryStillRequired = skillOutcome === 'retreated';
+            announceAccompanimentHandoff(
+                agent,
+                recoveryStillRequired
+                    ? 'I broke contact. I am getting safe before I resume your order.'
+                    : 'I am clear. Resuming your order now.',
+            );
         }
-        agent.behavior_arbiter?.requestDirectiveResume?.();
+        agent.behavior_arbiter?.requestDirectiveResume?.(interruptedDirective);
     }
     return code_return;
 }
@@ -1304,7 +1506,51 @@ class ModeController {
         this.updateCycleOpen = false;
     }
 
-    async updateBand(modeNames = []) {
+    proposeAttributedAccompaniment() {
+        const agent = controllerAgents.get(this);
+        if (!agent) return Object.freeze({ applicable: false, code: 'agent_unavailable' });
+        return attributedAccompanimentProposal(
+            agent,
+            this.modeMap.self_preservation,
+            this.modeMap.self_defense,
+        );
+    }
+
+    dispatchAttributedAccompaniment(intent, proposal) {
+        const agent = controllerAgents.get(this);
+        if (!agent || proposal?.applicable !== true) {
+            return { active: false, scheduled: false, mode: null, code: 'proposal_unavailable' };
+        }
+        const currentDirective = standingDirectiveIdentity(agent);
+        if (
+            !currentDirective
+            || currentDirective.directive !== proposal.directive?.directive
+            || currentDirective.canonicalUsername.toLowerCase()
+                !== String(proposal.directive?.canonicalUsername || '').toLowerCase()
+            || (currentDirective.authorizedAt ?? null) !== (proposal.directive?.authorizedAt ?? null)
+        ) {
+            return { active: false, scheduled: false, mode: null, code: 'proposal_stale' };
+        }
+        const mode = intent === 'retreat'
+            ? this.modeMap.self_preservation
+            : intent === 'protect'
+                ? this.modeMap.self_defense
+                : null;
+        if (!mode || mode.on !== true || mode.paused === true || mode.active === true) {
+            return { active: false, scheduled: false, mode: mode?.name || null, code: 'selected_mode_unavailable' };
+        }
+        const dispatch = intent === 'retreat'
+            ? dispatchAttributedRetreat(mode, agent, proposal)
+            : dispatchAttributedProtection(mode, agent, proposal);
+        return {
+            active: mode.active === true,
+            scheduled: dispatch.scheduled,
+            mode: mode.name,
+            code: dispatch.code,
+        };
+    }
+
+    async updateBand(modeNames = [], options = {}) {
         const agent = controllerAgents.get(this);
         if (!agent) return { active: false, scheduled: false, mode: null, code: 'agent_unavailable' };
         if (!this.updateCycleOpen) this.beginUpdateCycle();
@@ -1323,7 +1569,7 @@ class ModeController {
             if (mode.on && !mode.paused && !mode.active && Date.now() >= (mode.next_retry_at || 0) && (agent.isIdle() || interruptible)) {
                 const wasExecuting = agent.actions.executing === true;
                 const previousLabel = agent.actions.currentActionLabel;
-                const result = await mode.update(agent);
+                const result = await mode.update(agent, options);
                 if (result && typeof result === 'object' && typeof result.code === 'string') {
                     inactiveCode = result.code;
                 }

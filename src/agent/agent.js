@@ -439,7 +439,9 @@ export class Agent {
             this.landmark_memory = null;
             console.warn(`[landmark] Spatial recall is unavailable: ${String(error?.message || error).slice(0, 240)}`);
         }
-        this.behavior_arbiter = new BehaviorArbiter(this);
+        this.behavior_arbiter = new BehaviorArbiter(this, {
+            heldNoHumanUnloadGraceMs: settings.held_no_human_unload_grace_ms,
+        });
         try {
             this.flight_recorder = new BehaviorFlightRecorder(this);
         } catch (error) {
@@ -1018,6 +1020,7 @@ export class Agent {
             requesterPosition,
             memoryBank: this.memory_bank,
             homeState: this.home_state,
+            companion: this.companion_context?.snapshot?.() || null,
         });
         if (!plan) return false;
         if (plan.rejection) {
@@ -1396,6 +1399,7 @@ export class Agent {
                     bot: this.bot,
                     memoryBank: this.memory_bank,
                     homeState: this.home_state,
+                    companion: this.companion_context?.snapshot?.() || null,
                 });
             if (directive?.constructionSiteError) {
                 await this.history.add(source, message);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import test from 'node:test';
 
@@ -7,6 +8,7 @@ import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import {
   authoritativePlayerRefreshMs,
   BehaviorArbiter,
+  isDirectiveHazardSettlementEvidence,
   onlineHumanPlayerNames,
 } from '../../src/agent/runtime/behavior-arbiter.js';
 import {
@@ -15,6 +17,7 @@ import {
   formatDecisionTrace,
 } from '../../src/agent/runtime/decision-trace.js';
 import { getModeSuppressionReason } from '../../src/agent/modes.js';
+import { chooseCompanionAction } from '../../src/agent/runtime/companion-action-policy.js';
 
 function fakeAgent({ emergency = false, held = false, survival = null, job = null } = {}) {
   const calls = [];
@@ -190,6 +193,447 @@ test('the arbiter resumes one deferred finite player action after mortal reflexe
   assert.equal(status.selectedLane, 'player_directive');
   assert.equal(status.code, 'deferred_player_action_resumed');
   assert.equal(resumed, 1);
+});
+
+test('the pure companion policy selects retreat, recovery, and exact resume from authoritative state', () => {
+  const directive = {
+    directive: 'follow',
+    canonicalUsername: 'DadPlayer',
+    authorizedAt: 900,
+    presence: 'present',
+  };
+  const threat = {
+    entityId: 44,
+    attribution: 'self_damage',
+  };
+
+  assert.equal(chooseCompanionAction({
+    directive,
+    threat,
+    retreatRequired: true,
+    tacticalEligible: true,
+  }).intent, 'retreat');
+
+  assert.equal(chooseCompanionAction({
+    directive,
+    threat,
+    retreatRequired: false,
+    tacticalEligible: true,
+    recoveryOwnsThreat: true,
+  }).intent, 'yield_safety_recovery');
+
+  const resumed = chooseCompanionAction({
+    directive,
+    resumeRequested: true,
+    resumeRequest: { ...directive },
+    bodyIdle: true,
+    safetyIncidentActive: false,
+  });
+  assert.equal(resumed.intent, 'resume_directive');
+  assert.equal(resumed.code, 'exact_directive_resume');
+});
+
+test('the pure companion policy rejects unchanged tactics and stale, held, or dead continuation', () => {
+  const directive = {
+    directive: 'follow',
+    canonicalUsername: 'DadPlayer',
+    authorizedAt: 900,
+    presence: 'present',
+  };
+  const unchanged = chooseCompanionAction({
+    directive,
+    threat: { entityId: 44, attribution: 'self_damage' },
+    retreatRequired: true,
+    tacticalEligible: false,
+    tacticalCode: 'unchanged_failed_tactical_suppressed',
+  });
+  assert.equal(unchanged.intent, 'wait_material_change');
+  assert.equal(unchanged.rejected.some(item => item.intent === 'resume_directive'), true);
+
+  const replacement = chooseCompanionAction({
+    directive: { ...directive, authorizedAt: 901 },
+    resumeRequested: true,
+    resumeRequest: directive,
+    bodyIdle: true,
+  });
+  assert.equal(replacement.intent, 'cancel_stale_resume');
+
+  assert.equal(chooseCompanionAction({
+    directive,
+    resumeRequested: true,
+    resumeRequest: directive,
+    bodyIdle: true,
+    operatorHeld: true,
+  }).intent, 'hold');
+  assert.equal(chooseCompanionAction({
+    directive,
+    resumeRequested: true,
+    resumeRequest: directive,
+    bodyIdle: true,
+    dead: true,
+  }).code, 'body_unavailable');
+
+  assert.equal(chooseCompanionAction({
+    directive,
+    threat: { entityId: null, attribution: 'self_damage' },
+    tacticalEligible: true,
+  }).intent, 'continue_existing_policy', 'missing target identity cannot authorize combat');
+  assert.equal(chooseCompanionAction({
+    directive: { ...directive, canonicalUsername: '' },
+    resumeRequested: true,
+    resumeRequest: { ...directive, canonicalUsername: '' },
+    bodyIdle: true,
+  }).intent, 'cancel_stale_resume', 'missing player identity cannot authorize continuation');
+
+  assert.equal(chooseCompanionAction({
+    directive,
+    resumeRequested: true,
+    resumeRequest: directive,
+    bodyIdle: true,
+    directiveSettlement: { active: true, state: 'unchanged', code: 'directive_route_unchanged' },
+  }).intent, 'wait_material_change');
+  assert.equal(chooseCompanionAction({
+    directive,
+    resumeRequested: true,
+    resumeRequest: directive,
+    bodyIdle: true,
+    directiveSettlement: { active: true, state: 'unknown', code: 'directive_route_unchanged' },
+  }).intent, 'wait_material_change', 'unknown blocker evidence cannot authorize continuation');
+  assert.equal(chooseCompanionAction({
+    directive,
+    resumeRequested: true,
+    resumeRequest: directive,
+    bodyIdle: true,
+    directiveSettlement: { active: true, state: 'changed', code: 'directive_route_unchanged' },
+  }).intent, 'resume_directive');
+});
+
+test('standing directives share one material-change gate for hazard and existing-action resumes', async () => {
+  let targetPosition = { x: 8, y: 62, z: 0 };
+  let targetLiquid = true;
+  let botLocalBlock = 'dirt';
+  let explicitResumes = 0;
+  let existingResumes = 0;
+  const targetEntity = {
+    id: 44,
+    username: 'DadPlayer',
+    get position() {
+      return {
+        x: targetPosition.x,
+        y: targetPosition.y,
+        z: targetPosition.z,
+        floored() {
+          const origin = { x: Math.floor(this.x), y: Math.floor(this.y), z: Math.floor(this.z) };
+          return {
+            ...origin,
+            offset(x, y, z) { return { x: origin.x + x, y: origin.y + y, z: origin.z + z }; },
+          };
+        },
+      };
+    },
+    get isInWater() { return targetLiquid; },
+    isInLava: false,
+  };
+  const directive = () => ({
+    directive: 'follow',
+    canonicalUsername: 'DadPlayer',
+    directiveAuthorizedAt: 900,
+    presence: 'present',
+    entityId: 44,
+    entityEpoch: 2,
+    position: { ...targetPosition },
+    dimension: 'overworld',
+  });
+  const modes = {
+    beginUpdateCycle() {},
+    endUpdateCycle() {},
+    updateBand() { return { active: false, scheduled: false, code: 'inactive' }; },
+  };
+  const actions = {
+    executing: false,
+    currentActionLabel: '',
+    currentActionOwner: '',
+    resume_func: () => true,
+    resume_name: 'action:followPlayer',
+    hasDeferredPlayerAction: () => false,
+    resumeAction() { existingResumes += 1; return true; },
+  };
+  const agent = {
+    name: 'DirectiveSettlementBot',
+    runtime: { autonomy: 'command' },
+    bot: {
+      health: 20,
+      food: 20,
+      oxygenLevel: 20,
+      entity: {
+        position: {
+          x: 0,
+          y: 64,
+          z: 0,
+          floored() {
+            return {
+              x: 0,
+              y: 64,
+              z: 0,
+              offset(x, y, z) { return { x, y: 64 + y, z }; },
+            };
+          },
+        },
+      },
+      entities: { 44: targetEntity },
+      players: { DadPlayer: { username: 'DadPlayer', entity: targetEntity } },
+      modes,
+      blockAt(position) {
+        if (Number(position?.x) < 4) return { name: botLocalBlock };
+        return { name: targetLiquid ? 'water' : 'air' };
+      },
+    },
+    actions,
+    companion_context: { snapshot: directive },
+    environment_observer: { nextSampleAt: 0, update() {} },
+    self_prompter: { isActive: () => false, update() {} },
+    isOperatorHeld: () => false,
+    isIdle: () => true,
+    checkTaskDone() {},
+    resumeCompanionDirective() { explicitResumes += 1; return true; },
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 8 } });
+  agent.behavior_arbiter = arbiter;
+
+  arbiter.recordOutcome({
+    label: 'mode:self_preservation',
+    phase: 'failed',
+    code: 'skill_drowning_escape_unconfirmed',
+    evidence: { skill: { outcome: 'drowning_escape_unconfirmed' } },
+  });
+  arbiter.requestDirectiveResume(directive());
+  const hazardWait = await arbiter.update(25);
+  assert.equal(hazardWait.selectedLane, 'player_directive');
+  assert.equal(hazardWait.code, 'directive_hazard_unchanged');
+  assert.equal(explicitResumes, 0);
+
+  targetLiquid = false;
+  const hazardReleased = await arbiter.update(25);
+  assert.equal(hazardReleased.code, 'exact_directive_resumed');
+  assert.equal(explicitResumes, 1);
+
+  arbiter.recordOutcome({
+    label: 'action:followPlayer',
+    phase: 'failed',
+    code: 'skill_waiting_for_material_change',
+    evidence: { skill: { outcome: 'waiting_for_material_change' } },
+  });
+  assert.equal(arbiter.directiveMaterialChangeBlocker?.code, 'directive_route_unchanged');
+  assert.equal(arbiter.directiveSettlement(directive()).state, 'unchanged');
+  const routeWait = await arbiter.update(25);
+  assert.equal(routeWait.code, 'directive_route_unchanged');
+  assert.equal(existingResumes, 0);
+
+  botLocalBlock = 'air';
+  const routeReleased = await arbiter.update(25);
+  assert.equal(routeReleased.code, 'continuation_resumed');
+  assert.equal(existingResumes, 1);
+});
+
+test('every completed drowning receipt is a standing-directive settlement but interruption is censored', () => {
+  for (const [phase, outcome] of [
+    ['succeeded', 'drowning_escape_stable'],
+    ['failed', 'drowning_escape_open_water'],
+    ['failed', 'drowning_escape_unconfirmed'],
+  ]) {
+    assert.equal(isDirectiveHazardSettlementEvidence({
+      label: 'mode:self_preservation',
+      phase,
+      evidence: { skill: { outcome } },
+    }), true, outcome);
+  }
+  assert.equal(isDirectiveHazardSettlementEvidence({
+    label: 'mode:self_preservation',
+    phase: 'interrupted',
+    evidence: { skill: { outcome: 'interrupted' } },
+  }), false);
+  assert.equal(isDirectiveHazardSettlementEvidence({
+    label: 'action:followPlayer',
+    phase: 'failed',
+    evidence: { skill: { outcome: 'drowning_escape_unconfirmed' } },
+  }), false);
+});
+
+test('attributed danger interrupts follow, yields to recovery, and resumes the exact directive once', async () => {
+  const bot = new EventEmitter();
+  bot.health = 7;
+  bot.food = 20;
+  bot.oxygenLevel = 20;
+  bot.interrupt_code = false;
+  bot.output = '';
+  bot.lastActionEvidence = null;
+  bot.entity = { position: { x: 0, y: 64, z: 0 } };
+  const directive = {
+    directive: 'follow',
+    canonicalUsername: 'DadPlayer',
+    directiveAuthorizedAt: 900,
+    presence: 'present',
+  };
+  let threatPresent = true;
+  let recoveryPending = false;
+  let recoverySelected = false;
+  let tacticalDispatches = 0;
+  let resumes = 0;
+  let legacyAttributedSelections = 0;
+  let reflexSettled = Promise.resolve();
+  let followRuns = 0;
+  const agent = {
+    name: 'ContinuityBot',
+    runtime: { autonomy: 'command' },
+    bot,
+    companion_context: {
+      snapshot: () => ({ ...directive }),
+    },
+    environment_observer: { nextSampleAt: 0, update() {} },
+    self_prompter: { isActive: () => false, stopLoop() {} },
+    isOperatorHeld: () => false,
+    checkTaskDone() {},
+    requestInterrupt() { bot.interrupt_code = true; },
+    clearBotLogs() {
+      bot.output = '';
+      bot.interrupt_code = false;
+    },
+    recordActionResult(result) {
+      this.survival_director?.observeActionResult?.(result);
+      this.behavior_arbiter?.recordOutcome?.(result);
+    },
+    resumeCompanionDirective() {
+      resumes += 1;
+      this.actions.cancelResume();
+      return true;
+    },
+  };
+  agent.actions = new ActionManager(agent);
+  agent.isIdle = () => !agent.actions.executing;
+  agent.survival_director = {
+    inFlight: false,
+    status: { code: 'idle' },
+    safetyIncident: null,
+    blocksLowerPriority() { return this.inFlight; },
+    snapshot() { return { safetyIncident: this.safetyIncident }; },
+    observeAttributedThreat(receipt) {
+      assert.equal(receipt.entityId, 44);
+      recoveryPending = true;
+      this.safetyIncident = {
+        active: true,
+        stage: 'threat_response',
+        source: { kind: 'hostile', id: receipt.entityId },
+      };
+      return true;
+    },
+    observeActionResult(result) {
+      if (result.evidence?.skill?.outcome !== 'retreated') return false;
+      assert.equal(this.safetyIncident?.stage, 'threat_response');
+      this.safetyIncident = { ...this.safetyIncident, stage: 'disengaged' };
+      return true;
+    },
+    update() {
+      if (!recoveryPending) return;
+      recoverySelected = true;
+      this.inFlight = true;
+      this.status = { code: 'return_to_player' };
+    },
+  };
+  bot.modes = {
+    beginUpdateCycle() {},
+    endUpdateCycle() {},
+    proposeAttributedAccompaniment() {
+      if (!threatPresent) return { applicable: false, code: 'attributed_threat_absent' };
+      return {
+        applicable: true,
+        directive: {
+          directive: directive.directive,
+          canonicalUsername: directive.canonicalUsername,
+          authorizedAt: directive.directiveAuthorizedAt,
+          presence: directive.presence,
+        },
+        threat: { entityId: 44, attribution: 'self_damage', name: 'skeleton' },
+        retreatRequired: true,
+        recoveryOwnsThreat: recoveryPending,
+        tacticalEligible: true,
+        tacticalCode: 'self_defense_evidence_changed',
+      };
+    },
+    updateBand(names, options = {}) {
+      if (names.includes('self_defense') || names.includes('cowardice')) {
+        legacyAttributedSelections += 1;
+      }
+      if (options.skipAttributedAccompaniment === true) {
+        return { active: false, scheduled: false, code: 'shared_accompaniment_policy_owns_threat' };
+      }
+      return { active: false, scheduled: false, code: 'inactive' };
+    },
+    dispatchAttributedAccompaniment(intent, proposal) {
+      assert.equal(intent, 'retreat');
+      assert.equal(agent.survival_director.observeAttributedThreat(proposal.threat), true);
+      assert.equal(agent.survival_director.safetyIncident.stage, 'threat_response');
+      tacticalDispatches += 1;
+      reflexSettled = agent.actions.runAction('mode:self_preservation', () => {
+          bot.lastActionEvidence = { outcome: 'retreated' };
+          return true;
+        }, { owner: 'reflex' })
+        .then(outcome => {
+          agent.behavior_arbiter.requestDirectiveResume(proposal.directive);
+          return outcome;
+        });
+      return {
+        active: true,
+        scheduled: true,
+        mode: 'self_preservation',
+        code: 'shared_accompaniment_intent_scheduled',
+      };
+    },
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 8 } });
+  agent.behavior_arbiter = arbiter;
+
+  const followStarted = new Promise(resolve => {
+    const poll = () => {
+      if (agent.actions.currentActionLabel === 'action:followPlayer') resolve();
+      else setImmediate(poll);
+    };
+    poll();
+  });
+  const follow = agent.actions.runAction('action:followPlayer', async () => {
+    followRuns += 1;
+    if (followRuns > 1) return true;
+    while (!bot.interrupt_code) await new Promise(resolve => setImmediate(resolve));
+    return false;
+  }, { owner: 'player', resume: true, timeout: -1 });
+  await followStarted;
+
+  const interrupted = await arbiter.update(25);
+  await follow;
+  await reflexSettled;
+  assert.equal(interrupted.selectedLane, 'attributed_protection');
+  assert.equal(interrupted.code, 'critical_self_preservation');
+  assert.equal(tacticalDispatches, 1);
+  assert.equal(legacyAttributedSelections, 0, 'the migrated edge cannot also run the legacy protection band');
+  assert.equal(arbiter.directiveResumeRequested, true);
+
+  const recovering = await arbiter.update(25);
+  assert.equal(recovering.selectedLane, 'basic_survival');
+  assert.equal(recoverySelected, true);
+  assert.equal(resumes, 0, 'disengagement is not yet safe settlement');
+  assert.equal(arbiter.directiveResumeRequested, true);
+
+  threatPresent = false;
+  recoveryPending = false;
+  agent.survival_director.inFlight = false;
+  agent.survival_director.safetyIncident = null;
+  agent.survival_director.status = { code: 'safe' };
+  const resumed = await arbiter.update(25);
+  assert.equal(resumed.selectedLane, 'player_directive');
+  assert.equal(resumed.code, 'exact_directive_resumed');
+  assert.equal(resumes, 1);
+
+  await arbiter.update(25);
+  assert.equal(resumes, 1, 'the exact standing directive resumes at most once');
 });
 
 test('held lifecycle classifies distant tab-listed humans and excludes known bot profiles', () => {

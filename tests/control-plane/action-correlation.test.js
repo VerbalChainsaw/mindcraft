@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
+import Vec3 from 'vec3';
 
 import { ActionManager } from '../../src/agent/action_manager.js';
 import {
@@ -71,6 +72,57 @@ test('executeCommand creates unique immutable request contexts after command val
   assert.equal(Number.isFinite(contexts[0].requestedAt), true);
   assert.equal(Object.isFrozen(contexts[0]), true);
   assert.equal(Object.isFrozen(contexts[0].args), true);
+});
+
+test('an internal bounded player approach cannot erase a standing directive, while a player approach can', async () => {
+  const mutations = [];
+  const bot = new EventEmitter();
+  const player = {
+    id: 42,
+    type: 'player',
+    username: 'DadPlayer',
+    position: new Vec3(0.5, 64, 0.5),
+  };
+  bot.username = 'Kevin';
+  bot.output = '';
+  bot.interrupt_code = false;
+  bot.lastActionEvidence = null;
+  bot.entity = { position: new Vec3(0.5, 64, 0.5) };
+  bot.players = { DadPlayer: { username: 'DadPlayer', entity: player } };
+  bot.entities = { 42: player };
+  bot.modes = { isOn: name => name === 'cheat' };
+  bot.chat = () => {};
+  const agent = {
+    name: 'AuthorityBot',
+    bot,
+    companion_context: {
+      setDirective(...args) { mutations.push(args); },
+    },
+    self_prompter: { isActive: () => false },
+    behavior_arbiter: {
+      recordActionStart() {},
+      recordActionRelease() {},
+      recordOutcome() {},
+    },
+    isOperatorHeld: () => false,
+    isIdle() { return !this.actions.executing; },
+    requestInterrupt() { bot.interrupt_code = true; },
+    clearBotLogs() {
+      bot.output = '';
+      bot.interrupt_code = false;
+    },
+    recordActionResult() {},
+  };
+  agent.actions = new ActionManager(agent);
+
+  await executeCommand(agent, '!goToPlayer("DadPlayer", 3, true)', { owner: 'survival' });
+  assert.deepEqual(mutations, [], 'temporary survival ownership cannot erase Follow/Guard');
+
+  await executeCommand(agent, '!goToPlayer("DadPlayer", 3, true)', { owner: 'unknown-owner' });
+  assert.deepEqual(mutations, [], 'unknown internal ownership fails closed');
+
+  await executeCommand(agent, '!goToPlayer("DadPlayer", 3, true)', { owner: 'player' });
+  assert.deepEqual(mutations, [[null, 'DadPlayer']], 'fresh player authority may replace the standing directive');
 });
 
 test('request context bounds, sanitizes, clones, and permits only scalar or null arguments', () => {

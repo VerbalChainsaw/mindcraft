@@ -87,6 +87,31 @@ test('a family return pronoun binds the exact requesting player', () => {
   assert.equal(directive.releasesHold, true);
 });
 
+test('a same-player rendezvous reasserts rather than downgrades a standing companion directive', () => {
+  const companion = {
+    directive: 'follow',
+    requestedName: 'DadPlayer',
+    canonicalUsername: 'DadPlayer',
+    alias: 'DadPlayer',
+  };
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'come to me', { companion }).command,
+    '!followPlayer("DadPlayer", 3)',
+  );
+
+  companion.directive = 'guard';
+  assert.equal(
+    resolvePlayerDirective('DadPlayer', 'come here', { companion }).command,
+    '!guardPlayer("DadPlayer", 3)',
+  );
+
+  assert.equal(
+    resolvePlayerDirective('KidPlayer', 'come to me', { companion }).command,
+    '!goToPlayer("KidPlayer", 2)',
+    'a different speaker cannot inherit DadPlayer standing authority',
+  );
+});
+
 test('digTunnel is reachable deterministically (the reported gap)', () => {
   assert.equal(commandFor('dig a straight tunnel forward for 8 blocks'), '!digTunnel("forward", 8)');
   assert.equal(commandFor('cut a tunnel north 20'), '!digTunnel("north", 20)');

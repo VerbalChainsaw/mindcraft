@@ -44,6 +44,24 @@ function normalizedDimension(value) {
     return dimension;
 }
 
+// An unrecovered death manifest is an outstanding obligation, not a milestone
+// to reach eventually. It fires only once bodily survival is satisfied, so a
+// starving or threatened body never walks to a death site first.
+function deathRecoveryOverride(state) {
+    if (state?.memory?.deathRecoveryPending !== true) return null;
+    return {
+        code: 'death_recovery_pending',
+        // Keep the ladder's own stage identity. This raises the priority of an
+        // existing milestone rather than replacing it with a safety condition,
+        // and telemetry should not report a recovery trip as a survival override.
+        stage: 'death_recovery',
+        label: 'Recover inventory after death',
+        reason: 'a recorded death manifest has not been recovered',
+        nextOperation: 'Return to the recorded death site in the same dimension and verify the dropped inventory is recovered.',
+        command: '!recoverDeathItems()',
+    };
+}
+
 function survivalOverride(state) {
     const health = Number(state.gameplay?.health) || 0;
     const hunger = Number(state.gameplay?.hunger) || 0;
@@ -342,14 +360,22 @@ export function evaluateGameplayProgression(state) {
 
     const next = milestones.find(entry => !entry.complete) || null;
     const completed = milestones.filter(entry => entry.complete).length;
-    const override = survivalOverride(state);
+    // A recorded death manifest cannot wait behind the ladder. `death_recovery`
+    // is the last milestone, and dying usually empties the inventory that the
+    // earlier milestones test, so the first incomplete entry is always some
+    // gathering step and recovery becomes unreachable exactly when it matters.
+    // The dropped stack is normally the cheapest way to satisfy those earlier
+    // milestones anyway. Bodily survival still outranks it.
+    const override = survivalOverride(state) || deathRecoveryOverride(state);
 
     return {
         model: 'survival_progression_v1',
         completedMilestones: completed,
         totalMilestones: milestones.length,
-        currentStage: override ? 'survival_override' : (next?.id || 'operational'),
-        nextMilestone: override ? 'Restore safe operating conditions' : (next?.label || 'Maintain sustained survival operations'),
+        currentStage: override ? (override.stage || 'survival_override') : (next?.id || 'operational'),
+        nextMilestone: override
+            ? (override.label || 'Restore safe operating conditions')
+            : (next?.label || 'Maintain sustained survival operations'),
         missingPrerequisites: override ? [override.reason] : (next?.missing || []),
         nextOperation: override
             ? override.nextOperation

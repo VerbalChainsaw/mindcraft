@@ -1,11 +1,39 @@
 import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { actionResultFromError, createActionResult } from './runtime/action-result.js';
+import {
+    createActionReceiptLedger,
+    createLegacyActionReceiptEnvelope,
+} from './runtime/action-receipt-ledger.js';
 
 const ACTION_EXECUTION_CONTEXT = new AsyncLocalStorage();
 
 export function currentActionExecutionContext() {
     return ACTION_EXECUTION_CONTEXT.getStore() || null;
+}
+
+export function recordActionChild(relationship, evidence) {
+    const context = currentActionExecutionContext();
+    if (context?.receiptMode !== 'composed' || !context.receiptLedger) {
+        return Object.freeze({
+            accepted: false,
+            code: 'composed_action_receipt_context_unavailable',
+            snapshot: null,
+        });
+    }
+    return context.receiptLedger.recordChild(context.actionId, relationship, evidence);
+}
+
+export function recordActionTerminal(evidence) {
+    const context = currentActionExecutionContext();
+    if (context?.receiptMode !== 'composed' || !context.receiptLedger) {
+        return Object.freeze({
+            accepted: false,
+            code: 'composed_action_receipt_context_unavailable',
+            snapshot: null,
+        });
+    }
+    return context.receiptLedger.recordTerminal(context.actionId, evidence);
 }
 
 const STOP_WAIT_TIMEOUT_MS = 10_000;
@@ -155,7 +183,15 @@ function actionProgressTarget(result) {
 
 function normalizeActionOwner(owner) {
     const normalized = String(owner || '').trim().toLowerCase();
-    return Object.hasOwn(ACTION_OWNER_PRIORITY, normalized) ? normalized : 'player';
+    // Omitted ownership retains the historical direct-command default. An
+    // explicitly supplied but unknown owner is not equivalent to player
+    // authority; fail it closed to the lowest non-player lane.
+    if (!normalized) return 'player';
+    return Object.hasOwn(ACTION_OWNER_PRIORITY, normalized) ? normalized : 'background';
+}
+
+function normalizeReceiptMode(mode) {
+    return mode === 'composed' ? 'composed' : 'legacy';
 }
 
 function actionAttemptSignature(actionLabel, requestContext = null) {
@@ -175,10 +211,12 @@ export class ActionManager {
         this.currentActionId = '';
         this.currentActionFn = null;
         this.currentActionController = null;
+        this.currentReceiptLedger = null;
         this.timedout = false;
         this.resume_func = null;
         this.resume_name = '';
         this.resume_owner = '';
+        this.resume_receipt_mode = 'legacy';
         this.deferredPlayerAction = null;
         this.last_action_time = 0;
         this.currentActionStartedAt = 0;
@@ -330,24 +368,25 @@ export class ActionManager {
 
     // Positional parameters must match `_executeResume`. The zero-argument form
     // resumes whatever resume function is already registered.
-    async resumeAction(actionLabel = null, actionFn = null, timeout = 10, owner = null) {
-        return this._executeResume(actionLabel, actionFn, timeout, owner);
+    async resumeAction(actionLabel = null, actionFn = null, timeout = 10, owner = null, receiptMode = 'legacy') {
+        return this._executeResume(actionLabel, actionFn, timeout, owner, receiptMode);
     }
 
-    async runAction(actionLabel, actionFn, { timeout, resume = false, owner } = {}) {
+    async runAction(actionLabel, actionFn, { timeout, resume = false, owner, receiptMode = 'legacy' } = {}) {
         const actionOwner = normalizeActionOwner(owner || this.ownerContext.getStore());
+        const actionReceiptMode = normalizeReceiptMode(receiptMode);
         if (
             resume !== true
             && actionOwner === 'player'
             && this.isCriticalReflexAction()
             && this.isOwnerBlocked(actionOwner)
         ) {
-            return this.deferPlayerAction(actionLabel, actionFn, timeout, actionOwner);
+            return this.deferPlayerAction(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode);
         }
         if (resume) {
-            return this._executeResume(actionLabel, actionFn, timeout, actionOwner);
+            return this._executeResume(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode);
         } else {
-            return this._executeAction(actionLabel, actionFn, timeout, actionOwner);
+            return this._executeAction(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode);
         }
     }
 
@@ -358,6 +397,10 @@ export class ActionManager {
             return { stopped: true, timedOut: false };
         }
         if (this.stopTimedOutAt) {
+            this.currentReceiptLedger?.seal?.({
+                reason: 'cancelled',
+                mirrorEvidence: this.agent.bot.lastActionEvidence,
+            });
             try { this.currentActionController?.abort(); } catch { /* already aborted */ }
             try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
             return { stopped: false, timedOut: true, requestedAt: this.stopRequestedAt };
@@ -392,6 +435,10 @@ export class ActionManager {
         }
 
         if (this.executing) {
+            this.currentReceiptLedger?.seal?.({
+                reason: 'cancelled',
+                mirrorEvidence: this.agent.bot.lastActionEvidence,
+            });
             this.stopTimedOutAt = Date.now();
             console.warn(`Action "${this.currentActionLabel || 'unknown'}" did not stop within ${boundedTimeoutMs}ms; leaving the bot held.`);
             return { stopped: false, timedOut: true, requestedAt };
@@ -406,15 +453,17 @@ export class ActionManager {
         this.resume_func = null;
         this.resume_name = null;
         this.resume_owner = '';
+        this.resume_receipt_mode = 'legacy';
         this.deferredPlayerAction = null;
     }
 
-    deferPlayerAction(actionLabel, actionFn, timeout = -1, owner = 'player') {
+    deferPlayerAction(actionLabel, actionFn, timeout = -1, owner = 'player', receiptMode = 'legacy') {
         this.deferredPlayerAction = Object.freeze({
             actionLabel,
             actionFn,
             timeout,
             owner: normalizeActionOwner(owner),
+            receiptMode: normalizeReceiptMode(receiptMode),
             requestContext: this.currentRequestContext(),
         });
         this.agent.behavior_arbiter?.wake?.('deferred_player_action_registered');
@@ -448,19 +497,21 @@ export class ActionManager {
             pending.actionFn,
             pending.timeout,
             pending.owner,
+            pending.receiptMode,
         );
         return pending.requestContext
             ? this.runWithRequestContext(pending.requestContext, execute)
             : execute();
     }
 
-    async _executeResume(actionLabel = null, actionFn = null, timeout = 10, owner = null) {
+    async _executeResume(actionLabel = null, actionFn = null, timeout = 10, owner = null, receiptMode = 'legacy') {
         const new_resume = actionFn != null;
         if (new_resume) { // start new resume
             this.resume_func = actionFn;
             assert(actionLabel != null, 'actionLabel is required for new resume');
             this.resume_name = actionLabel;
             this.resume_owner = normalizeActionOwner(owner || this.ownerContext.getStore());
+            this.resume_receipt_mode = normalizeReceiptMode(receiptMode);
         }
         // A critical reflex owns the body until it settles, but an explicit
         // resumable player action is still valid work. Register it without
@@ -482,6 +533,7 @@ export class ActionManager {
                 this.resume_func,
                 timeout,
                 this.resume_owner || 'player',
+                this.resume_receipt_mode,
             );
             if (!res.success && res.result?.retryable === false) {
                 this.cancelResume();
@@ -492,11 +544,14 @@ export class ActionManager {
         }
     }
 
-    async _executeAction(actionLabel, actionFn, timeout = 10, owner = 'player') {
+    async _executeAction(actionLabel, actionFn, timeout = 10, owner = 'player', receiptMode = 'legacy') {
         let TIMEOUT;
+        let receiptLedger = null;
+        let sealedSkillEvidence = null;
         const startedAt = Date.now();
         const actionId = `${this.agent.name || 'bot'}-${++this.nextActionId}-${startedAt}`;
         const actionOwner = normalizeActionOwner(owner);
+        const actionReceiptMode = normalizeReceiptMode(receiptMode);
         const commandRequest = this.requestContext.getStore();
         try {
             if (
@@ -601,6 +656,8 @@ export class ActionManager {
             this.currentActionFn = actionFn;
             this.currentActionController = new AbortController();
             this.currentActionStartedAt = this.last_action_time;
+            receiptLedger = createActionReceiptLedger(actionId, { mode: actionReceiptMode });
+            this.currentReceiptLedger = receiptLedger;
             this.agent.behavior_arbiter?.recordActionStart?.({
                 actionId,
                 owner: actionOwner,
@@ -618,6 +675,7 @@ export class ActionManager {
                     timeout,
                     actionId,
                     this.currentActionController,
+                    receiptLedger,
                 );
             }
 
@@ -629,10 +687,18 @@ export class ActionManager {
             const actionValue = await ACTION_EXECUTION_CONTEXT.run({
                 actionId,
                 signal: this.currentActionController.signal,
+                receiptMode: actionReceiptMode,
+                receiptLedger,
                 deadlineAt: timeout > 0
                     ? this.currentActionStartedAt + (timeout * 60 * 1000)
                     : null,
             }, actionFn);
+
+            const sealedReceipt = receiptLedger.seal({
+                reason: this.timedout ? 'timeout' : this.agent.bot.interrupt_code ? 'cancelled' : 'resolved',
+                mirrorEvidence: this.agent.bot.lastActionEvidence,
+            });
+            sealedSkillEvidence = sealedReceipt.receipt || sealedSkillEvidence;
 
             // mark action as finished + cleanup
             this.agent.behavior_arbiter?.recordActionRelease?.({
@@ -647,6 +713,7 @@ export class ActionManager {
             this.currentActionOwner = '';
             this.currentActionFn = null;
             this.currentActionController = null;
+            this.currentReceiptLedger = null;
             this.currentActionStartedAt = 0;
             this.stopRequestedAt = null;
             this.stopTimedOutAt = null;
@@ -668,8 +735,12 @@ export class ActionManager {
             }
 
             // return action status report
-            const skillEvidence = this.agent.bot.lastActionEvidence || null;
-            const skillFailed = actionValue === false;
+            const skillEvidence = actionReceiptMode === 'composed'
+                ? sealedSkillEvidence
+                : createLegacyActionReceiptEnvelope(actionId, this.agent.bot.lastActionEvidence);
+            const receiptContractFailure = actionReceiptMode === 'composed'
+                && skillEvidence?.contract?.valid !== true;
+            const skillFailed = actionValue === false || receiptContractFailure;
             const skillRequested = !skillFailed && skillEvidence?.completion === 'requested';
             const skillFailureCode = typeof skillEvidence?.outcome === 'string' && skillEvidence.outcome.trim()
                 ? `skill_${skillEvidence.outcome.trim()}`
@@ -677,15 +748,24 @@ export class ActionManager {
             const skillSuccessCode = typeof skillEvidence?.outcome === 'string' && skillEvidence.outcome.trim()
                 ? `skill_${skillEvidence.outcome.trim()}`
                 : 'completed';
-            const skillRetryable = skillFailed && typeof skillEvidence?.retryable === 'boolean'
-                ? skillEvidence.retryable
-                : skillFailed;
+            const receiptFailureCode = receiptContractFailure
+                ? String(skillEvidence?.contract?.code || skillEvidence?.outcome || 'action_receipt_contract_violation')
+                    .trim()
+                    .slice(0, 80)
+                : null;
+            const skillRetryable = receiptContractFailure
+                ? false
+                : skillFailed && typeof skillEvidence?.retryable === 'boolean'
+                    ? skillEvidence.retryable
+                    : skillFailed && actionReceiptMode === 'legacy';
             const requestedRetryable = skillRequested && skillEvidence?.retryable === true;
             const result = createActionResult({
                 actionId,
                 label: actionLabel,
                 phase: interrupted ? 'interrupted' : timedout || skillFailed ? 'failed' : skillRequested ? 'requested' : 'succeeded',
-                code: interrupted ? 'interrupted' : timedout ? 'timeout' : skillFailed ? skillFailureCode : skillSuccessCode,
+                code: receiptContractFailure
+                    ? receiptFailureCode
+                    : interrupted ? 'interrupted' : timedout ? 'timeout' : skillFailed ? skillFailureCode : skillSuccessCode,
                 detail: output || (interrupted
                     ? 'Action was interrupted.'
                     : skillFailed
@@ -699,7 +779,9 @@ export class ActionManager {
                     skill: skillEvidence,
                     request: commandRequest || null,
                 },
-                retryable: interrupted || timedout || skillRetryable || requestedRetryable,
+                retryable: receiptContractFailure
+                    ? false
+                    : interrupted || timedout || skillRetryable || requestedRetryable,
                 startedAt,
             });
             this.lastResult = result;
@@ -707,6 +789,13 @@ export class ActionManager {
             this.agent.recordActionResult?.(result);
             return { success: result.phase === 'succeeded', message: output, interrupted, timedout, result };
         } catch (err) {
+            if (receiptLedger) {
+                const sealedReceipt = receiptLedger.seal({
+                    reason: this.timedout ? 'timeout' : 'exception',
+                    mirrorEvidence: this.agent.bot.lastActionEvidence,
+                });
+                sealedSkillEvidence = sealedReceipt.receipt || sealedSkillEvidence;
+            }
             if (this.currentActionId === actionId) {
                 this.agent.behavior_arbiter?.recordActionRelease?.({
                     actionId,
@@ -721,6 +810,7 @@ export class ActionManager {
             this.currentActionOwner = '';
             this.currentActionFn = null;
             this.currentActionController = null;
+            this.currentReceiptLedger = null;
             this.currentActionStartedAt = 0;
             this.stopRequestedAt = null;
             this.stopTimedOutAt = null;
@@ -748,9 +838,15 @@ export class ActionManager {
                 interrupted,
                 startedAt,
                 evidence: {
-                    skill: this.agent.bot.lastActionEvidence || null,
+                    skill: actionReceiptMode === 'composed'
+                        ? sealedSkillEvidence
+                        : createLegacyActionReceiptEnvelope(actionId, this.agent.bot.lastActionEvidence),
                     request: commandRequest || null,
                 },
+                retryable: actionReceiptMode === 'composed'
+                    && sealedSkillEvidence?.contract?.valid !== true
+                    ? false
+                    : undefined,
             });
             this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
             this.lastResult = result;
@@ -779,7 +875,7 @@ export class ActionManager {
         return output;
     }
 
-    _startTimeout(TIMEOUT_MINS = 10, actionId = null, controller = null) {
+    _startTimeout(TIMEOUT_MINS = 10, actionId = null, controller = null, receiptLedger = null) {
         // Nothing observes a timer callback's promise. This callback is the
         // recovery path for a stuck action, so a rejection escaping it would
         // surface as an unhandled rejection -- crashing the agent at exactly
@@ -790,6 +886,10 @@ export class ActionManager {
                 const message = `Code execution timed out after ${TIMEOUT_MINS} minutes. Attempting force stop.`;
                 console.warn(message);
                 this.timedout = true;
+                receiptLedger?.seal?.({
+                    reason: 'timeout',
+                    mirrorEvidence: this.agent.bot.lastActionEvidence,
+                });
                 // Deliberately not awaited: history.add can reach a model
                 // summarization call, and the force stop must not queue behind
                 // it. It still needs its own sink or it rejects into the void.

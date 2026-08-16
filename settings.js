@@ -58,6 +58,17 @@ const settings = {
         "retention": 128, // bounded in-memory arbiter decisions; only the newest four are projected in live state
     },
 
+    // A held bot with no human player online safely unloads after this grace.
+    // That is right for an idle session and wrong during an unattended
+    // measurement: the Scenario Lab must place an Operator Hold (its harness
+    // waits for held actuator quiescence), and the bot would then unload out
+    // from under the measurement roughly a third of the time. Set the env var
+    // to a negative value to keep a held bot loaded. The Hold itself is never
+    // released by this -- only the process unload is suppressed.
+    "held_no_human_unload_grace_ms": Number.isFinite(Number(process.env.MINDCRAFT_HELD_UNLOAD_GRACE_MS))
+        ? Number(process.env.MINDCRAFT_HELD_UNLOAD_GRACE_MS)
+        : 10_000,
+
     "spawn_timeout": 30, // num seconds allowed for the bot to spawn before throwing error. Increase when spawning takes a while.
     "block_place_delay": 0, // delay between placing blocks (ms) if using newAction. helps avoid bot being kicked by anti-cheat mechanisms on servers.
   

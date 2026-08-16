@@ -9,7 +9,11 @@ import {
 import pf from '../../../packages/minecraft-runtime/mineflayer-pathfinder/index.js';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
-import { currentActionExecutionContext } from '../action_manager.js';
+import {
+    currentActionExecutionContext,
+    recordActionChild,
+    recordActionTerminal,
+} from '../action_manager.js';
 import { blockMatchesPlacement } from '../runtime/block-placement-contract.js';
 import {
     assessAnchoredGameplaySupport,
@@ -70,6 +74,11 @@ import {
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
 } from '../runtime/mining-corridor-planner.js';
+import { createComponentTransactionReceipt } from '../runtime/component-transaction.js';
+import {
+    isPlayerBuildEvidence,
+    observeWorldModificationAuthority,
+} from '../runtime/world-modification-authority.js';
 import {
     isDrinkableHealingPotion,
     isWaterPotion,
@@ -92,11 +101,17 @@ const FOLLOW_SAMPLE_MS = 200;
 const FOLLOW_STUCK_AFTER_MS = 3_000;
 const MAX_FOLLOW_RECOVERY_ATTEMPTS = 2;
 const FOLLOW_RECOVERY_COOLDOWN_MS = 3_000;
+// Standing directives need a player-sensible liveness ceiling. Route planning
+// remains wholly owned by native Pathfinder, but a recovery tranche may not
+// spend an unbounded series of individually bounded probes. One absolute
+// budget spans the direct proof and every segmented proof in that attempt.
+const FOLLOW_RECOVERY_PLANNING_BUDGET_MS = 3_000;
+const FOLLOW_RECOVERY_ROUTE_PROBE_TIMEOUT_MS = 1_000;
 const FOLLOW_REPLAN_DISTANCE = 1.25;
 const FOLLOW_DESTINATION_SETTLE_MS = 1_500;
 const FOLLOW_DESTINATION_POSITION_EPSILON = 0.75;
+const FOLLOW_MATERIAL_TARGET_RELOCATION = 8;
 const MAX_AVOID_RETREAT_ATTEMPTS = 3;
-const MIN_MOVEMENT_PROGRESS = 0.1;
 const MAX_DEFENSE_SWINGS = 14;
 const MAX_DEFENSE_FAILURES = 2;
 const DEFENSE_SWING_INTERVAL_MS = 550;
@@ -160,6 +175,7 @@ const NAVIGATION_RECOVERY_DISTANCE = 1;
 const NAVIGATION_RECOVERY_RADIUS = 4;
 const MAX_NAVIGATION_RECOVERY_ATTEMPTS = 1;
 const GROUND_SETTLE_TIMEOUT_MS = 800;
+const BLOCK_BREAK_SETTLE_MS = 250;
 const SHALLOW_WATER_EXIT_TIMEOUT_MS = 2_500;
 const SHALLOW_WATER_SHORE_SCAN_RADIUS = 48;
 const DROWNING_RECOVERY_OXYGEN = 20;
@@ -434,7 +450,7 @@ const TOOL_TIER = Object.freeze({
 });
 const HUNTABLE_FOOD_ANIMALS = new Set(['chicken', 'cow', 'pig', 'rabbit', 'sheep']);
 
-function setActionEvidence(bot, evidence) {
+function actionEvidenceSnapshot(bot, evidence) {
     const previous = bot.lastActionEvidence;
     const preservesVerifiedMiningRoute = Boolean(
         previous?.routeDigging === true
@@ -443,7 +459,7 @@ function setActionEvidence(bot, evidence) {
         && previous.returnRoute.length > 0
         && evidence?.returnable !== false
     );
-    bot.lastActionEvidence = {
+    return {
         ...(preservesVerifiedMiningRoute ? {
             routeDigging: true,
             returnable: true,
@@ -456,6 +472,53 @@ function setActionEvidence(bot, evidence) {
         } : {}),
         recordedAt: Date.now(),
     };
+}
+
+function setActionEvidence(bot, evidence) {
+    bot.lastActionEvidence = actionEvidenceSnapshot(bot, evidence);
+}
+
+function setActionChildEvidence(bot, relationship, evidence) {
+    if (currentActionExecutionContext()?.receiptMode !== 'composed') {
+        setActionEvidence(bot, evidence);
+        return Object.freeze({
+            accepted: true,
+            code: 'legacy_action_evidence_recorded',
+            snapshot: bot.lastActionEvidence,
+        });
+    }
+    const result = recordActionChild(relationship, actionEvidenceSnapshot(bot, evidence));
+    if (result.accepted) bot.lastActionEvidence = result.snapshot;
+    return result;
+}
+
+function setActionTerminalEvidence(bot, evidence) {
+    if (currentActionExecutionContext()?.receiptMode !== 'composed') {
+        setActionEvidence(bot, evidence);
+        return Object.freeze({
+            accepted: true,
+            code: 'legacy_action_evidence_recorded',
+            snapshot: bot.lastActionEvidence,
+        });
+    }
+    const result = recordActionTerminal(actionEvidenceSnapshot(bot, evidence));
+    if (result.accepted) bot.lastActionEvidence = result.snapshot;
+    return result;
+}
+
+function setNavigationActionEvidence(bot, options, evidence) {
+    if (!options?.receiptRelationship) {
+        setActionEvidence(bot, evidence);
+        return bot.lastActionEvidence;
+    }
+    const result = setActionChildEvidence(bot, options.receiptRelationship, {
+        ...evidence,
+        ...(options.receiptStage ? { stage: options.receiptStage } : {}),
+    });
+    if (result.accepted && typeof options.onReceipt === 'function') {
+        options.onReceipt(result.snapshot);
+    }
+    return result.snapshot;
 }
 
 function collectionErrorOutcome(error) {
@@ -1460,11 +1523,15 @@ export function isClearableWorksiteBlock(bot, block) {
 function safeMovements(bot) {
     const movements = new pf.Movements(bot);
     const defaultSafeToBreak = movements.safeToBreak.bind(movements);
-    // Ordinary locomotion never owns excavation. Resource collection and the
-    // deterministic mining adapters below may explicitly authorize exact
-    // breaking; following, workstation approaches, pickup, and recovery may
-    // only use native movement through existing space.
-    movements.canDig = false;
+    // Protection is a blocklist, not an amputation. This previously set
+    // `canDig = false` for all ordinary locomotion so the bot could not "chew
+    // through decorative hedges" — which also meant a single grass block could
+    // stop it from reaching the player. A companion that cannot break dirt
+    // cannot follow a kid across ordinary terrain. Digging is allowed; the
+    // things worth protecting are named below, and `digCost` keeps the
+    // pathfinder preferring to walk around when walking around is reasonable.
+    // See ARCHITECTURE.md.
+    movements.canDig = true;
     movements.canPlaceBlocks = false;
     movements.allow1by1towers = false;
     movements.allowParkour = false;
@@ -1484,6 +1551,16 @@ function safeMovements(bot) {
     for (const block of ['glass', 'glass_pane']) {
         const blockId = bot?.registry?.blocksByName?.[block]?.id ?? mc.getBlockId(block);
         if (Number.isFinite(blockId)) movements.blocksCantBreak.add(blockId);
+    }
+    // The real protection list: portals, bedrock, barriers, containers, and
+    // workstations stay untouchable, and hazards are never opened by a route.
+    // Everything else — dirt, grass, stone — is ordinary terrain a player
+    // would walk through or break without a second thought.
+    for (const entry of bot?.registry?.blocksArray || []) {
+        if (!Number.isFinite(entry?.id)) continue;
+        if (isProtectedGameplayBlock(entry.name) || isHazardousGameplayBlock(entry.name)) {
+            movements.blocksCantBreak.add(entry.id);
+        }
     }
 
     const policy = traversalPolicy(bot);
@@ -2052,6 +2129,239 @@ function localNavigationRecoveryMovements(bot, origin) {
         && isLocalNavigationFoliage(bot, candidate, origin)
     );
     return { movements, foliageCount };
+}
+
+const LOCAL_EGRESS_DIRECTIONS = Object.freeze([
+    Object.freeze({ x: 1, z: 0 }),
+    Object.freeze({ x: -1, z: 0 }),
+    Object.freeze({ x: 0, z: 1 }),
+    Object.freeze({ x: 0, z: -1 }),
+]);
+const LOCAL_EGRESS_MAX_BLOCKS = 2;
+
+function localEgressCellClear(block) {
+    return Boolean(
+        block
+        && block.boundingBox === 'empty'
+        && !isLiquidGameplayBlock(block)
+        && !isHazardousGameplayBlock(block)
+    );
+}
+
+function localEgressBlockReceipt(block) {
+    return Object.freeze({
+        name: String(block?.name || 'unknown').slice(0, 64),
+        x: Math.floor(Number(block?.position?.x)),
+        y: Math.floor(Number(block?.position?.y)),
+        z: Math.floor(Number(block?.position?.z)),
+    });
+}
+
+/**
+ * Select the smallest player-like escape from an observed local enclosure.
+ *
+ * This is deliberately not a route-digging policy. It can authorize only one
+ * adjacent two-block body column (or solid blocks already intersecting the
+ * bot's body), every mutated block must be loaded natural fill, and all four
+ * cardinal faces must be observed blocked before protected-site proximity can
+ * be overridden. The override means a bot trapped in temporary dirt beside a
+ * base can free itself without granting Pathfinder authority to tunnel through
+ * the base.
+ */
+export function localNavigationEgressPlan(bot, goal = null, { routeUnavailable = false } = {}) {
+    const origin = bot?.entity?.position?.floored?.();
+    const finish = ({
+        code,
+        attempted = false,
+        enclosureObserved = false,
+        blocks = [],
+        exit = null,
+        authority = null,
+    }) => Object.freeze({
+        schemaVersion: 1,
+        code,
+        attempted,
+        enclosureObserved,
+        origin: segmentReceiptPosition(origin),
+        exit: segmentReceiptPosition(exit),
+        blocks: Object.freeze(blocks
+            .slice()
+            .sort((left, right) => Number(right?.position?.y) - Number(left?.position?.y))
+            .map(localEgressBlockReceipt)),
+        authority: authority ? Object.freeze({
+            allowed: authority.allowed === true,
+            code: String(authority.code || 'unknown').slice(0, 80),
+            siteState: String(authority.site?.state || 'unknown').slice(0, 40),
+        }) : null,
+    });
+    if (!origin?.offset || typeof bot?.blockAt !== 'function') {
+        return finish({ code: 'local_egress_observation_unavailable' });
+    }
+
+    const bodyBlocks = [origin, origin.offset(0, 1, 0)].map(position => {
+        try { return bot.blockAt(position); } catch { return null; }
+    });
+    if (bodyBlocks.some(block => !block)) {
+        return finish({ code: 'local_egress_observation_unavailable' });
+    }
+    const intersecting = bodyBlocks.filter(block => (
+        !localEgressCellClear(block)
+        && observedBodyIntersectsBlock(bot, block)
+    ));
+    if (intersecting.length > 0) {
+        const clearable = intersecting.length <= LOCAL_EGRESS_MAX_BLOCKS
+            && intersecting.every(block => isNaturalFillBlock(bot, block));
+        if (!clearable) {
+            return finish({
+                code: 'local_egress_body_obstruction_unsafe',
+                attempted: true,
+                enclosureObserved: true,
+            });
+        }
+        return finish({
+            code: 'local_egress_ready',
+            attempted: true,
+            enclosureObserved: true,
+            blocks: intersecting,
+            exit: origin,
+            authority: {
+                allowed: true,
+                code: 'body_intersection_egress_authorized',
+                site: { state: 'direct_body_observation' },
+            },
+        });
+    }
+
+    const observedFaces = [];
+    for (const direction of LOCAL_EGRESS_DIRECTIONS) {
+        const feetPosition = origin.offset(direction.x, 0, direction.z);
+        const headPosition = feetPosition.offset(0, 1, 0);
+        const supportPosition = feetPosition.offset(0, -1, 0);
+        let feet;
+        let head;
+        let support;
+        try {
+            feet = bot.blockAt(feetPosition);
+            head = bot.blockAt(headPosition);
+            support = bot.blockAt(supportPosition);
+        } catch {
+            return finish({ code: 'local_egress_observation_unavailable' });
+        }
+        if (!feet || !head || !support) {
+            return finish({ code: 'local_egress_observation_unavailable' });
+        }
+        const blocks = [feet, head].filter(block => !localEgressCellClear(block));
+        observedFaces.push({ direction, feetPosition, support, blocks });
+    }
+    const enclosureObserved = observedFaces.every(face => face.blocks.length > 0);
+    if (!enclosureObserved && routeUnavailable !== true) {
+        return finish({ code: 'local_egress_not_enclosed' });
+    }
+
+    const destination = segmentJourneyDestination(goal);
+    const candidates = [];
+    for (const face of observedFaces) {
+        if (!isSafeGameplaySupport(face.support)) continue;
+        if (face.blocks.length === 0 || face.blocks.length > LOCAL_EGRESS_MAX_BLOCKS) continue;
+        if (!face.blocks.every(block => isNaturalFillBlock(bot, block))) continue;
+        const siteAuthority = observeWorldModificationAuthority(bot, face.feetPosition, {
+            purpose: 'local_navigation_egress',
+            mutation: 'break_natural_fill',
+            radius: 2,
+        });
+        // Exact enclosure evidence is stronger than nearby-site classification:
+        // crafted blocks near a temporary dirt prison must not make the prison
+        // permanent. Mutation remains restricted to this one natural-fill body
+        // column and does not become route-time excavation authority.
+        const authority = siteAuthority.allowed
+            ? siteAuthority
+            : enclosureObserved ? {
+                allowed: true,
+                code: 'observed_enclosure_egress_authorized',
+                site: siteAuthority.site,
+            } : siteAuthority;
+        if (!authority.allowed || (!enclosureObserved && traversalPolicy(bot) === 'preserve')) continue;
+        const remaining = destination
+            ? journeyDistance(face.feetPosition, destination)
+            : 0;
+        candidates.push({ ...face, authority, remaining });
+    }
+    candidates.sort((left, right) => (
+        left.blocks.length - right.blocks.length
+        || left.remaining - right.remaining
+        || left.direction.x - right.direction.x
+        || left.direction.z - right.direction.z
+    ));
+    const selected = candidates[0];
+    if (!selected) {
+        return finish({
+            code: 'local_egress_no_authorized_face',
+            attempted: true,
+            enclosureObserved,
+        });
+    }
+    return finish({
+        code: 'local_egress_ready',
+        attempted: true,
+        enclosureObserved,
+        blocks: selected.blocks,
+        exit: selected.feetPosition,
+        authority: selected.authority,
+    });
+}
+
+export async function attemptLocalNavigationEgress(bot, goal = null, options = {}) {
+    const plan = localNavigationEgressPlan(bot, goal, options);
+    if (plan.code !== 'local_egress_ready' || plan.authority?.allowed !== true) {
+        return Object.freeze({
+            success: false,
+            strategy: 'bounded_natural_egress',
+            outcome: plan.code,
+            attempted: plan.attempted,
+            enclosureObserved: plan.enclosureObserved,
+            cleared: 0,
+            plan,
+        });
+    }
+    const receipts = [];
+    for (const target of plan.blocks) {
+        if (bot.interrupt_code || actionCancellationSignal()?.aborted) break;
+        let observed;
+        try { observed = bot.blockAt(new Vec3(target.x, target.y, target.z)); } catch { observed = null; }
+        if (!observed || !isNaturalFillBlock(bot, observed)) {
+            return Object.freeze({
+                success: false,
+                strategy: 'bounded_natural_egress',
+                outcome: observed ? 'egress_target_changed' : 'egress_target_unavailable',
+                attempted: true,
+                enclosureObserved: plan.enclosureObserved,
+                cleared: receipts.length,
+                plan,
+                receipts: Object.freeze(receipts),
+            });
+        }
+        const cleared = await breakBlockAt(bot, target.x, target.y, target.z, {
+            requireHarvest: false,
+        });
+        receipts.push(Object.freeze({
+            target,
+            cleared: cleared === true,
+            outcome: String(bot.lastActionEvidence?.outcome || (cleared ? 'broken' : 'break_failed')).slice(0, 80),
+        }));
+        if (!cleared) break;
+    }
+    const cleared = receipts.filter(receipt => receipt.cleared).length;
+    const success = cleared === plan.blocks.length && plan.blocks.length > 0;
+    return Object.freeze({
+        success,
+        strategy: 'bounded_natural_egress',
+        outcome: success ? 'egress_cleared' : bot.interrupt_code ? 'interrupted' : 'egress_clear_failed',
+        attempted: true,
+        enclosureObserved: plan.enclosureObserved,
+        cleared,
+        plan,
+        receipts: Object.freeze(receipts),
+    });
 }
 
 /**
@@ -8687,6 +8997,8 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
     let temporaryScaffoldsPlaced = 0;
     let temporaryScaffoldsReclaimed = 0;
     const treeSelectionReceipts = [];
+    const componentTransactions = [];
+    let lastModificationAuthority = null;
 
     // `num` remains the physical bound for recipe and GoalDirector collection.
     // A lumberjack work order may explicitly add the stronger stewardship
@@ -8741,6 +9053,37 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             if (nearest) {
                 const tree = selectedTree || discoverNaturalTree(bot, nearest, failedTargets);
                 if (tree.natural) {
+                    const modificationAuthority = observeWorldModificationAuthority(bot, tree.base, {
+                        purpose: 'resource_collection',
+                        mutation: 'harvest_tree_component',
+                        radius: 3,
+                    });
+                    if (modificationAuthority.allowed !== true) {
+                        lastModificationAuthority = modificationAuthority;
+                        failedTargets.push(...tree.logs.map(block => ({
+                            x: block.position.x,
+                            y: block.position.y,
+                            z: block.position.z,
+                        })));
+                        search.candidateFailures = (search.candidateFailures || 0) + 1;
+                        log(bot, modificationAuthority.code === 'protected_site'
+                            ? `Skipped the tree at ${tree.base.x}, ${tree.base.y}, ${tree.base.z}: nearby player-build evidence protects that site.`
+                            : `Skipped the tree at ${tree.base.x}, ${tree.base.y}, ${tree.base.z}: its bounded site authority is unknown.`);
+                        if (search.candidateFailures <= MAX_COLLECTION_TARGET_FAILURES) continue;
+                        setActionEvidence(bot, {
+                            kind: 'collect',
+                            outcome: modificationAuthority.code,
+                            target: {
+                                name: nearest.name,
+                                x: tree.base.x,
+                                y: tree.base.y,
+                                z: tree.base.z,
+                            },
+                            modificationAuthority,
+                            retryable: modificationAuthority.code === 'site_authority_unknown',
+                        });
+                        break;
+                    }
                     if (completeStartedTree && tree.truncated) {
                         const oversizedTarget = {
                             name: nearest.name,
@@ -8788,6 +9131,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                         y: tree.base.y,
                         z: tree.base.z,
                     };
+                    const remainingRequested = Math.max(1, target - collected);
                     log(bot, `Collecting a bounded ${tree.logs[0].name.replace('_log', '').replace('_stem', '')} tree queue with ${tree.logs.length} loaded logs.`);
                     const harvested = await collectDiscoveredTree(
                         bot,
@@ -8801,6 +9145,26 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                     collected += harvested.count;
                     temporaryScaffoldsPlaced += harvested.scaffoldsPlaced;
                     temporaryScaffoldsReclaimed += harvested.scaffoldsReclaimed;
+                    componentTransactions.push(createComponentTransactionReceipt({
+                        kind: 'tree',
+                        componentId: `${nearest.name}:${tree.base.x}:${tree.base.y}:${tree.base.z}`,
+                        requestedQuantity: completeStartedTree
+                            ? tree.logs.length
+                            : Math.min(remainingRequested, tree.logs.length),
+                        selectedQuantity: tree.logs.length,
+                        acquiredQuantity: harvested.count,
+                        remainingComponentCount: harvested.remaining.length,
+                        componentCompletionRequired: completeStartedTree,
+                        accessOutcome: harvested.error
+                            ? collectionErrorOutcome(harvested.error)
+                            : harvested.count > 0 ? 'native_collection_progress' : 'no_progress',
+                        temporaryCreated: harvested.scaffoldsPlaced,
+                        temporaryReconciled: harvested.scaffoldsReclaimed,
+                        temporaryRemaining: harvested.remainingScaffolds.length,
+                        terrainSettled: harvested.settledOnTerrain,
+                        terrainOutcome: harvested.settlementOutcome,
+                        interrupted: bot.interrupt_code,
+                    }));
                     if (bot.interrupt_code) {
                         setActionEvidence(bot, {
                             kind: 'collect',
@@ -8808,6 +9172,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                             target: stumpTarget,
                             count: harvested.count,
                             remainingCount: harvested.remaining.length,
+                            componentTransactions: componentTransactions.slice(0, MAX_COLLECTION_CANDIDATES),
                             retryable: false,
                         });
                         log(bot, `Tree harvesting stopped after collecting ${harvested.count} log${harvested.count === 1 ? '' : 's'} from the active tree.`);
@@ -8831,6 +9196,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                                 y: scaffold.position.y,
                                 z: scaffold.position.z,
                             })),
+                            componentTransactions: componentTransactions.slice(0, MAX_COLLECTION_CANDIDATES),
                             retryable: false,
                         });
                         log(bot, `Stopped because ${harvested.remainingScaffolds.length} temporary tree scaffold block(s) could not be reclaimed.`);
@@ -8846,6 +9212,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                             remainingCount: harvested.remaining.length,
                             scaffoldsPlaced: harvested.scaffoldsPlaced,
                             scaffoldsReclaimed: harvested.scaffoldsReclaimed,
+                            componentTransactions: componentTransactions.slice(0, MAX_COLLECTION_CANDIDATES),
                             retryable: false,
                         });
                         log(bot, 'Stopped because the completed tree transaction did not settle on verified nearby terrain.');
@@ -8866,6 +9233,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                                 z: block.position.z,
                             })),
                             passes: harvested.passes,
+                            componentTransactions: componentTransactions.slice(0, MAX_COLLECTION_CANDIDATES),
                             ...(harvested.error ? {
                                 error: String(harvested.error?.message || harvested.error).slice(0, 240),
                             } : {}),
@@ -8941,14 +9309,16 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
                 );
                 setActionEvidence(bot, {
                     kind: 'collect',
-                    outcome: candidates?.blocks.length > 0 ? 'unreachable' : 'resource_not_found',
+                    outcome: lastModificationAuthority?.code
+                        || (candidates?.blocks.length > 0 ? 'unreachable' : 'resource_not_found'),
                     target: search.lastAccessRecoveryTarget || { name: 'wood' },
                     count: 0,
                     search: collectionSearchEvidence(bot, search),
+                    ...(lastModificationAuthority ? { modificationAuthority: lastModificationAuthority } : {}),
                     ...(surfaceAccessRequired ? {
                         accessRequirement: { kind: 'surface' },
                     } : {}),
-                    retryable: true,
+                    retryable: lastModificationAuthority?.code === 'protected_site' ? false : true,
                 });
             }
             log(bot, collected
@@ -9026,6 +9396,7 @@ export async function collectWood(bot, num=1, range=64, exclude=null, searchOpti
             temporaryScaffoldsPlaced,
             temporaryScaffoldsReclaimed,
             treeSelections: treeSelectionReceipts.slice(0, MAX_COLLECTION_CANDIDATES),
+            componentTransactions: componentTransactions.slice(0, MAX_COLLECTION_CANDIDATES),
             search: collectionSearchEvidence(bot, search),
             retryable: false,
         });
@@ -9601,7 +9972,12 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             && isFallingGameplayBlock(block)
         ) ? fallingColumnDepth(bot, block.position) : 0;
         try {
-            await bot.dig(block, true);
+            // Mineflayer's local dig timer optimistically writes air before a
+            // server must accept the packet. Bind a visible face through the
+            // package's anti-cheat-safe raycast option, then leave enough time
+            // for Paper to correct a rejected break before we claim success.
+            await bot.dig(block, true, 'raycast');
+            await interruptibleDelay(bot, BLOCK_BREAK_SETTLE_MS);
         } catch (err) {
             setActionEvidence(bot, { kind: 'break', outcome: 'dig_blocked', target, error: err.message, retryable: true });
             log(bot, `Could not break ${block.name}: ${err.message}.`);
@@ -11494,7 +11870,212 @@ export async function completeExplorationRoute(
     });
 }
 
-export async function recoverDeathItems(bot, deathRecord) {
+const OVERHEAD_DEATH_DROP_SITE_RADIUS = 4;
+// Match the existing nearby-pickup envelope. A natural death scatters item
+// entities across a canopy, so standing under one edge of the tree is local
+// even when the exact matching stack is a few blocks across the crown.
+const OVERHEAD_DEATH_DROP_LOCAL_RADIUS = 8;
+const OVERHEAD_DEATH_DROP_MIN_RISE = 2;
+const OVERHEAD_DEATH_DROP_MAX_RISE = 8;
+const OVERHEAD_DEATH_DROP_MAX_COLUMNS = 3;
+const OVERHEAD_DEATH_DROP_MAX_LEAVES = 6;
+const OVERHEAD_DEATH_DROP_SETTLE_TIMEOUT_MS = 2_500;
+
+function deathDropReceiptPosition(position) {
+    if (![position?.x, position?.y, position?.z].every(Number.isFinite)) return null;
+    return Object.freeze({
+        x: Math.round(Number(position.x) * 100) / 100,
+        y: Math.round(Number(position.y) * 100) / 100,
+        z: Math.round(Number(position.z) * 100) / 100,
+    });
+}
+
+function inspectOverheadDeathDrops(bot, deathPosition, expected) {
+    const origin = bot?.entity?.position;
+    const finish = (outcome, matched, columns, detail = {}) => Object.freeze({
+        schemaVersion: 1,
+        outcome,
+        matched: Math.max(0, Math.min(64, matched.length)),
+        matchedItems: Object.freeze(matched.slice(0, 12).map(entry => Object.freeze({
+            id: entry.id,
+            name: entry.name,
+            count: entry.count,
+            position: deathDropReceiptPosition(entry.position),
+        }))),
+        columns: Object.freeze(columns.slice(0, OVERHEAD_DEATH_DROP_MAX_COLUMNS).map(column => Object.freeze({
+            x: column.x,
+            z: column.z,
+            leaves: Object.freeze(column.leaves.map(deathDropReceiptPosition)),
+        }))),
+        ...detail,
+    });
+    if (
+        !origin
+        || bot.interrupt_code
+        || ![origin.x, origin.y, origin.z, deathPosition?.x, deathPosition?.y, deathPosition?.z]
+            .every(Number.isFinite)
+    ) return finish('overhead_context_unavailable', [], []);
+
+    const matched = [];
+    for (const entity of Object.values(bot.entities || {})) {
+        if (entity?.name !== 'item' || !entity.position) continue;
+        let item = null;
+        try { item = entity.getDroppedItem?.(); } catch { continue; }
+        const expectedCount = Math.max(0, Number(expected?.[item?.name]) || 0);
+        if (!item?.name || expectedCount < 1) continue;
+        const siteDistance = Math.sqrt(
+            ((entity.position.x - deathPosition.x) ** 2)
+            + ((entity.position.y - deathPosition.y) ** 2)
+            + ((entity.position.z - deathPosition.z) ** 2)
+        );
+        if (siteDistance > OVERHEAD_DEATH_DROP_SITE_RADIUS) continue;
+        matched.push({
+            id: entity.id,
+            name: item.name,
+            count: Math.max(1, Math.floor(Number(item.count) || 1)),
+            position: entity.position,
+        });
+    }
+    if (matched.length === 0) return finish('matching_death_drops_not_loaded', matched, []);
+
+    const local = matched.filter(entry => {
+        const horizontal = Math.hypot(entry.position.x - origin.x, entry.position.z - origin.z);
+        const rise = entry.position.y - origin.y;
+        return horizontal <= OVERHEAD_DEATH_DROP_LOCAL_RADIUS
+            && rise >= OVERHEAD_DEATH_DROP_MIN_RISE
+            && rise <= OVERHEAD_DEATH_DROP_MAX_RISE;
+    });
+    if (local.length === 0) return finish('matching_death_drops_not_local_overhead', matched, []);
+
+    const grouped = new Map();
+    for (const entry of local) {
+        const x = Math.floor(entry.position.x);
+        const z = Math.floor(entry.position.z);
+        const key = `${x}:${z}`;
+        const group = grouped.get(key) || { x, z, items: [] };
+        group.items.push(entry);
+        grouped.set(key, group);
+    }
+    const columns = [];
+    const rejectedColumns = {};
+    for (const group of [...grouped.values()].slice(0, OVERHEAD_DEATH_DROP_MAX_COLUMNS)) {
+        const startY = Math.floor(origin.y) + 2;
+        const endY = Math.floor(Math.max(...group.items.map(entry => entry.position.y))) - 1;
+        const leaves = [];
+        let rejection = null;
+        if (endY < startY || endY - startY + 1 > OVERHEAD_DEATH_DROP_MAX_RISE) {
+            rejection = 'invalid_vertical_span';
+        }
+        for (let y = startY; !rejection && y <= endY; y += 1) {
+            const block = bot.blockAt(new Vec3(group.x, y, group.z));
+            if (!block) {
+                rejection = 'column_unloaded';
+                break;
+            }
+            if (String(block.name || '').endsWith('_leaves')) {
+                if (isProtectedGameplayBlock(block) || isHazardousGameplayBlock(block)) {
+                    rejection = 'unsafe_leaf_block';
+                    break;
+                }
+                leaves.push(block.position?.clone?.() || new Vec3(group.x, y, group.z));
+                continue;
+            }
+            if (
+                block.boundingBox === 'empty'
+                && !isLiquidGameplayBlock(block)
+                && !isHazardousGameplayBlock(block)
+            ) continue;
+            rejection = 'non_leaf_obstruction';
+        }
+        if (leaves.length > OVERHEAD_DEATH_DROP_MAX_LEAVES) rejection = 'leaf_budget_exceeded';
+        if (rejection || leaves.length === 0) {
+            const reason = rejection || 'no_leaf_support';
+            rejectedColumns[reason] = (rejectedColumns[reason] || 0) + 1;
+            continue;
+        }
+        columns.push({ x: group.x, z: group.z, leaves, items: group.items });
+    }
+    const totalLeaves = columns.reduce((total, column) => total + column.leaves.length, 0);
+    if (totalLeaves > OVERHEAD_DEATH_DROP_MAX_LEAVES) {
+        return finish('leaf_budget_exceeded', matched, [], {
+            rejectedColumns: Object.freeze({ ...rejectedColumns, leaf_budget_exceeded: 1 }),
+        });
+    }
+    if (columns.length === 0) {
+        return finish('no_bounded_leaf_column', matched, [], {
+            rejectedColumns: Object.freeze({ ...rejectedColumns }),
+        });
+    }
+    return finish('bounded_leaf_column_available', matched, columns, {
+        rejectedColumns: Object.freeze({ ...rejectedColumns }),
+    });
+}
+
+async function releaseOverheadDeathDrops(bot, deathPosition, expected, breakBlock = breakBlockAt) {
+    const inspection = inspectOverheadDeathDrops(bot, deathPosition, expected);
+    if (inspection.outcome !== 'bounded_leaf_column_available') {
+        return Object.freeze({
+            ...inspection,
+            attempted: false,
+            released: false,
+            cleared: Object.freeze([]),
+            retryable: false,
+        });
+    }
+    const cleared = [];
+    for (const column of inspection.columns) {
+        for (const position of column.leaves) {
+            if (bot.interrupt_code) {
+                return Object.freeze({
+                    ...inspection,
+                    outcome: 'interrupted',
+                    attempted: true,
+                    released: false,
+                    cleared: Object.freeze(cleared.slice()),
+                    retryable: false,
+                });
+            }
+            const removed = await breakBlock(bot, position.x, position.y, position.z, {
+                requireHarvest: false,
+            });
+            if (!removed) {
+                return Object.freeze({
+                    ...inspection,
+                    outcome: 'leaf_clear_failed',
+                    attempted: true,
+                    released: false,
+                    cleared: Object.freeze(cleared.slice()),
+                    breakFailure: bot.lastActionEvidence
+                        ? Object.freeze({ ...bot.lastActionEvidence })
+                        : null,
+                    retryable: bot.lastActionEvidence?.retryable === true,
+                });
+            }
+            cleared.push(deathDropReceiptPosition(position));
+        }
+    }
+    const matchedIds = new Set(inspection.matchedItems.map(item => item.id));
+    const settled = await waitForWorldCondition(bot, () => (
+        [...matchedIds].every(id => {
+            const entity = bot.entities?.[id];
+            return !entity?.position || entity.position.y <= bot.entity.position.y + 2.5;
+        })
+    ), OVERHEAD_DEATH_DROP_SETTLE_TIMEOUT_MS, 50);
+    return Object.freeze({
+        ...inspection,
+        outcome: settled ? 'death_drops_released' : 'death_drops_not_settled',
+        attempted: true,
+        released: settled,
+        cleared: Object.freeze(cleared.slice()),
+        retryable: !settled && !bot.interrupt_code,
+    });
+}
+
+export async function recoverDeathItems(bot, deathRecord, {
+    navigateToPosition = goToPosition,
+    pickupItems = pickupNearbyItems,
+    breakBlock = breakBlockAt,
+} = {}) {
     const position = deathRecord?.position;
     const expected = deathRecord?.inventory && typeof deathRecord.inventory === 'object'
         ? Object.fromEntries(Object.entries(deathRecord.inventory)
@@ -11505,6 +12086,7 @@ export async function recoverDeathItems(bot, deathRecord) {
     const target = position && [position.x, position.y, position.z].every(Number.isFinite)
         ? { name: 'last_death_position', x: position.x, y: position.y, z: position.z }
         : { name: 'last_death_position' };
+    const outputCheckpoint = String(bot?.output || '');
     const finish = (success, outcome, detail={}) => {
         setActionEvidence(bot, {
             kind: 'death_recovery',
@@ -11515,6 +12097,11 @@ export async function recoverDeathItems(bot, deathRecord) {
             ...detail,
         });
         if (success) {
+            // Movement, access, and pickup substeps may have failed before a
+            // supported fallback completed the whole obligation. Preserve
+            // their structured receipts, but do not narrate stale local
+            // failures beside the verified success statement.
+            bot.output = outputCheckpoint;
             log(bot, `Returned to the death site and recovered ${detail.recovered || 0} dropped items.`);
         } else if (outcome !== 'interrupted') {
             log(bot, `Death-item recovery stopped (${outcome.replaceAll('_', ' ')}).`);
@@ -11540,36 +12127,135 @@ export async function recoverDeathItems(bot, deathRecord) {
     }
 
     const before = world.getInventoryCounts(bot);
-    if (!await goToPosition(bot, position.x, position.y, position.z, 2)) {
-        return finish(false, 'death_position_unreachable');
+    const observeManifest = () => {
+        const after = world.getInventoryCounts(bot);
+        const recoveredByItem = {};
+        const gainedByItem = {};
+        let recovered = 0;
+        let gained = 0;
+        let missing = 0;
+        for (const [name, expectedCount] of Object.entries(expected)) {
+            const carried = Math.max(0, Number(after[name]) || 0);
+            const gainedCount = Math.max(0, carried - (Number(before[name]) || 0));
+            recoveredByItem[name] = Math.min(expectedCount, carried);
+            gainedByItem[name] = Math.min(expectedCount, gainedCount);
+            recovered += recoveredByItem[name];
+            gained += gainedByItem[name];
+            missing += Math.max(0, expectedCount - carried);
+        }
+        return Object.freeze({
+            after: Object.freeze({ ...after }),
+            recoveredByItem: Object.freeze(recoveredByItem),
+            gainedByItem: Object.freeze(gainedByItem),
+            recovered,
+            gained,
+            missing,
+            complete: missing === 0 && recovered > 0,
+        });
+    };
+    const finishIfManifestRecovered = (completionSource, detail = {}) => {
+        const inventory = observeManifest();
+        if (!inventory.complete) return null;
+        return finish(true, 'items_recovered', {
+            expected,
+            recoveredByItem: inventory.recoveredByItem,
+            gainedByItem: inventory.gainedByItem,
+            recovered: inventory.recovered,
+            gained: inventory.gained,
+            missing: 0,
+            completionSource,
+            ...detail,
+            retryable: false,
+        });
+    };
+    const alreadyRecovered = finishIfManifestRecovered('manifest_already_present');
+    if (alreadyRecovered === true) return true;
+
+    const navigationAttempts = [];
+    let overheadAccess = await releaseOverheadDeathDrops(bot, position, expected, breakBlock);
+    let reachedDeathSite = overheadAccess.released === true;
+    if (overheadAccess.attempted && !overheadAccess.released) {
+        const recoveredDuringAccess = finishIfManifestRecovered('automatic_pickup_during_access', {
+            overheadAccess,
+        });
+        if (recoveredDuringAccess === true) return true;
+        return finish(false, overheadAccess.outcome, {
+            overheadAccess,
+            retryable: overheadAccess.retryable === true,
+        });
+    }
+    if (!reachedDeathSite) {
+        reachedDeathSite = await navigateToPosition(bot, position.x, position.y, position.z, 2, {
+            allowSegmentedJourney: true,
+        });
+    }
+    let navigation = bot.lastActionEvidence?.kind === 'movement'
+        ? bot.lastActionEvidence
+        : null;
+    if (navigation) navigationAttempts.push(Object.freeze({ ...navigation }));
+    if (!reachedDeathSite && !bot.interrupt_code) {
+        overheadAccess = await releaseOverheadDeathDrops(bot, position, expected, breakBlock);
+        reachedDeathSite = overheadAccess.released === true;
+        if (overheadAccess.attempted && !overheadAccess.released) {
+            const recoveredDuringAccess = finishIfManifestRecovered('automatic_pickup_during_access', {
+                ...(navigation ? { navigation } : {}),
+                navigationAttempts: Object.freeze(navigationAttempts.slice(0, 3)),
+                overheadAccess,
+            });
+            if (recoveredDuringAccess === true) return true;
+            return finish(false, overheadAccess.outcome, {
+                ...(navigation ? { navigation } : {}),
+                navigationAttempts: Object.freeze(navigationAttempts.slice(0, 3)),
+                overheadAccess,
+                retryable: overheadAccess.retryable === true,
+            });
+        }
+    }
+    if (!reachedDeathSite) {
+        const recoveredDuringApproach = finishIfManifestRecovered('automatic_pickup_during_approach', {
+            ...(navigation ? { navigation } : {}),
+            ...(navigationAttempts.length > 0
+                ? { navigationAttempts: Object.freeze(navigationAttempts.slice(0, 3)) }
+                : {}),
+            overheadAccess,
+        });
+        if (recoveredDuringApproach === true) return true;
+        return finish(false, 'death_position_unreachable', {
+            ...(navigation ? { navigation } : {}),
+            ...(navigationAttempts.length > 0
+                ? { navigationAttempts: Object.freeze(navigationAttempts.slice(0, 3)) }
+                : {}),
+            overheadAccess,
+            // Redispatch requires explicit movement progress. Unknown or an
+            // unchanged failed segment is terminal until world state changes.
+            retryable: navigation?.retryable === true,
+        });
     }
     if (bot.interrupt_code) return finish(false, 'interrupted', { retryable: false });
 
-    await pickupNearbyItems(bot);
-    const after = world.getInventoryCounts(bot);
-    const recoveredByItem = {};
-    let recovered = 0;
-    let missing = 0;
-    for (const [name, expectedCount] of Object.entries(expected)) {
-        const gained = Math.max(0, (after[name] || 0) - (before[name] || 0));
-        recoveredByItem[name] = gained;
-        recovered += Math.min(expectedCount, gained);
-        missing += Math.max(0, expectedCount - (after[name] || 0));
-    }
-    if (missing > 0 || recovered < 1) {
-        return finish(false, recovered > 0 ? 'items_partially_recovered' : 'items_not_recovered', {
+    await pickupItems(bot);
+    const inventory = observeManifest();
+    if (!inventory.complete) {
+        return finish(false, inventory.recovered > 0 ? 'items_partially_recovered' : 'items_not_recovered', {
             expected,
-            recoveredByItem,
-            recovered,
-            missing,
+            recoveredByItem: inventory.recoveredByItem,
+            gainedByItem: inventory.gainedByItem,
+            recovered: inventory.recovered,
+            gained: inventory.gained,
+            missing: inventory.missing,
+            ...(navigation ? { navigation } : {}),
+            ...(navigationAttempts.length > 0
+                ? { navigationAttempts: Object.freeze(navigationAttempts.slice(0, 3)) }
+                : {}),
+            overheadAccess,
         });
     }
-    return finish(true, 'items_recovered', {
-        expected,
-        recoveredByItem,
-        recovered,
-        missing: 0,
-        retryable: false,
+    return finishIfManifestRecovered('pickup_reconciled', {
+        ...(navigation ? { navigation } : {}),
+        ...(navigationAttempts.length > 0
+            ? { navigationAttempts: Object.freeze(navigationAttempts.slice(0, 3)) }
+            : {}),
+        overheadAccess,
     });
 }
 
@@ -14033,6 +14719,593 @@ function navigationProgressEvidence(outcome) {
     };
 }
 
+// Pathfinder goals do not expose a destination uniformly. GoalBlock/GoalNear
+// carry integer coordinates; GoalFollow tracks a live entity.
+export function segmentJourneyDestination(goal) {
+    if (!goal) return null;
+    if ([goal?.x, goal?.y, goal?.z].every(Number.isFinite)) {
+        return { x: Number(goal.x), y: Number(goal.y), z: Number(goal.z) };
+    }
+    const tracked = goal?.entity?.position;
+    if (tracked && [tracked.x, tracked.y, tracked.z].every(Number.isFinite)) {
+        return { x: Number(tracked.x), y: Number(tracked.y), z: Number(tracked.z) };
+    }
+    return null;
+}
+
+function journeyDistance(left, right) {
+    return Math.hypot(
+        Number(left.x) - Number(right.x),
+        Number(left.y) - Number(right.y),
+        Number(left.z) - Number(right.z),
+    );
+}
+
+/**
+ * Bounded waypoints toward a destination, ordered by how much journey they buy.
+ *
+ * Only supported movement endpoints are admitted: the endpoint must be loaded,
+ * clear for a body, standing on safe support, and free of nearby liquid or a
+ * hazard. Most segments advance horizontally. When the bot is directly below
+ * or above the destination, the search instead samples nearby destination-level
+ * stances so native Pathfinder can route through an existing cave exit or
+ * staircase rather than treating horizontal alignment as arrival. Route-level
+ * returnability is established separately by a native reverse proof.
+ */
+export function segmentWaypointSelection(bot, destination, {
+    reach = [20, 16, 12, 8, 5, 3],
+    lateralDegrees = [0, 25, -25, 50, -50, 70, -70, 90, -90, 110, -110],
+} = {}) {
+    const origin = bot?.entity?.position?.floored?.();
+    const rejectionCounts = {
+        unloaded: 0,
+        bodyBlocked: 0,
+        liquid: 0,
+        hazardous: 0,
+        unsupported: 0,
+        adjacentLiquid: 0,
+    };
+    const finish = (code, inspected, candidates) => Object.freeze({
+        schemaVersion: 1,
+        code,
+        origin: segmentReceiptPosition(origin),
+        destination: segmentReceiptPosition(destination, { floor: false }),
+        inspected: Math.max(0, Math.min(1024, Math.floor(Number(inspected) || 0))),
+        rejectionCounts: Object.freeze({ ...rejectionCounts }),
+        candidates: Object.freeze(candidates.slice(0, 512).map(candidate => Object.freeze({ ...candidate }))),
+    });
+    if (!origin || !destination) return finish('selection_input_unavailable', 0, []);
+    const spanX = Number(destination.x) - origin.x;
+    const spanY = Number(destination.y) - origin.y;
+    const spanZ = Number(destination.z) - origin.z;
+    const flatSpan = Math.hypot(spanX, spanZ);
+    const span = journeyDistance(origin, destination);
+    if (!Number.isFinite(span) || span < 1) return finish('destination_already_local', 0, []);
+    const verticalLocal = flatSpan < 2 && Math.abs(spanY) >= 2;
+    const heading = Math.atan2(spanZ, spanX);
+    const verticalDirection = Math.sign(spanY) || 1;
+    const ordinaryVerticalLevels = [
+        origin.y,
+        origin.y + verticalDirection,
+        origin.y + verticalDirection * 2,
+        origin.y - verticalDirection,
+        origin.y + verticalDirection * 3,
+        origin.y - verticalDirection * 2,
+        origin.y + verticalDirection * 4,
+        origin.y - verticalDirection * 3,
+        origin.y - verticalDirection * 4,
+    ];
+    const verticalLevels = verticalLocal
+        ? [
+            Math.floor(Number(destination.y)),
+            Math.floor(Number(destination.y)) - verticalDirection,
+            ...ordinaryVerticalLevels,
+        ]
+        : ordinaryVerticalLevels;
+    const horizontalSteps = verticalLocal ? [0, 1, 2, 3, 5, 8] : reach;
+    const searchAngles = verticalLocal
+        ? [0, 45, 90, 135, 180, 225, 270, 315]
+        : lateralDegrees;
+    const seen = new Set();
+    const candidates = [];
+    let inspected = 0;
+    for (const distance of horizontalSteps) {
+        for (const degrees of searchAngles) {
+            const angle = verticalLocal
+                ? degrees * Math.PI / 180
+                : heading + (degrees * Math.PI / 180);
+            const step = verticalLocal ? distance : Math.min(distance, flatSpan);
+            const anchor = verticalLocal ? destination : origin;
+            const x = Math.floor(Number(anchor.x) + Math.cos(angle) * step);
+            const z = Math.floor(Number(anchor.z) + Math.sin(angle) * step);
+            for (const y of verticalLevels) {
+                const key = `${x}:${y}:${z}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                inspected += 1;
+                const feet = bot.blockAt(new Vec3(x, y, z));
+                const head = bot.blockAt(new Vec3(x, y + 1, z));
+                const support = bot.blockAt(new Vec3(x, y - 1, z));
+                if (!feet || !head || !support) {
+                    rejectionCounts.unloaded += 1;
+                    continue;
+                }
+                if (feet.boundingBox !== 'empty' || head.boundingBox !== 'empty') {
+                    rejectionCounts.bodyBlocked += 1;
+                    continue;
+                }
+                if (isLiquidGameplayBlock(feet) || isLiquidGameplayBlock(head)) {
+                    rejectionCounts.liquid += 1;
+                    continue;
+                }
+                if (isHazardousGameplayBlock(feet) || isHazardousGameplayBlock(head)) {
+                    rejectionCounts.hazardous += 1;
+                    continue;
+                }
+                if (!isAnchoredGameplaySupport(bot, support)) {
+                    rejectionCounts.unsupported += 1;
+                    continue;
+                }
+                const adjacentLiquid = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+                    .map(([dx, dz]) => bot.blockAt(new Vec3(x + dx, y, z + dz)))
+                    .some(isLiquidGameplayBlock);
+                if (adjacentLiquid) {
+                    rejectionCounts.adjacentLiquid += 1;
+                    continue;
+                }
+                candidates.push({ x, y, z, remaining: journeyDistance({ x, y, z }, destination) });
+            }
+        }
+    }
+    candidates.sort((left, right) => (
+        left.remaining - right.remaining
+        || Math.abs(left.y - Number(destination.y)) - Math.abs(right.y - Number(destination.y))
+    ));
+    return finish(
+        candidates.length > 0
+            ? verticalLocal ? 'vertical_egress_candidates_available' : 'candidates_available'
+            : verticalLocal ? 'no_safe_vertical_egress' : 'no_safe_waypoint',
+        inspected,
+        candidates,
+    );
+}
+
+export function segmentWaypointCandidates(bot, destination, options = {}) {
+    return segmentWaypointSelection(bot, destination, options).candidates;
+}
+
+const SEGMENT_JOURNEY_MAX_SEGMENTS = 10;
+const SEGMENT_JOURNEY_MIN_PROGRESS = 2;
+const SEGMENT_JOURNEY_MAX_STALLS = 2;
+const SEGMENT_JOURNEY_MAX_UNPROVEN_CANDIDATES = 2;
+const SEGMENT_JOURNEY_MAX_DETOUR_DEBT = 8;
+const SEGMENT_JOURNEY_MAX_CONSECUTIVE_DETOURS = 3;
+const SEGMENT_JOURNEY_MIN_DETOUR_DISPLACEMENT = 2;
+
+function createWaypointSelectionReceipt(selection, {
+    visitedExcluded = 0,
+    insufficientProgress = 0,
+    detourCandidates = 0,
+    detourDebtExcluded = 0,
+    selectedRelation = null,
+} = {}) {
+    return Object.freeze({
+        schemaVersion: 1,
+        code: String(selection?.code || 'selection_unavailable').slice(0, 80),
+        origin: segmentReceiptPosition(selection?.origin),
+        destination: segmentReceiptPosition(selection?.destination, { floor: false }),
+        inspected: Math.max(0, Math.min(1024, Math.floor(Number(selection?.inspected) || 0))),
+        candidateCount: Math.max(0, Math.min(512, selection?.candidates?.length || 0)),
+        visitedExcluded: Math.max(0, Math.min(512, Math.floor(Number(visitedExcluded) || 0))),
+        insufficientProgress: Math.max(0, Math.min(512, Math.floor(Number(insufficientProgress) || 0))),
+        detourCandidates: Math.max(0, Math.min(512, Math.floor(Number(detourCandidates) || 0))),
+        detourDebtExcluded: Math.max(0, Math.min(512, Math.floor(Number(detourDebtExcluded) || 0))),
+        selectedRelation: selectedRelation ? String(selectedRelation).slice(0, 80) : null,
+        rejectionCounts: Object.freeze({
+            unloaded: Math.max(0, Math.min(1024, Math.floor(Number(selection?.rejectionCounts?.unloaded) || 0))),
+            bodyBlocked: Math.max(0, Math.min(1024, Math.floor(Number(selection?.rejectionCounts?.bodyBlocked) || 0))),
+            liquid: Math.max(0, Math.min(1024, Math.floor(Number(selection?.rejectionCounts?.liquid) || 0))),
+            hazardous: Math.max(0, Math.min(1024, Math.floor(Number(selection?.rejectionCounts?.hazardous) || 0))),
+            unsupported: Math.max(0, Math.min(1024, Math.floor(Number(selection?.rejectionCounts?.unsupported) || 0))),
+            adjacentLiquid: Math.max(0, Math.min(1024, Math.floor(Number(selection?.rejectionCounts?.adjacentLiquid) || 0))),
+        }),
+    });
+}
+
+function segmentReceiptPosition(position, { floor = true } = {}) {
+    if (![position?.x, position?.y, position?.z].every(Number.isFinite)) return null;
+    const normalize = value => floor
+        ? Math.floor(Number(value))
+        : Math.round(Number(value) * 100) / 100;
+    return Object.freeze({
+        x: normalize(position.x),
+        y: normalize(position.y),
+        z: normalize(position.z),
+    });
+}
+
+function createSegmentJourneyReceipt({
+    index,
+    origin,
+    waypoint,
+    finalDestination,
+    routeStatus,
+    pathLength = 0,
+    returnStatus = null,
+    returnPathLength = 0,
+    proofPolicy = 'round_trip',
+    executionOutcome = null,
+    terminal = null,
+    executed = false,
+    progress = 0,
+    expectedProgress = 0,
+    progressRelation = 'decrease_spatial_distance',
+    bestDistanceBefore = null,
+    outcome,
+}) {
+    const detour = progressRelation === 'bounded_obstacle_detour';
+    return Object.freeze({
+        schemaVersion: 1,
+        index: Math.max(0, Math.min(SEGMENT_JOURNEY_MAX_SEGMENTS - 1, Math.floor(Number(index) || 0))),
+        origin: segmentReceiptPosition(origin),
+        waypoint: segmentReceiptPosition(waypoint),
+        finalDestination: segmentReceiptPosition(finalDestination, { floor: false }),
+        nativeRoute: Object.freeze({
+            status: String(routeStatus || 'unknown').slice(0, 80),
+            pathLength: Math.max(0, Math.min(4096, Math.floor(Number(pathLength) || 0))),
+            returnStatus: returnStatus ? String(returnStatus).slice(0, 80) : null,
+            returnPathLength: Math.max(0, Math.min(4096, Math.floor(Number(returnPathLength) || 0))),
+        }),
+        safety: Object.freeze({
+            loaded: true,
+            bodyClear: true,
+            supported: true,
+            nonHazardous: true,
+            adjacentLiquid: false,
+        }),
+        returnability: proofPolicy === 'safe_frontier'
+            ? 'safe_frontier_forward_proved'
+            : returnStatus === 'success'
+                ? 'native_round_trip_proved'
+                : 'not_proved',
+        expectedProgress: Object.freeze({
+            relation: progressRelation,
+            minimum: detour ? 0 : SEGMENT_JOURNEY_MIN_PROGRESS,
+            blocks: Math.round((Number(expectedProgress) || 0) * 100) / 100,
+            ...(detour ? {
+                minimumDisplacement: SEGMENT_JOURNEY_MIN_DETOUR_DISPLACEMENT,
+                maximumDistanceDebt: SEGMENT_JOURNEY_MAX_DETOUR_DEBT,
+                bestDistanceBefore: Math.round((Number(bestDistanceBefore) || 0) * 100) / 100,
+            } : {}),
+        }),
+        executionOutcome: executionOutcome ? String(executionOutcome).slice(0, 80) : null,
+        terminal: segmentReceiptPosition(terminal),
+        executed: executed === true,
+        progress: Math.round((Number(progress) || 0) * 100) / 100,
+        outcome: String(outcome || 'unknown').slice(0, 80),
+    });
+}
+
+function remainingRoutePlanningTimeMs(options = {}, fallbackTimeoutMs = 5_000) {
+    const requestedTimeoutMs = Number(options?.plannedRouteTimeoutMs);
+    let timeoutMs = Math.max(
+        100,
+        Math.min(
+            10_000,
+            Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+                ? Math.floor(requestedTimeoutMs)
+                : Math.floor(fallbackTimeoutMs),
+        ),
+    );
+    const deadlineAt = Number(options?.planningDeadlineAt);
+    if (!Number.isFinite(deadlineAt)) return timeoutMs;
+    const remainingMs = Math.floor(deadlineAt - Date.now());
+    if (remainingMs < 100) return 0;
+    timeoutMs = Math.min(timeoutMs, remainingMs);
+    return timeoutMs;
+}
+
+/**
+ * Receding-horizon journey: pick a bounded waypoint, prove a complete native
+ * route to it, execute, reconcile actual progress, repeat. The exact final
+ * destination is never replaced — it is only approached — and completing
+ * segments is progress, never arrival.
+ */
+async function runSegmentedJourney(bot, goal, options, planning, movementFactory) {
+    const initialDestination = segmentJourneyDestination(goal);
+    if (!initialDestination) {
+        return { attempted: false, arrived: false, segments: [], destination: null };
+    }
+    const segments = [];
+    const visited = new Set();
+    const initialOrigin = observedSupportedStandingCell(bot);
+    if (initialOrigin) visited.add(`${initialOrigin.x}:${initialOrigin.y}:${initialOrigin.z}`);
+    let stalls = 0;
+    let unprovenCandidates = 0;
+    const initialRemaining = initialOrigin
+        ? journeyDistance(bot.entity.position, initialDestination)
+        : Number.POSITIVE_INFINITY;
+    let bestRemaining = initialRemaining;
+    let progressed = 0;
+    let consecutiveDetours = 0;
+    let detourAnchorBest = null;
+    let blocker = initialOrigin ? null : 'segmented_journey_unsafe_origin';
+    let waypointSelection = null;
+
+    for (let index = 0; index < SEGMENT_JOURNEY_MAX_SEGMENTS; index += 1) {
+        if (bot.interrupt_code || actionCancellationSignal()?.aborted) break;
+        if (navigationGoalSatisfied(bot, goal)) break;
+        const segmentPlanningTimeoutMs = remainingRoutePlanningTimeMs(
+            options,
+            2_000,
+        );
+        if (segmentPlanningTimeoutMs <= 0) {
+            blocker = 'segmented_journey_planning_deadline';
+            break;
+        }
+        const destination = segmentJourneyDestination(goal);
+        const segmentOrigin = observedSupportedStandingCell(bot);
+        if (!destination || !segmentOrigin) {
+            blocker = destination
+                ? 'segmented_journey_unsafe_origin'
+                : 'segmented_journey_target_lost';
+            break;
+        }
+        const before = journeyDistance(bot.entity.position, destination);
+        bestRemaining = Math.min(bestRemaining, before);
+        const selection = segmentWaypointSelection(bot, destination);
+        let visitedExcluded = 0;
+        let insufficientProgress = 0;
+        let detourCandidates = 0;
+        let detourDebtExcluded = 0;
+        let directCandidate = null;
+        let detourCandidate = null;
+        for (const entry of selection.candidates) {
+            if (visited.has(`${entry.x}:${entry.y}:${entry.z}`)) {
+                visitedExcluded += 1;
+                continue;
+            }
+            if (entry.remaining <= before - SEGMENT_JOURNEY_MIN_PROGRESS) {
+                directCandidate = entry;
+                break;
+            }
+            insufficientProgress += 1;
+            const displacement = journeyDistance(segmentOrigin, entry);
+            if (displacement < SEGMENT_JOURNEY_MIN_DETOUR_DISPLACEMENT
+                || entry.remaining > bestRemaining + SEGMENT_JOURNEY_MAX_DETOUR_DEBT) {
+                detourDebtExcluded += 1;
+                continue;
+            }
+            detourCandidates += 1;
+            if (!detourCandidate) detourCandidate = entry;
+        }
+        const detourAllowed = consecutiveDetours < SEGMENT_JOURNEY_MAX_CONSECUTIVE_DETOURS;
+        const candidate = directCandidate || (detourAllowed ? detourCandidate : null);
+        const progressRelation = directCandidate
+            ? 'decrease_spatial_distance'
+            : candidate ? 'bounded_obstacle_detour' : null;
+        waypointSelection = createWaypointSelectionReceipt(selection, {
+            visitedExcluded,
+            insufficientProgress,
+            detourCandidates,
+            detourDebtExcluded,
+            selectedRelation: progressRelation,
+        });
+        if (!candidate) {
+            blocker = detourCandidate && !detourAllowed
+                ? 'segmented_journey_detour_limit'
+                : 'segmented_journey_no_safe_waypoint';
+            break;
+        }
+        visited.add(`${candidate.x}:${candidate.y}:${candidate.z}`);
+
+        const waypointGoal = new pf.goals.GoalBlock(candidate.x, candidate.y, candidate.z);
+        const segmentMovements = movementFactory();
+        const proofPolicy = options?.segmentProofPolicy === 'safe_frontier'
+            ? 'safe_frontier'
+            : 'round_trip';
+        // Generic journeys retain the strict reverse proof because a safe
+        // endpoint does not imply a climbable way home. Player pursuit is
+        // different: an ordinary player advances along a native-proven safe
+        // forward leg and replans from the new supported frontier. This never
+        // authorizes unproven movement or route-time digging.
+        const probe = proofPolicy === 'safe_frontier'
+            ? probeSafeNavigationStances(
+                bot,
+                [candidate],
+                segmentPlanningTimeoutMs,
+                segmentMovements,
+            )
+            : probeSafeRoundTripNavigationStances(
+                bot,
+                [candidate],
+                segmentOrigin,
+                segmentPlanningTimeoutMs,
+                segmentMovements,
+            );
+        if (!probe.reachable) {
+            unprovenCandidates += 1;
+            segments.push(createSegmentJourneyReceipt({
+                index,
+                origin: segmentOrigin,
+                waypoint: candidate,
+                finalDestination: destination,
+                routeStatus: probe.status,
+                pathLength: probe.pathLength,
+                returnStatus: probe.returnStatus,
+                returnPathLength: probe.returnPathLength,
+                proofPolicy,
+                expectedProgress: before - candidate.remaining,
+                progressRelation,
+                bestDistanceBefore: bestRemaining,
+                outcome: 'route_unproven',
+            }));
+            blocker = 'segmented_journey_route_unproven';
+            if (unprovenCandidates >= SEGMENT_JOURNEY_MAX_UNPROVEN_CANDIDATES) break;
+            continue;
+        }
+        unprovenCandidates = 0;
+        blocker = null;
+        const moved = await goToGoal(bot, waypointGoal, {
+            ...options,
+            movements: segmentMovements,
+            requirePlannedRoute: true,
+            allowSegmentedJourney: false,
+        });
+        const executionOutcome = bot.lastActionEvidence?.outcome || (moved ? 'arrived' : 'path_execution_failed');
+        const terminal = moved === true
+            ? await waitForStableSupportedStandingCell(bot)
+            : observedSupportedStandingCell(bot);
+        const reachedWaypoint = Boolean(
+            terminal
+            && terminal.x === candidate.x
+            && terminal.y === candidate.y
+            && terminal.z === candidate.z
+        );
+        const after = terminal
+            ? journeyDistance(terminal, destination)
+            : journeyDistance(bot.entity.position, destination);
+        const progress = before - after;
+        const displacement = terminal ? journeyDistance(segmentOrigin, terminal) : 0;
+        const detourWithinDebt = after <= bestRemaining + SEGMENT_JOURNEY_MAX_DETOUR_DEBT;
+        const detourVerified = progressRelation === 'bounded_obstacle_detour'
+            && displacement >= SEGMENT_JOURNEY_MIN_DETOUR_DISPLACEMENT
+            && detourWithinDebt;
+        const segmentOutcome = moved !== true
+            ? 'path_execution_failed'
+            : !reachedWaypoint
+                ? 'settlement_unverified'
+                : detourVerified
+                    ? 'detour_verified'
+                    : progress >= SEGMENT_JOURNEY_MIN_PROGRESS
+                    ? 'progress_verified'
+                    : progressRelation === 'bounded_obstacle_detour'
+                        ? displacement < SEGMENT_JOURNEY_MIN_DETOUR_DISPLACEMENT
+                            ? 'detour_displacement_insufficient'
+                            : 'detour_debt_exceeded'
+                        : 'no_material_progress';
+        segments.push(createSegmentJourneyReceipt({
+            index,
+            origin: segmentOrigin,
+            waypoint: candidate,
+            finalDestination: destination,
+            routeStatus: probe.status,
+            pathLength: probe.pathLength,
+            returnStatus: probe.returnStatus,
+            returnPathLength: probe.returnPathLength,
+            proofPolicy,
+            executionOutcome,
+            terminal,
+            executed: moved === true,
+            progress,
+            expectedProgress: before - candidate.remaining,
+            progressRelation,
+            bestDistanceBefore: bestRemaining,
+            outcome: segmentOutcome,
+        }));
+        if (!moved || !reachedWaypoint || (progressRelation === 'bounded_obstacle_detour' && !detourVerified)) {
+            blocker = !moved
+                ? 'segmented_path_execution_failed'
+                : !reachedWaypoint
+                    ? 'segmented_journey_settlement_unverified'
+                    : detourWithinDebt
+                        ? 'segmented_journey_detour_displacement_insufficient'
+                        : 'segmented_journey_detour_debt_exceeded';
+            break;
+        }
+        visited.add(`${terminal.x}:${terminal.y}:${terminal.z}`);
+        bestRemaining = Math.min(bestRemaining, after);
+        progressed = Number.isFinite(initialRemaining)
+            ? Math.max(0, initialRemaining - bestRemaining)
+            : 0;
+        blocker = null;
+        if (navigationGoalSatisfied(bot, goal)) break;
+        // Reconciliation: a segment that did not physically shorten the journey
+        // is not authority for another one. Elapsed time is never progress.
+        if (progressRelation === 'bounded_obstacle_detour') {
+            if (detourAnchorBest === null) detourAnchorBest = before;
+            consecutiveDetours += 1;
+            if (after <= detourAnchorBest - SEGMENT_JOURNEY_MIN_PROGRESS) {
+                consecutiveDetours = 0;
+                detourAnchorBest = null;
+            }
+            stalls = 0;
+        } else if (progress < SEGMENT_JOURNEY_MIN_PROGRESS) {
+            stalls += 1;
+            if (stalls >= SEGMENT_JOURNEY_MAX_STALLS) {
+                blocker = 'segmented_journey_no_progress';
+                break;
+            }
+        } else {
+            stalls = 0;
+            consecutiveDetours = 0;
+            detourAnchorBest = null;
+        }
+        const directMovements = movementFactory();
+        const directPlanningTimeoutMs = remainingRoutePlanningTimeMs(
+            options,
+            5_000,
+        );
+        if (directPlanningTimeoutMs <= 0) {
+            blocker = 'segmented_journey_planning_deadline';
+            break;
+        }
+        const direct = probeSafeNavigationGoal(
+            bot,
+            goal,
+            directPlanningTimeoutMs,
+            directMovements,
+        );
+        if (direct.reachable) {
+            const finished = await goToGoal(bot, goal, {
+                ...options,
+                movements: directMovements,
+                requirePlannedRoute: true,
+                allowSegmentedJourney: false,
+            });
+            if (finished === true || navigationGoalSatisfied(bot, goal)) {
+                return {
+                    attempted: true,
+                    arrived: true,
+                    segments: Object.freeze(segments.slice()),
+                    destination: segmentReceiptPosition(segmentJourneyDestination(goal), { floor: false }),
+                    progressed: Math.round(progressed * 100) / 100,
+                    waypointSelection,
+                };
+            }
+            blocker = 'segmented_final_path_execution_failed';
+            break;
+        }
+        if (consecutiveDetours >= SEGMENT_JOURNEY_MAX_CONSECUTIVE_DETOURS) {
+            blocker = 'segmented_journey_detour_limit';
+            break;
+        }
+    }
+
+    const arrived = navigationGoalSatisfied(bot, goal);
+    const boundedProgress = Math.round(progressed * 100) / 100;
+    const outcome = arrived
+        ? 'arrived'
+        : blocker || (boundedProgress >= SEGMENT_JOURNEY_MIN_PROGRESS
+            ? 'segmented_journey_incomplete'
+            : 'segmented_journey_no_progress');
+    return {
+        attempted: true,
+        arrived,
+        segments: Object.freeze(segments.slice(0, SEGMENT_JOURNEY_MAX_SEGMENTS)),
+        destination: segmentReceiptPosition(segmentJourneyDestination(goal) || initialDestination, { floor: false }),
+        progressed: boundedProgress,
+        outcome,
+        waypointSelection,
+        // Only a journey that physically advanced earns another attempt; an
+        // unchanged one would repeat identical planning evidence.
+        retryable: boundedProgress >= SEGMENT_JOURNEY_MIN_PROGRESS && !bot.interrupt_code,
+        message: boundedProgress >= SEGMENT_JOURNEY_MIN_PROGRESS
+            ? `No complete route exists, so I advanced ${boundedProgress} blocks toward the destination in ${segments.length} bounded segment attempt(s) but did not arrive (${outcome.replaceAll('_', ' ')}).`
+            : `Pathfinder could not produce a complete safe route (${planning.status}) and bounded segmentation stopped (${outcome.replaceAll('_', ' ')}); no unproven movement was attempted.`,
+    };
+}
+
 export async function goToGoal(bot, goal, options = {}) {
     /**
      * Navigate to the given goal. Use doors and attempt minimally destructive movements.
@@ -14053,19 +15326,117 @@ export async function goToGoal(bot, goal, options = {}) {
         : options?.movements
             ? () => options.movements
             : () => safeMovements(bot);
+    let preflightRecovery = null;
+    if (
+        options?.requirePlannedRoute === true
+        && options?.allowLocalRecovery !== false
+        && !navigationGoalSatisfied(bot, goal)
+    ) {
+        const egressPlan = localNavigationEgressPlan(bot, goal);
+        if (egressPlan.attempted) {
+            preflightRecovery = await attemptLocalNavigationEgress(bot, goal);
+            if (aborted()) return false;
+            if (preflightRecovery.success) {
+                log(bot, `Navigation cleared ${preflightRecovery.cleared} bounded natural obstruction block(s) before proving the requested route.`);
+            }
+        }
+    }
     const initialMovements = movementFactory();
     if (options?.requirePlannedRoute === true && !navigationGoalSatisfied(bot, goal)) {
-        const planning = probeSafeNavigationGoal(
+        const initialPlanningTimeoutMs = remainingRoutePlanningTimeMs(
+            options,
+            5_000,
+        );
+        if (initialPlanningTimeoutMs <= 0) {
+            setNavigationActionEvidence(bot, options, {
+                kind: 'movement',
+                outcome: 'planning_deadline_exhausted',
+                planning: { reachable: false, status: 'planning_deadline_exhausted', pathLength: 0 },
+                ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
+                retryable: true,
+            });
+            log(bot, 'The route-planning obligation reached its deadline before another native search could begin.');
+            return false;
+        }
+        let planning = probeSafeNavigationGoal(
             bot,
             goal,
-            options?.plannedRouteTimeoutMs,
+            initialPlanningTimeoutMs,
             initialMovements,
         );
+        if (
+            !planning.reachable
+            && options?.allowLocalRecovery !== false
+            && preflightRecovery?.success !== true
+        ) {
+            const failedRouteRecovery = await attemptLocalNavigationEgress(bot, goal, {
+                routeUnavailable: true,
+            });
+            if (failedRouteRecovery.attempted) preflightRecovery = failedRouteRecovery;
+            if (aborted()) return false;
+            if (failedRouteRecovery.success) {
+                log(bot, `Navigation cleared ${failedRouteRecovery.cleared} target-directed natural obstruction block(s) after the native route proof failed.`);
+                const retryPlanningTimeoutMs = remainingRoutePlanningTimeMs(options, 5_000);
+                planning = retryPlanningTimeoutMs <= 0
+                    ? { reachable: false, status: 'planning_deadline_exhausted', pathLength: 0 }
+                    : probeSafeNavigationGoal(
+                        bot,
+                        goal,
+                        retryPlanningTimeoutMs,
+                        movementFactory(),
+                    );
+            }
+        }
         if (!planning.reachable) {
-            setActionEvidence(bot, {
+            // A failed whole-journey proof means this destination is not
+            // reachable in one leg, not that no movement is possible. Under the
+            // approved segmented-navigation contract the journey may proceed as
+            // individually route-proven segments while the exact destination and
+            // obligation are retained. Recursion is disabled inside a segment,
+            // so every executed leg still requires its own complete native route.
+            if (options?.allowSegmentedJourney === true) {
+                const segmented = await runSegmentedJourney(
+                    bot,
+                    goal,
+                    options,
+                    planning,
+                    movementFactory,
+                );
+                if (segmented.arrived) {
+                    setNavigationActionEvidence(bot, options, {
+                        kind: 'movement',
+                        outcome: 'arrived',
+                        planning,
+                        segments: segmented.segments,
+                        finalDestination: segmented.destination,
+                        progressed: segmented.progressed,
+                        waypointSelection: segmented.waypointSelection,
+                        ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
+                        retryable: false,
+                    });
+                    return true;
+                }
+                if (segmented.attempted) {
+                    setNavigationActionEvidence(bot, options, {
+                        kind: 'movement',
+                        outcome: segmented.outcome,
+                        planning,
+                        segments: segmented.segments,
+                        finalDestination: segmented.destination,
+                        progressed: segmented.progressed,
+                        waypointSelection: segmented.waypointSelection,
+                        ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
+                        retryable: segmented.retryable,
+                    });
+                    log(bot, segmented.message);
+                    return false;
+                }
+            }
+            setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
                 outcome: 'path_not_found',
                 planning,
+                ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
                 retryable: true,
             });
             log(bot, `Pathfinder could not produce a complete safe route (${planning.status}); no movement was attempted.`);
@@ -14086,7 +15457,7 @@ export async function goToGoal(bot, goal, options = {}) {
     ) + 1;
     const doorCheckInterval = startDoorInterval(bot);
     try {
-        let recovery = null;
+        let recovery = preflightRecovery;
         let currentFeet = bot.entity?.position
             ? bot.blockAt(bot.entity.position.floored())
             : null;
@@ -14175,7 +15546,7 @@ export async function goToGoal(bot, goal, options = {}) {
         }
         if (outcome.state === 'stalled') {
             const target = navigationTarget(goal);
-            setActionEvidence(bot, {
+            setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
                 outcome: 'path_stalled',
                 ...(target ? { target } : {}),
@@ -14196,7 +15567,7 @@ export async function goToGoal(bot, goal, options = {}) {
         }
         if (outcome.state === 'rejected') {
             const failure = pathfinderErrorOutcome(outcome.error, Boolean(bot.interrupt_code));
-            setActionEvidence(bot, {
+            setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
                 outcome: failure,
                 error: String(outcome.error?.message || outcome.error).slice(0, 240),
@@ -14209,7 +15580,7 @@ export async function goToGoal(bot, goal, options = {}) {
             return false;
         }
         if (bot.interrupt_code || aborted()) {
-            setActionEvidence(bot, {
+            setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
                 outcome: 'interrupted',
                 ...(recovery ? { recovery } : {}),
@@ -14220,7 +15591,7 @@ export async function goToGoal(bot, goal, options = {}) {
         }
         const arrived = navigationGoalSatisfied(bot, goal);
         if (!arrived) {
-            setActionEvidence(bot, {
+            setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
                 outcome: 'goal_not_reached',
                 ...(recovery ? { recovery } : {}),
@@ -14229,7 +15600,7 @@ export async function goToGoal(bot, goal, options = {}) {
             log(bot, 'Pathfinder stopped without satisfying the requested goal.');
             return false;
         }
-        setActionEvidence(bot, {
+        setNavigationActionEvidence(bot, options, {
             kind: 'movement',
             outcome: 'arrived',
             ...(recovery ? { recovery } : {}),
@@ -14237,10 +15608,11 @@ export async function goToGoal(bot, goal, options = {}) {
         return true;
     } catch (err) {
         const outcome = pathfinderErrorOutcome(err, Boolean(bot.interrupt_code || aborted()));
-        setActionEvidence(bot, {
+        setNavigationActionEvidence(bot, options, {
             kind: 'movement',
             outcome,
             error: String(err?.message || err).slice(0, 240),
+            ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
             retryable: outcome !== 'interrupted',
         });
         log(bot, outcome === 'unreachable'
@@ -17368,7 +18740,10 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     return false;
 }
 
-export async function goToPosition(bot, x, y, z, min_distance=2, { dryOnly = false } = {}) {
+export async function goToPosition(bot, x, y, z, min_distance=2, {
+    dryOnly = false,
+    allowSegmentedJourney = false,
+} = {}) {
     /**
      * Navigate to the given position.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -17435,24 +18810,54 @@ export async function goToPosition(bot, x, y, z, min_distance=2, { dryOnly = fal
         const routed = await goToGoal(
             bot,
             new pf.goals.GoalNear(x, y, z, requestedDistance),
-            dryOnly
+            (dryOnly || allowSegmentedJourney)
                 ? {
-                    movements: () => dryRouteMovements(bot),
+                    movements: () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot),
                     requirePlannedRoute: true,
+                    allowSegmentedJourney: allowSegmentedJourney === true,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
                 }
                 : {},
         );
         if (!routed) return false;
+        const navigation = bot.lastActionEvidence?.kind === 'movement'
+            ? bot.lastActionEvidence
+            : null;
         const distance = bot.entity.position.distanceTo(new Vec3(x, y, z));
         if (distance <= requestedDistance + 1) {
-            setActionEvidence(bot, { kind: 'movement', outcome: 'arrived', target: { x, y, z }, distance });
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: 'arrived',
+                target: { x, y, z },
+                distance,
+                ...(navigation?.segments ? {
+                    planning: navigation.planning,
+                    segments: navigation.segments,
+                    finalDestination: navigation.finalDestination,
+                    progressed: navigation.progressed,
+                    waypointSelection: navigation.waypointSelection,
+                } : {}),
+                retryable: false,
+            });
             log(bot, `You have reached at ${x}, ${y}, ${z}.`);
             return true;
         }
         else {
-            setActionEvidence(bot, { kind: 'movement', outcome: 'too_far', target: { x, y, z }, distance });
+            setActionEvidence(bot, {
+                kind: 'movement',
+                outcome: 'too_far',
+                target: { x, y, z },
+                distance,
+                ...(navigation?.segments ? {
+                    planning: navigation.planning,
+                    segments: navigation.segments,
+                    finalDestination: navigation.finalDestination,
+                    progressed: navigation.progressed,
+                    waypointSelection: navigation.waypointSelection,
+                } : {}),
+                retryable: true,
+            });
             log(bot, `Unable to reach ${x}, ${y}, ${z}, you are ${Math.round(distance)} blocks away.`);
             return false;
         }
@@ -18069,8 +19474,22 @@ export async function goToPlayer(bot, username, distance=3, {
      * @example
      * await skills.goToPlayer(bot, "player");
     **/
+    const composedReceipts = currentActionExecutionContext()?.receiptMode === 'composed';
+    const publishTerminal = evidence => (
+        composedReceipts
+            ? setActionTerminalEvidence(bot, evidence)
+            : (setActionEvidence(bot, evidence), { accepted: true, snapshot: bot.lastActionEvidence })
+    );
+    let lastNavigationReceipt = null;
+    const navigationReceiptOptions = stage => composedReceipts
+        ? {
+            receiptRelationship: 'navigation',
+            receiptStage: stage,
+            onReceipt: receipt => { lastNavigationReceipt = receipt; },
+        }
+        : {};
     if (bot.username === username) {
-        setActionEvidence(bot, {
+        publishTerminal({
             kind: 'movement',
             outcome: 'invalid_self_target',
             target: { name: username },
@@ -18080,6 +19499,27 @@ export async function goToPlayer(bot, username, distance=3, {
         log(bot, `Cannot navigate to ${username}: that name identifies this bot, not the requesting player.`);
         return false;
     }
+    let navigation = null;
+    const navigationStages = [];
+    const rememberFreshNavigation = (stage, previous) => {
+        if (composedReceipts) return lastNavigationReceipt;
+        const evidence = bot.lastActionEvidence;
+        if (evidence === previous || evidence?.kind !== 'movement') return null;
+        const receipt = Object.freeze({ ...evidence });
+        navigationStages.push(Object.freeze({
+            stage: String(stage || 'navigation').slice(0, 64),
+            navigation: receipt,
+        }));
+        const receiptHasSegments = Array.isArray(receipt.segments) && receipt.segments.length > 0;
+        const retainedHasSegments = Array.isArray(navigation?.segments) && navigation.segments.length > 0;
+        if (!navigation || (receiptHasSegments && !retainedHasSegments)) navigation = receipt;
+        return receipt;
+    };
+    const stagedNavigationEvidence = () => (
+        navigationStages.length > 0
+            ? { navigationStages: Object.freeze(navigationStages.slice()) }
+            : {}
+    );
     let resolution = resolvePhysicalPlayer(bot, username);
     let target = playerTargetEvidence(resolution);
     let player = resolution.entity;
@@ -18100,18 +19540,35 @@ export async function goToPlayer(bot, username, distance=3, {
                 Math.floor(position.z),
                 reacquireDistance,
             );
+            const previousNavigation = bot.lastActionEvidence;
             const reachedRegion = regionGoal.isEnd(bot.entity.position.floored()) || await goToGoal(bot, regionGoal, {
                 movements: () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot),
-                requirePlannedRoute: dryOnly,
+                requirePlannedRoute: true,
+                allowSegmentedJourney: true,
+                segmentProofPolicy: 'safe_frontier',
                 allowHealthBoundedDescent: false,
-                allowLocalRecovery: false,
+                allowLocalRecovery: true,
+                ...navigationReceiptOptions('managed_player_region'),
             });
-            if (!reachedRegion) return false;
+            rememberFreshNavigation('managed_player_region', previousNavigation);
+            if (!reachedRegion) {
+                if (composedReceipts) {
+                    publishTerminal({
+                        kind: 'movement',
+                        outcome: bot.interrupt_code
+                            ? 'interrupted'
+                            : lastNavigationReceipt?.outcome || 'goal_not_reached',
+                        target,
+                        retryable: !bot.interrupt_code && lastNavigationReceipt?.retryable === true,
+                    });
+                }
+                return false;
+            }
             resolution = resolvePhysicalPlayer(bot, username);
             target = playerTargetEvidence(resolution);
             player = resolution.entity;
         } else {
-            setActionEvidence(bot, {
+            publishTerminal({
                 kind: 'movement',
                 outcome: observation?.success === true && observation?.found === false
                     ? 'target_offline'
@@ -18130,7 +19587,7 @@ export async function goToPlayer(bot, username, distance=3, {
         }
     }
     if (!player) {
-        setActionEvidence(bot, {
+        publishTerminal({
             kind: 'movement',
             outcome: 'lost_target',
             target,
@@ -18141,7 +19598,7 @@ export async function goToPlayer(bot, username, distance=3, {
     }
     if (bot.modes.isOn('cheat')) {
         bot.chat('/tp @s ' + resolution.canonical);
-        setActionEvidence(bot, { kind: 'movement', outcome: 'teleport_requested', completion: 'requested', target, retryable: false });
+        publishTerminal({ kind: 'movement', outcome: 'teleport_requested', completion: 'requested', target, retryable: false });
         log(bot, `Requested teleport to ${resolution.canonical}; waiting for the server to apply it.`);
         return true;
     }
@@ -18154,12 +19611,20 @@ export async function goToPlayer(bot, username, distance=3, {
     const arrivalDistance = distance + 1;
     const goal = new pf.goals.GoalFollow(player, arrivalDistance);
 
+    const initialEvidence = bot.lastActionEvidence;
     let reached = await goToGoal(bot, goal, {
         ...(dryOnly ? { movements: () => dryRouteMovements(bot) } : {}),
         requirePlannedRoute: true,
+        // Player pursuit is the case the approved segmented-navigation contract
+        // names first. A missing whole-journey proof means this player is not
+        // reachable in one leg, not that the companion should stand still.
+        allowSegmentedJourney: true,
+        segmentProofPolicy: 'safe_frontier',
         allowHealthBoundedDescent: false,
-        allowLocalRecovery: false,
+        allowLocalRecovery: true,
+        ...navigationReceiptOptions('live_player_pursuit'),
     });
+    rememberFreshNavigation('live_player_pursuit', initialEvidence);
     if (!reached && !bot.interrupt_code) {
         resolution = resolvePhysicalPlayer(bot, username);
         player = resolution.entity;
@@ -18174,7 +19639,7 @@ export async function goToPlayer(bot, username, distance=3, {
     if (
         !reached
         && !bot.interrupt_code
-        && bot.lastActionEvidence?.outcome === 'path_timeout'
+        && (composedReceipts ? lastNavigationReceipt?.outcome : bot.lastActionEvidence?.outcome) === 'path_timeout'
     ) {
         // A dynamic GoalFollow can time out while the same stationary player's
         // exact observed region has a valid native route. Change the planning
@@ -18193,11 +19658,14 @@ export async function goToPlayer(bot, username, distance=3, {
                 Math.max(2, arrivalDistance),
             );
             log(bot, `Dynamic pursuit timed out; routing once to ${username}'s verified current region.`);
+            const fallbackEvidence = bot.lastActionEvidence;
             reached = await goToGoal(bot, regionGoal, {
                 movements: () => safeMovements(bot),
                 allowHealthBoundedDescent: false,
-                allowLocalRecovery: false,
+                allowLocalRecovery: true,
+                ...navigationReceiptOptions('verified_region_fallback'),
             });
+            rememberFreshNavigation('verified_region_fallback', fallbackEvidence);
         }
     }
     if (!reached && !bot.interrupt_code) {
@@ -18211,22 +19679,57 @@ export async function goToPlayer(bot, username, distance=3, {
             log(bot, `Minecraft confirmed ${username} within ${settledDistance.toFixed(1)} blocks after the fallback settled.`);
         }
     }
-    if (!reached) return false;
+    if (!reached) {
+        if (composedReceipts) {
+            publishTerminal({
+                kind: 'movement',
+                outcome: bot.interrupt_code
+                    ? 'interrupted'
+                    : lastNavigationReceipt?.outcome || 'goal_not_reached',
+                target,
+                retryable: !bot.interrupt_code && lastNavigationReceipt?.retryable === true,
+            });
+        }
+        return false;
+    }
     resolution = resolvePhysicalPlayer(bot, username);
     target = playerTargetEvidence(resolution);
     player = resolution.entity;
     if (!player) {
-        setActionEvidence(bot, { kind: 'movement', outcome: 'lost_target', target, retryable: false });
+        publishTerminal({
+            kind: 'movement',
+            outcome: 'lost_target',
+            target,
+            ...(navigation ? { navigation } : {}),
+            ...stagedNavigationEvidence(),
+            retryable: false,
+        });
         log(bot, `${username} is no longer visible after navigation.`);
         return false;
     }
     const actualDistance = bot.entity.position.distanceTo(player.position);
     if (actualDistance > arrivalDistance) {
-        setActionEvidence(bot, { kind: 'movement', outcome: 'too_far', target, distance: actualDistance });
+        publishTerminal({
+            kind: 'movement',
+            outcome: 'too_far',
+            target,
+            distance: actualDistance,
+            ...(navigation ? { navigation } : {}),
+            ...stagedNavigationEvidence(),
+            retryable: true,
+        });
         log(bot, `Could not reach ${username}; still ${Math.round(actualDistance)} blocks away.`);
         return false;
     }
-    setActionEvidence(bot, { kind: 'movement', outcome: 'arrived', target, distance: actualDistance });
+    publishTerminal({
+        kind: 'movement',
+        outcome: 'arrived',
+        target,
+        distance: actualDistance,
+        ...(navigation ? { navigation } : {}),
+        ...stagedNavigationEvidence(),
+        retryable: false,
+    });
     log(bot, `You have reached ${username}.`);
     return true;
 }
@@ -18330,6 +19833,102 @@ export async function followPlayerUntilNearBlock(bot, username, blockName, radiu
 }
 
 
+export async function attemptSegmentedFollowRecovery(bot, player, distance=3) {
+    const normalizedDistance = normalizePlayerDistance(distance, 3);
+    const start = bot?.entity?.position?.clone?.();
+    if (!start || !player?.position) {
+        return Object.freeze({
+            success: false,
+            strategy: 'segmented_follow_journey',
+            outcome: 'target_or_origin_unavailable',
+            progressed: 0,
+            retryable: false,
+        });
+    }
+    const distanceBefore = start.distanceTo(player.position);
+    const planningStartedAt = Date.now();
+    stopNavigationGoal(bot);
+    const arrived = await goToGoal(
+        bot,
+        new pf.goals.GoalFollow(player, normalizedDistance),
+        {
+            requirePlannedRoute: true,
+            allowSegmentedJourney: true,
+            allowLocalRecovery: true,
+            segmentProofPolicy: 'safe_frontier',
+            plannedRouteTimeoutMs: FOLLOW_RECOVERY_ROUTE_PROBE_TIMEOUT_MS,
+            planningDeadlineAt: planningStartedAt + FOLLOW_RECOVERY_PLANNING_BUDGET_MS,
+            receiptRelationship: 'navigation',
+            receiptStage: 'follow_segmented_recovery',
+        },
+    );
+    const navigationReceipt = bot.lastActionEvidence;
+    const receiptProgress = Math.max(0, Number(navigationReceipt?.progressed) || 0);
+    const distanceAfter = bot?.entity?.position && player?.position
+        ? bot.entity.position.distanceTo(player.position)
+        : distanceBefore;
+    const observedProgress = Math.max(0, distanceBefore - distanceAfter);
+    const progressed = Math.round(Math.max(receiptProgress, observedProgress) * 100) / 100;
+    return Object.freeze({
+        success: arrived === true || progressed >= SEGMENT_JOURNEY_MIN_PROGRESS,
+        strategy: 'segmented_follow_journey',
+        outcome: arrived === true
+            ? 'arrived'
+            : String(navigationReceipt?.outcome || 'segmented_journey_incomplete').slice(0, 80),
+        progressed,
+        arrived: arrived === true,
+        planningBudgetMs: FOLLOW_RECOVERY_PLANNING_BUDGET_MS,
+        planningElapsedMs: Math.max(0, Date.now() - planningStartedAt),
+        retryable: arrived !== true && navigationReceipt?.retryable === true,
+    });
+}
+
+export function observeFollowDestinationProgress({
+    bestDistance = Number.POSITIVE_INFINITY,
+    currentDistance = Number.POSITIVE_INFINITY,
+    targetMoved = false,
+    noProgressMs = 0,
+    sampleMs = FOLLOW_SAMPLE_MS,
+} = {}) {
+    const current = Number(currentDistance);
+    const previousBest = Number(bestDistance);
+    const relocated = targetMoved === true && Number.isFinite(current);
+    const approached = Number.isFinite(current)
+        && (!Number.isFinite(previousBest) || current <= previousBest - NAVIGATION_GOAL_PROGRESS_DELTA);
+    const progressed = relocated || approached;
+    return Object.freeze({
+        progressed,
+        bestDistance: progressed
+            ? current
+            : Number.isFinite(previousBest) ? previousBest : current,
+        noProgressMs: progressed
+            ? 0
+            : Math.max(0, Number(noProgressMs) || 0) + Math.max(0, Number(sampleMs) || 0),
+        reason: relocated
+            ? 'target_materially_relocated'
+            : approached ? 'destination_distance_decreased' : 'destination_distance_unchanged',
+    });
+}
+
+export function continuousFollowLiveness({
+    noProgressMs = 0,
+    recoveryAttempts = 0,
+    lastRecoverySucceeded = null,
+} = {}) {
+    // The final failed receipt exhausts the recovery budget immediately. It is
+    // already proof of unchanged no-progress, so waiting through another stall
+    // window before settlement would turn elapsed time into fictitious evidence.
+    if (lastRecoverySucceeded === false
+        && Number(recoveryAttempts) >= MAX_FOLLOW_RECOVERY_ATTEMPTS) {
+        return 'wait_material_change';
+    }
+    if (Number(noProgressMs) < FOLLOW_STUCK_AFTER_MS) return 'continue';
+    if (Number(recoveryAttempts) >= MAX_FOLLOW_RECOVERY_ATTEMPTS) {
+        return 'wait_material_change';
+    }
+    return 'recover';
+}
+
 export async function followPlayer(bot, username, distance=4, options={}) {
     /**
      * Follow the given player endlessly. Will not return until the code is manually stopped.
@@ -18340,12 +19939,90 @@ export async function followPlayer(bot, username, distance=4, options={}) {
      * await skills.followPlayer(bot, "player");
      **/
     distance = normalizePlayerDistance(distance, 3);
+    let terminalRecorded = false;
+    const recordFollowChild = evidence => setActionChildEvidence(bot, 'navigation', evidence);
+    const recordFollowTerminal = evidence => {
+        terminalRecorded = true;
+        return setActionTerminalEvidence(bot, evidence);
+    };
+    const settleFollowForMaterialChange = ({
+        distance: observedDistance,
+        recoveryAttempts: attempts,
+        pathStatus,
+    }) => {
+        recordFollowTerminal({
+            kind: 'follow',
+            outcome: 'waiting_for_material_change',
+            target,
+            distance: observedDistance,
+            recoveryAttempts: attempts,
+            pathStatus,
+            retryable: true,
+        });
+        log(bot, `Path to ${canonicalUsername} is still obstructed after ${attempts} route-proven segmented journey attempts. I am keeping the follow order, but I will not retry until the player or route materially changes.`);
+        return false;
+    };
     let resolution = resolvePhysicalPlayer(bot, username);
     let target = playerTargetEvidence(resolution);
     let player = resolution.entity;
+    if (!player && typeof options?.locatePlayerPosition === 'function') {
+        let observation = null;
+        try {
+            observation = await options.locatePlayerPosition(username);
+        } catch (error) {
+            recordFollowChild({
+                kind: 'follow',
+                outcome: 'managed_target_lookup_failed',
+                target,
+                error: String(error?.message || error).slice(0, 160),
+                retryable: true,
+            });
+        }
+        const position = observation?.position;
+        const observedDimension = String(observation?.dimension || '').replace(/^minecraft:/, '');
+        if (
+            observation?.success === true
+            && observation?.found === true
+            && [position?.x, position?.y, position?.z].every(Number.isFinite)
+            && observedDimension === dimensionName(bot)
+        ) {
+            const reacquireDistance = Math.max(6, normalizePlayerDistance(distance, 3) + 2);
+            const regionGoal = new pf.goals.GoalNear(
+                Math.floor(position.x),
+                Math.floor(position.y),
+                Math.floor(position.z),
+                reacquireDistance,
+            );
+            recordFollowChild({
+                kind: 'follow',
+                outcome: 'managed_target_region_bound',
+                target: { ...target, source: observation.source || 'managed_paper' },
+                position: segmentReceiptPosition(position, { floor: false }),
+                retryable: true,
+            });
+            const reachedRegion = regionGoal.isEnd(bot.entity.position.floored()) || await goToGoal(
+                bot,
+                regionGoal,
+                {
+                    requirePlannedRoute: true,
+                    allowSegmentedJourney: true,
+                    segmentProofPolicy: 'safe_frontier',
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: true,
+                    receiptRelationship: 'navigation',
+                    receiptStage: 'follow_managed_player_region',
+                },
+            );
+            if (reachedRegion && !bot.interrupt_code) {
+                resolution = resolvePhysicalPlayer(bot, username);
+                target = playerTargetEvidence(resolution);
+                player = resolution.entity;
+            }
+        }
+    }
     if (!player) {
         companionContextFor(bot)?.markWaiting?.();
-        setActionEvidence(bot, { kind: 'follow', outcome: 'waiting_for_target', target, retryable: false });
+        recordFollowTerminal({ kind: 'follow', outcome: 'waiting_for_target', target, retryable: false });
         log(bot, `Cannot follow ${username} yet: waiting for the player to reappear.`);
         return false;
     }
@@ -18353,7 +20030,8 @@ export async function followPlayer(bot, username, distance=4, options={}) {
     const move = safeMovements(bot);
     bot.pathfinder.setMovements(move);
     let doorCheckInterval = null;
-    let lastPosition = bot.entity.position.clone();
+    let bestFollowDistance = bot.entity.position.distanceTo(player.position);
+    let followTargetAnchor = player.position.clone();
     let noProgressMs = 0;
     let recoveryAttempts = 0;
     let recoveryCooldownUntil = 0;
@@ -18380,7 +20058,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
     try {
         doorCheckInterval = startDoorInterval(bot);
         bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
-        setActionEvidence(bot, {
+        recordFollowChild({
             kind: 'follow',
             outcome: 'pathing',
             target,
@@ -18404,7 +20082,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
             if (!context?.canUseLastSeen?.()) {
                 context?.markWaiting?.();
                 bot.pathfinder.stop();
-                setActionEvidence(bot, {
+                recordFollowTerminal({
                     kind: 'follow',
                     outcome: 'waiting_for_target',
                     target,
@@ -18423,7 +20101,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
                     lastSeenPosition.z,
                     normalizePlayerDistance(distance, 3),
                 ));
-                setActionEvidence(bot, {
+                recordFollowChild({
                     kind: 'follow',
                     outcome: 'reacquiring',
                     target,
@@ -18447,6 +20125,8 @@ export async function followPlayer(bot, username, distance=4, options={}) {
             noProgressMs = 0;
             recoveryAttempts = 0;
             recoveryCooldownUntil = 0;
+            bestFollowDistance = bot.entity.position.distanceTo(player.position);
+            followTargetAnchor = player.position.clone();
             bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
             liquidNoConvergenceMs = 0;
             lastPathStatus = null;
@@ -18461,7 +20141,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
             try {
                 completion = options.until({ bot, player, distance: distance_from_player });
             } catch (error) {
-                setActionEvidence(bot, {
+                recordFollowTerminal({
                     kind: 'follow',
                     outcome: 'completion_check_failed',
                     target,
@@ -18472,7 +20152,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
                 return false;
             }
             if (completion) {
-                setActionEvidence(bot, {
+                recordFollowTerminal({
                     kind: 'follow',
                     outcome: 'condition_reached',
                     target,
@@ -18506,6 +20186,8 @@ export async function followPlayer(bot, username, distance=4, options={}) {
         if (distance_from_player > nearby_distance || needsShoreRecovery) {
             if (needsShoreRecovery) {
                 noProgressMs = 0;
+                bestFollowDistance = distance_from_player;
+                followTargetAnchor = player.position.clone();
                 if (distance_from_player <= bestLiquidFollowDistance - NAVIGATION_GOAL_PROGRESS_DELTA) {
                     bestLiquidFollowDistance = distance_from_player;
                     liquidNoConvergenceMs = 0;
@@ -18517,7 +20199,7 @@ export async function followPlayer(bot, username, distance=4, options={}) {
                     if (bot.interrupt_code) break;
                     bot.pathfinder.setMovements(safeMovements(bot));
                     bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
-                    setActionEvidence(bot, {
+                    recordFollowChild({
                         kind: 'follow',
                         outcome: recovery.success ? 'shore_recovering' : 'shore_recovery_blocked',
                         target,
@@ -18537,35 +20219,38 @@ export async function followPlayer(bot, username, distance=4, options={}) {
             } else {
                 bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
                 liquidNoConvergenceMs = 0;
-                const progress = bot.entity.position.distanceTo(lastPosition);
+                const targetMoved = player.position.distanceTo(followTargetAnchor)
+                    >= FOLLOW_MATERIAL_TARGET_RELOCATION;
+                if (targetMoved) followTargetAnchor = player.position.clone();
                 if (Date.now() < recoveryCooldownUntil) {
                     noProgressMs = 0;
-                } else if (progress < MIN_MOVEMENT_PROGRESS) {
-                    noProgressMs += FOLLOW_SAMPLE_MS;
                 } else {
-                    noProgressMs = 0;
-                    if (progress >= NAVIGATION_PROGRESS_DISTANCE) recoveryAttempts = 0;
+                    const progress = observeFollowDestinationProgress({
+                        bestDistance: bestFollowDistance,
+                        currentDistance: distance_from_player,
+                        targetMoved,
+                        noProgressMs,
+                        sampleMs: FOLLOW_SAMPLE_MS,
+                    });
+                    bestFollowDistance = progress.bestDistance;
+                    noProgressMs = progress.noProgressMs;
+                    if (progress.progressed) recoveryAttempts = 0;
                 }
-                if (noProgressMs >= FOLLOW_STUCK_AFTER_MS) {
-                    if (recoveryAttempts >= MAX_FOLLOW_RECOVERY_ATTEMPTS) {
-                        recoveryCooldownUntil = Date.now() + FOLLOW_RECOVERY_COOLDOWN_MS;
-                        setActionEvidence(bot, {
-                            kind: 'follow',
-                            outcome: 'blocked_waiting',
-                            target,
+                const liveness = continuousFollowLiveness({ noProgressMs, recoveryAttempts });
+                if (liveness !== 'continue') {
+                    if (liveness === 'wait_material_change') {
+                        return settleFollowForMaterialChange({
                             distance: distance_from_player,
                             recoveryAttempts,
                             pathStatus: lastPathStatus,
-                            retryable: true,
                         });
-                        log(bot, `Path to ${canonicalUsername} is still obstructed after ${recoveryAttempts} local escape attempts; follow remains active and will retry after the route can change.`);
                     } else {
                         recoveryAttempts += 1;
-                        const recovery = await attemptLocalNavigationEscape(bot);
+                        const recovery = await attemptSegmentedFollowRecovery(bot, player, distance);
                         if (bot.interrupt_code) break;
                         bot.pathfinder.setMovements(safeMovements(bot));
                         bot.pathfinder.setGoal(new ResponsiveFollowGoal(bot, player, distance), true);
-                        setActionEvidence(bot, {
+                        recordFollowChild({
                             kind: 'follow',
                             outcome: recovery.success ? 'recovering' : 'recovery_blocked',
                             target,
@@ -18576,8 +20261,19 @@ export async function followPlayer(bot, username, distance=4, options={}) {
                             retryable: true,
                         });
                         log(bot, recovery.success
-                            ? `Following ${username}: completed local escape ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} and replanned the route.`
-                            : `Following ${username}: local escape ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} was blocked; keeping the dynamic follow route active.`);
+                            ? `Following ${username}: completed route-proven journey segments ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS} and resumed the dynamic follow route.`
+                            : `Following ${username}: no route-proven journey segment was available on attempt ${recoveryAttempts}/${MAX_FOLLOW_RECOVERY_ATTEMPTS}; keeping the follow obligation active.`);
+                        if (continuousFollowLiveness({
+                            noProgressMs: 0,
+                            recoveryAttempts,
+                            lastRecoverySucceeded: recovery.success,
+                        }) === 'wait_material_change') {
+                            return settleFollowForMaterialChange({
+                                distance: distance_from_player,
+                                recoveryAttempts,
+                                pathStatus: lastPathStatus,
+                            });
+                        }
                     }
                     noProgressMs = 0;
                     lastPathStatus = null;
@@ -18587,6 +20283,8 @@ export async function followPlayer(bot, username, distance=4, options={}) {
             noProgressMs = 0;
             recoveryAttempts = 0;
             recoveryCooldownUntil = 0;
+            bestFollowDistance = distance_from_player;
+            followTargetAnchor = player.position.clone();
             bestLiquidFollowDistance = Number.POSITIVE_INFINITY;
             liquidNoConvergenceMs = 0;
             lastPathStatus = null;
@@ -18621,9 +20319,17 @@ export async function followPlayer(bot, username, distance=4, options={}) {
             bot.modes.unpause('unstuck');
             bot.modes.unpause('elbow_room');
         }
-            lastPosition = bot.entity.position.clone();
         }
-        return !bot.interrupt_code && Boolean(player);
+        const completed = !bot.interrupt_code && Boolean(player);
+        if (!terminalRecorded) {
+            recordFollowTerminal({
+                kind: 'follow',
+                outcome: bot.interrupt_code ? 'interrupted' : completed ? 'follow_ended' : 'waiting_for_target',
+                target,
+                retryable: false,
+            });
+        }
+        return completed;
     } finally {
         try {
             syncFollowSurfaceAscent(bot, { active: surfaceAscentActive });
@@ -21684,16 +23390,8 @@ function overheadCoverBlock(block) {
     );
 }
 
-// Natural terrain is fair game in an emergency; a crafted floor almost always
-// belongs to somebody's build. This is a material check only — it does not know
-// about named sites, so a shared grass courtyard is still diggable. Spatial
-// site protection needs a separate landmark/ownership receipt; until that
-// exists, this limitation remains explicit rather than inferred from terrain.
 function isCraftedFloorMaterial(block) {
-    const name = String(block?.name || '');
-    if (!name) return false;
-    return /(?:_planks|_bricks?|_concrete|_wool|_carpet|_terracotta|_glazed_terracotta|_stairs|_slab|_fence|_wall|_door|_copper|_tiles)$/.test(name)
-        || ['bricks', 'bookshelf', 'crafting_table', 'furnace', 'chest', 'glass', 'quartz_block', 'iron_block', 'gold_block', 'diamond_block', 'netherite_block'].includes(name);
+    return isPlayerBuildEvidence(block);
 }
 
 function sealingBlockName(bot) {
@@ -21765,6 +23463,19 @@ export function assessShelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
             material,
             position: shelterPosition(feet),
             observed: floor?.name || 'unloaded',
+        });
+    }
+    const modificationAuthority = observeWorldModificationAuthority(bot, feet, {
+        purpose: 'emergency_shelter',
+        mutation: 'excavate_and_seal',
+        radius: 3,
+    });
+    if (modificationAuthority.allowed !== true) {
+        return shelterReceipt(false, modificationAuthority.code, {
+            depth: requestedDepth,
+            material,
+            position: shelterPosition(feet),
+            modificationAuthority,
         });
     }
 
@@ -21843,6 +23554,7 @@ export function assessShelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
         material,
         position: shelterPosition(feet),
         sealPosition: shelterPosition(sealPosition),
+        modificationAuthority,
     });
 }
 

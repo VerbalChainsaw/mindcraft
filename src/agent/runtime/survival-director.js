@@ -17,6 +17,10 @@ import {
 } from './survival-policy.js';
 import { isDrinkableHealingPotion, potionIdentity } from './brewing-plan.js';
 import { minecraftWeather } from './weather-state.js';
+import {
+  createMaterialChangeBlocker,
+  evaluateMaterialChange,
+} from './obligation-settlement.js';
 
 const SUCCESS_COOLDOWN_MS = 2_000;
 const FAILURE_COOLDOWN_MS = 10_000;
@@ -733,6 +737,7 @@ export class SurvivalDirector extends BehaviorDirector {
     ));
     this.foodSourceBlocker = null;
     this.sleepBlockers = new Map();
+    this.sleepExhaustionAnnouncedFor = null;
     this.sleepBlocker = null;
     this.jobFoodUpkeep = null;
     this.lastDecision = null;
@@ -780,8 +785,7 @@ export class SurvivalDirector extends BehaviorDirector {
     return this.safetyIncident;
   }
 
-  observeDamageSource(receipt) {
-    const source = damageSourceSnapshot(receipt);
+  observeSafetySource(source) {
     if (!source) return false;
     const now = Date.now();
     if (this.safetyIncident && sameSource(this.safetyIncident.source, source)) {
@@ -814,6 +818,35 @@ export class SurvivalDirector extends BehaviorDirector {
     this.nextEligibleAt = 0;
     this.agent.behavior_arbiter?.wake?.('survival_incident_observed');
     return true;
+  }
+
+  observeDamageSource(receipt) {
+    return this.observeSafetySource(damageSourceSnapshot(receipt));
+  }
+
+  observeAttributedThreat(threat) {
+    if (!['self_damage', 'protected_player'].includes(threat?.attribution)) return false;
+    const entityId = Number(threat?.entityId);
+    if (!Number.isFinite(entityId)) return false;
+    const id = Math.floor(entityId);
+    const entity = this.agent.bot?.entities?.[id] || null;
+    if (!entity?.position || !mc.isCombatSafeHostile(entity)) return false;
+
+    const expectedUuid = boundedDecisionText(threat?.entityUuid, 80) || null;
+    const actualUuid = boundedDecisionText(entity.uuid, 80) || null;
+    if (expectedUuid && actualUuid !== expectedUuid) return false;
+    const expectedName = boundedDecisionText(threat?.name, 64).toLowerCase();
+    const actualName = boundedDecisionText(entity.name || entity.username, 64).toLowerCase();
+    if (!expectedUuid && expectedName && expectedName !== actualName) return false;
+
+    return this.observeSafetySource(Object.freeze({
+      kind: 'hostile',
+      id,
+      name: actualName || expectedName || null,
+      username: null,
+      type: boundedDecisionText(entity.type, 32) || null,
+      observedAt: Date.now(),
+    }));
   }
 
   closeSafetyIncident({ phase = 'succeeded', code, detail = '' } = {}) {
@@ -1045,6 +1078,28 @@ export class SurvivalDirector extends BehaviorDirector {
       ? attempted
       : intent?.target;
     if (!position || !bed || ![bed.x, bed.y, bed.z].every(Number.isFinite)) return;
+    const bedIdentity = `${Number(bed.x)}:${Number(bed.y)}:${Number(bed.z)}`;
+    const code = boundedDecisionText(result?.code, 64) || 'sleep_rejected';
+    const night = isNightTime(Number(this.agent.bot?.time?.timeOfDay || 0));
+    const materialChangeBlocker = createMaterialChangeBlocker({
+      owner: 'survival',
+      obligationId: `sleep:${bedIdentity}`,
+      code,
+      checkpoint: {
+        position,
+        dimension: dimensionName(this.agent.bot?.game?.dimension),
+        targetSignature: code === 'skill_bed_occupied'
+          ? `${bedIdentity}:occupied`
+          : null,
+        cycleSignature: night ? 'night' : null,
+      },
+      releasePredicates: [
+        'dimension',
+        ...(code === 'skill_bed_occupied' ? ['target_signature'] : []),
+        ...(night ? ['cycle_signature'] : []),
+      ],
+    });
+    if (!materialChangeBlocker) return;
     const blocker = Object.freeze({
       bed: Object.freeze({
         name: boundedDecisionText(bed.name, 48) || 'bed',
@@ -1054,10 +1109,11 @@ export class SurvivalDirector extends BehaviorDirector {
       }),
       position,
       dimension: dimensionName(this.agent.bot?.game?.dimension),
-      code: boundedDecisionText(result?.code, 64) || 'sleep_rejected',
-      night: isNightTime(Number(this.agent.bot?.time?.timeOfDay || 0)),
+      code,
+      night,
+      materialChangeBlocker,
     });
-    const key = `${blocker.bed.x}:${blocker.bed.y}:${blocker.bed.z}`;
+    const key = bedIdentity;
     this.sleepBlockers.set(key, blocker);
     this.sleepBlocker = blocker;
   }
@@ -1073,18 +1129,23 @@ export class SurvivalDirector extends BehaviorDirector {
     // Unknown is not material change. Without authoritative position evidence
     // there is no proof anything moved, so the blocker must be retained.
     if (!position) return false;
-    if (dimension !== blocker.dimension) return true;
-    // A fresh night is a genuinely different situation; the same night is not.
-    if (blocker.night && !isNightTime(Number(situation.timeOfDay || 0))) return true;
-    if (blocker.code === 'skill_bed_occupied') {
-      const current = (Array.isArray(situation.beds) ? situation.beds : []).find(candidate => (
-        Number(candidate?.x) === blocker.bed.x
-        && Number(candidate?.y) === blocker.bed.y
-        && Number(candidate?.z) === blocker.bed.z
-      ));
-      if (current?.occupied === false) return true;
-    }
-    return false;
+    const bedIdentity = `${blocker.bed.x}:${blocker.bed.y}:${blocker.bed.z}`;
+    const current = (Array.isArray(situation.beds) ? situation.beds : []).find(candidate => (
+      Number(candidate?.x) === blocker.bed.x
+      && Number(candidate?.y) === blocker.bed.y
+      && Number(candidate?.z) === blocker.bed.z
+    ));
+    const observation = {
+      position,
+      dimension,
+      targetSignature: blocker.code === 'skill_bed_occupied' && typeof current?.occupied === 'boolean'
+        ? `${bedIdentity}:${current.occupied ? 'occupied' : 'available'}`
+        : null,
+      cycleSignature: blocker.night
+        ? isNightTime(Number(situation.timeOfDay || 0)) ? 'night' : 'day'
+        : null,
+    };
+    return evaluateMaterialChange(blocker.materialChangeBlocker, observation).materialChanged === true;
   }
 
   // Every rejected physical bed from this night is withheld. Other reachable
@@ -1098,9 +1159,36 @@ export class SurvivalDirector extends BehaviorDirector {
     }
     this.sleepBlocker = [...this.sleepBlockers.values()].at(-1) || null;
     if (this.sleepBlockers.size === 0) return beds;
-    return beds.filter(candidate => !this.sleepBlockers.has(
+    const eligible = beds.filter(candidate => !this.sleepBlockers.has(
       `${Number(candidate?.x)}:${Number(candidate?.y)}:${Number(candidate?.z)}`,
     ));
+    // Exhausting every reachable bed is the end of this rung, not silence. The
+    // fallback contract requires one concise receipt-grounded statement, and
+    // reporting a single bed name reads as one arbitrary failure rather than
+    // "there is nowhere here to sleep". Announced once per exhausted set.
+    if (beds.length > 0 && eligible.length === 0) this.announceSleepExhausted(beds.length);
+    else this.sleepExhaustionAnnouncedFor = null;
+    return eligible;
+  }
+
+  announceSleepExhausted(blockedCount) {
+    const count = Math.max(1, Math.floor(Number(blockedCount) || 1));
+    if (this.sleepExhaustionAnnouncedFor === count) return false;
+    this.sleepExhaustionAnnouncedFor = count;
+    if (typeof this.agent.openChat !== 'function') return false;
+    const reasons = [...new Set(
+      [...this.sleepBlockers.values()].map(blocker => boundedDecisionText(blocker.code, 48)).filter(Boolean),
+    )];
+    const cause = reasons.length === 1 && reasons[0] === 'skill_bed_occupied'
+      ? 'they are all occupied'
+      : `of ${reasons.join(', ') || 'an unresolved bed failure'}`;
+    const message = count === 1
+      ? `I cannot sleep here: the only bed I can reach is unusable because ${cause}. I am not going to keep asking it.`
+      : `I cannot sleep here: all ${count} beds I can reach are unusable because ${cause}. I am not going to keep asking them.`;
+    void Promise.resolve(this.agent.openChat(message)).catch(error => {
+      console.warn(`[survival] Could not announce sleep exhaustion: ${boundedDecisionText(error?.message || error, 160)}`);
+    });
+    return true;
   }
 
   settleSleep(intent, result) {

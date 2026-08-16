@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+
+import { isStaleActivityState, staleActivityReason } from './activity-freshness.js';
 import path from 'node:path';
 
 import * as mc from '../../utils/mcdata.js';
@@ -309,7 +311,13 @@ class GoalStateStore {
       if (document?.version !== STORE_VERSION) {
         throw new TypeError(`Unsupported goal-state version '${document?.version}'.`);
       }
-      const activeGoal = document.activeGoal ? normalizeGoalContract(document.activeGoal) : null;
+      // An active goal is in-flight activity and expires with the session;
+      // lastGoal / protectedGoalId are completion history and are preserved.
+      const activeGoalStale = document.activeGoal && isStaleActivityState(document.savedAt);
+      if (activeGoalStale) this.lastError = staleActivityReason('goal state', document.savedAt);
+      const activeGoal = document.activeGoal && !activeGoalStale
+        ? normalizeGoalContract(document.activeGoal)
+        : null;
       const lastGoal = document.lastGoal ? normalizeGoalContract(document.lastGoal) : null;
       const protectedGoalId = boundedText(document.protectedGoalId, 96) || null;
       return {

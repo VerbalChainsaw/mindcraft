@@ -767,6 +767,64 @@ test('a player-caused hit waits for clarification and a fresh explicit order res
   assert.equal(director.snapshot().safetyIncident.resolutionCode, 'player_intent_clarified');
 });
 
+test('an attributed live hostile opens the safety incident before tactical execution and rejects identity drift', () => {
+  const agent = createAgent();
+  const threat = {
+    id: 442,
+    uuid: 'skeleton-442',
+    name: 'skeleton',
+    type: 'hostile',
+    position: { x: 3, y: 64, z: 0 },
+  };
+  agent.bot.health = 7;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = { [threat.id]: threat };
+  const wakes = [];
+  agent.behavior_arbiter = { wake: reason => wakes.push(reason) };
+  const director = new SurvivalDirector(agent);
+
+  assert.equal(director.observeAttributedThreat({
+    entityId: threat.id,
+    entityUuid: threat.uuid,
+    name: threat.name,
+    attribution: 'self_damage',
+  }), true);
+  const incident = director.snapshot().safetyIncident;
+  assert.equal(incident.active, true);
+  assert.equal(incident.stage, 'threat_response');
+  assert.deepEqual({
+    kind: incident.source.kind,
+    id: incident.source.id,
+    name: incident.source.name,
+    username: incident.source.username,
+    type: incident.source.type,
+  }, {
+    kind: 'hostile',
+    id: threat.id,
+    name: threat.name,
+    username: null,
+    type: 'hostile',
+  });
+  assert.equal(Number.isFinite(incident.source.observedAt), true);
+  assert.deepEqual(wakes, ['survival_incident_observed']);
+
+  assert.equal(director.observeAttributedThreat({
+    entityId: threat.id,
+    entityUuid: 'replacement-entity',
+    name: threat.name,
+    attribution: 'self_damage',
+  }), false);
+  assert.equal(director.snapshot().safetyIncident, incident, 'identity drift cannot mutate the incident');
+
+  delete agent.bot.entities[threat.id];
+  assert.equal(director.observeAttributedThreat({
+    entityId: threat.id,
+    entityUuid: threat.uuid,
+    name: threat.name,
+    attribution: 'self_damage',
+  }), false, 'an unloaded threat cannot create tactical authority');
+});
+
 test('a settled failed help route is not retried unchanged and unproven cover is rejected', async () => {
   const agent = createAgent();
   agent.name = 'Kevin';
@@ -1506,4 +1564,76 @@ test('Given missing position evidence, the sleep blocker is retained rather than
   await settle();
   assert.deepEqual(commands, [BED_A_COMMAND]);
   assert.notEqual(director.sleepBlocker, null);
+});
+
+// Live seam campaign 2026-08-15: with every reachable bed occupied, Kevin
+// correctly stopped after one attempt each but reported "I couldn't finish
+// orange bed" — one arbitrary bed name rather than "there is nowhere here to
+// sleep". The fallback contract requires one concise receipt-grounded statement
+// when a rung is exhausted, said once.
+function exhaustionAgent(position = { x: 0, y: 64, z: 0 }) {
+  const said = [];
+  const agent = {
+    bot: { entity: { id: 1, position }, game: { dimension: 'overworld' }, time: { timeOfDay: 14_000 } },
+    runtime: { survival: POLICY },
+    last_action_result: null,
+    isIdle: () => true,
+    isOperatorHeld: () => false,
+    openChat: message => { said.push(String(message)); return Promise.resolve(); },
+  };
+  return { agent, said };
+}
+
+test('Given every reachable bed blocked, survival explains the whole rung once instead of naming one bed', async () => {
+  const { agent, said } = exhaustionAgent();
+  const beds = [
+    { name: 'orange_bed', x: -370, y: 70, z: -162, distance: 3, reachable: true, safe: true },
+    { name: 'red_bed', x: -370, y: 70, z: -169, distance: 9, reachable: true, safe: true },
+  ];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => sleeperSituation(beds),
+    executeCommand: () => {},
+  });
+
+  for (const bed of beds) {
+    director.captureSleepBlocker(
+      { kind: 'sleep', target: bed },
+      { phase: 'failed', code: 'skill_bed_occupied', target: bed },
+    );
+  }
+  director.eligibleSleepBeds(sleeperSituation(beds));
+  await settle();
+
+  assert.equal(said.length, 1);
+  assert.match(said[0], /all 2 beds/);
+  assert.match(said[0], /occupied/);
+  // Naming a single bed was the reporting defect; the statement must be about
+  // the exhausted rung.
+  assert.doesNotMatch(said[0], /couldn't finish/);
+
+  // Repeating the evaluation must not repeat the announcement.
+  director.eligibleSleepBeds(sleeperSituation(beds));
+  await settle();
+  assert.equal(said.length, 1);
+});
+
+test('Given one blocked bed and another still free, survival stays quiet and keeps trying', async () => {
+  const { agent, said } = exhaustionAgent();
+  const blocked = { name: 'orange_bed', x: -370, y: 70, z: -162, distance: 3, reachable: true, safe: true };
+  const free = { name: 'red_bed', x: -370, y: 70, z: -169, distance: 9, reachable: true, safe: true };
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => sleeperSituation([blocked, free]),
+    executeCommand: () => {},
+  });
+
+  director.captureSleepBlocker(
+    { kind: 'sleep', target: blocked },
+    { phase: 'failed', code: 'skill_bed_occupied', target: blocked },
+  );
+  const eligible = director.eligibleSleepBeds(sleeperSituation([blocked, free]));
+  await settle();
+
+  assert.equal(eligible.length, 1);
+  assert.equal(eligible[0].z, -169);
+  assert.equal(said.length, 0);
 });

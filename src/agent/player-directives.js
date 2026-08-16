@@ -20,6 +20,21 @@ function normalizedMessage(message) {
         .replace(/[.!?]+$/g, '');
 }
 
+function compatibleStandingCompanionDirective(playerName, context = {}) {
+    const companion = context.companion;
+    if (!['follow', 'guard'].includes(companion?.directive)) return null;
+    const speaker = String(playerName || '').trim().toLowerCase();
+    if (!speaker) return null;
+    const identities = [
+        companion.requestedName,
+        companion.canonicalUsername,
+        companion.alias,
+    ]
+        .map(value => String(value || '').trim().toLowerCase())
+        .filter(Boolean);
+    return identities.includes(speaker) ? companion.directive : null;
+}
+
 function namedPlaceLabel(value) {
     return String(value || '')
         .trim()
@@ -517,6 +532,17 @@ export function resolvePlayerDirective(playerName, message, context = {}) {
     }
 
     if (/^(?:please\s+)?(?:come|walk|move|get|return|head)(?:\s+back)?\s+(?:here|to (?:me|us)|over here)\b/.test(text)) {
+        const standingDirective = compatibleStandingCompanionDirective(playerName, context);
+        if (standingDirective) {
+            const commandName = standingDirective === 'guard' ? 'guardPlayer' : 'followPlayer';
+            return {
+                command: `!${commandName}(${commandString(playerName)}, 3)`,
+                response: standingDirective === 'guard'
+                    ? 'I am coming back to you and keeping guard.'
+                    : 'I am coming back to you and staying with you.',
+                releasesHold: true,
+            };
+        }
         return {
             command: `!goToPlayer(${commandString(playerName)}, 2)`,
             response: 'I will come to you now.',

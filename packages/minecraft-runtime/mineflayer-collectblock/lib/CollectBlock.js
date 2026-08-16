@@ -222,6 +222,35 @@ function gotoWithTargetLimits(bot, goal, targetTimeoutMs, targetStallTimeoutMs, 
         }
     });
 }
+function gotoBlockWithTargetLimits(bot, block, goal, targetTimeoutMs, targetStallTimeoutMs, targetSearchRadius) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const exclusions = bot.pathfinder.movements?.exclusionAreasBreak;
+        if (!Array.isArray(exclusions) || !block?.position) {
+            return yield gotoWithTargetLimits(bot, goal, targetTimeoutMs, targetStallTimeoutMs, targetSearchRadius);
+        }
+        // The route planner may clear separately authorized obstacles, but the
+        // interaction target has exactly one mining owner. If Pathfinder is
+        // allowed to begin this block as route excavation, settling or
+        // replanning the approach aborts its crack progress before mineBlock
+        // starts the same block again.
+        const protectInteractionTarget = candidate => (
+            candidate?.position?.x === block.position.x
+            && candidate?.position?.y === block.position.y
+            && candidate?.position?.z === block.position.z
+                ? 100
+                : 0
+        );
+        exclusions.push(protectInteractionTarget);
+        try {
+            return yield gotoWithTargetLimits(bot, goal, targetTimeoutMs, targetStallTimeoutMs, targetSearchRadius);
+        }
+        finally {
+            const index = exclusions.indexOf(protectInteractionTarget);
+            if (index >= 0)
+                exclusions.splice(index, 1);
+        }
+    });
+}
 function collectAll(bot, options) {
     return __awaiter(this, void 0, void 0, function* () {
         let targetFailures = 0;
@@ -249,7 +278,7 @@ function collectAll(bot, options) {
                         const goal = new mineflayer_pathfinder_1.goals.GoalLookAtBlock(closest.position, bot.world, {
                             requireIndependentSupport: true
                         });
-                        yield gotoWithTargetLimits(bot, goal, options.targetTimeoutMs, options.targetStallTimeoutMs, options.targetSearchRadius);
+                        yield gotoBlockWithTargetLimits(bot, closest, goal, options.targetTimeoutMs, options.targetStallTimeoutMs, options.targetSearchRadius);
                         yield mineBlock(bot, closest, options);
                         break;
                     }

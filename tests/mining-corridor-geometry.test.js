@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
+import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 
 import collectBlockRuntime from '../packages/minecraft-runtime/mineflayer-collectblock/lib/index.js';
@@ -203,13 +204,14 @@ test('surface recovery recognizes covered ground-level access from a complete na
     assert.equal(bot.lastActionEvidence.legs, 0);
 });
 
-test('surface recovery accepts an already occupied open stance without routing toward treetops', async () => {
+test('surface recovery accepts an occupied open stance with a complete native ground-egress proof', async () => {
     const blocks = new Map();
     const put = (x, y, z, name, boundingBox, shapes) => {
         const position = new Vec3(x, y, z);
         blocks.set(key(position), { name, boundingBox, shapes, position });
     };
     put(4, 72, -3, 'acacia_leaves', 'block', [[0, 0, 0, 1, 1, 1]]);
+    put(10, 72, -3, 'grass_block', 'block', [[0, 0, 0, 1, 1, 1]]);
     const bot = {
         entity: {
             position: new Vec3(4.5, 73, -2.5),
@@ -228,7 +230,20 @@ test('surface recovery accepts an already occupied open stance without routing t
         output: '',
     };
 
-    assert.equal(await goToSurface(bot), true);
+    assert.equal(await goToSurface(bot, {
+        async navigateGoal() {
+            assert.fail('The already occupied usable surface should not start another navigation leg.');
+        },
+        probeSurfaceEgress(_bot, stances) {
+            assert.ok(stances.some(stance => stance.equals(new Vec3(10, 73, -3))));
+            return {
+                reachable: true,
+                status: 'success',
+                pathLength: 6,
+                terminalPosition: { x: 10, y: 73, z: -3 },
+            };
+        },
+    }), true);
     assert.equal(bot.lastActionEvidence.outcome, 'surface_reached');
     assert.equal(bot.lastActionEvidence.support, 'acacia_leaves');
     assert.equal(bot.lastActionEvidence.legs, 0);
@@ -510,6 +525,88 @@ test('CollectBlock cancellation waits for its active lease after the target queu
     await cancellation;
     assert.equal(cancellationReturned, true);
     assert.equal(cancellationError, stopFailure);
+});
+
+test('CollectBlock approach never starts breaking the exact interaction target', async () => {
+    class Block {
+        constructor() {
+            this.name = 'acacia_log';
+            this.type = 17;
+            this.position = new Vec3(1, 0, 0);
+            this.drops = [];
+        }
+
+        canHarvest() {
+            return true;
+        }
+    }
+
+    const bot = new EventEmitter();
+    const target = new Block();
+    let liveTarget = target;
+    let approachDigStarts = 0;
+    let explicitDigStarts = 0;
+    let activeMovements = null;
+    const movements = {
+        exclusionAreasBreak: [],
+        safeToBreak(block) {
+            return this.exclusionAreasBreak.reduce((cost, exclusion) => cost + exclusion(block), 0) < 100;
+        },
+    };
+    bot.entity = { position: new Vec3(0, 0, 0) };
+    bot.registry = minecraftData('1.21.11');
+    bot.entities = {};
+    bot.inventory = {
+        items: () => [],
+        emptySlotCount: () => 1,
+    };
+    bot.heldItem = null;
+    bot.world = {};
+    bot.blockAt = () => liveTarget;
+    bot.unequip = () => Promise.resolve();
+    bot.stopDigging = () => Promise.resolve();
+    bot.dig = () => {
+        explicitDigStarts += 1;
+        liveTarget = { name: 'air', type: 0, position: target.position };
+        setTimeout(() => {
+            for (let tick = 0; tick < 10; tick += 1) bot.emit('physicsTick');
+        }, 0);
+        return Promise.resolve();
+    };
+    bot.tool = {
+        getDigTime: () => 100,
+        equipForBlock: () => Promise.resolve(),
+    };
+    bot.pathfinder = {
+        movements,
+        setMovements(next) {
+            activeMovements = next;
+            this.movements = next;
+        },
+        setGoal() {},
+        goto() {
+            if (activeMovements.safeToBreak(target)) {
+                // Model Pathfinder beginning the route excavation and then
+                // settling its approach without completing that block. The
+                // explicit miner must be the only owner allowed to start it.
+                approachDigStarts += 1;
+            }
+            return Promise.resolve();
+        },
+    };
+
+    const collector = new CollectBlock(bot);
+    collector.movements = movements;
+    await collector.collect(target);
+
+    assert.equal(approachDigStarts, 0);
+    assert.equal(explicitDigStarts, 1);
+    assert.equal(movements.exclusionAreasBreak.length, 0);
+
+    liveTarget = target;
+    bot.pathfinder.goto = () => Promise.reject(new Error('route failed'));
+    await assert.rejects(collector.collect(target), /route failed/);
+    assert.equal(movements.exclusionAreasBreak.length, 0);
 });
 
 test('deep mining corridor search binds a supported multi-bend route around rejected cells', () => {

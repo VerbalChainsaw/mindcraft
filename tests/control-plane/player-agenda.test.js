@@ -1451,3 +1451,122 @@ test('parsePlayerAgenda preserves death recovery ahead of requester return and t
   assert.equal(plan.steps[1].entry.terminalDisposition, 'hold_position');
   assert.deepEqual(plan.unresolved, []);
 });
+
+// Live seam campaign 2026-08-15: "Kevin, collect wood and make charcoal" queued
+// a goto whose recipient was "RouteGuide" and a harvest whose requester was
+// "ADMIN". Neither has ever been a player. The goto then reported skill_arrived
+// and "Agenda step done" with zero players online. Name shape is not identity.
+import {
+    normalizeAgendaEntry as normalizeEntryForIdentity,
+} from '../../src/agent/runtime/agenda.js';
+
+const ROSTER = new Set(['bubby', 'dadplayer']);
+
+test('an agenda recipient that is not on the authoritative roster is refused', () => {
+    assert.throws(
+        () => normalizeEntryForIdentity(
+            { kind: 'goto', recipient: 'RouteGuide', requester: 'RouteGuide' },
+            { knownPlayers: ROSTER },
+        ),
+        /RouteGuide/,
+    );
+});
+
+test('a recipient on the roster is accepted regardless of letter case', () => {
+    const entry = normalizeEntryForIdentity(
+        { kind: 'goto', recipient: 'Bubby', requester: 'Bubby' },
+        { knownPlayers: ROSTER },
+    );
+
+    assert.equal(entry.kind, 'goto');
+    assert.equal(entry.recipient, 'Bubby');
+});
+
+test('an unknown requester is dropped rather than rejecting otherwise valid work', () => {
+    const entry = normalizeEntryForIdentity(
+        { kind: 'harvest', target: 'logs', quantity: 4, requester: 'ADMIN' },
+        { knownPlayers: ROSTER },
+    );
+
+    assert.equal(entry.kind, 'harvest');
+    assert.equal(entry.target, 'logs');
+    // Attribution is optional; a destination is not. A stray sender label must
+    // not survive to become a rendezvous target later.
+    assert.equal(entry.requester, '');
+});
+
+test('with no roster available the shape-only check is unchanged', () => {
+    const entry = normalizeEntryForIdentity(
+        { kind: 'goto', recipient: 'RouteGuide', requester: 'RouteGuide' },
+        {},
+    );
+
+    assert.equal(entry.recipient, 'RouteGuide');
+});
+
+// Live seam campaign 2026-08-15. The connective splitter requires a comma before
+// "and", so "collect wood and make charcoal" and "get four logs and come back to
+// me" lose their second clause silently. Making the comma optional was tried and
+// reverted: it split "Then go inside and sleep in the bed" and destroyed the
+// accepted construction-barrier sleep step. These checks pin the safety property
+// that any future fix must preserve — a noun conjunction is one request.
+import { splitAgendaSegments as splitForClauses } from '../../src/agent/player-agenda.js';
+
+test('a noun conjunction is one clause and is never split', () => {
+    assert.deepEqual(splitForClauses('collect wood and stone'), ['collect wood and stone']);
+    assert.deepEqual(splitForClauses('bring me sand and gravel'), ['bring me sand and gravel']);
+    assert.deepEqual(
+        splitForClauses('get some wood and iron and copper'),
+        ['get some wood and iron and copper'],
+    );
+});
+
+test('a comma before the conjunction separates clauses', () => {
+    assert.deepEqual(
+        splitForClauses('collect wood, and make charcoal'),
+        ['collect wood', 'make charcoal'],
+    );
+});
+
+test('one instruction split across "and" stays whole', () => {
+    assert.deepEqual(
+        splitForClauses('go inside and sleep in the bed'),
+        ['go inside and sleep in the bed'],
+    );
+});
+
+// Live seam campaign 2026-08-15. The connective splitter requires a comma before
+// "and", so unpunctuated speech lost its second clause with no receipt. A verb
+// list cannot fix it: the same "and" joins two clauses in "collect wood and make
+// charcoal" and two halves of one instruction in "go inside and sleep in the
+// bed". The discriminator is evidence instead of vocabulary — split only when
+// each half independently resolves to real work through the capability registry.
+test('an unpunctuated conjunction is separated when both halves are real work', () => {
+    const plan = parsePlayerAgenda('Bubby', 'get four logs and come back to me', {});
+
+    assert.deepEqual(plan.steps.map(step => step.entry.kind), ['acquire', 'goto']);
+    assert.equal(plan.unresolved.length, 0);
+});
+
+test('one instruction spanning a conjunction is never torn apart', () => {
+    // "go inside" is not work on its own, so this must stay a single sleep step.
+    // Splitting it destroyed the accepted construction-barrier sleep behaviour.
+    const plan = parsePlayerAgenda('Bubby', 'go inside and sleep in the bed', {});
+
+    assert.deepEqual(plan.steps.map(step => step.entry.kind), ['sleep']);
+});
+
+test('a clause the registry cannot satisfy is reported instead of silently dropped', () => {
+    const plan = parsePlayerAgenda('Bubby', 'collect wood and make charcoal', {});
+
+    // The supported half still runs; the unsupported half becomes visible so the
+    // intent ledger can ask rather than deliver half the request in silence.
+    assert.deepEqual(plan.steps.map(step => step.entry.kind), ['harvest']);
+    assert.deepEqual(plan.unresolved.map(entry => entry.segment), ['make charcoal']);
+});
+
+test('an ambiguous noun conjunction surfaces rather than resolving by guess', () => {
+    const plan = parsePlayerAgenda('Bubby', 'collect wood and stone', {});
+
+    assert.deepEqual(plan.unresolved.map(entry => entry.segment), ['stone']);
+});

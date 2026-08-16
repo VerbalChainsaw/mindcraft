@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+
+import { isStaleActivityState, staleActivityReason } from './activity-freshness.js';
 import path from 'node:path';
 
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
@@ -72,6 +74,13 @@ export class CompanionDirectiveStateStore {
       const document = JSON.parse(readFileSync(this.filePath, 'utf8'));
       if (document?.version !== STORE_VERSION) {
         throw new TypeError(`Unsupported companion-directive version '${document?.version}'.`);
+      }
+      // A standing follow/guard is what the companion is doing right now, not
+      // something to revive hours later from a finished session.
+      if (isStaleActivityState(document.savedAt)) {
+        this.lastError = staleActivityReason('companion directive', document.savedAt);
+        this.state = normalizeState();
+        return this.snapshot();
       }
       this.state = normalizeState(document);
     } catch (error) {

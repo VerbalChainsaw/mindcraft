@@ -190,9 +190,23 @@ export function chooseSurvivalIntent(situation = {}, policy = {}) {
     };
   }
   if (situation.idle !== true) return null;
+  // A competent player at recoverable health does not forage at night with a
+  // safe bed nearby. Sleeping skips the hostile window at no cost and resets the
+  // insomnia that spawns phantoms, while night foraging is what walked the body
+  // into open water at low health. Critical need still outranks rest, because
+  // starvation and a critical wound cannot be slept off.
+  const nightRestAvailable = policy.mode === 'full'
+    && policy.sleep === 'safe'
+    && situation.dimension === 'overworld'
+    && isNightTime(numeric(situation.timeOfDay, 0))
+    && health > 8
+    && hunger > numeric(policy.criticalFood, 6)
+    && (Array.isArray(situation.beds) ? situation.beds : [])
+      .some(candidate => candidate?.reachable === true && candidate?.safe === true);
   if (
     policy.mode === 'full'
     && health <= 14
+    && !nightRestAvailable
   ) {
     if (situation.recentDamage === true && situation.sheltered !== true) {
       const recoveryShelter = (Array.isArray(situation.shelters) ? situation.shelters : [])

@@ -35,6 +35,7 @@ import { bindStructureAccessoryMaterials } from '../runtime/jobs/structure-mater
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
 import { blockCanSupportPlacement } from '../runtime/block-placement-contract.js';
+import { recordActionTerminal } from '../action_manager.js';
 import {
     createItemGoalContract,
     inventoryCountForGoalTarget,
@@ -348,7 +349,63 @@ export function collectionExclusionsForAgent(agent, requestedName = null) {
     return exclusions;
 }
 
-function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = null) {
+/**
+ * Activated collection commands still call legacy skills that publish their
+ * final observation through `bot.lastActionEvidence`. Adapt only this command
+ * boundary into the composed action ledger. Nested collection (for example,
+ * tool bootstrapping) remains a child of its owning skill and cannot
+ * accidentally claim the outer action's one terminal slot.
+ *
+ * Never promote an arbitrary last observation. A resolved collection must end
+ * in a bounded collection or mining-search receipt, and a claimed success must
+ * agree with a positive `collected` observation. Unknown or contradictory
+ * evidence becomes an explicit, non-retryable terminal failure.
+ */
+export function recordCollectionActionTerminal(bot, actionValue) {
+    const evidence = bot?.lastActionEvidence;
+    const kind = String(evidence?.kind || '').trim();
+    const outcome = String(evidence?.outcome || '').trim();
+    const claimedCollection = (
+        kind === 'collect'
+        && outcome === 'collected'
+        && Number(evidence?.count) > 0
+    );
+    const supportedTerminal = (
+        Boolean(outcome)
+        && (kind === 'collect' || kind === 'mining_search')
+        && typeof actionValue === 'boolean'
+        && (actionValue === true) === claimedCollection
+    );
+    const terminal = supportedTerminal
+        ? evidence
+        : {
+            kind: 'collect',
+            outcome: 'collection_terminal_invalid',
+            observed: {
+                kind: kind || null,
+                outcome: outcome || null,
+                count: Number.isFinite(Number(evidence?.count)) ? Number(evidence.count) : null,
+                actionValue: typeof actionValue === 'boolean' ? actionValue : null,
+            },
+            retryable: false,
+        };
+    const recorded = recordActionTerminal(terminal);
+    if (recorded.accepted && bot) bot.lastActionEvidence = recorded.snapshot;
+    return Object.freeze({
+        accepted: recorded.accepted === true,
+        valid: supportedTerminal,
+        code: recorded.code,
+        snapshot: recorded.snapshot,
+    });
+}
+
+async function runCollectionAction(agent, operation) {
+    const actionValue = await operation();
+    const receipt = recordCollectionActionTerminal(agent?.bot, actionValue);
+    return actionValue === true && receipt.accepted === true && receipt.valid === true;
+}
+
+function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = null, receiptMode = 'legacy') {
     let actionLabel = null;  // Will be set on first use
     
     const wrappedAction = async function (agent, ...args) {
@@ -363,7 +420,11 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
         }
         const actionFnWithAgent = async () => actionFn(agent, ...args);
         const actionTimeout = typeof timeout === 'function' ? timeout(agent, ...args) : timeout;
-        const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout: actionTimeout, resume });
+        const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, {
+            timeout: actionTimeout,
+            resume,
+            receiptMode,
+        });
         if (code_return.interrupted && !code_return.timedout)
             return;
         if (code_return.result?.phase && code_return.result.phase !== 'succeeded') {
@@ -377,15 +438,24 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
     // Query/configuration/vision commands use different wrappers and retain
     // their existing non-takeover behavior.
     wrappedAction.manualAutonomyTakeover = true;
+    wrappedAction.receiptMode = receiptMode;
 
     return wrappedAction;
 }
 
-function setCompanionDirective(agent, directive, playerName) {
+export function updateCompanionDirectiveFromAction(agent, directive, playerName) {
+    // A bounded approach may be used as one leg of survival, goal, job, or
+    // autonomy orchestration. Those owners temporarily control the body; they
+    // do not have authority to erase an existing player Follow/Guard promise.
+    // Unknown owner evidence fails closed. The non-null Follow/Guard prepare
+    // hooks run before action acquisition and are themselves explicit player
+    // continuation commands, so only destructive null mutations are gated.
+    if (directive === null && agent?.actions?.currentActionOwner !== 'player') return false;
     agent.companion_context?.setDirective?.(directive, playerName);
     if (directive !== 'guard' && agent.runtime?.reflexes?.combat === 'off') {
         agent.bot?.modes?.setOn?.('self_defense', false);
     }
+    return true;
 }
 
 /**
@@ -835,12 +905,12 @@ export const actionsList = [
             'dry_only': {type: 'boolean', description: 'Require a complete Pathfinder route that does not enter water.', optional: true, default: false},
         },
         perform: runAsAction(async (agent, player_name, closeness, dry_only = false) => {
-            setCompanionDirective(agent, null, player_name);
+            updateCompanionDirectiveFromAction(agent, null, player_name);
             return await skills.goToPlayer(agent.bot, player_name, closeness, {
                 locatePlayerPosition: name => agent.locatePlayerPosition(name),
                 dryOnly: dry_only === true,
             });
-        })
+        }, false, -1, null, 'composed')
     },
     {
         name: '!followPlayer',
@@ -850,10 +920,12 @@ export const actionsList = [
             'follow_dist': {type: 'float', description: 'The distance to follow from.', domain: [0, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, follow_dist) => {
-            return await skills.followPlayer(agent.bot, player_name, follow_dist);
+            return await skills.followPlayer(agent.bot, player_name, follow_dist, {
+                locatePlayerPosition: name => agent.locatePlayerPosition(name),
+            });
         }, true, -1, (agent, player_name) => {
-            setCompanionDirective(agent, 'follow', player_name);
-        })
+            updateCompanionDirectiveFromAction(agent, 'follow', player_name);
+        }, 'composed')
     },
     {
         name: '!followPlayerUntilNearBlock',
@@ -864,7 +936,7 @@ export const actionsList = [
             'radius': { type: 'float', description: 'Maximum distance both companions may be from the block.', domain: [2, 32] },
         },
         perform: runAsAction(async (agent, player_name, block_name, radius) => {
-            setCompanionDirective(agent, 'follow', player_name);
+            updateCompanionDirectiveFromAction(agent, 'follow', player_name);
             return await skills.followPlayerUntilNearBlock(
                 agent.bot,
                 player_name,
@@ -882,11 +954,13 @@ export const actionsList = [
             'guard_dist': {type: 'float', description: 'distance to keep from the guarded player.', domain: [1, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, guard_dist) => {
-            return await skills.followPlayer(agent.bot, player_name, guard_dist);
+            return await skills.followPlayer(agent.bot, player_name, guard_dist, {
+                locatePlayerPosition: name => agent.locatePlayerPosition(name),
+            });
         }, true, -1, (agent, player_name) => {
-            setCompanionDirective(agent, 'guard', player_name);
+            updateCompanionDirectiveFromAction(agent, 'guard', player_name);
             agent.bot.modes.setOn('self_defense', true);
-        })
+        }, 'composed')
     },
     {
         name: '!goToCoordinates',
@@ -1429,37 +1503,39 @@ export const actionsList = [
             'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
             'complete_started_tree': { type: 'boolean', description: 'Finish the bounded connected natural tree once harvesting starts.', optional: true, default: true },
         },
-        perform: runAsAction(async (agent, type, num, range, relocate = false, complete_started_tree = true) => {
-            if (skills.isWoodBlockType(type)) {
-                return await skills.collectWood(
+        perform: runAsAction((agent, type, num, range, relocate = false, complete_started_tree = true) => (
+            runCollectionAction(agent, async () => {
+                if (skills.isWoodBlockType(type)) {
+                    return await skills.collectWood(
+                        agent.bot,
+                        num,
+                        range,
+                        collectionExclusionsForAgent(agent, type),
+                        {
+                            relocate: relocate === true,
+                            woodType: type,
+                            completeStartedTree: complete_started_tree === true,
+                        },
+                    );
+                }
+                return await skills.collectBlock(
                     agent.bot,
+                    type,
                     num,
-                    range,
                     collectionExclusionsForAgent(agent, type),
+                    range,
                     {
                         relocate: relocate === true,
-                        woodType: type,
-                        completeStartedTree: complete_started_tree === true,
+                        preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
+                        preservedReturnRoute: activeMiningReturnRoute(agent),
                     },
                 );
-            }
-            return await skills.collectBlock(
-                agent.bot,
-                type,
-                num,
-                collectionExclusionsForAgent(agent, type),
-                range,
-                {
-                    relocate: relocate === true,
-                    preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
-                    preservedReturnRoute: activeMiningReturnRoute(agent),
-                },
-            );
-        }, false, (_agent, type, num, _range, _relocate = false, complete_started_tree = true) => (
+            })
+        ), false, (_agent, type, num, _range, _relocate = false, complete_started_tree = true) => (
             skills.isWoodBlockType(type)
                 ? woodCollectionActionTimeoutMinutes(num, complete_started_tree)
                 : RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES
-        ))
+        ), null, 'composed')
     },
     {
         name: '!prepareMaterial',
@@ -1531,15 +1607,15 @@ export const actionsList = [
         params: {
             'num': { type: 'int', description: 'The number of logs to collect.', domain: [1, 64, '[]'] }
         },
-        perform: runAsAction(async (agent, num) => {
-            return await skills.collectWood(
+        perform: runAsAction((agent, num) => (
+            runCollectionAction(agent, () => skills.collectWood(
                 agent.bot,
                 num,
                 64,
                 collectionExclusionsForAgent(agent),
                 { relocate: true, completeStartedTree: true },
-            );
-        }, false, (_agent, num) => woodCollectionActionTimeoutMinutes(num, true))
+            ))
+        ), false, (_agent, num) => woodCollectionActionTimeoutMinutes(num, true), null, 'composed')
     },
     {
         name: '!collectWoodInRange',
@@ -1550,8 +1626,8 @@ export const actionsList = [
             'relocate': { type: 'boolean', description: 'Allow bounded movement to new search areas when the current scan is empty.', optional: true, default: false },
             'complete_started_tree': { type: 'boolean', description: 'Finish the bounded connected natural tree once harvesting starts.', optional: true, default: true },
         },
-        perform: runAsAction(async (agent, num, range, relocate = false, complete_started_tree = true) => {
-            return await skills.collectWood(
+        perform: runAsAction((agent, num, range, relocate = false, complete_started_tree = true) => (
+            runCollectionAction(agent, () => skills.collectWood(
                 agent.bot,
                 num,
                 range,
@@ -1560,10 +1636,10 @@ export const actionsList = [
                     relocate: relocate === true,
                     completeStartedTree: complete_started_tree === true,
                 },
-            );
-        }, false, (_agent, num, _range, _relocate = false, complete_started_tree = true) => (
+            ))
+        ), false, (_agent, num, _range, _relocate = false, complete_started_tree = true) => (
             woodCollectionActionTimeoutMinutes(num, complete_started_tree)
-        ))
+        ), null, 'composed')
     },
     {
         name: '!craftRecipe',
@@ -2832,7 +2908,7 @@ export const actionsList = [
         description: 'Come to the named player and stop within a comfortable companion distance. Use for requests such as "come here".',
         params: {'player_name': { type: 'string', description: 'Name of the player to approach.' }},
         perform: runAsAction(async (agent, player_name) => {
-            setCompanionDirective(agent, null, player_name);
+            updateCompanionDirectiveFromAction(agent, null, player_name);
             return await skills.goToPlayer(agent.bot, player_name, 2, {
                 locatePlayerPosition: name => agent.locatePlayerPosition(name),
             });
@@ -2845,7 +2921,7 @@ export const actionsList = [
         perform: runAsAction(async (agent, player_name) => {
             return await skills.followPlayer(agent.bot, player_name, 3);
         }, true, -1, (agent, player_name) => {
-            setCompanionDirective(agent, 'follow', player_name);
+            updateCompanionDirectiveFromAction(agent, 'follow', player_name);
         })
     },
     {
@@ -2885,7 +2961,7 @@ export const actionsList = [
         perform: runAsAction(async (agent, player_name) => {
             return await skills.followPlayer(agent.bot, player_name, 3);
         }, true, -1, (agent, player_name) => {
-            setCompanionDirective(agent, 'guard', player_name);
+            updateCompanionDirectiveFromAction(agent, 'guard', player_name);
             agent.bot.modes.setOn('self_defense', true);
         })
     },

@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+
+import { isStaleActivityState, staleActivityReason } from './activity-freshness.js';
 import path from 'node:path';
 
 import { writeJsonAtomicSync } from '../../utils/atomic-file.js';
@@ -93,6 +95,13 @@ export class JobStateStore {
         throw new TypeError(`Unsupported job-state version '${document?.version}'.`);
       }
       this.terminalReceipt = normalizeTerminalReceipt(document.terminalReceipt);
+      // An active work order is in-flight activity, not durable knowledge.
+      // Restoring one from a previous play session revives work nobody asked
+      // for. See activity-freshness.js.
+      if (document.activeOrder && isStaleActivityState(document.savedAt)) {
+        this.lastError = staleActivityReason('job state', document.savedAt);
+        return null;
+      }
       return document.activeOrder ? normalizeWorkOrder(document.activeOrder) : null;
     } catch (error) {
       this.lastError = String(error?.message || error).slice(0, 280);

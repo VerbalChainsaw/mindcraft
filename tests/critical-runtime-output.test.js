@@ -137,7 +137,7 @@ test('a cave stance is bindable only when native Pathfinder proves the return ro
   const registry = minecraftData('1.21.11');
   const cave = new Vec3(10, 60, 0);
   const home = new Vec3(0, 70, 0);
-  const reverseStarts = [];
+  const routeStarts = [];
   const bot = {
     registry,
     traversalPolicy: 'preserve',
@@ -150,9 +150,12 @@ test('a cave stance is bindable only when native Pathfinder proves the return ro
         return { status: 'success', path: [cave.clone()] };
       },
       getPathFromTo(_movements, start) {
-        reverseStarts.push(start.clone());
-        return (function * noReturnRoute() {
-          yield { result: { status: 'noPath', path: [] } };
+        routeStarts.push(start.clone());
+        const inbound = start.x === home.x && start.y === home.y && start.z === home.z;
+        return (function * routeByDirection() {
+          yield { result: inbound
+            ? { status: 'success', path: [cave.clone()] }
+            : { status: 'noPath', path: [] } };
         }());
       },
     },
@@ -161,16 +164,29 @@ test('a cave stance is bindable only when native Pathfinder proves the return ro
   const rejected = probeSafeRoundTripNavigationStances(bot, [cave], home, 500);
   assert.equal(rejected.reachable, false);
   assert.equal(rejected.status, 'return_route_unreachable');
-  assert.deepEqual(reverseStarts.map(position => position.toArray()), [cave.toArray()]);
+  assert.deepEqual(routeStarts.map(position => position.toArray()), [
+    home.toArray(),
+    cave.toArray(),
+  ]);
 
   bot.pathfinder.getPathFromTo = function * returnRoute(_movements, start) {
-    reverseStarts.push(start.clone());
-    yield { result: { status: 'success', path: [home.clone()] } };
+    routeStarts.push(start.clone());
+    const inbound = start.x === home.x && start.y === home.y && start.z === home.z;
+    yield { result: {
+      status: 'success',
+      path: [inbound ? cave.clone() : home.clone()],
+    } };
   };
   const accepted = probeSafeRoundTripNavigationStances(bot, [cave], home, 500);
   assert.equal(accepted.reachable, true);
   assert.deepEqual(accepted.terminalPosition, { x: cave.x, y: cave.y, z: cave.z });
   assert.equal(accepted.returnStatus, 'success');
+  assert.deepEqual(routeStarts.map(position => position.toArray()), [
+    home.toArray(),
+    cave.toArray(),
+    home.toArray(),
+    cave.toArray(),
+  ]);
 });
 
 test('local navigation recovery offers supported nearby stances without inventing a descent', () => {
@@ -214,9 +230,12 @@ test('local navigation recovery does not execute a stance with no native return 
       getPathTo() {
         return { status: 'success', path: [new Vec3(1, 64, 0)] };
       },
-      getPathFromTo() {
-        return (function * noReturnRoute() {
-          yield { result: { status: 'noPath', path: [] } };
+      getPathFromTo(_movements, start) {
+        const inbound = start.x === origin.x && start.y === origin.y && start.z === origin.z;
+        return (function * routeByDirection() {
+          yield { result: inbound
+            ? { status: 'success', path: [new Vec3(1, 64, 0)] }
+            : { status: 'noPath', path: [] } };
         }());
       },
       goto() {

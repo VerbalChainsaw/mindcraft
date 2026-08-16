@@ -28,6 +28,17 @@ test('Phase 0 parser accepts equivalent single-quoted and double-quoted follow c
   });
 });
 
+test('continuous player pursuit publishes composed receipts for shared settlement', () => {
+  assert.equal(getCommand('!followPlayer').perform.receiptMode, 'composed');
+  assert.equal(getCommand('!guardPlayer').perform.receiptMode, 'composed');
+});
+
+test('activated resource collection commands publish composed terminal receipts', () => {
+  assert.equal(getCommand('!collectBlocksInRange').perform.receiptMode, 'composed');
+  assert.equal(getCommand('!collectWood').perform.receiptMode, 'composed');
+  assert.equal(getCommand('!collectWoodInRange').perform.receiptMode, 'composed');
+});
+
 test('Command parsing preserves existing callers when a trailing parameter is optional', () => {
   assert.deepEqual(
     parseCommandMessage('!requestItemGoal("acquire", "iron_pickaxe", 1, "ADMIN")'),

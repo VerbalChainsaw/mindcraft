@@ -67,8 +67,13 @@ test('the frozen v1 manifest registers two bounded replays and keeps other famil
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
   assert.deepEqual(manifest.scenarios.map(({ family }) => family).sort(), [...FAMILIES]);
-  assert.equal(manifest.manifestRevision, 'release-0.1.v7');
-  assert.equal(manifest.candidateCommit, 'b47117b373a36d894e8ca9df740ae2ced0493913');
+  // Revision and candidate commit MOVE every time the manifest is re-registered
+  // against a new HEAD. Pinning them to literals made re-registration break this
+  // test, which is part of why the lab was only ever runnable against one commit.
+  // Assert their shape; the frozen fixture hashes and seeds below are the real
+  // invariants.
+  assert.match(manifest.manifestRevision, /^\S(?:.*\S)?$/);
+  assert.match(manifest.candidateCommit, /^[a-f0-9]{40}$/);
 
   const stone = manifest.scenarios.find(({ id }) => (
     id === 'autonomous-wood-to-stone-no-safe-stance-recovery'
@@ -88,7 +93,19 @@ test('the frozen v1 manifest registers two bounded replays and keeps other famil
   assert.equal(follow.requestForms[0].request, '!followPlayer("FollowTarget", 3)');
   assert.equal(follow.requestForms[1].request, 'Follow me through the doorway and down the corridor.');
 
-  const registered = new Set([stone.id, follow.id]);
+  // The obstruction course covers what doorway-corridor cannot: following a
+  // player when terrain must be broken. doorway-corridor passes identically
+  // with digging disabled, so it can never catch a movement regression.
+  const obstruction = manifest.scenarios.find(({ id }) => id === 'obstruction-follow');
+  assert.equal(obstruction.status, 'not-run');
+  assert.equal(obstruction.executor.safe, true);
+  assert.equal(obstruction.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(obstruction.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(obstruction.world.fixtureHash, follow.world.fixtureHash);
+  assert.equal(obstruction.seed, follow.seed);
+  assert.ok(obstruction.expectedEvidence.includes('corridor-progress-confirmed'));
+
+  const registered = new Set([stone.id, follow.id, obstruction.id]);
   assert.ok(manifest.scenarios
     .filter(({ id }) => !registered.has(id))
     .every(({ status, executor }) => (
