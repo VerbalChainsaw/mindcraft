@@ -5,16 +5,18 @@ exercise the Minecraft companion through varied, bounded, high-frequency family 
 load AGENTS.md, docs/coordination/CURRENT.md, docs/architecture/SHARED-CONTRACT-SPINE.md, and the mindcraft-minecraft-development skill before gameplay work
 use managed Paper and the sole existing IronSuiteProof runtime as authoritative physical evidence
 preserve every unrelated dirty path and keep the active branch and shared working state intact
-declare each campaign's player-visible outcome and stopping condition before execution; the fixed maximum is two genuine product repair classes and three valid gameplay tranches—initial, post-repair, and final acceptance
-allow one censored setup retry only for a broken harness or invalid fixture, meaning two total setup attempts; charge a failure only after bounded authoritative reconciliation, never from a missing/delayed advisory acknowledgement when the intended state is proved; a repeated signature, any second terminal setup failure, or a changed fixture contract closes the campaign
-close rather than expand a campaign when a valid replay reveals a distinct third product defect; known deferred blockers do not authorize another repair inside the campaign
-keep the roughly 25-minute checkpoint bound separate from gameplay budgets; campaigns may span checkpoints, but every wake must persist the same counters and grants no extra run, retry, or repair
+declare each campaign's player-visible outcome and stopping condition before execution; unattended agent-driven runs are the default and are bounded by convergence, never by a run count
+run the real world, observe, repair, and run again without rationing unattended runs; only a run consuming the Director's presence keeps the tight maximum of two product repair classes and three valid tranches, and needs an adversarial review of the changed seam first
+a product-side crash or unavailable situation sample before the intended request is exercised is a defect finding, not a consumed tranche and not a fixture failure
+charge a setup failure only after bounded authoritative reconciliation, never from a missing or delayed advisory acknowledgement when the intended state is proved
+while an unattended campaign is still converging a newly found defect is evidence to repair and rerun, not a reason to close; rotate when the outcome stops converging, and known deferred blockers stay deferred
+campaigns may span any number of checkpoints; no checkpoint imposes a wall-clock stop, and crossing one grants no extra attended budget
 freeze the exact blocker and rotate to a different common scenario at any campaign-closing bound; safety, false success, corruption, or blockage can prioritize a separately declared next campaign, not expand the current one
 keep Mineflayer and mature plugins responsible for movement, combat, inventory, crafting, fishing, and interaction mechanics
 diagnose the first unproven selection, feasibility, planning, execution, reconciliation, or verified-outcome boundary
-record exact player-visible WTF behavior with location, simpler sensible behavior, and likely owner
+state the sensible player action before dispatching a live request, then record the five-field player-sense counterfactual for each diagnosed defect and live result: sensible action, actual behavior, first divergence, owner, smallest shared correction
 freeze accepted mechanics after one natural physical pass and do not stack supporting-seam proofs
-update docs/coordination/CURRENT.md at each bounded checkpoint with runtime, last physical result, blocker, WTF, and next action
+update docs/coordination/CURRENT.md at each bounded checkpoint with runtime, last physical result, blocker, player-sense verdict, and next action
 leave the sole bot stopped under Operator Hold between declared campaigns; never launch a second runtime
 
 ## FACTS
@@ -37,7 +39,7 @@ focused-verification: remembered-home and requester-inheritance regressions, par
 UNSURE self-defense-live-acceptance: three post-respawn retreat failures involved changing health or hostile spacing, so the latest chain neither cleanly accepts nor disproves unchanged-evidence suppression
 safe-unloaded-hold: BehaviorArbiter now evaluates both mortal reflex bands before a full-tab-roster absence contract for explicit Stop or completed terminal wait; after ten continuous seconds with zero humans it rechecks Hold/presence and delegates one existing code-zero teardown, while any human resets the timer, known bot profiles are excluded, missing roster evidence fails closed, and temporary assignment-compilation/handoff Holds never unload; Operator Hold remains persisted for manual/dashboard restart
 focused-verification: behavior-arbiter-trace passes 22/22 including temporary-Hold exclusion; the new graceful code-zero self-exit case passed within the lifecycle run; live Paper acceptance corroborates process, recorder, position, health, inventory, and persistence postconditions
-campaign-governor-revision: every new campaign has hard maxima of two genuine product repair classes, three valid gameplay tranches in order (initial, post-repair, final acceptance), and one censored setup retry; checkpoint wakes carry the same counters and grant no new budget
+campaign-governor-revision (SUPERSEDED 2026-08-15): the two-repair, three-tranche, one-setup-retry maxima now apply only to runs consuming the Director's presence; unattended agent-driven runs are unrationed and bounded by convergence
 closed-campaign-37: one valid gameplay tranche, zero repairs, zero setup retries; acquire-six Spruce Logs gained eleven and rediscovered the deferred whole-tree overcollection class, so the campaign closed without replay
 closed-campaign-38: one valid gameplay tranche, one safety repair, zero setup retries; an unresponsive craft action blocked self-defense until Skeleton death, the shared craft admission gate now yields on abort or a hostile within six blocks, focused checks pass 2/2, and no replay may manufacture the lost kit
 closed-campaign-39: no valid gameplay tranche or product repair; one witness route hang consumed the sole censored setup retry, a second harness predicate failure closed the campaign, and the only preserved observation is guard closing from 21.6 to about 2.2 blocks with health/inventory stable
