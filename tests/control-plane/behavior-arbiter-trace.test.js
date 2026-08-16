@@ -1567,3 +1567,41 @@ test('a throw in the update preamble degrades the tick and leaves the arbiter ab
   assert.equal(arbiter.updating, false);
   assert.notEqual(second.code, undefined);
 });
+
+// A persona hesitation is evaluated ABOVE the player-directive lane, so a
+// casual comportment could delay an explicit "follow me" by its full pause.
+// Waiting on someone who just spoke to you is the opposite of a companion.
+test('a waiting player outranks the persona comportment pause', async () => {
+  const { playerAwaitsResponse } = await import(
+    '../../src/agent/runtime/behavior-arbiter.js'
+  );
+
+  const withDirective = {
+    companion_context: { snapshot: () => ({ directive: 'follow' }) },
+    actions: { hasDeferredPlayerAction: () => false },
+  };
+  const withDeferredAction = {
+    companion_context: { snapshot: () => ({ directive: null }) },
+    actions: { hasDeferredPlayerAction: () => true },
+  };
+  const idle = {
+    companion_context: { snapshot: () => ({ directive: null }) },
+    actions: { hasDeferredPlayerAction: () => false },
+  };
+
+  assert.equal(playerAwaitsResponse(withDirective), true, 'a standing directive is waiting');
+  assert.equal(playerAwaitsResponse(withDeferredAction), true, 'a deferred player action is waiting');
+  assert.equal(playerAwaitsResponse(idle), false, 'an idle companion may pace itself');
+  assert.equal(
+    playerAwaitsResponse(idle, { directiveResumeRequested: true }),
+    true,
+    'an explicit resume request is waiting',
+  );
+
+  // Absent structure must not be read as "someone is waiting" -- that would
+  // disable persona pacing everywhere rather than only for the player.
+  assert.equal(playerAwaitsResponse(null), false);
+  assert.equal(playerAwaitsResponse({}), false);
+  assert.equal(playerAwaitsResponse({ companion_context: {} }), false);
+  assert.equal(playerAwaitsResponse({ actions: {} }), false);
+});

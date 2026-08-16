@@ -197,6 +197,22 @@ function resultSkillOutcome(result) {
  * failed or partial escape cannot become an unchanged immediate retry. An
  * interrupted action is censored before this predicate is consulted.
  */
+/**
+ * True when the player is waiting on the companion: a standing directive, a
+ * deferred player action, or an explicit resume request.
+ *
+ * Exported and pure so the ordering rule it guards can be tested without
+ * mocking perception, modes and seven directors. A persona hesitation must
+ * never delay someone who just gave an order.
+ */
+export function playerAwaitsResponse(agent, { directiveResumeRequested = false } = {}) {
+  return Boolean(
+    agent?.companion_context?.snapshot?.()?.directive
+    || agent?.actions?.hasDeferredPlayerAction?.() === true
+    || directiveResumeRequested,
+  );
+}
+
 export function isDirectiveHazardSettlementEvidence(result) {
   return result?.phase !== 'interrupted'
     && result?.code !== 'interrupted'
@@ -1231,10 +1247,25 @@ export class BehaviorArbiter {
       selected = await this.evaluateModeBand('bounded_recovery', RECOVERY_MODES, perception);
       if (selected) return selected;
 
-      if (this.urgency === 'critical') {
+      // A persona hesitation is for work the companion chose to do. It must
+      // never sit in front of the player: this lane is evaluated above
+      // player_directive, so a casual comportment could delay an explicit
+      // "follow me" by its full pause. Waiting on someone who just spoke to you
+      // is the opposite of feeling like a companion. Autonomous work below
+      // still paces normally. See ARCHITECTURE.md -- a player command is never
+      // deferred, queued behind, or paced by anything.
+      const playerIsWaiting = playerAwaitsResponse(this.agent, {
+        directiveResumeRequested: this.directiveResumeRequested,
+      });
+      if (this.urgency === 'critical' || playerIsWaiting) {
         this.comportmentPauseUntil = 0;
         this.traceRecorder.startLane('comportment_pause');
-        this.traceRecorder.finishLane('comportment_pause', { status: 'ineligible', reasonCode: 'critical_urgency_override' });
+        this.traceRecorder.finishLane('comportment_pause', {
+          status: 'ineligible',
+          reasonCode: this.urgency === 'critical'
+            ? 'critical_urgency_override'
+            : 'player_directive_outranks_comportment',
+        });
       } else if (this.comportmentPauseUntil > this.now()) {
         this.traceRecorder.startLane('comportment_pause');
         return this.select(
