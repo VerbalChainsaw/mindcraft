@@ -181,6 +181,40 @@ In `behavior-arbiter.js`, a player directive currently sits behind
 `bounded_recovery`, and `comportment_pause`. Move it to position 2, directly
 below Reflex. Delete `comportment_pause` entirely.
 
+## Coverage gate — read before Step 4
+
+**Step 4 and Step 5 are blocked on scenario coverage, not on nerve.** The
+original ordering here said "make one scenario pass, then collapse". That was
+written before it was clear what the one scenario covers.
+
+Both runnable scenarios issue `!followPlayer(...)`. They prove following, on
+open ground and through broken terrain. Nothing else is runnable:
+`stone-recovery` has no fixture anywhere on the machine, and three families are
+`unavailable`.
+
+Against that, Step 4 proposes deleting:
+
+| Director | Lines | Capability | Unit tests |
+|---|---:|---|---|
+| `goal-director` | 3,203 | typed goals — "get me 8 iron and come back" | 2 files |
+| `agenda-director` | 2,152 | multi-step player requests | 2 files |
+| `role-director` | 486 | autonomous role work | **0** |
+| `reaction-director` | 269 | speech and gesture reactions | 3 files |
+| `progression-director` | 207 | self-directed progression | **0** |
+
+6,317 lines, of which the live harness exercises none. Deleting typed goals and
+the agenda with follow-only coverage would remove the capabilities behind every
+request that is not "come here", with no way to see what broke until someone
+plays. That is the exact failure mode this whole effort exists to end.
+
+**Prerequisite for Step 4:** a scenario that exercises a typed goal
+(acquire an item and deliver it) and one that exercises a multi-step agenda
+request. The course machinery is programmatic — `provisionFixture` lays geometry
+with `fill` commands — so a new course needs no new world fixture. See
+`obstruction-follow` for the pattern.
+
+Until then, treat the lane count as a known cost, not an emergency.
+
 ## Step 4 — Collapse the lanes
 
 20 → 4. Delete these lanes and their directors:
