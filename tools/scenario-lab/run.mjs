@@ -36,6 +36,10 @@ const SCENARIOS = Object.freeze({
   'deliver-item-goal':
     'Typed goal end to end: acquire a block of dirt and physically hand it to '
     + 'the player. The only course that exercises goal-director.',
+  'orchestration-charcoal':
+    'Plain language against primitives only. Asks for wood and charcoal, and '
+    + 'measures whether the LLM orchestrates the chain or only routes to a '
+    + 'pre-written procedure.',
 });
 
 // The deliver course runs on a generated flat world instead of the captured
@@ -45,6 +49,7 @@ const SCENARIOS = Object.freeze({
 // needs no machine-local path or override.
 const GENERATED_FIXTURES = Object.freeze({
   'deliver-item-goal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
+  'orchestration-charcoal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'orchestration-forest-v1'),
 });
 
 // The fixture is machine-local and gitignored. An explicit override wins outright. Falling back to the machine-local default

@@ -96,9 +96,13 @@ function deliverFixtureDry(attempt) {
   const probes = Array.isArray(physical?.deliveryDryLandProbes)
     ? physical.deliveryDryLandProbes
     : [];
+  // orchestrate-charcoal places no source block on purpose: finding the wood is
+  // the thing being measured. Requiring a placed source there would demand
+  // evidence the course is designed not to produce.
+  const sourceRequired = physical?.course === 'deliver-item';
   return physical?.deliveryGroundPresent === true
     && physical?.deliveryDryLandVerified === true
-    && physical?.deliverySourcePresent === true
+    && (sourceRequired ? physical?.deliverySourcePresent === true : true)
     && physical?.fixtureVerified === true
     && probes.length === 4
     && probes.every((probe) => probe?.verified === true);
@@ -252,7 +256,8 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
   const harness = report?.harness_evidence;
   const attempts = Array.isArray(harness?.attempts) ? harness.attempts : [];
   const attempt = attempts.length === 1 ? attempts[0] : null;
-  const deliverCourse = courseOf(report) === 'deliver-item';
+  const course = courseOf(report);
+  const deliverCourse = course === 'deliver-item' || course === 'orchestrate-charcoal';
   const correlated = deliverCourse
     ? deliverRequestCorrelated(attempt)
     : Boolean(expectedRoute && requestCorrelated(attempt, expectedRoute));

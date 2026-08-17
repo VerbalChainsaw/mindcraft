@@ -51,8 +51,27 @@ const OBSTRUCTION_PLUG_BLOCK = 'dirt';
 // reliable mine rather than a search. Laid with fill commands like every other
 // course here; see the note in FIXTURES.md about why frozen worlds rot.
 const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2: 1011 });
-const DELIVER_ITEM = 'dirt';
-const DELIVER_QUANTITY = 1;
+
+// What each delivering course wants, and how it is allowed to get it.
+//
+// deliver-item hands the bot its material: a dirt patch is placed beside it, so
+// the course measures the goal chain and nothing else.
+//
+// orchestrate-charcoal places NOTHING. The bot is told "go get some wood and
+// make me some charcoal" in plain language and must derive the rest -- charcoal
+// needs a furnace, a furnace needs cobblestone, cobblestone needs a pickaxe.
+// That derivation is the measurement, so the window is long and the world is a
+// forest rather than a prepared patch.
+const DELIVER_SPEC = Object.freeze({
+  'deliver-item': Object.freeze({ item: 'dirt', quantity: 1, placeSource: true, waitMs: 120_000 }),
+  'orchestrate-charcoal': Object.freeze({ item: 'charcoal', quantity: 1, placeSource: false, waitMs: 600_000 }),
+});
+// Assigned once from the course in run(). Module-level so the existing deliver
+// code paths keep reading one name.
+let DELIVER_ITEM = 'dirt';
+let DELIVER_QUANTITY = 1;
+let DELIVER_PLACE_SOURCE = true;
+let DELIVER_WAIT_MS = 120_000;
 
 // The deliver course runs on a generated flat world whose top solid block is
 // y=99, so the course constants above already stand on real ground. These probes
@@ -142,11 +161,11 @@ function parseArgs(argv) {
   if (!['follow', 'stop', 'deliver'].includes(options.mode)) {
     throw new Error('Mode must be follow, stop, or deliver.');
   }
-  if (options.mode === 'deliver' && options.course !== 'deliver-item') {
-    throw new Error('Deliver verification requires the deliver-item course.');
+  if (options.mode === 'deliver' && !Object.hasOwn(DELIVER_SPEC, options.course)) {
+    throw new Error(`Deliver verification requires one of: ${Object.keys(DELIVER_SPEC).join(', ')}.`);
   }
-  if (!['full', 'doorway-corridor', 'obstruction-follow', 'deliver-item'].includes(options.course)) {
-    throw new Error('Course must be full, doorway-corridor, obstruction-follow, or deliver-item.');
+  if (!['full', 'doorway-corridor', 'obstruction-follow', ...Object.keys(DELIVER_SPEC)].includes(options.course)) {
+    throw new Error('Course must be full, doorway-corridor, obstruction-follow, deliver-item, or orchestrate-charcoal.');
   }
   if (options.mode === 'stop' && options.course !== 'full') {
     throw new Error('Stop verification requires the full course.');
@@ -472,6 +491,19 @@ function createControlledTarget(eventLog) {
 
 async function run() {
   const options = parseArgs(process.argv.slice(2));
+  // Hoisted deliberately. These were declared inside the attempt loop, where
+  // provisionFixture -- defined in this scope and called from it -- could not
+  // see them. node --check does not catch that; the run does, at the worst
+  // possible moment.
+  const deliverCourse = Object.hasOwn(DELIVER_SPEC, options.course);
+  const obstructionCourse = options.course === 'obstruction-follow';
+  if (deliverCourse) {
+    const spec = DELIVER_SPEC[options.course];
+    DELIVER_ITEM = spec.item;
+    DELIVER_QUANTITY = spec.quantity;
+    DELIVER_PLACE_SOURCE = spec.placeSource;
+    DELIVER_WAIT_MS = spec.waitMs;
+  }
   const activeWaypoints = options.mode === 'stop' || options.course === 'full'
     ? WAYPOINTS
     : WAYPOINTS.slice(0, 2);
@@ -685,7 +717,7 @@ async function run() {
           ]
         : []),
       `fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`,
-      ...(options.course === 'deliver-item'
+      ...(deliverCourse && DELIVER_PLACE_SOURCE
         ? [
             `fill ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} ${DELIVER_SOURCE.x2} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z2} ${DELIVER_ITEM}`,
           ]
@@ -1119,7 +1151,7 @@ async function run() {
           () => countTargetItem(DELIVER_ITEM),
           held => held !== null && held >= wanted,
           `${runId} ${DELIVER_QUANTITY}x ${DELIVER_ITEM} delivered to ${TARGET_NAME}`,
-          120_000,
+          DELIVER_WAIT_MS,
         );
         activeAttempt.deliveryObservedAt = Date.now();
       } else {
@@ -1222,8 +1254,6 @@ async function run() {
       // design and only becomes true once the companion breaks through. That
       // transition -- plugged before, open after -- IS the proof, so it
       // replaces the static doorway check rather than failing it.
-      const deliverCourse = options.course === 'deliver-item';
-      const obstructionCourse = options.course === 'obstruction-follow';
       // Sealed behind the target, then open again at the end = the companion
       // broke through. `plugVerified` at paperBefore is intentionally false
       // here: the doorway starts open so the target can path east.
@@ -1239,7 +1269,7 @@ async function run() {
           // ambiguous 'unreachable' twenty minutes later instead of saying so.
           && paperBefore.groundVerified === true
           && paperBefore.dryLandVerified === true
-          && paperBefore.sourceVerified === true
+          && (DELIVER_PLACE_SOURCE ? paperBefore.sourceVerified === true : true)
         : obstructionCourse
         ? [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
             .every(snapshot => snapshot.wallVerified && snapshot.platformVerified)

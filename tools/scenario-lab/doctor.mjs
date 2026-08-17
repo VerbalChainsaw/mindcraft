@@ -172,7 +172,7 @@ try {
   // and a trial-bot-memory directory that exist nowhere on this machine.
   // Reporting it as runnable would send the next agent chasing a fixture that
   // cannot be produced.
-  const DRIVEABLE = new Set(['doorway-corridor-follow', 'obstruction-follow', 'deliver-item-goal']);
+  const DRIVEABLE = new Set(['doorway-corridor-follow', 'obstruction-follow', 'deliver-item-goal', 'orchestration-charcoal']);
   const notRun = manifest.scenarios.filter(s => s.status === 'not-run').map(s => s.id);
   const runnable = notRun.filter(id => DRIVEABLE.has(id));
   const blocked = notRun.filter(id => !DRIVEABLE.has(id));

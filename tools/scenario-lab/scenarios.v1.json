@@ -1,7 +1,7 @@
 {
  "schemaVersion": "scenario-lab.manifest.v1",
- "manifestRevision": "deliver-item-goal-20260817.v1",
- "manifestHash": "216c8be7a13773172fde3aa15d4c0defe996be3e8b20314c88cd8ed10db52b50",
+ "manifestRevision": "orchestration-charcoal-20260817.v1",
+ "manifestHash": "9ed0f97ced3eb1bd6d7f046b66456a24acdce686811c73f5c06cb9993648d670",
  "title": "Release 0.1 deterministic Scenario Lab catalog",
  "candidateCommit": "12bdc21081a3e883b945d6eb001a543ba61e7902",
  "server": {
@@ -404,6 +404,61 @@
      "detail": "The fixture identity has no immutable hash or registered canonical evidence adapter."
     }
    ]
+  },
+  {
+   "id": "orchestration-charcoal",
+   "family": "orchestration-charcoal",
+   "title": "Plain language to charcoal, on primitives only",
+   "status": "not-run",
+   "seed": "5514418771093312",
+   "world": {
+    "worldId": "orchestration-forest-v1",
+    "fixtureId": "scenario-lab.orchestration-forest.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "2b7929d24497eb27b73b4996326856fe302cf4797857e7a8ed1951d324e59105",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 900000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "Go get some wood and make me some charcoal.",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "Go get some wood and make me some charcoal.",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "instrumentation-mode-confirmed",
+    "goal-action-lifecycle",
+    "dry-land-fixture-confirmed",
+    "item-delivered-to-recipient",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+     "orchestration-charcoal"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
   }
  ]
 }

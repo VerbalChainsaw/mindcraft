@@ -43,7 +43,7 @@ param(
     # scenario. 'obstruction-follow' spans the wall across the full course width
     # and plugs the doorway with a breakable block, so following the player
     # REQUIRES breaking it -- the case the registered course does not exercise.
-    [ValidateSet('doorway-corridor', 'obstruction-follow', 'deliver-item')]
+    [ValidateSet('doorway-corridor', 'obstruction-follow', 'deliver-item', 'orchestrate-charcoal')]
     [string]$Course = 'doorway-corridor',
 
     [string]$FixtureRoot = ''
@@ -345,12 +345,12 @@ try {
     if ($fixtureKind -notin @('archive', 'generated')) {
         throw "Unsupported fixture kind '$fixtureKind'."
     }
-    $expectedFixtureId = if ($fixtureKind -eq 'generated') {
-        'scenario-lab.deliver-item-flat.v1'
+    $expectedFixtureIds = if ($fixtureKind -eq 'generated') {
+        @('scenario-lab.deliver-item-flat.v1', 'scenario-lab.orchestration-forest.v1')
     } else {
-        'scenario-lab.doorway-corridor-follow.v1'
+        @('scenario-lab.doorway-corridor-follow.v1')
     }
-    if ([string]$metadata.fixture_id -ne $expectedFixtureId -or [int]$metadata.fixture_version -ne 1) {
+    if ([string]$metadata.fixture_id -notin $expectedFixtureIds -or [int]$metadata.fixture_version -ne 1) {
         throw 'Fixture metadata identifies the wrong scenario or version.'
     }
     if ($fixtureKind -eq 'archive' -and -not (Test-Path -LiteralPath $archive)) {
@@ -510,7 +510,15 @@ try {
     $scenarioProfileJson = ($scenarioProfile | ConvertTo-Json -Depth 30) + [Environment]::NewLine
     [IO.File]::WriteAllText($scenarioProfilePath, $scenarioProfileJson, [Text.UTF8Encoding]::new($false))
     $report.startup_isolation.profile_sha256 = (Get-FileHash -LiteralPath $scenarioProfilePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $launchSettingsJson = ([ordered]@{
+    # A fixture may name the command surface the bot is allowed. Everything not
+    # named is blocked, in the prompt and in the command map. This is how a course
+    # asks whether the LLM can orchestrate primitives rather than route to a
+    # pre-written procedure; see the orchestration block in the fixture metadata.
+    $allowedCommands = @()
+    if ($null -ne $metadata.orchestration -and $null -ne $metadata.orchestration.allowed_commands) {
+        $allowedCommands = @($metadata.orchestration.allowed_commands)
+    }
+    $launchSettings = [ordered]@{
         auto_start = $true
         auto_open_ui = $false
         init_message = ''
@@ -520,7 +528,12 @@ try {
             enabled = ($InstrumentationMode -eq 'on')
             retention = 128
         }
-    } | ConvertTo-Json -Compress)
+    }
+    if ($allowedCommands.Count -gt 0) {
+        $launchSettings['allowed_commands'] = $allowedCommands
+        $report.allowed_commands = $allowedCommands
+    }
+    $launchSettingsJson = ($launchSettings | ConvertTo-Json -Compress -Depth 6)
 
     Save-Status 'backing-up-runtime'
     Copy-Item -LiteralPath $configPath -Destination $configBackup

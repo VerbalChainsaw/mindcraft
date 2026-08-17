@@ -1,0 +1,72 @@
+{
+  "schema_version": "scenario-lab.fixture.v1",
+  "fixture_id": "scenario-lab.orchestration-forest.v1",
+  "fixture_version": 1,
+  "kind": "generated",
+  "why": [
+    "This fixture exists to test one claim: that an LLM can orchestrate primitives",
+    "against Minecraft's geometry, rather than route a sentence to a pre-written",
+    "procedure. 152 commands are registered and 98 describe themselves as",
+    "multi-step. If the bot only passes with those available, it is a router.",
+    "",
+    "The task is 'go get some wood and make me some charcoal'. Charcoal needs a",
+    "furnace; a furnace needs 8 cobblestone; cobblestone needs a pickaxe; a pickaxe",
+    "needs planks and sticks. Nothing tells the bot that chain. Deriving it IS the",
+    "test, which is why allowed_commands below excludes every command that would",
+    "make a sequencing decision in JavaScript -- especially !prepareWoodenTool,",
+    "which performs the exact dependency step being measured.",
+    "",
+    "Forest biome with features enabled, so real trees generate on flat ground.",
+    "Stone sits in the layer stack for cobblestone. Surface is y=100 like the",
+    "deliver fixture, and dry land runs in every direction."
+  ],
+  "source": {
+    "world_name": "orchestration-forest-v1",
+    "seed": "5514418771093312",
+    "dimension": "overworld"
+  },
+  "generation": {
+    "level_type": "minecraft:flat",
+    "generate_structures": false,
+    "generator_settings": {
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:stone", "height": 155 },
+        { "block": "minecraft:dirt", "height": 7 },
+        { "block": "minecraft:grass_block", "height": 1 }
+      ],
+      "biome": "minecraft:forest",
+      "lakes": false,
+      "features": true
+    },
+    "surface": {
+      "top_block": "minecraft:grass_block",
+      "top_y": 99,
+      "stand_y": 100,
+      "layer_total_height": 164,
+      "min_build_height": -64
+    }
+  },
+  "orchestration": {
+    "principle": "mechanics are allowed, sequencing is not",
+    "allowed_commands": [
+      "!stats", "!inventory", "!nearbyBlocks", "!entities",
+      "!craftable", "!getCraftingPlan", "!inspectMinecraft", "!searchForBlock",
+      "!goToCoordinates", "!goToPlayer", "!moveAway",
+      "!collectBlocks", "!craftRecipe", "!smeltItem", "!placeHere",
+      "!equip", "!givePlayer", "!digDown"
+    ],
+    "deliberately_excluded": {
+      "!requestItemGoal": "goal-director runs the whole acquire-and-deliver chain",
+      "!assignMiningJob / !assignHarvestJob / !assign*Job": "persistent quotas with tool preparation and delivery built in",
+      "!addToAgenda / agenda commands": "sequencing lane; the LLM must hold the sequence",
+      "!prepareWoodenTool": "survival-bootstraps the tool dependency -- the exact reasoning step under test",
+      "!collectWood": "resolves 'wood' to any log type; the bot should name the block it wants",
+      "!newAction": "writes JavaScript. A pass would prove code generation, not orchestration. Already blocked unless allow_insecure_coding."
+    }
+  },
+  "profile": {
+    "filename": "scenario-profile.json",
+    "autonomy": "command"
+  }
+}
