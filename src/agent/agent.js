@@ -4,7 +4,7 @@ import { VisionInterpreter } from './vision/vision_interpreter.js';
 import { Prompter } from '../models/prompter.js';
 import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
-import { containsCommand, commandAssignsPersistentGoal, commandAssignsPersistentJob, commandExists, commandTakesManualAutonomy, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
+import { containsCommand, commandAssignsPersistentGoal, commandAssignsPersistentJob, commandExists, commandTakesManualAutonomy, executeCommand, truncCommandMessage, isAction, blacklistCommands, getCommandManifest } from './commands/index.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank, hasPendingDeathRecovery } from './memory_bank.js';
@@ -370,6 +370,8 @@ export class Agent {
             configured: settings.blocked_actions,
             task: this.task.blocked_actions,
             allowInsecureCoding: settings.allow_insecure_coding,
+            allowed: settings.allowed_commands,
+            registered: getCommandManifest().map((command) => command.name),
         });
         if (this.runtime?.role === 'companion' && !this.blocked_actions.includes('!attackPlayer')) {
             this.blocked_actions.push('!attackPlayer');
