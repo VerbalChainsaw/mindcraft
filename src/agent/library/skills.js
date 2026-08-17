@@ -220,6 +220,10 @@ const MAX_COLLECTION_DROP_DEPTH = 2;
 // It only stops a starved process being told its route does not exist.
 // remainingActionTimeMs() still caps this by the owning action's deadline.
 const COLLECTION_ROUTE_PROBE_TIMEOUT_MS = 400;
+// Wider budget for a second pass, used only when every candidate was rejected
+// on a clock expiry rather than on a missing route. Still capped by the owning
+// action's deadline via remainingActionTimeMs().
+const COLLECTION_ROUTE_PROBE_RETRY_TIMEOUT_MS = 1_500;
 const COLLECTION_ROUTE_PROBE_TICK_MS = 15;
 const MAX_COLLECTION_ROUTE_SLICES = 8;
 const MAX_COLLECTION_SEARCH_RELOCATIONS = 3;
@@ -2836,10 +2840,16 @@ function collectionBreakTime(bot, block, boundTool = undefined) {
     }
 }
 
-function probeCollectionRoute(bot, block, movements, targetAssessment = null) {
+function probeCollectionRoute(
+    bot,
+    block,
+    movements,
+    targetAssessment = null,
+    probeTimeoutMs = COLLECTION_ROUTE_PROBE_TIMEOUT_MS,
+) {
     const distance = bot.entity.position.distanceTo(block.position);
     const signal = actionCancellationSignal();
-    const remainingMs = remainingActionTimeMs(COLLECTION_ROUTE_PROBE_TIMEOUT_MS);
+    const remainingMs = remainingActionTimeMs(probeTimeoutMs);
     if (signal?.aborted || remainingMs <= 0) {
         return {
             routeStatus: 'action_deadline',
@@ -2924,7 +2934,7 @@ function collectionCandidateObservations(
     blocks,
     movements,
     descentFallback = false,
-    { stableMiningStance = false } = {},
+    { stableMiningStance = false, probeTimeoutMs = COLLECTION_ROUTE_PROBE_TIMEOUT_MS } = {},
 ) {
     return blocks.map(block => {
         const hazard = collectionHazardObservation(bot, block);
@@ -2943,6 +2953,7 @@ function collectionCandidateObservations(
                 block,
                 targetAssessment ? collectionApproachMovements(bot) : movements,
                 targetAssessment,
+                probeTimeoutMs,
             );
         return {
             block,
@@ -3035,6 +3046,18 @@ function collectionDecisionEvidence(selection) {
         scoreBreakdown: selected?.scoreBreakdown || null,
         descentFallback: selection?.descentFallback || null,
     };
+}
+
+/**
+ * True when a selection failed and every rejection was a route-probe clock
+ * expiry. Requires at least one observation: an empty candidate list proves
+ * nothing either way and must not trigger a wider re-probe.
+ */
+function collectionRejectionsAreAllTimeouts(selection) {
+    const statuses = collectionDecisionEvidence(selection).routeStatuses || {};
+    const entries = Object.entries(statuses);
+    if (entries.length === 0) return false;
+    return entries.every(([status, count]) => status === 'timeout' && Number(count) > 0);
 }
 
 function collectionRejectionSummary(selection) {
@@ -7529,7 +7552,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     : `No more ${blockType} found within ${searchRange} blocks.`);
             break;
         }
-        const selection = preferredPosition
+        let selection = preferredPosition
             ? (() => {
                 const routeMovements = targetScopedCollectionMovements(bot, preferredBlock, {
                     allowPillars: searchOptions?.allowPillars === true,
@@ -7560,6 +7583,26 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 allowNaturalRouteDigging ? miningMovements(bot) : safeMovements(bot),
                 { stableMiningStance: allowNaturalRouteDigging },
             );
+        // A clock expiry is not evidence that a route is missing. When EVERY
+        // candidate was rejected on 'timeout' the selection proved nothing, so
+        // concluding 'unreachable' here is the mirror of treating an unknown as
+        // permission. Re-probe once with a wider budget before deciding.
+        //
+        // Live 2026-08-16: twelve dirt candidates two blocks away, all twelve
+        // 'timeout', reported unreachable, and the companion relocated 32
+        // blocks to look elsewhere.
+        if (!selection.selected && collectionRejectionsAreAllTimeouts(selection)) {
+            const widened = selectCollectionCandidate(
+                bot,
+                blocks,
+                allowNaturalRouteDigging ? miningMovements(bot) : safeMovements(bot),
+                {
+                    stableMiningStance: allowNaturalRouteDigging,
+                    probeTimeoutMs: COLLECTION_ROUTE_PROBE_RETRY_TIMEOUT_MS,
+                },
+            );
+            if (widened.selected) selection = widened;
+        }
         if (!selection.selected) {
             const recoveredAccess = (
                 searchOptions?.allowAccessRecovery !== false
