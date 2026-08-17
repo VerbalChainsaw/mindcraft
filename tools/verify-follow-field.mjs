@@ -54,6 +54,13 @@ const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2:
 const DELIVER_ITEM = 'dirt';
 const DELIVER_QUANTITY = 1;
 
+// A* budget for the controlled target. Four times the library default of 5s.
+const TARGET_THINK_TIMEOUT_MS = 20_000;
+// One bounded retry when the target's SEARCH is cut short. Deliberately does
+// not cover 'NoPath': no route existing is a real result the scenario must
+// report, while a search that ran out of clock is an artifact of machine load.
+const TARGET_SEARCH_RETRIES = 1;
+
 const OBJECTIVE = 'fol001proof';
 const COMMAND = '!followPlayer("FollowTarget", 3)';
 const POLL_MS = 100;
@@ -640,6 +647,13 @@ async function run() {
     movements.allowParkour = false;
     movements.canOpenDoors = true;
     target.pathfinder.setMovements(movements);
+    // The controlled target is measurement scaffolding, not the thing under
+    // test. Its default 5s A* budget is a wall-clock allowance, so on a loaded
+    // machine the search is cut off and reports status 'timeout' -- which the
+    // harness then surfaces as a scenario failure even though the route exists
+    // and the companion never had a chance to be wrong. Give the scaffolding
+    // room; correctness matters here and speed does not.
+    target.pathfinder.thinkTimeout = TARGET_THINK_TIMEOUT_MS;
   };
 
   // How much of an item the recipient is physically holding. Returns null when
@@ -660,12 +674,33 @@ async function run() {
 
   const driveTarget = async waypoint => {
     const startedAt = Date.now();
-    const gotoWaypoint = destination => withTimeout(
+    const gotoOnce = destination => withTimeout(
       target.pathfinder.goto(new pf.goals.GoalNear(destination.x, destination.y, destination.z, 0.25)),
       25_000,
       `${TARGET_NAME} physical movement to ${destination.name}`,
       () => target.pathfinder.stop(),
     );
+    // Retry only a cut-short search. A 'NoPath' result means the route genuinely
+    // does not exist and must fail the scenario -- retrying that would hide the
+    // exact class of defect this harness exists to catch.
+    const gotoWaypoint = async destination => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await gotoOnce(destination);
+        } catch (error) {
+          const searchExpired = error?.name === 'Timeout'
+            || /took to long to decide path/i.test(String(error?.message || ''));
+          if (!searchExpired || attempt >= TARGET_SEARCH_RETRIES) throw error;
+          evidence.controlledTarget.events.push({
+            at: Date.now(),
+            event: 'search-timeout-retry',
+            destination: destination.name,
+            attempt: attempt + 1,
+          });
+          target.pathfinder.stop();
+        }
+      }
+    };
     try {
       if (waypoint.name === 'west-up-one-block') {
         const staging = { name: 'elevation-staging', x: 1035.5, y: 100, z: 1014.5 };
