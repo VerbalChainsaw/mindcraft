@@ -181,6 +181,34 @@ In `behavior-arbiter.js`, a player directive currently sits behind
 `bounded_recovery`, and `comportment_pause`. Move it to position 2, directly
 below Reflex. Delete `comportment_pause` entirely.
 
+## Open engine defects found by the harness
+
+Found 2026-08-16 while building a typed-goal scenario. All three are real
+gameplay defects; only the first is fixed.
+
+**1. Collection route probe budget — FIXED.** The wall clock (75ms) was tighter
+than the compute the probe was already allowed (120ms), so searches were cut off
+before finishing. Live: "Found 12 dirt candidates, but none has a safe reachable
+route (timeout:12)" with dirt two blocks away and visible, followed by a 32-block
+relocation. Raised to 400ms; compute budget unchanged.
+
+**2. A timeout is classified as unreachable — OPEN.** The skill records
+`routeStatuses {timeout: 12}` and reports `outcome: 'unreachable'`. An
+inconclusive probe is treated as a negative result. It should re-probe with a
+larger budget when every candidate failed on a clock expiry. Needs a budget
+threaded through `probeCollectionRoute` -> `collectionCandidateObservations` ->
+`selectCollectionCandidate`.
+
+**3. A typed goal survives death and continues from the respawn point — OPEN.**
+The bot died mid-goal, respawned ~1,400 blocks away at world spawn, and the goal
+carried on from there: it collected a grass_block near spawn, then tried to walk
+back to the recipient across open ocean until it timed out and drowned. Nothing
+re-established whether the goal was still viable from the new position. In play
+this reads as: die once, and the companion sets off on a doomed cross-country
+march instead of reassessing.
+
+Defect 3 is the most player-visible of the three and has no coverage.
+
 ## Coverage gate — read before Step 4
 
 **Step 4 and Step 5 are blocked on scenario coverage, not on nerve.** The
