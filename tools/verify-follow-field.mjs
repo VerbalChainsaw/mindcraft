@@ -535,6 +535,7 @@ async function run() {
     const opening = marker(runId, phase, 'OPEN');
     const step = marker(runId, phase, 'STEP');
     const plug = marker(runId, phase, 'PLUG');
+    const source = marker(runId, phase, 'SRCE');
     await paperCommand(`scoreboard players set ${begin} ${OBJECTIVE} 1`);
     await paperCommand(`data get entity ${options.bot} Pos`);
     await paperCommand(`data get entity ${TARGET_NAME} Pos`);
@@ -542,6 +543,9 @@ async function run() {
     await paperCommand(`execute if block 1033 100 1008 minecraft:air run scoreboard players set ${opening} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set ${step} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} minecraft:${OBSTRUCTION_PLUG_BLOCK} run scoreboard players set ${plug} ${OBJECTIVE} 1`);
+    // Did provisioning actually place the acquisition source? A goal that fails
+    // to find its material is only meaningful if the material was really there.
+    await paperCommand(`execute if block ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} minecraft:${DELIVER_ITEM} run scoreboard players set ${source} ${OBJECTIVE} 1`);
     await paperCommand(`scoreboard players set ${end} ${OBJECTIVE} 1`);
     await delay(250);
     const status = await fetchJson(options.url, '/api/minecraft-server');
@@ -555,6 +559,7 @@ async function run() {
       targetPosition: paperPosition(window, TARGET_NAME),
       wallVerified: markerObserved(window, wall),
       plugVerified: markerObserved(window, plug),
+      sourceVerified: markerObserved(window, source),
       doorwayVerified: markerObserved(window, opening),
       platformVerified: markerObserved(window, step),
       lines: window,
@@ -1158,6 +1163,7 @@ async function run() {
           deliveryVerified,
           deliveryItem: options.mode === 'deliver' ? DELIVER_ITEM : null,
           deliveryQuantity: options.mode === 'deliver' ? DELIVER_QUANTITY : null,
+          deliverySourcePresent: paperBefore.sourceVerified,
           deliveryBaseline: activeAttempt.deliveryBaseline,
           deliveryFinal: activeAttempt.deliveryFinal,
           deliveryObservedAt: activeAttempt.deliveryObservedAt,
