@@ -1,5 +1,13 @@
 # Minecraft Companion V2 — Technical Debt Map
 
+> **Reconciliation note, 2026-08-17.** Kept as a register, not as instruction. Two
+> things in it are stale: the coordination note naming a single repository writer no
+> longer holds, and the line anchors drifted before the 2026-08-16 reset. Since that
+> reset, most of the debt recorded here is addressed by deletion rather than repair —
+> see `ARCHITECTURE.md` Steps 4–6. Check a record against `ARCHITECTURE.md` before
+> scheduling it.
+
+
 **Purpose:** Maintain a living, evidence-based register of technical debt without turning maintenance into a competing architecture program.
 
 **Last reconciled:** 2026-08-10, branch `recovery/iron-pickaxe-20260803`, source checkpoint `8e58d0b` (reliability tranche: TD-LIFE-001, TD-ACT-001, TD-PROMPT-002, TD-PROV-001, TD-JOB-001) plus a model-lifecycle tranche closing TD-MODEL-001's plumbing and opening TD-MODEL-002.

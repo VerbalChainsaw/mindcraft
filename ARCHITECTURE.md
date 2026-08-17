@@ -283,6 +283,54 @@ request.
 - Multi-step agenda: **still missing.** `agenda-director` (2,153 lines) has no
   live coverage.
 
+### The gate is frozen. Do not add to it.
+
+A gate that grows one item per session is not a safety mechanism, it is a
+decision not to collapse, taken by default. Between 2026-08-16 and 2026-08-17
+the prerequisite went from "one scenario passes" to "typed goal" to "typed goal
+and agenda". That stops here.
+
+**The gate is one scenario per request class the player actually uses.** Not one
+per director — directors are what Step 4 deletes, so coverage defined by them is
+effort spent on the thing being removed. Every scenario must assert a
+player-visible outcome, because that is the assertion that survives the
+rewrite: after the collapse, the same scenario should still pass against
+completely different internals. `deliver-item-goal` asserts "the dirt is in the
+recipient's inventory", which is true or false regardless of whether
+`goal-director` exists.
+
+| Request class | Scenario | State |
+|---|---|---|
+| follow me | `doorway-corridor-follow` | green |
+| follow me through terrain | `obstruction-follow` | green |
+| bring me X | `deliver-item-goal` | green |
+| come here | — | missing |
+| get me X (no delivery) | — | missing |
+| build me X | — | missing |
+| protect me / stay here | — | missing |
+
+**This list is provisional and the Director owns it.** It was written from the
+intent model above, not from observation. The real list comes from watching
+Jordan play and recording what he asks for — that is the only source that
+matters, since he is the acceptance test. Correct the table from a play session,
+then freeze it.
+
+**Two rules, once it is frozen:**
+
+1. No item may be added without the Director. A new idea for coverage is a note,
+   not a gate item.
+2. When the table is green, Step 4 executes. Not "is considered" — executes.
+
+If the honest answer turns out to be that no amount of coverage feels like
+enough, then the collapse is not happening, and this file should say so and stop
+describing a migration nobody intends to run. That is a legitimate outcome. What
+is not legitimate is leaving it permanently one scenario away.
+
+Cost is no longer the obstacle. The expensive part of a new course was the
+mechanism — generated fixture, worker branch, evidence branch — and that is
+built and documented in `tools/scenario-lab/FIXTURES.md`. Each remaining course
+is a recipe plus roughly a hundred lines.
+
 **Step 4 remains gated.** Half the prerequisite is met, not all of it. Deleting
 `agenda-director` with no scenario exercising a multi-step request would repeat
 exactly the mistake this gate exists to prevent. The deliver course is the

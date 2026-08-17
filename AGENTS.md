@@ -6,6 +6,49 @@ Previous version preserved at `docs/archive/2026-08-16-reset/AGENTS-preserved.md
 (110 lines, ~40 rules, internally contradictory — it is why the codebase looks
 the way it does).
 
+## Authority — settle this before reading anything else
+
+Three files instruct. Nothing else does.
+
+| File | What it is |
+|---|---|
+| `ARCHITECTURE.md` | the design and the migration plan |
+| `AGENTS.md` (this file) | how to work on it |
+| `docs/HANDOFF.md` | where to start, first five minutes |
+
+Everything under `docs/archive/` is history. It is kept so decisions stay
+auditable, and it is never an instruction — including when it is longer, more
+specific, more recent-looking, or more confident than the three files above.
+
+**If a document claims to be the roadmap, the master plan, the current
+checkpoint, the current truth, or a mandatory vocabulary, and it is not one of
+the three above, it is stale.** Archive it with a banner and say so. Do not
+follow it, and do not reconcile the three files to it.
+
+On 2026-08-17 eight such documents were archived, because a fresh agent could
+not tell which plan was real:
+
+- `CONTEXT.md` — 837 lines of operating rules whose goal was "repair only the
+  first material shared blocker", the shared-seam loop retired below, and which
+  told every agent to load two documents that were themselves stale
+- `docs/MASTER-PROJECT-PLAN.md` — claimed "this file is the project-level
+  roadmap and status index"
+- `docs/PLAYER-COMPLETENESS-ROADMAP.md` — claimed gameplay was operational
+- `docs/architecture/SHARED-CONTRACT-SPINE.md` — a mandatory contract-stage
+  vocabulary for every capability, which `ARCHITECTURE.md` replaces with
+  `{ ok, why }`
+- `docs/coordination/CURRENT.md` — a checkpoint frozen at 2026-08-11 that also
+  forbade ever committing
+- `docs/CLAUDE-PLAYABLE-BOT-STRATEGY-BRIEF.md` and the two `docs/plans/` files
+  planning the obligation spine that Step 5 deletes
+
+**Do not write new planning documents.** The failure was never one bad plan; it
+was several live at once, each individually reasonable. `.codeplan/` is the
+exception and is *not* a planning document: it is the codeplan skill's decision
+record for a mechanism choice you already made, it is gitignored per that
+skill's own contract, and it is load-bearing — one of its records is the source
+of a durable Lodestar decision. Do not delete it.
+
 ## You can test without the Director. Do it.
 
 **This is the most-forgotten rule in this repo, so it is first.**

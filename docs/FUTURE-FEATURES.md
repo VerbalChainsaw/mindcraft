@@ -4,8 +4,9 @@
 
 **Authority:** this document records desirable future experiences. It does not
 claim that a feature exists, authorize implementation, or override
-`MASTER-PROJECT-PLAN.md`, `PLAYER-COMPLETENESS-ROADMAP.md`, the current
-checkpoint, player authority, or the shared contract spine.
+`ARCHITECTURE.md`, `AGENTS.md`, or player authority. (Before 2026-08-17 this
+line named MASTER-PROJECT-PLAN.md, PLAYER-COMPLETENESS-ROADMAP.md and the
+shared contract spine; all three are archived under `docs/archive/`.)
 
 This list is intentionally incomplete. Add ideas when they improve the fantasy
 of a trustworthy, capable Minecraft companion; promote them into the master

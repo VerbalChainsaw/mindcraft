@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** Plans the obligation spine that ARCHITECTURE.md Step 5 deletes.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 [codeplan · shared receipt and obligation spine · IN · mode: full · confidence: high · candidates: V1 receipt-first staged migration (context ledger), V2 obligation-kernel-first migration (event reducer), V3 domain-by-domain extraction (domain adapters), V4 wholesale runtime replacement (runtime replacement) · lean: V1 · baseline: V3]
 
 # Shared Receipt and Obligation Spine

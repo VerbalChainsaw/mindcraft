@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** It opens "commanded companion gameplay is operational". ARCHITECTURE.md opens by explaining why the bot ignores instructions. Both cannot be the current state.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 # Player completeness and runtime performance
 
 Status: commanded companion gameplay is operational and the two required

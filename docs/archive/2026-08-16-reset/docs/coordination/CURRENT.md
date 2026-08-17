@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** A checkpoint frozen at 2026-08-11 / commit 2b7fc3d, naming a closed Session 44 as the live state. It also instructs "do not stage, commit, stash, clean, reset, or overwrite" the tree, which contradicts explicit Director authorization and would freeze the repo indefinitely.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 # Current Minecraft Companion checkpoint
 
 Branch/functional checkpoint: `recovery/iron-pickaxe-20260803` at

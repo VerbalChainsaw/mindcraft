@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** Its RULES section instructed every agent to load docs/coordination/CURRENT.md and docs/architecture/SHARED-CONTRACT-SPINE.md, both archived alongside it. Its stated GOAL — "repair only the first material shared blocker inside each declared campaign" — is the shared-seam loop that AGENTS.md retires by name: "Fix the leaf... The instruction to repair the highest shared seam produced 33,000 lines of runtime abstraction." This file is where the campaign program in .codeplan/ came from.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 ## GOAL
 exercise the Minecraft companion through varied, bounded, high-frequency family scenarios; repair only the first material shared blocker inside each declared campaign
 

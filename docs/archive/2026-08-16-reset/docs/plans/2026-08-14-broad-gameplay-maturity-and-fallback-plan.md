@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** Source of the M4/M5 milestone vocabulary, which is a different roadmap from ARCHITECTURE.md Steps 1-6.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 # Broad Gameplay Maturity and Fallback Plan
 
 Status: active strategic direction, adopted 2026-08-14. This plan remains in force until the Director replaces it.

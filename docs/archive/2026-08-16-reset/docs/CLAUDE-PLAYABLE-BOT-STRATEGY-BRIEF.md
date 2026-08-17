@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** A briefing prompt for an external strategist. Its output, if any, is superseded by the reset.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 # Claude brief: strategize a path to a genuinely playable Minecraft companion
 
 You are acting as an independent architecture and development-governance

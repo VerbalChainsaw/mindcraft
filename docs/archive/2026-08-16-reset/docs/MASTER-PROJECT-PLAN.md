@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** It claimed "this file is the project-level roadmap and status index". ARCHITECTURE.md holds that role now, and this plan never mentions the reset, the four-layer hierarchy, or the lane collapse.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 # Minecraft Companion Master Project Plan
 
 **Last updated:** 2026-08-11

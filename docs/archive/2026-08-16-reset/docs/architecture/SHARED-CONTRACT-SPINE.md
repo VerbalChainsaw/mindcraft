@@ -1,3 +1,12 @@
+> **ARCHIVED 2026-08-17 — NOT CURRENT.**
+> This document predates the 2026-08-16 architecture reset and describes a plan
+> the project no longer follows. Kept as history, not as instruction.
+>
+> **Why it was archived:** It declares a mandatory selection -> feasibility -> planning -> execution -> reconciliation vocabulary for every capability. ARCHITECTURE.md specifies primitives that return {ok, why} and states "No receipts, no contract stages, no evidence envelopes." This is also the "highest shared seam" thinking that Fix the leaf retires.
+>
+> Current design: `ARCHITECTURE.md` · how to work: `AGENTS.md` · start here:
+> `docs/HANDOFF.md`
+
 # Shared Contract Spine
 
 This is the durable failure-attribution vocabulary for the Minecraft companion. Its purpose is to make the layer holding responsibility mechanically legible so a repair changes the correct owner.
