@@ -632,7 +632,13 @@ function auditBlueprint(bot, order, inventory) {
     }
   } else if (insideFootprint) {
     const escape = probeSafeNavigationStances(bot, blueprintEscapeStances(bot, order), 500);
-    if (!escape.reachable) {
+    // "trapped_exit" asserts the bot cannot get out, and that blocks the whole
+    // order. Only a finished search that found nothing supports that claim; a
+    // 500ms budget that expired supports nothing. An unproven exit route is not
+    // a trap -- with digging, placing and towers available the companion can
+    // make its own way out -- so an inconclusive probe proceeds and records why
+    // rather than blocking the job on a search that never finished.
+    if (!escape.reachable && escape.conclusive !== false) {
       return {
         valid: false,
         code: 'trapped_exit',

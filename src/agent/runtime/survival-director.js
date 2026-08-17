@@ -511,7 +511,15 @@ function shelterSituation(bot) {
   if (legalCover.length === 0) return { sheltered: false, shelters: [] };
   const route = probeSafeNavigationStances(bot, legalCover, 1_000);
   if (!route.reachable || !route.terminalPosition) {
-    return { sheltered: false, shelters: [] };
+    // An unfinished search is not proof there is nowhere to shelter. Report the
+    // probe status so a caller can retry or say honestly that it ran out of
+    // search time, rather than acting on a manufactured "no shelters exist".
+    return {
+      sheltered: false,
+      shelters: [],
+      inconclusive: route.conclusive === false,
+      routeStatus: route.status,
+    };
   }
   const selected = legalCover.find(candidate => (
     Math.floor(candidate.x) === Math.floor(route.terminalPosition.x)

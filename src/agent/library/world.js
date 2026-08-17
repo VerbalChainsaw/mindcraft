@@ -446,9 +446,39 @@ function clearPathMovementsFor(bot) {
     const movements = new pf.Movements(bot);
     movements.canDig = false;
     movements.canPlaceBlocks = false;
-    movements.canOpenDoors = false;
+    // Opening a door is neither digging nor placing, and this function's own
+    // docstring only promises "no digging or placing". With doors shut off, a
+    // closed door read as "no clear path" and the caller never tried.
+    movements.canOpenDoors = true;
     clearPathMovements.set(bot, movements);
     return movements;
+}
+
+// 100ms was the old budget and it ran on a behavior tick, so an unfinished
+// search -- not a missing route -- routinely became "no". Matches the 400ms the
+// collection route probe was raised to on 2026-08-16 for the same reason.
+const CLEAR_PATH_BUDGET_MS = 400;
+
+/**
+ * Three-state walkability. 'no' means pathfinder actually finished and found
+ * nothing; 'inconclusive' means it ran out of budget or only got partway, which
+ * is not the same claim and must never be reported as impossibility.
+ *
+ * @returns {{ clear: 'yes'|'no'|'inconclusive', status: string }}
+ */
+export async function assessClearPath(bot, target) {
+    const movements = clearPathMovementsFor(bot);
+    const goal = new pf.goals.GoalNear(target.position.x, target.position.y, target.position.z, 1);
+    let path = null;
+    try {
+        path = await bot.pathfinder.getPathTo(movements, goal, CLEAR_PATH_BUDGET_MS);
+    } catch (error) {
+        return { clear: 'inconclusive', status: 'probe_error' };
+    }
+    const status = path?.status || 'unknown';
+    if (status === 'success') return { clear: 'yes', status };
+    if (status === 'noPath') return { clear: 'no', status };
+    return { clear: 'inconclusive', status };
 }
 
 export async function isClearPath(bot, target) {
@@ -458,10 +488,12 @@ export async function isClearPath(bot, target) {
      * @param {Entity} target - The target to path to.
      * @returns {boolean} - True if there is a clear path, false otherwise.
      */
-    let movements = clearPathMovementsFor(bot);
-    let goal = new pf.goals.GoalNear(target.position.x, target.position.y, target.position.z, 1);
-    let path = await bot.pathfinder.getPathTo(movements, goal, 100);
-    return path.status === 'success';
+    // Attempt unless pathfinder definitively said there is no route. These are
+    // opportunistic modes -- flee, hunt, pick up a dropped item -- where trying
+    // and failing costs almost nothing and refusing to try costs the behaviour
+    // entirely. An unfinished search fails open to "go ahead".
+    const assessment = await assessClearPath(bot, target);
+    return assessment.clear !== 'no';
 }
 
 export function hasLineOfSightToEntity(bot, entity) {

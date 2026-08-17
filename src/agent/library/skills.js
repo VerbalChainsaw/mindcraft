@@ -1695,7 +1695,9 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000, move
         || (!bot?.pathfinder?.getPathFromTo && !bot?.pathfinder?.getPathTo)
         || !bot?.entity?.position
     ) {
-        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+        // Unavailable is not impossible. A probe that could not run proves
+        // nothing about the world.
+        return { reachable: false, conclusive: false, status: 'route_probe_unavailable', pathLength: 0 };
     }
     const goal = new pf.goals.GoalCompositeAny(
         positions.map(position => new pf.goals.GoalBlock(position.x, position.y, position.z)),
@@ -1704,6 +1706,7 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000, move
         const current = bot.entity.position.floored();
         return {
             reachable: true,
+            conclusive: true,
             status: 'already_at_stance',
             pathLength: 0,
             terminalPosition: { x: current.x, y: current.y, z: current.z },
@@ -1726,6 +1729,9 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000, move
     } catch (error) {
         return {
             reachable: false,
+            // A probe that threw proved nothing. Callers that treat reachable
+            // false as "cannot be done" must consult this instead.
+            conclusive: false,
             status: 'route_probe_error',
             pathLength: 0,
             error: String(error?.message || error).slice(0, 160),
@@ -2004,9 +2010,16 @@ function probeSafeNavigationFrom(bot, start, goal, timeoutMs, movements = null) 
         };
     }
     const terminal = Array.isArray(result?.path) ? result.path.at(-1) : null;
+    // Pathfinder returns success, partial, timeout or noPath. Only noPath is a
+    // finished search that found nothing; partial and timeout mean the search
+    // stopped early. Collapsing all three into reachable:false is how an
+    // unfinished search became "unreachable" and then became a trapped_exit, a
+    // missing shelter, or a silently skipped capability candidate downstream.
+    const probeStatus = result?.status || 'unknown';
     return {
-        reachable: result?.status === 'success',
-        status: result?.status || 'unknown',
+        reachable: probeStatus === 'success',
+        conclusive: probeStatus === 'success' || probeStatus === 'noPath',
+        status: probeStatus,
         pathLength: Array.isArray(result?.path) ? result.path.length : 0,
         terminalPosition: terminal && result?.status === 'success'
             ? { x: Math.floor(terminal.x), y: Math.floor(terminal.y), z: Math.floor(terminal.z) }
