@@ -1630,12 +1630,26 @@ function dryRouteMovements(bot) {
  * gone. This is intentionally stricter than general survival-safe movement:
  * a four-block survivable drop can still strand the companion below a player.
  */
+// Pursuit policy, and it is policy rather than physics: chasing a mob does not
+// authorize excavating the world or dropping somewhere you cannot climb back
+// from. Every restriction here is deliberate and named, and a pursuit that fails
+// under it reports combat_timeout or target_lost -- never "unreachable", because
+// the target may well be reachable to a companion that was allowed to dig.
+//
+// Parkour is NOT restricted. It used to be, which contradicted this function's
+// own comment at the call site ("combat may traverse normal block geometry,
+// including native jumps") and took an ordinary Minecraft combat move away for
+// no stated reason. A jump is reversible; it strands nobody.
+//
+// Fleeing is deliberately not routed through here. moveAway uses safeMovements
+// with the full action set, because a companion running for its life must have
+// every ordinary move available.
 export function configureReturnableCombatMovements(movements) {
     if (!movements || typeof movements !== 'object') return movements;
     movements.canDig = false;
     movements.canPlaceBlocks = false;
     movements.allow1by1towers = false;
-    movements.allowParkour = false;
+    movements.allowParkour = true;
     movements.maxDropDown = Math.min(
         Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
         1,
@@ -6890,6 +6904,10 @@ export async function attackEntity(bot, entity, kill=true) {
                     kind: 'combat',
                     outcome: timedOut ? 'combat_timeout' : 'target_lost',
                     target,
+                    // Name the restriction the pursuit ran under, so a failure
+                    // here is never read as the target being unreachable in
+                    // principle. It was unreachable without digging.
+                    pursuitPolicy: 'no_excavation_no_stranding_drop',
                     elapsedMs: Date.now() - startedAt,
                     retryable: true,
                 });
