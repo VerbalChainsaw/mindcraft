@@ -23,7 +23,19 @@ the way it does).
   finish.
 - The scarce resource is the Director's attention, not live runs.
 
-## Run the scenarios. Two commands.
+## Run the scenarios. Check first, then run.
+
+```bash
+npm run scenario:doctor
+```
+
+Reports whether the lab can run right now: fixture present and hash-verified,
+ports free (and what holds them), no leftover runtime lock, manifest valid.
+Exit 0 means ready. Every check exists because that failure once looked like a
+product defect and was not — a busy port surfaces as "Runtime did not become
+world-ready within three minutes", a held lock as "Another Scenario Lab
+invocation owns the managed runtime". Run it before diagnosing a failed
+scenario.
 
 ```bash
 npm run scenario:follow

@@ -69,7 +69,8 @@
     "validate:all": "node tools/validate-companion.mjs all",
     "scenario:follow": "node tools/scenario-lab/run.mjs doorway-corridor-follow",
     "scenario:obstruction": "node tools/scenario-lab/run.mjs obstruction-follow",
-    "scenario:list": "node tools/scenario-lab/run.mjs --help"
+    "scenario:list": "node tools/scenario-lab/run.mjs --list",
+    "scenario:doctor": "node tools/scenario-lab/doctor.mjs"
   },
   "devDependencies": {
     "patch-package": "^8.0.0"

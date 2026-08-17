@@ -35,12 +35,12 @@ const SCENARIOS = Object.freeze({
     + 'companion cannot dig — the 2026-08-16 defect.',
 });
 
-// The fixture is machine-local and gitignored. Env var wins so another machine
-// can point elsewhere without editing this file.
-const FIXTURE_ROOTS = [
-  process.env.SCENARIO_LAB_FOLLOW_FIXTURE_ROOT,
-  'C:/Users/zerop/Development/JordanWorkspace/artifacts/minecraft-validation/fixtures/doorway-corridor-follow-v1',
-].filter(Boolean);
+// The fixture is machine-local and gitignored. An explicit override wins outright. Falling back to the machine-local default
+// when someone has set this variable would silently run against the wrong
+// fixture -- or hide a typo on a machine that has its own copy elsewhere.
+const FIXTURE_ROOTS = process.env.SCENARIO_LAB_FOLLOW_FIXTURE_ROOT
+  ? [process.env.SCENARIO_LAB_FOLLOW_FIXTURE_ROOT]
+  : ['C:/Users/zerop/Development/JordanWorkspace/artifacts/minecraft-validation/fixtures/doorway-corridor-follow-v1'];
 
 function resolveFixtureRoot() {
   for (const candidate of FIXTURE_ROOTS) {
@@ -55,6 +55,14 @@ function resolveFixtureRoot() {
   );
 }
 
+/** Human-readable scenario menu, shared by --list and the unknown-name error. */
+function describeScenarios(heading) {
+  const lines = Object.entries(SCENARIOS)
+    .map(([id, why]) => `  ${id}\n      ${why}`)
+    .join('\n');
+  return `${heading}\n${lines}\n\nCheck readiness first: npm run scenario:doctor\n`;
+}
+
 // Timestamped so the adapter's non-recursive mkdir and wx writes never collide.
 function outputDirectory(scenario, now) {
   const stamp = new Date(now).toISOString().replace(/[:.]/g, '-').replace('Z', '');
@@ -63,11 +71,13 @@ function outputDirectory(scenario, now) {
 
 async function main(argv) {
   const scenario = argv[0] || 'doorway-corridor-follow';
+  if (scenario === '--list' || scenario === '-l') {
+    process.stdout.write(describeScenarios('Scenario Lab scenarios:'));
+    return 0;
+  }
   if (!Object.hasOwn(SCENARIOS, scenario)) {
     process.stderr.write(
-      `Unknown scenario '${scenario}'.\n\nAvailable:\n`
-      + Object.entries(SCENARIOS).map(([id, why]) => `  ${id}\n      ${why}`).join('\n')
-      + '\n',
+      describeScenarios(`Unknown scenario '${scenario}'.\n\nAvailable:`),
     );
     return 2;
   }
