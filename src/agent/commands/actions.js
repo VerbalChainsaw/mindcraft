@@ -2918,11 +2918,19 @@ export const actionsList = [
         name: '!follow',
         description: 'Continuously follow the named player until stopped or replaced by another player action. Use for "follow me".',
         params: {'player_name': { type: 'string', description: 'Name of the player to follow.' }},
+        // Delegates identically to !followPlayer. It used to omit
+        // locatePlayerPosition, so this command could only follow a player it
+        // could already see -- and a model picking the shorter synonym got a
+        // companion that stood still. Two commands promising the same thing must
+        // not behave differently; the model chooses by description, not by
+        // reading which one was wired properly.
         perform: runAsAction(async (agent, player_name) => {
-            return await skills.followPlayer(agent.bot, player_name, 3);
+            return await skills.followPlayer(agent.bot, player_name, 3, {
+                locatePlayerPosition: name => agent.locatePlayerPosition(name),
+            });
         }, true, -1, (agent, player_name) => {
             updateCompanionDirectiveFromAction(agent, 'follow', player_name);
-        })
+        }, 'composed')
     },
     {
         name: '!collect',
