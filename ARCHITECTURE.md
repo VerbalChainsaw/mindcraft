@@ -211,6 +211,36 @@ the goal already relocates of its own accord. Beyond that the goal settles
 and says so; nearer than that it resumes as before. An unobservable anchor
 never abandons the goal -- unknown distance is not "too far".
 
+## The deliver course is blocked on the world, definitively
+
+A typed-goal scenario (`!requestItemGoal("deliver","dirt",1,...)`) was built and
+run five times against the follow fixture. It cannot pass there, and the reason
+is now evidence rather than inference — the last run had mobs eliminated as a
+variable:
+
+```
+sourcePresent : true    the dirt is demonstrably placed
+mob contact   : none    peaceful difficulty held
+actions       : self_preservation/skill_drowning_escape_open_water
+                collectBlocksInRange/skill_unreachable
+                moveAway/skill_unsafe_medium
+```
+
+The chain: collection cannot route, so the goal relocates 32 blocks
+(`ACQUISITION_REGION_RELOCATION_DISTANCE`); the fixture is an island, so 32
+blocks is open ocean; the bot enters an unsafe medium, starts drowning, and
+self-preservation seizes the body, interrupting the collection. Repeat until
+timeout.
+
+**A typed-goal scenario needs a dry-land fixture.** Geometry can be laid
+programmatically with `fill`, but acquisition needs terrain to search and
+relocate through. That is world-authoring work, and it is the single remaining
+prerequisite for Step 4.
+
+The course itself is worth keeping. It never passed and still produced four
+engine defects — the route probe budget, timeout-as-unreachable, goal-survives-
+death, and hostile mobs deciding scenarios — every one of which is now fixed.
+
 ## Coverage gate — read before Step 4
 
 **Step 4 and Step 5 are blocked on scenario coverage, not on nerve.** The
