@@ -479,6 +479,8 @@ async function run() {
   let fixtureMutated = false;
   let previousMobSpawning = null;
   let mobSpawningMutated = false;
+  let previousDifficulty = null;
+  let difficultyMutated = false;
 
   const paperCommand = command => fetchJson(options.url, '/api/minecraft-server/command', {
     method: 'POST',
@@ -527,6 +529,32 @@ async function run() {
     `${options.bot} held actuator quiescence`,
     timeoutMs,
   );
+
+  // Difficulty, read the same way as a gamerule. Peaceful removes hostile mobs
+  // outright rather than racing their travel speed with a kill radius, which is
+  // the arithmetic that failed: a margin sized for a 60s measurement is too
+  // small for the deliver course's 120s delivery wait, and a drowned covers
+  // ~144 blocks in that time.
+  const readDifficulty = async () => {
+    const command = 'difficulty';
+    await paperCommand(command);
+    return waitFor(
+      async () => {
+        const status = await fetchJson(options.url, '/api/minecraft-server');
+        const lines = Array.isArray(status?.server?.logs) ? status.server.logs : [];
+        const commandIndex = lines.findLastIndex(line => String(line).includes(`[command] > ${command}`));
+        if (commandIndex < 0) return null;
+        for (const line of lines.slice(commandIndex + 1)) {
+          const match = String(line).match(/difficulty is (peaceful|easy|normal|hard)/i);
+          if (match) return { value: match[1].toLowerCase(), line: String(line) };
+        }
+        return null;
+      },
+      Boolean,
+      'difficulty query',
+      5_000,
+    );
+  };
 
   const paperSnapshot = async (runId, phase) => {
     const begin = marker(runId, phase, 'BEGIN');
@@ -600,10 +628,21 @@ async function run() {
             `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
           ]),
       `fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`,
-      // The acceptance fixture must not be preempted by a natural mob from an
-      // adjacent prior test. This bounded margin contains no player entities;
-      // both the companion and controlled target are preserved by type.
-      'kill @e[type=!player,x=1020,y=94,z=1000,dx=30,dy=12,dz=24]',
+      // The acceptance fixture must not be preempted by a mob. Spawning is
+      // already disabled for the run, so the only remaining threat is a mob
+      // that already exists swimming or walking in from outside this box.
+      //
+      // The old margin was 6-10 blocks around the course, which a drowned
+      // crosses in seconds: one 2026-08-16 deliver run was killed mid-goal by
+      // exactly that ("I got away from the drowned... Took 8 damage!... That
+      // got me. Respawning."), and the bot then resumed from world spawn.
+      //
+      // Sized so arrival is impossible rather than unlikely: a drowned moves
+      // ~1.2 blocks/s, so ~70 blocks is the most it covers during a 60s
+      // measurement. This clears ~75 blocks on every side of the course.
+      // Players are excluded by type, so the companion and controlled target
+      // both survive.
+      'kill @e[type=!player,x=953,y=70,z=931,dx=160,dy=64,dz=160]',
       `gamemode survival ${options.bot}`,
       `gamemode survival ${TARGET_NAME}`,
       `tp ${options.bot} ${BOT_START.x} ${BOT_START.y} ${BOT_START.z}`,
@@ -779,6 +818,26 @@ async function run() {
     evidence.fixture.mobSpawning = {
       previous: previousMobSpawning,
       duringFixture: spawningDuring.value,
+      restored: false,
+    };
+
+    // Suppressing spawns leaves every mob that already exists. Peaceful removes
+    // them and keeps them gone for the whole run, so no scenario can be decided
+    // by a drowned that happened to be swimming nearby. Restored on teardown
+    // exactly like the gamerule above.
+    const difficultyBefore = await readDifficulty();
+    previousDifficulty = difficultyBefore.value;
+    if (previousDifficulty !== 'peaceful') {
+      await paperCommand('difficulty peaceful');
+      difficultyMutated = true;
+    }
+    const difficultyDuring = await readDifficulty();
+    if (difficultyDuring.value !== 'peaceful') {
+      throw new Error('Could not isolate the fixture from hostile mobs (difficulty is not peaceful).');
+    }
+    evidence.fixture.difficulty = {
+      previous: previousDifficulty,
+      duringFixture: difficultyDuring.value,
       restored: false,
     };
 
@@ -1261,6 +1320,15 @@ async function run() {
     let gameruleRestoreError = null;
     try {
       if (mobSpawningMutated) await paperCommand(`gamerule spawn_mobs ${previousMobSpawning}`);
+      if (difficultyMutated && previousDifficulty) {
+        await paperCommand(`difficulty ${previousDifficulty}`);
+        const difficultyAfter = await readDifficulty();
+        evidence.fixture.difficulty = {
+          ...(evidence.fixture.difficulty || {}),
+          restored: difficultyAfter.value === previousDifficulty,
+          after: difficultyAfter.value,
+        };
+      }
       if (previousMobSpawning !== null) {
         const spawningAfter = await readBooleanGamerule('spawn_mobs');
         if (spawningAfter.value !== previousMobSpawning) {
