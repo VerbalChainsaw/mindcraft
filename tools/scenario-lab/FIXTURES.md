@@ -192,3 +192,63 @@ For JS tools generally, use `tools/mindserver-url.mjs`
 (`resolveMindserverUrl()`): explicit URL → `SCENARIO_LAB_MINDSERVER_URL` /
 `MINDSERVER_URL` → `launcher-config.json` → `http://localhost:8080`. Use
 `localhost`, never the `127.0.0.1` literal — MindServer binds IPv6 loopback.
+
+## Geometry is programmatic; the world underneath is not
+
+Two scenarios differ in a way that decided which one survived, and the lesson
+has a limit that cost a build to find.
+
+`doorway-corridor-follow` and `obstruction-follow` lay their geometry at run
+time: `provisionFixture` clears a box and places the wall, doorway and platform
+with `fill` commands, restoring the baseline afterwards. Adding
+`obstruction-follow` therefore cost ~90 lines and no new fixture.
+
+`autonomous-wood-to-stone-no-safe-stance-recovery` does the opposite -- zero
+`fill` commands, total dependence on a captured `trial-world.zip` plus a
+`trial-bot-memory` directory. Neither exists on this machine and neither was
+checked in, so it cannot be repaired without re-authoring a world.
+
+**The limit.** An attempt on 2026-08-16 to add a typed-goal delivery course to
+the follow fixture failed, and not in the harness. `goal-director` accepted the
+goal and dispatched correctly:
+
+```
+!requestItemGoal ['deliver','dirt',1,'FollowTarget'] -> !collectBlocksInRange('dirt',1,64)
+goalDirector: failed / no_deterministic_recovery
+  "No reachable loaded surface region satisfies the requested relocation."
+```
+
+The follow fixture is a cleared platform in **ocean**. The same world logs
+"Reached breathable air, but no loaded dry shore was reachable" during ordinary
+self-preservation. Resource acquisition relocates to search, finds no reachable
+dry surface, and fails before it ever sees a dirt patch three blocks away.
+
+So: **lay geometry programmatically, but match the world to the behaviour.**
+Following needs only local terrain and runs anywhere. Acquisition, mining,
+building and anything that searches for resources needs a world that supports
+it. That is why stone-recovery shipped its own world -- that was the necessary
+choice for its behaviour class, not the lazy one.
+
+A typed-goal scenario therefore needs a dry-land fixture. That is real authoring
+work, not a fill command, and it gates deleting goal-director (see
+ARCHITECTURE.md, Coverage gate).
+
+## Superseded note (kept for context)
+
+The two scenarios differ in a way that decided which one survived.
+
+`doorway-corridor-follow` and `obstruction-follow` lay their geometry at run
+time: `provisionFixture` clears a box and places the wall, doorway and platform
+with `fill` commands, then restores the baseline afterwards. The frozen world is
+only a flat substrate. Adding `obstruction-follow` therefore cost ~90 lines and
+no new fixture at all.
+
+`autonomous-wood-to-stone-no-safe-stance-recovery` does the opposite. It issues
+zero `fill`/`setblock` commands and depends entirely on a pre-captured world
+plus a `trial-bot-memory` directory holding a specific bot state. Neither exists
+on this machine and neither was ever checked in, so the scenario is
+unrunnable and cannot be repaired without re-authoring a world by hand.
+
+**Build new courses the first way.** A programmatic course is readable, diffable,
+survives a lost directory, and can be changed without re-freezing a hash. A
+captured world is a binary that rots silently and takes its scenario with it.

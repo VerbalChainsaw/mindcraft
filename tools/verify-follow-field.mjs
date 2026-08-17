@@ -42,6 +42,18 @@ const OBSTRUCTION_WALL = Object.freeze({ x: 1033, y1: 100, y2: 102, z1: 1006, z2
 const OBSTRUCTION_PLUG = Object.freeze({ x: 1033, y1: 100, y2: 101, z: 1008 });
 const OBSTRUCTION_PLUG_BLOCK = 'dirt';
 
+// Deliver course. Exercises the typed-goal path (goal-director) rather than the
+// follow skill: the companion must acquire an item and physically hand it to
+// the player. Dirt is deliberate -- it drops by hand, so the test measures the
+// goal chain rather than whether the bot happens to hold a pickaxe.
+//
+// The source patch sits beside the bot's start so acquisition is a short,
+// reliable mine rather than a search. Laid with fill commands like every other
+// course here; see the note in FIXTURES.md about why frozen worlds rot.
+const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2: 1011 });
+const DELIVER_ITEM = 'dirt';
+const DELIVER_QUANTITY = 1;
+
 const OBJECTIVE = 'fol001proof';
 const COMMAND = '!followPlayer("FollowTarget", 3)';
 const POLL_MS = 100;
@@ -79,9 +91,14 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.attempts) || options.attempts < 1 || options.attempts > 3) {
     throw new Error('Attempts must be an integer from 1 through 3.');
   }
-  if (!['follow', 'stop'].includes(options.mode)) throw new Error('Mode must be follow or stop.');
-  if (!['full', 'doorway-corridor', 'obstruction-follow'].includes(options.course)) {
-    throw new Error('Course must be full, doorway-corridor, or obstruction-follow.');
+  if (!['follow', 'stop', 'deliver'].includes(options.mode)) {
+    throw new Error('Mode must be follow, stop, or deliver.');
+  }
+  if (options.mode === 'deliver' && options.course !== 'deliver-item') {
+    throw new Error('Deliver verification requires the deliver-item course.');
+  }
+  if (!['full', 'doorway-corridor', 'obstruction-follow', 'deliver-item'].includes(options.course)) {
+    throw new Error('Course must be full, doorway-corridor, obstruction-follow, or deliver-item.');
   }
   if (options.mode === 'stop' && options.course !== 'full') {
     throw new Error('Stop verification requires the full course.');
@@ -552,6 +569,11 @@ async function run() {
     fixtureMutated = true;
     const commands = [
       `fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`,
+      ...(options.course === 'deliver-item'
+        ? [
+            `fill ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} ${DELIVER_SOURCE.x2} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z2} ${DELIVER_ITEM}`,
+          ]
+        : []),
       ...(options.course === 'obstruction-follow'
         ? [
             // Full-width wall so the companion cannot simply walk around it,
@@ -578,6 +600,15 @@ async function run() {
       `effect give ${options.bot} minecraft:saturation 180 1 true`,
       `effect give ${TARGET_NAME} minecraft:instant_health 1 4 true`,
       `effect give ${TARGET_NAME} minecraft:saturation 180 1 true`,
+      // Deterministic delivery baseline. Without this the recipient could enter
+      // the attempt already holding the item and the acceptance would pass on
+      // stock it never received.
+      ...(options.course === 'deliver-item'
+        ? [
+            `clear ${TARGET_NAME} minecraft:${DELIVER_ITEM}`,
+            `clear ${options.bot} minecraft:${DELIVER_ITEM}`,
+          ]
+        : []),
     ];
     for (const command of commands) await paperCommand(command);
     target.pathfinder.stop();
@@ -609,6 +640,22 @@ async function run() {
     movements.allowParkour = false;
     movements.canOpenDoors = true;
     target.pathfinder.setMovements(movements);
+  };
+
+  // How much of an item the recipient is physically holding. Returns null when
+  // the inventory cannot be read, never 0 -- a read failure reported as "none"
+  // would set the delivery baseline to zero and let the wait satisfy instantly
+  // on stock the target already had.
+  const countTargetItem = itemName => {
+    try {
+      const items = target?.inventory?.items?.();
+      if (!Array.isArray(items)) return null;
+      return items
+        .filter(item => item?.name === itemName)
+        .reduce((total, item) => total + (Number(item.count) || 0), 0);
+    } catch {
+      return null;
+    }
   };
 
   const driveTarget = async waypoint => {
@@ -833,6 +880,9 @@ async function run() {
         traceMap: new Map(),
         terminal: null,
         obstructionSealedAt: null,
+        deliveryBaseline: countTargetItem(DELIVER_ITEM),
+        deliveryObservedAt: null,
+        deliveryFinal: null,
         resyncRequests: 0,
         waypoints: [],
         paperBefore,
@@ -847,17 +897,39 @@ async function run() {
         () => states[options.bot] || null,
         state => {
           const compact = compactState(state);
-          return compact.sampledAt >= activeAttempt.issuedAt
-            && compact.held === false
-            && compact.idle === false
+          if (compact.sampledAt < activeAttempt.issuedAt) return false;
+          if (compact.held !== false) return false;
+          // A typed goal dispatches its own subgoal commands (collect, then
+          // deliver), so it owns the body under changing labels rather than one
+          // fixed follow action. Requiring a specific label here would make the
+          // wait a test of the goal's internal command choice.
+          if (options.mode === 'deliver') return compact.idle === false;
+          return compact.idle === false
             && compact.current === 'action:followPlayer'
             && Boolean(compact.pathfinding);
         },
-        `${runId} active follow ownership`,
-        15_000,
+        `${runId} active ${options.mode === 'deliver' ? 'goal' : 'follow'} ownership`,
+        options.mode === 'deliver' ? 30_000 : 15_000,
       );
       activeAttempt.activeAt = Number(activeState?._meta?.sampledAt) || Date.now();
 
+      if (options.mode === 'deliver') {
+        // The whole acceptance: the item physically arrives in the recipient's
+        // inventory. Not a claim in a log, not a goal phase -- the player is
+        // holding it. The target never moves; the companion must acquire and
+        // bring it.
+        if (activeAttempt.deliveryBaseline === null) {
+          throw new Error(`${runId} could not read ${TARGET_NAME}'s inventory for a delivery baseline.`);
+        }
+        const wanted = activeAttempt.deliveryBaseline + DELIVER_QUANTITY;
+        await waitFor(
+          () => countTargetItem(DELIVER_ITEM),
+          held => held !== null && held >= wanted,
+          `${runId} ${DELIVER_QUANTITY}x ${DELIVER_ITEM} delivered to ${TARGET_NAME}`,
+          120_000,
+        );
+        activeAttempt.deliveryObservedAt = Date.now();
+      } else {
       await driveTarget(activeWaypoints[0]);
       if (options.mode === 'stop') {
         await waitFor(
@@ -877,6 +949,7 @@ async function run() {
           `${runId} bot completion of ${options.course} course`,
           25_000,
         );
+      }
       }
 
       activeAttempt.stopIssuedAt = Date.now();
@@ -954,6 +1027,7 @@ async function run() {
       // design and only becomes true once the companion breaks through. That
       // transition -- plugged before, open after -- IS the proof, so it
       // replaces the static doorway check rather than failing it.
+      const deliverCourse = options.course === 'deliver-item';
       const obstructionCourse = options.course === 'obstruction-follow';
       // Sealed behind the target, then open again at the end = the companion
       // broke through. `plugVerified` at paperBefore is intentionally false
@@ -961,7 +1035,9 @@ async function run() {
       const obstructionDugThrough = obstructionCourse
         ? Boolean(activeAttempt.obstructionSealedAt) && Boolean(paperAfter.doorwayVerified)
         : null;
-      const fixtureVerified = obstructionCourse
+      const fixtureVerified = deliverCourse
+        ? [paperBefore, paperAfter].every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
+        : obstructionCourse
         ? [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
             .every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
           && obstructionDugThrough === true
@@ -975,7 +1051,23 @@ async function run() {
       const finalWaypointReached = distance(paperAfter.botPosition, finalWaypoint) <= 4.5;
       const stopQuiescenceMs = Math.max(0, heldAt - stopAcceptedAt);
       const settlingMs = Math.max(0, settledAt - heldAt);
-      const passed = targetReachedRequiredWaypoints
+      // Delivery acceptance is deliberately narrow: the recipient physically
+      // holds at least the requested quantity more than it started with, the
+      // companion settled quiescent afterwards, and the fixture is intact.
+      // Waypoint and travel thresholds are follow criteria and do not apply --
+      // the recipient never moves on this course.
+      activeAttempt.deliveryFinal = countTargetItem(DELIVER_ITEM);
+      const deliveryVerified = options.mode === 'deliver'
+        ? activeAttempt.deliveryBaseline !== null
+          && activeAttempt.deliveryFinal !== null
+          && activeAttempt.deliveryFinal >= activeAttempt.deliveryBaseline + DELIVER_QUANTITY
+        : null;
+      const passed = options.mode === 'deliver'
+        ? deliveryVerified === true
+          && stopQuiescenceMs <= 2_000
+          && stable
+          && fixtureVerified
+        : targetReachedRequiredWaypoints
         && targetTravel >= (options.mode === 'follow'
           ? (options.course === 'full' ? 20 : 12)
           : 20)
@@ -1028,6 +1120,12 @@ async function run() {
           finalWaypointReached,
           obstructionDugThrough,
           obstructionSealedAt: activeAttempt.obstructionSealedAt || null,
+          deliveryVerified,
+          deliveryItem: options.mode === 'deliver' ? DELIVER_ITEM : null,
+          deliveryQuantity: options.mode === 'deliver' ? DELIVER_QUANTITY : null,
+          deliveryBaseline: activeAttempt.deliveryBaseline,
+          deliveryFinal: activeAttempt.deliveryFinal,
+          deliveryObservedAt: activeAttempt.deliveryObservedAt,
           twoTurnsCompleted: activeAttempt.waypoints.length === 3,
           oneBlockElevationCompleted: elevated,
           finalDistanceToTarget: distance(paperAfter.botPosition, paperAfter.targetPosition),

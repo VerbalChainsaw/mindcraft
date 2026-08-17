@@ -22,6 +22,7 @@ const ADAPTER_ID = 'follow-field-live-replay-v1';
 const SCENARIO_COURSE = Object.freeze({
   'doorway-corridor-follow': 'doorway-corridor',
   'obstruction-follow': 'obstruction-follow',
+  'deliver-item-goal': 'deliver-item',
 });
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(SCRIPT_DIRECTORY, 'follow-field-worker.ps1');

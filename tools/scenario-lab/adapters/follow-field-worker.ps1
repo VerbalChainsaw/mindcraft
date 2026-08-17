@@ -43,7 +43,7 @@ param(
     # scenario. 'obstruction-follow' spans the wall across the full course width
     # and plugs the doorway with a breakable block, so following the player
     # REQUIRES breaking it -- the case the registered course does not exercise.
-    [ValidateSet('doorway-corridor', 'obstruction-follow')]
+    [ValidateSet('doorway-corridor', 'obstruction-follow', 'deliver-item')]
     [string]$Course = 'doorway-corridor',
 
     [string]$FixtureRoot = ''
@@ -606,7 +606,7 @@ try {
         '--bot', 'MindcraftBot',
         '--attempts', '1',
         '--evidence', $harnessEvidencePath,
-        '--mode', 'follow',
+        '--mode', $(if ($Course -eq 'deliver-item') { 'deliver' } else { 'follow' }),
         '--course', $Course,
         '--request-file', $requestPath,
         '--authorized-active-world'
