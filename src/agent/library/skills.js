@@ -2064,7 +2064,7 @@ export function probeSafeRoundTripNavigationStances(
         candidates.length === 0
         || ![home?.x, home?.y, home?.z].every(Number.isFinite)
     ) {
-        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+        return { reachable: false, conclusive: false, status: 'route_probe_unavailable', pathLength: 0 };
     }
 
     const boundedTimeoutMs = Math.max(100, Math.min(5_000, Math.floor(Number(timeoutMs) || 2_000)));
@@ -2113,8 +2113,14 @@ export function probeSafeRoundTripNavigationStances(
         remainingCandidates.splice(index, 1);
     }
 
+    // A round trip is only conclusively impossible when BOTH legs finished and
+    // found nothing. If either probe ran out of budget, this result is "not
+    // proven", and a caller must not turn it into "there is nothing here".
+    const inboundConclusive = lastInbound?.conclusive !== false;
+    const returnConclusive = lastReturn ? lastReturn.conclusive !== false : false;
     return {
         reachable: false,
+        conclusive: Boolean(lastInbound) && inboundConclusive && returnConclusive,
         status: lastInbound?.reachable ? 'return_route_unreachable' : lastInbound?.status || 'unknown',
         pathLength: lastInbound?.pathLength || 0,
         returnStatus: lastReturn?.status || null,

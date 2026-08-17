@@ -471,6 +471,7 @@ function bindExposedOre(context, args) {
         right.position.z - origin.z,
       )
     ));
+  let inconclusiveSkips = 0;
   for (const block of candidates.slice(0, 12)) {
     const assessment = assessStableMiningCollectionTarget(bot, block);
     if (!assessment.safe) continue;
@@ -480,7 +481,14 @@ function bindExposedOre(context, args) {
       args.home,
       700,
     );
-    if (!route.reachable) continue;
+    if (!route.reachable) {
+      // Skipping is fine; pretending we looked is not. A 700ms round-trip probe
+      // that expired has not shown this ore is unusable, and twelve of those
+      // adding up to "resource_not_found" is how an unfinished search became a
+      // missing resource.
+      if (route.conclusive === false) inconclusiveSkips += 1;
+      continue;
+    }
     const target = {
       name: block.name,
       x: block.position.x,
@@ -499,12 +507,20 @@ function bindExposedOre(context, args) {
       returnPathLength: route.returnPathLength,
     });
   }
+  // The code stays 'resource_not_found' because goal-director matches on it and
+  // a new code changes recovery behaviour unpredictably. The truth rides
+  // alongside instead: inconclusive says the search did not finish, so a caller
+  // can retry or report honestly rather than concluding the ore is not there.
   return immutable({
     ok: false,
     code: 'resource_not_found',
-    detail: candidates.length > 0
-      ? 'Observed exposed ore had no stable non-destructive native approach.'
-      : 'No untried exposed ore was observed in this cave region.',
+    inconclusive: inconclusiveSkips > 0,
+    inconclusiveSkips,
+    detail: candidates.length === 0
+      ? 'No untried exposed ore was observed in this cave region.'
+      : inconclusiveSkips > 0
+        ? `Observed ${candidates.length} exposed ore, but ${inconclusiveSkips} round-trip probe(s) ran out of search time before proving an approach.`
+        : 'Observed exposed ore had no stable non-destructive native approach.',
     target: regionTarget,
   });
 }
