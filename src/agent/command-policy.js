@@ -22,8 +22,15 @@ export function resolveBlockedActions({
     // commands are registered. Steps 4 and 6 need to run the bot on a reduced
     // surface to find out whether the LLM can orchestrate primitives or is only
     // routing to pre-written procedures. An empty allowlist means no restriction.
-    const allowedNames = new Set(commandNames(allowed));
-    const disallowed = allowedNames.size === 0
+    // The prompt builder calls these to construct $STATS and $INVENTORY. They
+    // are introspection, not player-facing actions, and blacklistCommands
+    // deletes blocked names from the command map -- so blocking one of these
+    // made prompter.js call .perform on undefined and killed the agent process
+    // while building the prompt. An allowlist restricts what the bot may DO, not
+    // what it may know about itself.
+    const promptInternals = ['!awareness', '!inventory', '!stats'];
+    const allowedNames = new Set([...commandNames(allowed), ...promptInternals]);
+    const disallowed = commandNames(allowed).length === 0
         ? []
         : commandNames(registered).filter((name) => !allowedNames.has(name));
     return [...new Set([

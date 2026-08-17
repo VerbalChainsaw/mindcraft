@@ -570,11 +570,11 @@ export class Prompter {
         }
 
         if (prompt.includes('$STATS')) {
-            const stats = await getCommand('!awareness').perform(this.agent);
+            const stats = await getCommand('!awareness')?.perform(this.agent) ?? '';
             prompt = prompt.replaceAll('$STATS', stats);
         }
         if (prompt.includes('$INVENTORY')) {
-            let inventory = await getCommand('!inventory').perform(this.agent);
+            let inventory = await getCommand('!inventory')?.perform(this.agent) ?? '';
             prompt = prompt.replaceAll('$INVENTORY', inventory);
         }
         if (prompt.includes('$ACTION')) {

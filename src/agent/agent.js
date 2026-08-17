@@ -1228,6 +1228,22 @@ export class Agent {
         if (max_responses === null) {
             max_responses = settings.max_commands === -1 ? Infinity : settings.max_commands;
         }
+        // src/agent/settings.js is an empty object populated at runtime, so
+        // max_commands can legitimately be absent in a child agent process. A
+        // null would leave max_responses null, and `for (i = 0; i < null; i++)`
+        // never runs -- the model would be skipped with nothing said. settings.js
+        // documents -1 as "no limit", so an absent value fails open to that
+        // rather than silently meaning zero turns.
+        //
+        // (Not the cause of the 2026-08-17 silence: that was a crash in the
+        // prompt builder. I misread Infinity as null here because JSON.stringify
+        // prints Infinity as null. The guard is still correct on its own terms.)
+        if (max_responses === null || max_responses === undefined || !Number.isFinite(Number(max_responses))) {
+            if (max_responses !== Infinity) {
+                console.warn(`[settings] max_commands is ${JSON.stringify(settings.max_commands)}; defaulting to no limit.`);
+                max_responses = Infinity;
+            }
+        }
         if (max_responses === -1) {
             max_responses = Infinity;
         }
@@ -1411,6 +1427,14 @@ export class Agent {
                     deferToModel: true,
                     modelInstruction: queuedConstruction.modelInstruction,
                 }
+                // Step 6: the regex directive table is the second deterministic
+                // interceptor and the one that actually silenced the model. It
+                // maps plain language straight onto composite job commands --
+                // "get ... wood" becomes !assignHarvestJob("logs", 32, player)
+                // with a canned reply -- so for those phrasings the LLM is never
+                // consulted. With sequencing on it stands down too.
+                : this.llm_sequencing
+                ? null
                 : resolvePlayerDirective(canonicalPlayer || source, deterministicMessage, {
                     role: this.runtime?.role,
                     bot: this.bot,
@@ -1580,13 +1604,33 @@ export class Agent {
 
         if (!self_prompt && this.self_prompter.isActive()) // message is from user during self-prompting
             max_responses = 1; // force only respond to this message, then let self-prompting take over
+        if (this.llm_sequencing) {
+            // Temporary diagnostic, llm_sequencing only. Three live runs ended
+            // with the message reaching this point and no command being issued,
+            // and the remaining candidates are all runtime values that static
+            // reading cannot settle.
+            console.log('[llm-seq] entering model loop', JSON.stringify({
+                max_responses,
+                speechAuthority: playerSpeechAuthority,
+                held: this.isOperatorHeld?.() === true,
+                holdGeneration: this.operator_hold_generation,
+                authorizedGeneration: authorizedModelHoldGeneration,
+                shutUp: this.shut_up === true,
+                selfPrompterActive: this.self_prompter?.isActive?.() === true,
+                interruptNow: checkInterrupt(),
+            }));
+        }
         try {
             for (let i=0; i<max_responses; i++) {
-                if (checkInterrupt()) break;
+                if (checkInterrupt()) {
+                    if (this.llm_sequencing) console.log('[llm-seq] broke on checkInterrupt at turn', i);
+                    break;
+                }
                 let history = this.history.getHistory();
                 let res = await this.prompter.promptConvo(history);
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
+            if (this.llm_sequencing) console.log('[llm-seq] model returned', JSON.stringify(String(res || '').slice(0, 300)));
 
             if (res.trim().length === 0) {
                 console.warn('no response')
@@ -1637,7 +1681,17 @@ export class Agent {
                 }
                 
                 if (!commandExists(command_name)) {
-                    this.history.add('system', `Command ${command_name} does not exist.`);
+                    // Naming the alternatives matters most when the surface is
+                    // reduced: a live run spent two of its turns re-guessing
+                    // !collectWoodInRange, which the allowlist had removed. The
+                    // model recovered on its own, but only after wasting turns
+                    // it did not have. Tell it what it may actually call.
+                    const available = getCommandManifest({ blocked: this.blocked_actions })
+                        .map((command) => command.name);
+                    const hint = available.length && available.length <= 40
+                        ? ` Available commands: ${available.join(' ')}.`
+                        : '';
+                    this.history.add('system', `Command ${command_name} does not exist.${hint}`);
                     console.warn('Agent hallucinated command:', command_name)
                     continue;
                 }
