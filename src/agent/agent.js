@@ -189,6 +189,19 @@ export function modelCommandAwaitsPlayerConfirmation(response, commandName = con
     return /(?:\bshould\s+i\b|\bshall\s+i\b|\bmay\s+i\b|\bcan\s+i\b|\bwould\s+you\s+like\s+me\s+to\b|\bdo\s+you\s+want\s+me\s+to\b|\bwant\s+me\s+to\b|\bis\s+it\s+okay\s+if\s+i\b)/i.test(proposal);
 }
 
+// Director's call, 2026-08-17: "Yes, it should mine it. It can mine it. Why
+// stop?" A companion that halts to ask permission for an obvious, reversible
+// step is the polite form of stalling -- the charcoal run derived that it needed
+// cobblestone, asked whether to mine it, and then sat for nine minutes.
+//
+// So a question no longer withholds the command. The question is still spoken,
+// so the player can redirect; the work just does not stop while it waits. Only
+// genuinely consequential actions still require an answer first: attacking
+// someone, leaving, restarting, or bringing more bots into the world.
+const CONFIRMATION_REQUIRED_COMMANDS = new Set([
+    '!attackPlayer', '!attack', '!leaveGame', '!restart', '!spawnBots',
+]);
+
 function commandReleasesOperatorHold(commandName) {
     return isAction(commandName) && !HOLD_SAFE_COMMANDS.has(commandName);
 }
@@ -1640,7 +1653,10 @@ export class Agent {
                 let command_name = containsCommand(res);
 
             if (command_name) { // contains query or command
-                if (modelCommandAwaitsPlayerConfirmation(res, command_name)) {
+                if (
+                    modelCommandAwaitsPlayerConfirmation(res, command_name)
+                    && CONFIRMATION_REQUIRED_COMMANDS.has(command_name)
+                ) {
                     const proposal = res.substring(0, res.indexOf(command_name)).trim();
                     await this.history.add(this.name, proposal);
                     await this.history.add(

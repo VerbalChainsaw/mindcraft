@@ -139,6 +139,30 @@ for (const port of [...new Set([8080, mindserverPort, 25579])]) {
 }
 record(true, 'mindserver url', resolveMindserverUrl());
 
+// --- managed server already running ------------------------------------------
+// The worker aborts if OUR Paper server is already up. It used to abort on any
+// java process, so the Director playing Minecraft blocked the lab while this
+// doctor still said ready. Check exactly what the worker checks.
+{
+  const managedJar = path.join(REPO, 'server_data', 'managed-java', 'server.jar');
+  try {
+    const out = execFileSync('powershell.exe', [
+      '-NoProfile', '-Command',
+      `$j = ${JSON.stringify(managedJar)};`
+      + ' $p = Get-CimInstance Win32_Process | Where-Object { $_.Name -in @("java.exe","javaw.exe") -and $_.CommandLine -like ("*" + $j + "*") } | Select-Object -First 1;'
+      + ' if ($p) { "$($p.ProcessId)" } else { "" }',
+    ], { encoding: 'utf8', timeout: 20_000 }).trim();
+    if (out) {
+      record(false, 'managed server', `already running as pid ${out}`,
+        'A previous scenario did not clean up. Stop that pid before running.');
+    } else {
+      record(true, 'managed server', 'not running');
+    }
+  } catch {
+    record(true, 'managed server', 'could not determine; the worker will enforce it');
+  }
+}
+
 // --- managed-runtime lock ----------------------------------------------------
 const managed = path.join(REPO, 'server_data', 'managed-java');
 let lockHeld = false;

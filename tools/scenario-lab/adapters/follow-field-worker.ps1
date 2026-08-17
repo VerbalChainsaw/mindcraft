@@ -481,9 +481,19 @@ try {
 
     if (Test-Path -LiteralPath $worldPath) { throw "Replay world already exists: $worldPath" }
     if ($sourceExtractPath -and (Test-Path -LiteralPath $sourceExtractPath)) { throw "Archive source world unexpectedly exists: $sourceExtractPath" }
-    if (@(Get-Process -Name java,javaw -ErrorAction SilentlyContinue).Count -gt 0) {
+    # Only OUR managed server counts as a conflict. This used to abort on any
+    # java.exe or javaw.exe at all, which meant the Director playing Minecraft --
+    # the launcher ships its own bundled javaw -- blocked every scenario with
+    # "Java is already running", while scenario:doctor reported ready because it
+    # never looked. The cleanup path below already matches on the managed jar;
+    # this is the same test.
+    $managedJarPath = [IO.Path]::GetFullPath((Join-Path $managed 'server.jar'))
+    $conflictingJava = @(Get-CimInstance Win32_Process | Where-Object {
+        ($_.Name -in @('java.exe', 'javaw.exe')) -and $_.CommandLine -like ('*' + $managedJarPath + '*')
+    })
+    if ($conflictingJava.Count -gt 0) {
         $report.conflict = $true
-        throw 'Java is already running.'
+        throw "The managed Paper server is already running (pid $($conflictingJava[0].ProcessId))."
     }
     foreach ($port in @($mindserverPort, 25579)) {
         if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
