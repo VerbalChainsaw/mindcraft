@@ -684,7 +684,10 @@ try {
         '--bot', 'MindcraftBot',
         '--attempts', '1',
         '--evidence', $harnessEvidencePath,
-        '--mode', $(if ($Course -eq 'deliver-item') { 'deliver' } else { 'follow' }),
+        # Every delivering course measures in deliver mode. Keyed to one course
+        # name, orchestrate-charcoal silently ran in follow mode and timed out
+        # waiting for follow ownership that a charcoal task never produces.
+        '--mode', $(if ($Course -in @('deliver-item', 'orchestrate-charcoal')) { 'deliver' } else { 'follow' }),
         '--course', $Course,
         '--request-file', $requestPath,
         '--authorized-active-world'

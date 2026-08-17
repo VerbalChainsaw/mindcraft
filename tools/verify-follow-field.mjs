@@ -164,6 +164,12 @@ function parseArgs(argv) {
   if (options.mode === 'deliver' && !Object.hasOwn(DELIVER_SPEC, options.course)) {
     throw new Error(`Deliver verification requires one of: ${Object.keys(DELIVER_SPEC).join(', ')}.`);
   }
+  // And the converse, which cost several runs: a delivering course measured in
+  // follow mode waits for follow ownership no delivery task will ever produce,
+  // and fails on a timeout that looks like a gameplay defect.
+  if (Object.hasOwn(DELIVER_SPEC, options.course) && options.mode !== 'deliver') {
+    throw new Error(`Course ${options.course} must be measured with --mode deliver, got '${options.mode}'.`);
+  }
   if (!['full', 'doorway-corridor', 'obstruction-follow', ...Object.keys(DELIVER_SPEC)].includes(options.course)) {
     throw new Error('Course must be full, doorway-corridor, obstruction-follow, deliver-item, or orchestrate-charcoal.');
   }
