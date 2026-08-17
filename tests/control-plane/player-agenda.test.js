@@ -16,36 +16,61 @@ import { normalizeAgendaEntry } from '../../src/agent/runtime/agenda.js';
 import { createAccessRepairWorkOrder } from '../../src/agent/runtime/access-repair.js';
 import { resolvePlayerDirective } from '../../src/agent/player-directives.js';
 
-test('classifyDisposition flags interrupt words and defaults to append', () => {
+// Director's contract, 2026-08-17: a fresh instruction IS the current intent and
+// replaces non-reflex work. The previous default was append, which forced the
+// player to say "now" or "instead" to be taken seriously -- speaking the
+// scheduler's language instead of their own. Appending is still available, but
+// it has to be asked for the way people actually ask for it.
+//
+// Note "get 5 logs then build a shelter": the `then` joins two clauses of ONE
+// new request, so it interrupts and installs both steps in order. Only a
+// LEADING continuation ("then build a shelter", said after prior work) appends.
+test('classifyDisposition interrupts on a fresh request and appends only on explicit continuation', () => {
   assert.equal(classifyDisposition('stop and come here'), 'interrupt');
   assert.equal(classifyDisposition('now mine 10 iron'), 'interrupt');
   assert.equal(classifyDisposition('forget that, follow me'), 'interrupt');
   assert.equal(classifyDisposition('mine stone right now'), 'interrupt');
   assert.equal(classifyDisposition('build a shelter instead'), 'interrupt');
-  assert.equal(classifyDisposition('get 5 logs then build a shelter'), 'append');
+  assert.equal(classifyDisposition('Kevin, come here'), 'interrupt');
+  assert.equal(classifyDisposition('get 5 logs then build a shelter'), 'interrupt');
   assert.equal(classifyDisposition('also grab some cobblestone'), 'append');
+  assert.equal(classifyDisposition('then build a shelter'), 'append');
+  assert.equal(classifyDisposition('when you are done, come here'), 'append');
+  assert.equal(classifyDisposition('grab some stone too'), 'append');
   assert.equal(classifyDisposition(''), 'append');
 });
 
-test('resolvePlayerPlanDisposition replaces held work without mistaking compilation Hold for authority', () => {
-  const cleanup = 'clean up your inventory for the day, then come back to me';
-  assert.equal(resolvePlayerPlanDisposition(cleanup), 'append');
-  assert.equal(resolvePlayerPlanDisposition(cleanup, {
-    agendaBusy: true,
-    operatorHeld: true,
-  }), 'interrupt');
-  assert.equal(resolvePlayerPlanDisposition(cleanup, {
+test('a fresh request supersedes running work; an explicit continuation still appends', () => {
+  // Disposition now depends on the LANGUAGE first, so this test needs both
+  // kinds of input. A fresh instruction replaces non-reflex work whatever the
+  // agenda is doing -- that is the Director's contract: what he just said is the
+  // current intent, not another entry in the queue.
+  const fresh = 'clean up your inventory for the day, then come back to me';
+  for (const state of [
+    {},
+    { agendaBusy: true, operatorHeld: true },
+    { agendaBusy: true, operatorHeld: false },
+    { agendaBusy: true, operatorHeld: true, compilingConstruction: true },
+  ]) {
+    assert.equal(resolvePlayerPlanDisposition(fresh, state), 'interrupt');
+  }
+
+  // An explicit continuation appends onto running work, and a compilation Hold
+  // does not get mistaken for player authority to replace it.
+  const continuation = 'also clean up your inventory';
+  assert.equal(resolvePlayerPlanDisposition(continuation, {
     agendaBusy: true,
     operatorHeld: false,
   }), 'append');
-  assert.equal(resolvePlayerPlanDisposition(cleanup, {
+  assert.equal(resolvePlayerPlanDisposition(continuation, {
     agendaBusy: true,
     operatorHeld: true,
     compilingConstruction: true,
   }), 'append');
-  assert.equal(resolvePlayerPlanDisposition('actually, clean up your inventory', {
+  // A player Stop, then a continuation, is fresh authority over the held queue.
+  assert.equal(resolvePlayerPlanDisposition(continuation, {
     agendaBusy: true,
-    operatorHeld: false,
+    operatorHeld: true,
   }), 'interrupt');
 });
 
@@ -288,7 +313,9 @@ function stubResolver(_player, segment) {
 test('parsePlayerAgenda sequences a multi-step line into ordered entries', () => {
   const plan = parsePlayerAgenda('Gabriel', 'get 5 logs then build a shelter then come here', {}, { resolveDirective: stubResolver });
   assert.ok(plan);
-  assert.equal(plan.disposition, 'append');
+  // Fresh three-part request: it replaces whatever was queued, and its own three
+  // steps stay in the order given. Sequencing and disposition are separate.
+  assert.equal(plan.disposition, 'interrupt');
   assert.equal(plan.multiStep, true);
   assert.deepEqual(plan.steps.map(step => step.entry.kind), ['harvest', 'shelter', 'goto']);
 });

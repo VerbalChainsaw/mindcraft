@@ -1683,11 +1683,24 @@ function minedResourceDeliveryPlan(playerName, message) {
  *
  * @returns {'interrupt'|'append'}
  */
+// Explicit continuation language. Everything else is a fresh instruction.
+const CONTINUATION_LEADING = /^(?:and\s+)?(?:also|then|afterwards?|next|additionally|plus|after\s+that)\b/i;
+const CONTINUATION_ANYWHERE = /\b(?:when\s+you(?:'re|\s+are)?\s+(?:done|finished)|after\s+(?:that|you\s+finish)|as\s+well|in\s+addition)\b|\btoo\s*[.!]?$/i;
+
 export function classifyDisposition(message) {
   const text = normalizeMessage(message).trim().toLowerCase();
   if (!text) return 'append';
   if (INTERRUPT_LEADING.test(text) || INTERRUPT_ANYWHERE.test(text)) return 'interrupt';
-  return 'append';
+  // A fresh request replaces current work. Appending by default forced the
+  // player to speak the scheduler's language -- "Kevin come here" queued behind
+  // whatever he was already doing unless you happened to say "now" or "instead".
+  // That is backwards: the player's latest instruction IS the current intent,
+  // and ARCHITECTURE.md says a player command replaces it immediately.
+  //
+  // Appending is still available, but the player has to ask for it in the
+  // ordinary way people ask for it: also, then, after that, when you finish.
+  if (CONTINUATION_LEADING.test(text) || CONTINUATION_ANYWHERE.test(text)) return 'append';
+  return 'interrupt';
 }
 
 /**

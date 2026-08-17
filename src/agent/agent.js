@@ -389,7 +389,14 @@ export class Agent {
         // then get 1 additional charcoal", and returned handled. Blocking
         // !addToAgenda changed nothing, because the interception happens
         // upstream of command selection entirely.
-        this.llm_sequencing = settings.llm_sequencing === true;
+        // Model-first is the ordinary behaviour, not an experiment. Defaulting
+        // this off "so ordinary bots are unchanged" meant the fix shipped to
+        // nobody: the scenario proved it while the played Kevin kept routing
+        // plain English through the regex directive table. Legacy deterministic
+        // routing is now the thing you opt into, by name.
+        this.llm_sequencing = settings.legacy_deterministic_routing === true
+            ? false
+            : settings.llm_sequencing !== false;
         this.blocked_actions = resolveBlockedActions({
             configured: settings.blocked_actions,
             task: this.task.blocked_actions,
