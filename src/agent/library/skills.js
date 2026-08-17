@@ -201,7 +201,25 @@ const MAX_COLLECTION_SCAN_CANDIDATES = 48;
 const MAX_COLLECTION_SAFE_SCAN_CANDIDATES = 768;
 const MAX_COLLECTION_STANCES = 24;
 const MAX_COLLECTION_DROP_DEPTH = 2;
-const COLLECTION_ROUTE_PROBE_TIMEOUT_MS = 75;
+// Wall-clock allowance for proving a route to ONE collection candidate.
+//
+// This was 75ms, which is less than the compute the probe is already allowed to
+// spend: MAX_COLLECTION_ROUTE_SLICES * COLLECTION_ROUTE_PROBE_TICK_MS is 120ms
+// of search. The wall clock therefore expired before the search was permitted
+// to finish thinking, and every candidate came back 'timeout'.
+//
+// Live evidence, 2026-08-16: with dirt two blocks away and plainly visible, the
+// companion reported "Found 12 dirt candidates, but none has a safe reachable
+// route (timeout:12)" and relocated 32 blocks to look elsewhere. Every one of
+// the twelve was a clock expiry, not a missing route. On a machine running
+// other work -- this one had 99 node processes at 69% CPU -- the event loop is
+// starved and 75ms of wall clock buys almost no compute at all.
+//
+// Raising only the wall clock does not grant extra compute: the slice budget
+// above is unchanged, so a healthy machine finishes exactly as fast as before.
+// It only stops a starved process being told its route does not exist.
+// remainingActionTimeMs() still caps this by the owning action's deadline.
+const COLLECTION_ROUTE_PROBE_TIMEOUT_MS = 400;
 const COLLECTION_ROUTE_PROBE_TICK_MS = 15;
 const MAX_COLLECTION_ROUTE_SLICES = 8;
 const MAX_COLLECTION_SEARCH_RELOCATIONS = 3;
