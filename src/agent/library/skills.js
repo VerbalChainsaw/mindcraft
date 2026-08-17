@@ -1554,6 +1554,10 @@ function safeMovements(bot) {
     // pathfinder preferring to walk around when walking around is reasonable.
     // See ARCHITECTURE.md.
     movements.canDig = true;
+    // policy: these are the 'preserve' traversal defaults -- a companion told to
+    // preserve the world does not build, tower or vault through it. The 'full'
+    // policy below restores all three. Preserve is the Director's choice to
+    // make, not a claim that the bot cannot do these things.
     movements.canPlaceBlocks = false;
     movements.allow1by1towers = false;
     movements.allowParkour = false;
@@ -1646,6 +1650,9 @@ function dryRouteMovements(bot) {
 // every ordinary move available.
 export function configureReturnableCombatMovements(movements) {
     if (!movements || typeof movements !== 'object') return movements;
+    // policy: chasing a mob does not authorize excavating the world, and the
+    // drop limit below is what keeps the pursuit returnable. Parkour is
+    // deliberately NOT restricted -- a jump strands nobody.
     movements.canDig = false;
     movements.canPlaceBlocks = false;
     movements.allow1by1towers = false;
@@ -2133,7 +2140,12 @@ function miningMovements(bot) {
     const movements = safeMovements(bot);
     const defaultSafeToBreak = movements.defaultSafeToBreak;
     movements.canDig = true;
-    movements.allow1by1towers = false;
+    // Towers restored. A miner that may dig down but not pillar back up is the
+    // exact shape of "I am stuck in a hole I made", which is not a situation
+    // Minecraft actually produces -- you nerd-pole out. Parkour stays off: a
+    // mining route should be a walkable corridor, not a jumping puzzle.
+    movements.allow1by1towers = true;
+    // policy: mining routes stay walkable rather than acrobatic.
     movements.allowParkour = false;
     movements.digCost = 2;
     movements.safeToBreak = candidate => (
@@ -2837,8 +2849,8 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
         ));
     }
     if (requireReturnableRoute) {
-        // A collection plugin may pursue a falling drop after breaking the
-        // target. Never advertise a descent it cannot climb back from when
+        // policy: a collection plugin may pursue a falling drop after breaking
+        // the target. Never advertise a descent it cannot climb back from when
         // the owning capability promises returnability.
         movements.allowParkour = false;
         movements.maxDropDown = Math.min(
@@ -9661,8 +9673,11 @@ async function collectDroppedItemQueue(bot, candidates, {
     bot.on('collectBlock_targetFailed', onTargetFailed);
     try {
         const movements = safeMovements(bot);
+        // policy: fetching a dropped item does not authorize excavating terrain
+        // to reach it. Towers are restored -- an item on a ledge is a thing a
+        // player climbs to, and refusing to climb loses the item for no reason.
         movements.canDig = false;
-        movements.allow1by1towers = false;
+        movements.allow1by1towers = true;
         bot.collectBlock.movements = movements;
         await runBoundedCollectionOperation(
             bot,
@@ -16227,8 +16242,11 @@ async function stageMiningStaircase(bot, targetBlock = null) {
             {
                 movements: () => {
                     const movements = safeMovements(bot);
+                    // policy: staging walks up to a chosen mining candidate; it
+                    // does not tunnel a new route to it. Towers restored so the
+                    // approach can climb ordinary terrain.
                     movements.canDig = false;
-                    movements.allow1by1towers = false;
+                    movements.allow1by1towers = true;
                     movements.allowParkour = false;
                     return movements;
                 },
@@ -17220,6 +17238,9 @@ function isMiningRouteCellReturnable(bot, position) {
 
 function clearedMiningMovements(bot) {
     const movements = safeMovements(bot);
+    // policy: this traverses a corridor the miner already opened. Digging is off
+    // because the route exists by construction; re-excavating it would mean the
+    // corridor was never actually cleared.
     movements.canDig = false;
     movements.allow1by1towers = false;
     movements.allowParkour = false;
@@ -20862,6 +20883,8 @@ export async function moveAway(bot, distance, options = {}) {
         );
     const routeMovements = meaningfulRelocation?.movements || safeMovements(bot);
     if (courtesyContract) {
+        // policy: a courtesy relocation keeps a predictable walking distance
+        // from the player. Vaulting away turns polite spacing into a bolt.
         routeMovements.allowParkour = false;
         routeMovements.maxDropDown = Math.min(
             Number(routeMovements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
@@ -21087,9 +21110,9 @@ export async function moveAwayFromEntity(bot, entity, distance=16) {
         maxVerticalDelta,
     );
     const movements = safeMovements(bot);
-    // A goal constrains settlement, not intermediate A* nodes. Keep the whole
-    // emergency route inside the same elevation envelope so a legal endpoint
-    // above ground cannot be reached through a dangerous cave detour.
+    // policy: a goal constrains settlement, not intermediate A* nodes. Keep the
+    // whole emergency route inside the same elevation envelope so a legal
+    // endpoint above ground cannot be reached through a dangerous cave detour.
     movements.allowParkour = false;
     movements.maxDropDown = Math.min(
         Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
@@ -22397,6 +22420,9 @@ async function releaseLivestockAttraction(bot, food) {
 
 function noSprintLivestockMovements(bot) {
     const movements = safeMovements(bot);
+    // policy: led animals follow at a walk and through open ground. Tunnelling or
+    // pillaring while leading livestock breaks the pen and loses the herd, which
+    // is a genuine thing to forbid rather than a capability the bot lacks.
     movements.allowSprinting = false;
     movements.canDig = false;
     movements.allow1by1towers = false;

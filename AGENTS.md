@@ -8,13 +8,23 @@ the way it does).
 
 ## Authority — settle this before reading anything else
 
-Three files instruct. Nothing else does.
+Four sources instruct. Nothing else does.
 
-| File | What it is |
+| Source | What it is |
 |---|---|
+| `lodestar start --cwd <cwd>` | durable project decisions, loaded first, every session |
 | `ARCHITECTURE.md` | the design and the migration plan |
 | `AGENTS.md` (this file) | how to work on it |
 | `docs/HANDOFF.md` | where to start, first five minutes |
+
+Run `lodestar start` once at session start. Its decisions are current unless a
+repo file is more specific; where a decision and a repo file genuinely disagree,
+**say so rather than silently choosing one** — that disagreement is a defect in
+one of them.
+
+An earlier version of this section said "three files instruct" and omitted
+Lodestar, while the same session wrote twelve durable decisions into it. That
+contradiction is exactly the split-brain this section exists to prevent.
 
 Everything under `docs/archive/` is history. It is kept so decisions stay
 auditable, and it is never an instruction — including when it is longer, more

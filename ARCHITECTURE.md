@@ -188,15 +188,17 @@ are already written.
 
 Still open below.
 
-## Step 2 — Fix locomotion (DONE — see above)
+## Step 2 — Locomotion (DONE)
 
-`src/agent/library/skills.js:1524` `safeMovements()` sets `canDig = false` for
-all ordinary locomotion — following, workstation approaches, pickup, recovery.
-Default `traversalPolicy` is `'preserve'` (`agent.js:384`), which also disables
-parkour, towers, and block placement.
+`safeMovements()` sets `canDig = true` with a protection blocklist, and under the
+`full` traversal policy also enables parkour, block placement and 1x1 towers.
+Every remaining restriction in the codebase now carries a `// policy:` note
+naming its reason, enforced by `npm run audit:veto`.
 
-Set the default to `full`. Replace the global dig ban with a player-built-block
-blocklist. Nine call sites set `canDig = false`; most should not.
+The old text here still described the defect as though it were current — it
+told the next agent that `safeMovements()` sets `canDig = false` and to go set
+the default to `full`, both of which were already done. A migration document that
+describes the pre-migration state is worse than no document.
 
 ## Step 3 — Player command preempts
 
@@ -205,69 +207,12 @@ In `behavior-arbiter.js`, a player directive currently sits behind
 `bounded_recovery`, and `comportment_pause`. Move it to position 2, directly
 below Reflex. Delete `comportment_pause` entirely.
 
-## Open engine defects found by the harness
+## Resolved investigations
 
-Found 2026-08-16 while building a typed-goal scenario. All three are real
-gameplay defects; only the first is fixed.
-
-**1. Collection route probe budget — FIXED.** The wall clock (75ms) was tighter
-than the compute the probe was already allowed (120ms), so searches were cut off
-before finishing. Live: "Found 12 dirt candidates, but none has a safe reachable
-route (timeout:12)" with dirt two blocks away and visible, followed by a 32-block
-relocation. Raised to 400ms; compute budget unchanged.
-
-**2. A timeout is classified as unreachable — FIXED.** The skill recorded
-`routeStatuses {timeout: 12}` and reported `outcome: 'unreachable'`. When every
-rejection is a clock expiry the candidates are now re-probed once at 1500ms
-before concluding. `noPath` is deliberately excluded: re-probing a genuine
-missing route would hide the defect class this harness exists to catch.
-
-**3. A typed goal survives death and continues from the respawn point — FIXED.**
-The bot died mid-goal, respawned ~1,400 blocks away at world spawn, and the goal
-carried on from there: it collected a grass_block near spawn, then tried to walk
-back to the recipient across open ocean until it timed out and drowned. Nothing
-re-established whether the goal was still viable from the new position. In play
-this reads as: die once, and the companion sets off on a doomed cross-country
-march instead of reassessing.
-
-Resolved by DEATH_RESUME_MAX_DISPLACEMENT (128), anchored to the ~96 blocks
-the goal already relocates of its own accord. Beyond that the goal settles
-and says so; nearer than that it resumes as before. An unobservable anchor
-never abandons the goal -- unknown distance is not "too far".
-
-## The deliver course is blocked on the world, definitively
-
-A typed-goal scenario (`!requestItemGoal("deliver","dirt",1,...)`) was built and
-run five times against the follow fixture. It cannot pass there, and the reason
-is now evidence rather than inference — the last run had mobs eliminated as a
-variable:
-
-```
-sourcePresent : true    the dirt is demonstrably placed
-mob contact   : none    peaceful difficulty held
-actions       : self_preservation/skill_drowning_escape_open_water
-                collectBlocksInRange/skill_unreachable
-                moveAway/skill_unsafe_medium
-```
-
-The chain: collection cannot route, so the goal relocates 32 blocks
-(`ACQUISITION_REGION_RELOCATION_DISTANCE`); the fixture is an island, so 32
-blocks is open ocean; the bot enters an unsafe medium, starts drowning, and
-self-preservation seizes the body, interrupting the collection. Repeat until
-timeout.
-
-**A typed-goal scenario needs a dry-land world — RESOLVED 2026-08-17.** The
-world does not have to be authored, only generated. `deliver-item-goal` runs on
-a superflat recipe (`tools/scenario-lab/fixtures/deliver-item-flat-v1`) whose
-surface is y=100, which is where the existing course constants already sit, so
-the course geometry is unchanged. `npm run scenario:deliver` exits 0 on HEAD:
-both request forms delivered, `FollowTarget` 0 -> 1 dirt, zero safety
-violations. The fixture premise is measured rather than assumed — four
-dry-land probes at 40 blocks, past the 32-block relocation.
-
-The course itself is worth keeping. It never passed and still produced four
-engine defects — the route probe budget, timeout-as-unreachable, goal-survives-
-death, and hostile mobs deciding scenarios — every one of which is now fixed.
+The engine-defect list and the "deliver course is blocked on the world" evidence
+chain moved to `docs/archive/2026-08-16-reset/docs/ARCHITECTURE-superseded-sections.md`
+on 2026-08-17. Every finding in them is fixed. This file has a ~200 line budget
+and narrating solved problems is what spent it.
 
 ## Coverage gate — read before Step 4
 

@@ -74,6 +74,7 @@
     "scenario:list": "node tools/scenario-lab/run.mjs --list",
     "scenario:doctor": "node tools/scenario-lab/doctor.mjs",
     "audit:wiring": "node tools/wiring-audit.mjs --assert",
+    "audit:veto": "node tools/veto-audit.mjs --assert",
     "audit:silent": "node tools/sweep-silent-failures.mjs"
   },
   "devDependencies": {

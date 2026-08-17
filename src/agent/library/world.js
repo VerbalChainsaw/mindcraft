@@ -444,6 +444,10 @@ function clearPathMovementsFor(bot) {
     const cached = clearPathMovements.get(bot);
     if (cached) return cached;
     const movements = new pf.Movements(bot);
+    // policy: this probe answers "can I walk there without touching the world".
+    // Digging and placing are excluded because they are the thing being asked
+    // about, not because the bot is incapable of them. A false answer here means
+    // "not trivially walkable", never "unreachable" -- see assessClearPath.
     movements.canDig = false;
     movements.canPlaceBlocks = false;
     // Opening a door is neither digging nor placing, and this function's own
