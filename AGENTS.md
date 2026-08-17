@@ -49,6 +49,105 @@ record for a mechanism choice you already made, it is gitignored per that
 skill's own contract, and it is load-bearing — one of its records is the source
 of a durable Lodestar decision. Do not delete it.
 
+## The architecture: who decides what
+
+Established 2026-08-17 from live evidence, not from theory. Read this before
+changing any gameplay code. Every failure investigated that day had one shape:
+**project code answered a question the engine should have answered, answered it
+worse, and reported its own wrong answer as ground truth.**
+
+Concretely: `safeMovements` handed mineflayer-pathfinder three of its four action
+classes deleted, so it could only ever reply "no path"; `collectionStandingPositions`
+vetoed twelve obtainable stone blocks before pathfinder was consulted at all; and
+a regex table in `player-directives.js` answered plain English before the model
+was asked. None of that was missing capability. It was capability overridden.
+
+### The layers
+
+| Layer | Owns | Hard rule |
+|---|---|---|
+| **0 Engine** | mineflayer, mineflayer-pathfinder, mineflayer-collectblock, mineflayer-tool, mineflayer-pvp, mineflayer-armor-manager, mineflayer-auto-eat | Never reimplemented, never second-guessed. Pathfinder gets every action class. |
+| **1 Capability** | thin wrappers returning `{ ok, why }` | Ask the engine, report what it said. Computes no route, stance, or reachability of its own. |
+| **2 Recipe** | the composite commands (`!establishFarm`, `!assignMiningJob`, ...) | Built only from capabilities. Callable by the model, never automatic. |
+| **3 Policy** | protections, Operator Hold, budgets, safety | May **forbid**. May never declare something **impossible**. |
+| **4 Intent** | the LLM | Sole source of "what next". Sees the request, the world, the last result. |
+| **Reflex** | drowning, lava, health critical, hostile adjacent, starving | The only preemption. Resolves one hazard and returns control. May not plan. |
+
+Layer 3 is the load-bearing distinction. "I will not break your greenhouse" is a
+legitimate policy veto. "That block is unreachable" is not a sentence policy is
+entitled to say — only Layer 0 may say it.
+
+### The rules
+
+1. **Never answer a question the engine can answer.** Reachability, stance,
+   route, line of sight, tool suitability are Layer 0's. If you are writing a
+   loop over nearby cells to decide whether something is reachable, stop.
+2. **A refusal must cite an engine result or a named rule.** "Unreachable" is
+   sayable only when pathfinder said so *with full movements*. Otherwise report
+   what actually happened.
+3. **Inconclusive is not refusal.** `timeout`, `no_deterministic_recovery`,
+   `action_deadline` and a search-limit stop are all "I did not finish looking".
+   Only `noPath` from a fully-equipped search is evidence of impossibility.
+4. **Policy forbids; it never declares impossible.** A veto names its protection.
+   A budget stop says "I ran out of time", never "it cannot be done".
+5. **The model is asked first — for plain language.** No deterministic layer may
+   consume a player utterance before the model sees it. An explicit `!command`
+   typed by the player is unambiguous and still executes directly; that is not a
+   deterministic interceptor, it is the player naming the capability.
+6. **Capabilities return `{ ok, why }`.** No receipts, no contract stages, no
+   evidence envelopes on the gameplay path.
+7. **Missing configuration fails open to capable, not closed to inert.** A null
+   `max_commands` once meant zero model turns, silently. If a setting is absent,
+   choose the capable default and say so.
+8. **Asking never blocks** except for consequential actions (attack, leave,
+   restart, spawn bots). The companion asks and keeps working.
+9. **Nothing is deleted until a scenario covers the behaviour.** Demotion is
+   reversible; deletion is not.
+10. **If the model is unavailable, say so.** Never fall back to a deterministic
+    router. That fallback is precisely how the regex table came to exist.
+
+Rules 1 through 4 are the architecture. The rest is hygiene.
+
+### What is not a layer, and survives everything
+
+**Knowledge** — home, landmarks, saved places, verified procedures, remembered
+facts — is Layer 4 input, not machinery. `knowledge-store.js`,
+`landmark-memory.js`, `home-state-store.js`, `memory-recall.js`,
+`personal-memory.js` and `player-memory.js` are exempt from every deletion step.
+Forgetting a task is fine. Forgetting the house is not.
+
+### Reconciliations, so these do not fight the older rules
+
+- **"Fix the leaf" still governs defect repair.** It forbids generalising a bug
+  into a new shared module. It does not forbid *removing* a layer that overrides
+  the engine — that is deletion of abstraction, which is what "fix the leaf"
+  exists to protect. Architectural change still needs the Director's explicit
+  authorization; this section is that authorization for the model above.
+- **"Package-first mechanics" is the same rule as Rule 1**, and it was already
+  written here before 2026-08-17. It was violated in code anyway. Rules 1 to 4
+  exist to make it checkable rather than aspirational.
+- **"Does it read as play?" is Layer 3 judgment.** It already says: "this gate is
+  about judgment, not capability... Protect specific things; never amputate a
+  general ability." `canDig = false` on all locomotion was that amputation, and
+  so were `canPlaceBlocks = false` and `allow1by1towers = false`. Rule 4 is how
+  that gate stays honest.
+- **The Operator Hold is legitimate Layer 3 policy** and is unaffected. It
+  forbids acting; it never claims something is impossible. It does not conflict
+  with Rule 8: a Hold is a standing instruction, a clarifying question is not.
+
+### How this regresses, and how to catch it
+
+The failure mode returns as soon as someone adds a "safety" check that answers a
+physics question, usually after one bad route. Watch for:
+
+- a loop over nearby cells deciding reachability
+- a new `*_unreachable` or `no_*_stance` code that no engine produced
+- a phrase table mapping player words to commands
+- a `Movements` object with capabilities set to `false`
+
+`npm run audit:wiring` and `npm run audit:silent` exist for the mechanical half.
+Neither catches these yet. Extending them to is worth doing.
+
 ## You can test without the Director. Do it.
 
 **This is the most-forgotten rule in this repo, so it is first.**
