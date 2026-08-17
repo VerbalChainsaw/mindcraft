@@ -25,15 +25,34 @@ World `viability-pilot-disposable`, seed `3579780610592225162`.
 
 ## Running it
 
-Either pass `--fixture-root`, or set the environment variable the worker
-already checks:
-
 ```bash
-export SCENARIO_LAB_FOLLOW_FIXTURE_ROOT="C:/Users/zerop/Development/JordanWorkspace/artifacts/minecraft-validation/fixtures/doorway-corridor-follow-v1"
+npm run scenario:doctor        # ready? names whatever is blocking
+npm run scenario:follow        # open-ground follow
+npm run scenario:obstruction   # follow through terrain that must be broken
+npm run scenario:list          # what exists and why
 ```
 
-The worker starts its **own isolated stack on port 8080 + 25579**. It does not
-touch a launcher running on 8081. Both ports must be free when it starts.
+The wrapper resolves the fixture, picks a fresh output directory and sets
+regression mode. Nothing else is needed.
+
+**Allow ~3 minutes per scenario** (measured: 172s). Two request forms, each
+starting an isolated stack, waiting for world_ready, measuring, tearing down and
+restoring. Only ~60s is the measurement -- which is what `elapsedMs` in the
+result reports, so do not read that as the command duration.
+
+On another machine, point the fixture somewhere else:
+
+```bash
+export SCENARIO_LAB_FOLLOW_FIXTURE_ROOT="/path/to/doorway-corridor-follow-v1"
+```
+
+An explicit override wins outright and does NOT fall back to the machine-local
+default -- a mistyped path fails loudly instead of silently running against a
+fixture you did not choose.
+
+The worker starts its own isolated stack. MindServer's port is derived from
+`launcher-config.json` (currently 8081, formerly 8080); Paper uses 25579. Both
+must be free, and `scenario:doctor` reports which process holds either.
 
 ## Two modes
 

@@ -46,9 +46,18 @@ npm run scenario:obstruction
 ```
 
 Exit 0 means passed with complete evidence and no safety violations. Anything
-else prints the result file to read. Each takes ~40-60s and needs no human in
-the world; the wrapper resolves the fixture, picks a fresh output directory and
-sets regression mode for you. Ports 8080/8081 and 25579 must be free.
+else prints the result file to read.
+
+**Allow about 3 minutes per scenario** (measured: 172s). Do not set a shorter
+timeout and do not conclude a run has hung. Each scenario runs two request
+forms, and each one starts an isolated Paper + MindServer stack, waits for
+world_ready, measures, tears down and restores the world. Only ~60s of that is
+the measurement itself, which is what `elapsedMs` in the result file reports --
+that field is the measured window, not the command duration.
+
+No human is needed in the world. The wrapper resolves the fixture, picks a fresh
+output directory and sets regression mode. Ports 8080/8081 and 25579 must be
+free; `scenario:doctor` tells you what holds them.
 
 - `scenario:follow` — follow a player through a doorway and corridor on open
   ground. **Passes with or without digging**, so it cannot catch a companion
