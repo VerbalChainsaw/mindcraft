@@ -198,7 +198,7 @@ rejection is a clock expiry the candidates are now re-probed once at 1500ms
 before concluding. `noPath` is deliberately excluded: re-probing a genuine
 missing route would hide the defect class this harness exists to catch.
 
-**3. A typed goal survives death and continues from the respawn point — OPEN.**
+**3. A typed goal survives death and continues from the respawn point — FIXED.**
 The bot died mid-goal, respawned ~1,400 blocks away at world spawn, and the goal
 carried on from there: it collected a grass_block near spawn, then tried to walk
 back to the recipient across open ocean until it timed out and drowned. Nothing
@@ -206,7 +206,10 @@ re-established whether the goal was still viable from the new position. In play
 this reads as: die once, and the companion sets off on a doomed cross-country
 march instead of reassessing.
 
-Defect 3 is the most player-visible of the three and has no coverage.
+Resolved by DEATH_RESUME_MAX_DISPLACEMENT (128), anchored to the ~96 blocks
+the goal already relocates of its own accord. Beyond that the goal settles
+and says so; nearer than that it resumes as before. An unobservable anchor
+never abandons the goal -- unknown distance is not "too far".
 
 ## Coverage gate — read before Step 4
 

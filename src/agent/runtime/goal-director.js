@@ -61,6 +61,20 @@ const SOURCE_ACCESS_RECHECK_DISTANCE = 2;
 // scan radius before rebinding; owned Pathfinder still enforces the action
 // deadline, recent-region exclusions, and non-destructive movement policy.
 const ACQUISITION_REGION_RELOCATION_DISTANCE = 32;
+// How far a death may displace the companion before its goal stops being
+// achievable from where it now stands.
+//
+// Anchored to what the goal will already travel of its own accord: it relocates
+// ACQUISITION_REGION_RELOCATION_DISTANCE per hop, up to three hops, so ~96
+// blocks is the furthest it ever voluntarily goes to do a job. Beyond that the
+// journey has become the task. 128 leaves headroom over the distance it would
+// choose while staying well inside "this is now its own expedition".
+//
+// Live 2026-08-16: the companion died mid-goal, respawned ~1,400 blocks away at
+// world spawn, and resumed -- collecting near spawn and then attempting to walk
+// back to the recipient across open ocean until it timed out and drowned. A
+// player would have said "I died and I'm back at spawn", not set off silently.
+const DEATH_RESUME_MAX_DISPLACEMENT = 128;
 const UNDERGROUND_SURFACE_RECOVERY_Y = 48;
 const SURFACE_ACCESS_TARGET_Y = 56;
 // A failed target above ordinary block-interaction reach is not another local
@@ -485,6 +499,37 @@ function hasPendingDeathItems(memoryBank, recordedAt) {
   const death = memoryBank?.recallDeath?.(recordedAt);
   if (!death || death.recoveredAt) return false;
   return Object.values(death.inventory || {}).some(count => Number(count) > 0);
+}
+
+/**
+ * Where the goal has to end up: the recipient for a delivery, otherwise the
+ * requester. Returns null when no anchor can be observed -- an unknown anchor
+ * must not be read as "too far", or a goal would be abandoned on missing
+ * evidence rather than on distance.
+ */
+function goalAnchorPosition(goal, bot) {
+  const name = goal?.destination?.kind === 'player'
+    ? goal.destination.player
+    : goal?.requester;
+  if (!name) return null;
+  const entity = bot?.players?.[name]?.entity;
+  const position = entity?.position;
+  if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) return null;
+  return position;
+}
+
+/**
+ * After a death, is the goal still achievable from where the companion now
+ * stands? Only ever answers true when both positions are observed: an unknown
+ * distance leaves the goal alone.
+ */
+export function deathDisplacedGoalBeyondReach(goal, bot, maxDisplacement = DEATH_RESUME_MAX_DISPLACEMENT) {
+  if (String(goal?.evidence?.code || '') !== 'goal_owner_died') return false;
+  const anchor = goalAnchorPosition(goal, bot);
+  const here = bot?.entity?.position;
+  if (!anchor || !here || ![here.x, here.y, here.z].every(Number.isFinite)) return false;
+  const displacement = Math.hypot(here.x - anchor.x, here.y - anchor.y, here.z - anchor.z);
+  return Number.isFinite(displacement) && displacement > maxDisplacement;
 }
 
 function recoveryCommand(goal, bot, memoryBank = null) {
@@ -2922,6 +2967,27 @@ export class GoalDirector {
             'delivery_stance_rebind',
             'The local drop stance changed; rebinding the current recipient before the next bounded delivery attempt.',
             true,
+          );
+          return;
+        }
+        // A death can move the companion further than the goal would ever
+        // travel of its own accord. Resuming from there turns "get me some
+        // wood" into a cross-country march to a recipient it cannot reach --
+        // observed live as a walk back across open ocean that timed out and
+        // drowned. Settle truthfully and say so instead; the player can ask
+        // again now that the situation has changed.
+        if (deathDisplacedGoalBeyondReach(goal, this.agent.bot)) {
+          const anchor = goalAnchorPosition(goal, this.agent.bot);
+          const here = this.agent.bot?.entity?.position;
+          const blocks = anchor && here
+            ? Math.round(Math.hypot(here.x - anchor.x, here.y - anchor.y, here.z - anchor.z))
+            : null;
+          this.fail(
+            'death_displaced_beyond_reach',
+            blocks === null
+              ? 'I died and respawned too far away to finish that. Ask again if you still want it.'
+              : `I died and respawned about ${blocks} blocks away, which is too far to finish that from here. Ask again if you still want it.`,
+            { retryable: false },
           );
           return;
         }
