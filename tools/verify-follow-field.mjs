@@ -1029,7 +1029,14 @@ async function run() {
         }
       } else if (
         !activeAttempt.terminal
-        && result?.label === 'action:followPlayer'
+        // Any action belonging to this request is the terminal act. This
+        // required 'action:followPlayer' by name, so the model choosing !follow
+        // meant no terminal was ever captured and the run died at the wait for
+        // it -- after ownership, after the course, after the stop. The third
+        // place the same hard-coded name broke the same run. resultsByLabel
+        // records what actually arrived, so a wrong expectation reads as a
+        // naming mismatch instead of a hang.
+        && result?.label?.startsWith('action:')
         && resultBelongsToRequest
       ) activeAttempt.terminal = structuredClone(result);
     };
@@ -1219,7 +1226,12 @@ async function run() {
       if (options.mode === 'stop') {
         await waitFor(
           () => activeAttempt.samples,
-          samples => samples.some(sample => distance(sample.position, BOT_START) >= 4 && sample.current === 'action:followPlayer'),
+          // Physical progress under any request-owned action, not one name.
+          samples => samples.some(sample => (
+            distance(sample.position, BOT_START) >= 4
+            && typeof sample.current === 'string'
+            && sample.current.startsWith('action:')
+          )),
           `${runId} physical follow progress before stop`,
           15_000,
         );
