@@ -7669,6 +7669,49 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 retryable: true,
             });
             const rejectionSummary = collectionRejectionSummary(selection);
+            // Last resort: hand the nearest candidate to mineflayer-collectblock
+            // and let pathfinder dig its own way there.
+            //
+            // The stance assessment above is advisory, not the final word. It
+            // rejected all twelve cobblestone candidates around a bot that was
+            // standing in stone holding a stone pickaxe, which is not a real
+            // answer -- there is stone under almost everything, and the plugin
+            // solves exactly this by tunnelling. Refusing an obtainable block
+            // because a bespoke stance check could not name a standing cell is
+            // worse than trying and failing, because trying and failing at least
+            // moves and reports why.
+            const fallbackBlock = blocks[0];
+            if (fallbackBlock && !bot.interrupt_code) {
+                log(bot, `No stance found for ${blockType}; letting collectblock dig its own route.`);
+                const heldBefore = world.getInventoryCounts(bot)?.[blockType] || 0;
+                bot.modes.pause('unstuck');
+                bot.modes.pause('elbow_room');
+                try {
+                    bot.collectBlock.movements = targetScopedCollectionMovements(bot, fallbackBlock, {
+                        allowPillars: searchOptions?.allowPillars === true,
+                        allowNaturalRouteDigging: true,
+                        requireReturnableRoute: false,
+                    });
+                    await runBoundedCollectionOperation(
+                        bot,
+                        () => bot.collectBlock.collect(fallbackBlock),
+                        () => bot.collectBlock.cancelTask(),
+                    );
+                } catch (error) {
+                    log(bot, `Digging route to ${blockType} failed: ${String(error?.message || error).slice(0, 160)}`);
+                } finally {
+                    const routeMovements = safeMovements(bot);
+                    bot.collectBlock.movements = routeMovements;
+                    bot.pathfinder.setMovements(routeMovements);
+                    bot.modes.unpause('unstuck');
+                    bot.modes.unpause('elbow_room');
+                }
+                const heldAfter = world.getInventoryCounts(bot)?.[blockType] || 0;
+                if (heldAfter > heldBefore) {
+                    collected += heldAfter - heldBefore;
+                    continue;
+                }
+            }
             log(
                 bot,
                 `Found ${blocks.length} ${blockType} candidate${blocks.length === 1 ? '' : 's'}, but none has a safe reachable route`

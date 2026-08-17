@@ -97,6 +97,9 @@ const DELIVER_TERMINAL_LABELS = Object.freeze([
   'action:requestItemGoal',
   'action:collectBlocksInRange',
 ]);
+// A walk-up stone outcrop for the orchestration course, a few blocks from the
+// bot's start and standing proud of the grass so it has faces to mine from.
+const OUTCROP = Object.freeze({ x1: 1036, x2: 1039, y1: 100, y2: 102, z1: 1012, z2: 1015 });
 const DELIVER_GROUND = Object.freeze({ x: 1033, y: 99, z: 1011, block: 'grass_block' });
 const DELIVER_DRY_LAND = Object.freeze([
   Object.freeze({ name: 'north', x: 1033, y: 99, z: 971 }),
@@ -724,6 +727,18 @@ async function run() {
         ? [
             `forceload add ${DELIVER_FORCELOAD.x1} ${DELIVER_FORCELOAD.z1} ${DELIVER_FORCELOAD.x2} ${DELIVER_FORCELOAD.z2}`,
             `setworldspawn ${DELIVER_WORLD_SPAWN.x} ${DELIVER_WORLD_SPAWN.y} ${DELIVER_WORLD_SPAWN.z}`,
+          ]
+        : []),
+      // A surface stone outcrop, which a real forest has and a superflat recipe
+      // does not. Without it the only stone is under seven layers of dirt, so the
+      // companion digs a one-wide shaft into solid rock and every cobblestone
+      // candidate is then rejected for no_safe_stance -- twelve of them, in the
+      // run that got this far. That rejection looks like a genuine skill defect
+      // and may well be one, but the geometry that provokes it is this fixture's
+      // invention, not Minecraft's. Give it rock it can walk up to.
+      ...(orchestrationCourse
+        ? [
+            `fill ${OUTCROP.x1} ${OUTCROP.y1} ${OUTCROP.z1} ${OUTCROP.x2} ${OUTCROP.y2} ${OUTCROP.z2} stone`,
           ]
         : []),
       // The orchestration course wants open forest. Clearing the box and walling
