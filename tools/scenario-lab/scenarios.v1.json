@@ -1,7 +1,7 @@
 {
  "schemaVersion": "scenario-lab.manifest.v1",
- "manifestRevision": "obstruction-course-20260816.v1",
- "manifestHash": "be5ae42c3737ab19bb06e7a7e9c01591bf6463d1ede379641ce31153625f743c",
+ "manifestRevision": "deliver-item-goal-20260817.v1",
+ "manifestHash": "216c8be7a13773172fde3aa15d4c0defe996be3e8b20314c88cd8ed10db52b50",
  "title": "Release 0.1 deterministic Scenario Lab catalog",
  "candidateCommit": "12bdc21081a3e883b945d6eb001a543ba61e7902",
  "server": {
@@ -126,6 +126,61 @@
      "detail": "The fixture identity has no immutable hash or registered canonical evidence adapter."
     }
    ]
+  },
+  {
+   "id": "deliver-item-goal",
+   "family": "deliver-item-goal",
+   "title": "Acquire an item and deliver it to the player",
+   "status": "not-run",
+   "seed": "8140427791654321",
+   "world": {
+    "worldId": "deliver-item-flat-v1",
+    "fixtureId": "scenario-lab.deliver-item-flat.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "5648172f406cd63604db1c8cf4f53923d4e8ec4e18a41ac92dd9fd12ef82489e",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 300000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "!requestItemGoal(\"deliver\",\"dirt\",1,\"FollowTarget\")",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "Bring me a block of dirt.",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "instrumentation-mode-confirmed",
+    "goal-action-lifecycle",
+    "dry-land-fixture-confirmed",
+    "item-delivered-to-recipient",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+     "deliver-item-goal"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
   },
   {
    "id": "doorway-corridor-follow",

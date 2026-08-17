@@ -9,6 +9,12 @@ export const STATUSES = Object.freeze(['unavailable', 'not-run', 'blocked', 'fai
 export const FAMILIES = Object.freeze([
   'autonomous-wood-to-stone-no-safe-stance-recovery',
   'chunk-unloaded-confirmed-air-semantics',
+  // A typed goal end to end: acquire an item and physically hand it to the
+  // player. Both follow families issue !followPlayer, so nothing runnable
+  // exercised goal-director at all -- which is what blocked the lane collapse.
+  // Runs on a generated flat world; the captured follow world is an island and
+  // acquisition drowns in it. See tools/scenario-lab/fixtures/.
+  'deliver-item-goal',
   'doorway-corridor-follow',
   'elevation-follow',
   // Following a player when terrain is in the way. The doorway-corridor family

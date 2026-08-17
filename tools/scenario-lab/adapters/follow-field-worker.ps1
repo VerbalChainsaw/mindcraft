@@ -315,7 +315,6 @@ try {
 
     foreach ($required in @(
         $repo,
-        $archive,
         $fixtureProfile,
         $fixtureMetadata,
         $configPath,
@@ -334,12 +333,32 @@ try {
     if ([string]$metadata.schema_version -ne 'scenario-lab.fixture.v1') {
         throw 'Unsupported follow fixture metadata schema.'
     }
-    if ([string]$metadata.fixture_id -ne 'scenario-lab.doorway-corridor-follow.v1' -or [int]$metadata.fixture_version -ne 1) {
+    # Two fixture kinds. 'archive' restores a captured world from follow-world.zip.
+    # 'generated' hands Paper a flat-layer recipe and lets it build the world at
+    # boot, so there is no binary to lose and no hash to re-freeze. The deliver
+    # course needs the second kind: acquisition relocates 32 blocks to search, and
+    # the captured follow world is an island, so that relocation lands in open
+    # ocean and self-preservation interrupts the goal. See ARCHITECTURE.md and the
+    # fixture's own why[] block.
+    $fixtureKind = [string]$metadata.kind
+    if ([string]::IsNullOrWhiteSpace($fixtureKind)) { $fixtureKind = 'archive' }
+    if ($fixtureKind -notin @('archive', 'generated')) {
+        throw "Unsupported fixture kind '$fixtureKind'."
+    }
+    $expectedFixtureId = if ($fixtureKind -eq 'generated') {
+        'scenario-lab.deliver-item-flat.v1'
+    } else {
+        'scenario-lab.doorway-corridor-follow.v1'
+    }
+    if ([string]$metadata.fixture_id -ne $expectedFixtureId -or [int]$metadata.fixture_version -ne 1) {
         throw 'Fixture metadata identifies the wrong scenario or version.'
+    }
+    if ($fixtureKind -eq 'archive' -and -not (Test-Path -LiteralPath $archive)) {
+        throw "Missing required path: $archive"
     }
     $sourceWorldName = [string]$metadata.source.world_name
     $sourceSeed = [string]$metadata.source.seed
-    $sourceExtractPath = Join-Path $extractRoot $sourceWorldName
+    $sourceExtractPath = if ($fixtureKind -eq 'archive') { Join-Path $extractRoot $sourceWorldName } else { $null }
     if ([string]::IsNullOrWhiteSpace($sourceWorldName) -or $sourceSeed -notmatch '^-?\d+$') {
         throw 'Fixture metadata has an invalid source world or seed.'
     }
@@ -361,7 +380,11 @@ try {
         throw "Repository must be clean for a registered live replay: $($dirty -join '; ')"
     }
 
-    $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $archiveHash = if ($fixtureKind -eq 'archive') {
+        (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else {
+        $null
+    }
     $profileHash = (Get-FileHash -LiteralPath $fixtureProfile -Algorithm SHA256).Hash.ToLowerInvariant()
     $metadataHash = (Get-FileHash -LiteralPath $fixtureMetadata -Algorithm SHA256).Hash.ToLowerInvariant()
     $harnessHash = (Get-FileHash -LiteralPath $harness -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -377,12 +400,22 @@ try {
     $report.measurement_harness_sha256 = $harnessHash
     $report.gameplay_skills_sha256 = $skillsHash
 
-    if ($archiveHash -ne $ExpectedFixtureHash) { throw "Archived world hash mismatch: $archiveHash" }
-    if ($metadataHash -ne $expectedMetadataHash) { throw 'Fixture metadata hash does not match the registered frozen contract.' }
-    if ($profileHash -ne $expectedProfileHash) { throw 'Scenario profile hash does not match the registered frozen contract.' }
-    if ($archiveHash -ne [string]$metadata.archive.sha256) { throw 'Archive hash does not match fixture metadata.' }
-    if ($profileHash -ne [string]$metadata.profile.sha256) { throw 'Scenario profile hash does not match fixture metadata.' }
-    if ([string]$metadata.course_contract.baseline_sha256 -ne $expectedBaselineHash) { throw 'Baseline course contract does not match the registered frozen contract.' }
+    if ($fixtureKind -eq 'archive') {
+        if ($archiveHash -ne $ExpectedFixtureHash) { throw "Archived world hash mismatch: $archiveHash" }
+        if ($metadataHash -ne $expectedMetadataHash) { throw 'Fixture metadata hash does not match the registered frozen contract.' }
+        if ($profileHash -ne $expectedProfileHash) { throw 'Scenario profile hash does not match the registered frozen contract.' }
+        if ($archiveHash -ne [string]$metadata.archive.sha256) { throw 'Archive hash does not match fixture metadata.' }
+        if ($profileHash -ne [string]$metadata.profile.sha256) { throw 'Scenario profile hash does not match fixture metadata.' }
+        if ([string]$metadata.course_contract.baseline_sha256 -ne $expectedBaselineHash) { throw 'Baseline course contract does not match the registered frozen contract.' }
+    } else {
+        # A generated fixture has no archive, so the metadata file IS the world:
+        # change a layer and you change the terrain. Pinning it to the manifest's
+        # fixtureHash keeps exactly the guarantee the archive hash gave -- the run
+        # provably describes the world the manifest registered -- without a binary.
+        if ($metadataHash -ne $ExpectedFixtureHash) {
+            throw "Generated fixture recipe hash mismatch: expected $ExpectedFixtureHash but the recipe hashes to $metadataHash."
+        }
+    }
     $boundCandidateFiles = [ordered]@{
         follow_worker = [ordered]@{
             relative_path = 'tools/scenario-lab/adapters/follow-field-worker.ps1'
@@ -436,14 +469,18 @@ try {
     # claims to describe that exact code -- and is also why this scenario could
     # only ever verify one commit. In regression mode the drift is recorded and
     # the run proceeds, because the whole point is to test the code as it is now.
-    $skillsDrifted = $skillsHash -ne [string]$metadata.candidate.gameplay_skills_sha256
+    # A generated fixture pins terrain, not code, so it records no gameplay
+    # controller hash. Requiring one would make this course a one-shot notary the
+    # way the follow scenario was -- re-frozen on every skills.js edit.
+    $skillsDrifted = ($fixtureKind -eq 'archive') -and
+        ($skillsHash -ne [string]$metadata.candidate.gameplay_skills_sha256)
     $report.gameplay_skills_drifted = $skillsDrifted
     $report.fixture_gameplay_skills_sha256 = [string]$metadata.candidate.gameplay_skills_sha256
     if ($skillsDrifted -and -not $RegressionMode) { throw 'Gameplay controller drifted from the frozen fixture contract.' }
     $report.fixture_authorized = $true
 
     if (Test-Path -LiteralPath $worldPath) { throw "Replay world already exists: $worldPath" }
-    if (Test-Path -LiteralPath $sourceExtractPath) { throw "Archive source world unexpectedly exists: $sourceExtractPath" }
+    if ($sourceExtractPath -and (Test-Path -LiteralPath $sourceExtractPath)) { throw "Archive source world unexpectedly exists: $sourceExtractPath" }
     if (@(Get-Process -Name java,javaw -ErrorAction SilentlyContinue).Count -gt 0) {
         $report.conflict = $true
         throw 'Java is already running.'
@@ -497,13 +534,34 @@ try {
     New-Item -ItemType Directory -Path $botDir | Out-Null
     $runtimeMemoryInstalled = $true
 
-    Save-Status 'restoring-archived-world'
-    Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
-    if (-not (Test-Path -LiteralPath $sourceExtractPath)) {
-        throw "Archive did not restore expected world root: $sourceExtractPath"
+    if ($fixtureKind -eq 'archive') {
+        Save-Status 'restoring-archived-world'
+        Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
+        if (-not (Test-Path -LiteralPath $sourceExtractPath)) {
+            throw "Archive did not restore expected world root: $sourceExtractPath"
+        }
+        $worldInstalled = $true
+        Move-Item -LiteralPath $sourceExtractPath -Destination $worldPath
+    } else {
+        # Nothing to restore -- Paper builds the world from the recipe on first
+        # boot. $worldInstalled still gates cleanup, which moves the generated
+        # world out of the managed directory exactly as it does a restored one.
+        Save-Status 'generating-world-from-recipe'
+        $generatorSettings = ($metadata.generation.generator_settings | ConvertTo-Json -Compress -Depth 10)
+        $generateStructures = if ([bool]$metadata.generation.generate_structures) { 'true' } else { 'false' }
+        $worldInstalled = $true
+        Set-ServerProperty $propertiesPath 'level-type' ([string]$metadata.generation.level_type)
+        Set-ServerProperty $propertiesPath 'generator-settings' $generatorSettings
+        Set-ServerProperty $propertiesPath 'generate-structures' $generateStructures
+        $report.world_recipe = [ordered]@{
+            level_type = [string]$metadata.generation.level_type
+            generator_settings = $generatorSettings
+            generate_structures = $generateStructures
+            expected_top_block = [string]$metadata.generation.surface.top_block
+            expected_top_y = [int]$metadata.generation.surface.top_y
+            expected_stand_y = [int]$metadata.generation.surface.stand_y
+        }
     }
-    $worldInstalled = $true
-    Move-Item -LiteralPath $sourceExtractPath -Destination $worldPath
 
     Set-ServerProperty $propertiesPath 'level-name' $worldName
     Set-ServerProperty $propertiesPath 'level-seed' $sourceSeed
@@ -656,16 +714,36 @@ try {
     $report.harness_evidence = $harnessEvidence
     $attempts = @($harnessEvidence.attempts)
     $attempt = if ($attempts.Count -eq 1) { $attempts[0] } else { $null }
-    $physicalEvidenceComplete = (
-        $null -ne $attempt -and
-        $attempt.passed -eq $true -and
-        $attempt.physicalAcceptance.fixtureVerified -eq $true -and
-        $attempt.physicalAcceptance.doorwayCrossed -eq $true -and
-        $attempt.physicalAcceptance.corridorCompleted -eq $true -and
-        $attempt.physicalAcceptance.finalWaypointReached -eq $true -and
-        $attempt.stop.stableForTenSeconds -eq $true -and
-        [double]$attempt.stop.quiescenceMs -le 2000
-    )
+    # What counts as complete physical evidence depends on the course. Doorway,
+    # corridor and final-waypoint are follow criteria: the deliver course's
+    # recipient never moves, so requiring them would reject a delivery that
+    # demonstrably happened. The deliver clause is not weaker -- it additionally
+    # requires that the item physically changed hands and that the world could
+    # have supported the acquisition at all.
+    $physicalEvidenceComplete = if ($Course -eq 'deliver-item') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+            $attempt.physicalAcceptance.deliveryVerified -eq $true -and
+            $attempt.physicalAcceptance.deliverySourcePresent -eq $true -and
+            $attempt.physicalAcceptance.deliveryGroundPresent -eq $true -and
+            $attempt.physicalAcceptance.deliveryDryLandVerified -eq $true -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } else {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+            $attempt.physicalAcceptance.doorwayCrossed -eq $true -and
+            $attempt.physicalAcceptance.corridorCompleted -eq $true -and
+            $attempt.physicalAcceptance.finalWaypointReached -eq $true -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    }
     $falseSuccess = $harnessEvidence.passed -eq $true -and -not $physicalEvidenceComplete
     $report.verdict = [ordered]@{
         passed = (

@@ -1,0 +1,51 @@
+{
+  "schema_version": "scenario-lab.fixture.v1",
+  "fixture_id": "scenario-lab.deliver-item-flat.v1",
+  "fixture_version": 1,
+  "kind": "generated",
+  "why": [
+    "The typed-goal deliver course cannot pass on the doorway-corridor follow fixture.",
+    "That world is an island: acquisition relocates 32 blocks, lands in open ocean,",
+    "self-preservation seizes the body to escape drowning, and the goal is interrupted.",
+    "See ARCHITECTURE.md, 'The deliver course is blocked on the world, definitively'.",
+    "",
+    "This fixture is a generation recipe, not a captured world. Paper builds it from",
+    "server.properties at boot, so there is no archive to lose, no hash to re-freeze,",
+    "and nothing that rots silently the way stone-recovery's trial-world.zip did.",
+    "The layer stack puts the top solid block at y=99, so the standing surface is",
+    "y=100 -- exactly where the existing course constants in verify-follow-field.mjs",
+    "already place BOT_START, TARGET_START and DELIVER_SOURCE. The course geometry is",
+    "unchanged; only the ground under it is."
+  ],
+  "source": {
+    "world_name": "deliver-item-flat-v1",
+    "seed": "8140427791654321",
+    "dimension": "overworld"
+  },
+  "generation": {
+    "level_type": "minecraft:flat",
+    "generate_structures": false,
+    "generator_settings": {
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:stone", "height": 155 },
+        { "block": "minecraft:dirt", "height": 7 },
+        { "block": "minecraft:grass_block", "height": 1 }
+      ],
+      "biome": "minecraft:plains",
+      "lakes": false,
+      "features": false
+    },
+    "surface": {
+      "top_block": "minecraft:grass_block",
+      "top_y": 99,
+      "stand_y": 100,
+      "layer_total_height": 164,
+      "min_build_height": -64
+    }
+  },
+  "profile": {
+    "filename": "scenario-profile.json",
+    "autonomy": "command"
+  }
+}

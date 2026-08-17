@@ -7,10 +7,116 @@ export const FOLLOW_FIELD_EVIDENCE = Object.freeze([
   'terminal-quiescence-confirmed',
 ]);
 
+// The deliver course proves a typed goal, not a follow. Doorway and corridor
+// crossings are follow criteria and cannot apply here -- the recipient never
+// moves. What has to be true instead is that the goal was dispatched from the
+// player's request, that the world could support the acquisition at all, and
+// that the item ended up in the recipient's hands.
+export const DELIVER_FIELD_EVIDENCE = Object.freeze([
+  'request-correlation',
+  'instrumentation-mode-confirmed',
+  'goal-action-lifecycle',
+  'dry-land-fixture-confirmed',
+  'item-delivered-to-recipient',
+  'terminal-quiescence-confirmed',
+]);
+
 const EXPECTED_ROUTE = Object.freeze({
   direct: 'explicit-command',
   'natural-language': 'deterministic-nl',
 });
+
+// Both deliver request forms correlate through goal-director rather than
+// through the request route: the player's message reaches goal-director, and
+// goal-director is what dispatches the skills that carry a requestId. With
+// instrumentation off there are no decision traces to recover the original
+// route from, so this is the strongest honest correlation available -- and it
+// is still specific: a goal-director dispatch of !givePlayer with this
+// recipient and item cannot happen unless the request was understood.
+const DELIVER_ROUTE_ORIGIN = 'goal-director';
+const DELIVER_TERMINAL_SKILL = '!givePlayer';
+const DELIVER_ACQUISITION_LABEL = 'action:collectBlocksInRange';
+const DELIVER_RECIPIENT = 'FollowTarget';
+const DELIVER_ITEM = 'dirt';
+const DELIVER_QUANTITY = 1;
+
+/** Which course a report describes. Reads the fixture block first because it
+ *  survives an attempt that failed before physicalAcceptance was assembled. */
+function courseOf(report) {
+  const harness = report?.harness_evidence;
+  return harness?.fixture?.courseVariant
+    || harness?.attempts?.[0]?.physicalAcceptance?.course
+    || null;
+}
+
+function deliverRequestCorrelated(attempt) {
+  const actionId = attempt?.terminal?.actionId;
+  const request = attempt?.terminal?.evidence?.request;
+  const args = Array.isArray(request?.args) ? request.args : [];
+  return Boolean(
+    actionId
+    && typeof request?.requestId === 'string'
+    && request.requestId.length > 0
+    && request?.routeOrigin === DELIVER_ROUTE_ORIGIN
+    && request?.selectedSkill === DELIVER_TERMINAL_SKILL
+    && String(args[0] || '') === DELIVER_RECIPIENT
+    && String(args[1] || '') === DELIVER_ITEM
+    && Number(args[2]) === DELIVER_QUANTITY,
+  );
+}
+
+// The goal is a chain, so the lifecycle has to show both links: the acquisition
+// actually succeeded, and the hand-over is the terminal act. Accepting the
+// hand-over alone would pass a run where the companion gave away dirt it was
+// already carrying.
+function deliverLifecycleComplete(attempt) {
+  const terminal = attempt?.terminal;
+  const acquisition = attempt?.results?.[DELIVER_ACQUISITION_LABEL];
+  const issuedAt = attempt?.issuedAt;
+  const activeAt = attempt?.activeAt;
+  const startedAt = terminal?.startedAt;
+  const finishedAt = terminal?.finishedAt;
+  return attempt?.commandAck?.success === true
+    && [issuedAt, activeAt, startedAt, finishedAt].every(Number.isFinite)
+    && activeAt >= issuedAt
+    && typeof terminal?.actionId === 'string'
+    && terminal.actionId.length > 0
+    && terminal?.label === 'action:givePlayer'
+    && startedAt >= issuedAt
+    && finishedAt >= startedAt
+    && acquisition?.phase === 'succeeded'
+    && Number(acquisition?.startedAt) >= issuedAt;
+}
+
+// The fixture premise. On the captured follow world every one of these is false
+// and the run reports an ambiguous 'unreachable' instead; that is the whole
+// reason this course could not pass before.
+function deliverFixtureDry(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const probes = Array.isArray(physical?.deliveryDryLandProbes)
+    ? physical.deliveryDryLandProbes
+    : [];
+  return physical?.deliveryGroundPresent === true
+    && physical?.deliveryDryLandVerified === true
+    && physical?.deliverySourcePresent === true
+    && physical?.fixtureVerified === true
+    && probes.length === 4
+    && probes.every((probe) => probe?.verified === true);
+}
+
+// The acceptance itself: the recipient physically holds more than it started
+// with. A null baseline is a read failure, never zero -- treating it as zero
+// would let the wait satisfy instantly on stock the recipient already had.
+function deliverItemHandedOver(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const baseline = physical?.deliveryBaseline;
+  const final = physical?.deliveryFinal;
+  return physical?.deliveryVerified === true
+    && Number.isFinite(baseline)
+    && Number.isFinite(final)
+    && final >= baseline + DELIVER_QUANTITY
+    && Number.isFinite(physical?.deliveryObservedAt);
+}
 
 function requestCandidates(attempt) {
   const candidates = [];
@@ -146,16 +252,28 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
   const harness = report?.harness_evidence;
   const attempts = Array.isArray(harness?.attempts) ? harness.attempts : [];
   const attempt = attempts.length === 1 ? attempts[0] : null;
-  const correlated = Boolean(expectedRoute && requestCorrelated(attempt, expectedRoute));
+  const deliverCourse = courseOf(report) === 'deliver-item';
+  const correlated = deliverCourse
+    ? deliverRequestCorrelated(attempt)
+    : Boolean(expectedRoute && requestCorrelated(attempt, expectedRoute));
   const instrumentationConfirmed = instrumentationModeConfirmed(report, instrumentationMode);
-  const checks = {
-    'request-correlation': correlated,
-    'instrumentation-mode-confirmed': instrumentationConfirmed,
-    'follow-action-lifecycle': lifecycleComplete(attempt),
-    'doorway-crossing-confirmed': doorwayComplete(attempt),
-    'corridor-progress-confirmed': corridorComplete(attempt),
-    'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
-  };
+  const checks = deliverCourse
+    ? {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'goal-action-lifecycle': deliverLifecycleComplete(attempt),
+        'dry-land-fixture-confirmed': deliverFixtureDry(attempt),
+        'item-delivered-to-recipient': deliverItemHandedOver(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      }
+    : {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'follow-action-lifecycle': lifecycleComplete(attempt),
+        'doorway-crossing-confirmed': doorwayComplete(attempt),
+        'corridor-progress-confirmed': corridorComplete(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      };
   const observedEvidence = Object.entries(checks)
     .filter(([, verified]) => verified)
     .map(([id]) => id);
@@ -215,8 +333,12 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
       ? report.verdict.external_retry_count
       : 0,
     terminalReason: success
-      ? 'doorway-corridor-follow-verified'
+      ? (deliverCourse ? 'deliver-item-goal-verified' : 'doorway-corridor-follow-verified')
       : String(report?.error || attempt?.terminal?.code || 'follow-field-failed').slice(0, 240),
+    // Which evidence contract this observation was judged against. The aggregate
+    // reads it rather than assuming the follow set, so a deliver run is never
+    // marked incomplete for missing doorway evidence it could not produce.
+    evidenceSet: deliverCourse ? DELIVER_FIELD_EVIDENCE : FOLLOW_FIELD_EVIDENCE,
     elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : 0,
     actionId: attempt?.terminal?.actionId || null,
     routeOrigin: expectedRoute,
@@ -228,7 +350,10 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
 
 export function aggregateFollowFieldObservations(plan, observations) {
   const observedEvidence = [];
-  for (const evidenceId of FOLLOW_FIELD_EVIDENCE) {
+  const expectedEvidence = observations.find(({ evidenceSet }) => Array.isArray(evidenceSet))
+    ?.evidenceSet
+    || FOLLOW_FIELD_EVIDENCE;
+  for (const evidenceId of expectedEvidence) {
     if (
       observations.length === plan.invocations.length
       && observations.every((observation) => observation.observedEvidence.includes(evidenceId))

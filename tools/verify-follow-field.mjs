@@ -54,6 +54,47 @@ const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2:
 const DELIVER_ITEM = 'dirt';
 const DELIVER_QUANTITY = 1;
 
+// The deliver course runs on a generated flat world whose top solid block is
+// y=99, so the course constants above already stand on real ground. These probes
+// prove that rather than assuming it, because assuming it is exactly what failed
+// before: on the captured follow fixture the ground ends and the ocean begins a
+// few blocks out, acquisition relocates 32 blocks to search, and the companion
+// drowns instead of collecting. A run that could not tell those two worlds apart
+// would report the same 'unreachable' either way.
+//
+// DELIVER_GROUND is directly under the course. DELIVER_DRY_LAND samples the four
+// compass points at 40 blocks -- beyond the 32-block acquisition relocation --
+// so "there is somewhere dry to relocate to" is measured in every direction the
+// relocation could pick, not just the one that happened to work.
+// The deliver course's terminal act is the hand-over, not a follow. !givePlayer
+// is what physically transfers the item and !requestItemGoal is the goal wrapper
+// around it; the run records whichever finishes last before the stop. The follow
+// label is deliberately absent: this course never emits one, and gating the
+// terminal on it is what failed the first run after the companion had already
+// delivered the dirt. Judging which of these should have fired is the evidence
+// adapter's job -- this list only has to let the measurement finish.
+const DELIVER_TERMINAL_LABELS = Object.freeze([
+  'action:givePlayer',
+  'action:requestItemGoal',
+  'action:collectBlocksInRange',
+]);
+const DELIVER_GROUND = Object.freeze({ x: 1033, y: 99, z: 1011, block: 'grass_block' });
+const DELIVER_DRY_LAND = Object.freeze([
+  Object.freeze({ name: 'north', x: 1033, y: 99, z: 971 }),
+  Object.freeze({ name: 'south', x: 1033, y: 99, z: 1051 }),
+  Object.freeze({ name: 'east', x: 1073, y: 99, z: 1011 }),
+  Object.freeze({ name: 'west', x: 993, y: 99, z: 1011 }),
+]);
+// Keeps every block the probes and the relocation can reach resident, so a
+// /fill or an `execute if block` never reports a false negative from an
+// unloaded chunk. 64 chunks, well under the 256-chunk forceload cap.
+const DELIVER_FORCELOAD = Object.freeze({ x1: 978, z1: 958, x2: 1088, z2: 1064 });
+// A generated world spawns players at the origin, ~1,440 blocks from the course.
+// Without this a single death sends the companion on the cross-country march
+// that DEATH_RESUME_MAX_DISPLACEMENT exists to stop, and the run measures that
+// instead of the delivery.
+const DELIVER_WORLD_SPAWN = Object.freeze({ x: 1033, y: 100, z: 1011 });
+
 // A* budget for the controlled target. Four times the library default of 5s.
 const TARGET_THINK_TIMEOUT_MS = 20_000;
 // One bounded retry when the target's SEARCH is cut short. Deliberately does
@@ -574,6 +615,21 @@ async function run() {
     // Did provisioning actually place the acquisition source? A goal that fails
     // to find its material is only meaningful if the material was really there.
     await paperCommand(`execute if block ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} minecraft:${DELIVER_ITEM} run scoreboard players set ${source} ${OBJECTIVE} 1`);
+    // Is the world under this course actually dry land, and does it stay dry
+    // past the distance acquisition relocates? On the captured follow fixture the
+    // answer is no, and every deliver run there died the same way. Measure it
+    // rather than trust the fixture name.
+    const ground = marker(runId, phase, 'GRND');
+    const dryLand = DELIVER_DRY_LAND.map(probe => ({
+      ...probe,
+      name_marker: marker(runId, phase, `DRY_${probe.name}`),
+    }));
+    if (options.course === 'deliver-item') {
+      await paperCommand(`execute if block ${DELIVER_GROUND.x} ${DELIVER_GROUND.y} ${DELIVER_GROUND.z} minecraft:${DELIVER_GROUND.block} run scoreboard players set ${ground} ${OBJECTIVE} 1`);
+      for (const probe of dryLand) {
+        await paperCommand(`execute if block ${probe.x} ${probe.y} ${probe.z} minecraft:${DELIVER_GROUND.block} run scoreboard players set ${probe.name_marker} ${OBJECTIVE} 1`);
+      }
+    }
     await paperCommand(`scoreboard players set ${end} ${OBJECTIVE} 1`);
     await delay(250);
     const status = await fetchJson(options.url, '/api/minecraft-server');
@@ -588,6 +644,15 @@ async function run() {
       wallVerified: markerObserved(window, wall),
       plugVerified: markerObserved(window, plug),
       sourceVerified: markerObserved(window, source),
+      groundVerified: markerObserved(window, ground),
+      dryLandProbes: dryLand.map(probe => ({
+        name: probe.name,
+        x: probe.x,
+        y: probe.y,
+        z: probe.z,
+        verified: markerObserved(window, probe.name_marker),
+      })),
+      dryLandVerified: dryLand.every(probe => markerObserved(window, probe.name_marker)),
       doorwayVerified: markerObserved(window, opening),
       platformVerified: markerObserved(window, step),
       lines: window,
@@ -601,6 +666,7 @@ async function run() {
       if (run.state === 'minecraft:air') continue;
       await paperCommand(`fill ${run.x1} ${run.y} ${run.z} ${run.x2} ${run.y} ${run.z} ${run.state}`);
     }
+    if (options.course === 'deliver-item') await paperCommand('forceload remove all');
     fixtureMutated = false;
   };
 
@@ -608,6 +674,16 @@ async function run() {
     await restoreFixture();
     fixtureMutated = true;
     const commands = [
+      // Deliver-course preamble. Both must precede the first fill: the forceload
+      // so that no fill or probe below can land in an unloaded chunk and report a
+      // false negative, and the world spawn so a death respawns at the course
+      // rather than 1,440 blocks away at the generated world's origin.
+      ...(options.course === 'deliver-item'
+        ? [
+            `forceload add ${DELIVER_FORCELOAD.x1} ${DELIVER_FORCELOAD.z1} ${DELIVER_FORCELOAD.x2} ${DELIVER_FORCELOAD.z2}`,
+            `setworldspawn ${DELIVER_WORLD_SPAWN.x} ${DELIVER_WORLD_SPAWN.y} ${DELIVER_WORLD_SPAWN.z}`,
+          ]
+        : []),
       `fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`,
       ...(options.course === 'deliver-item'
         ? [
@@ -863,11 +939,28 @@ async function run() {
         }
       }
       const result = compact.lastResult;
-      if (
+      const resultBelongsToRequest = typeof result?.label === 'string'
+        && typeof result?.actionId === 'string'
+        && Number(result.startedAt) >= activeAttempt.issuedAt;
+      // Record every terminal result this request produced, whatever its label.
+      // When a course expects the wrong label this is what says so out loud,
+      // instead of the 5s wait below timing out on a result that was never
+      // going to arrive -- which is exactly how the first deliver run failed
+      // after the companion had already handed over the dirt.
+      if (resultBelongsToRequest) {
+        activeAttempt.resultsByLabel.set(result.label, structuredClone(result));
+      }
+      if (resultBelongsToRequest && options.mode === 'deliver') {
+        // The deliver course has a chain, not a single action. Its terminal act
+        // is the last one to finish before the stop, so take the newest match
+        // rather than the first.
+        if (DELIVER_TERMINAL_LABELS.includes(result.label)) {
+          activeAttempt.terminal = structuredClone(result);
+        }
+      } else if (
         !activeAttempt.terminal
         && result?.label === 'action:followPlayer'
-        && typeof result.actionId === 'string'
-        && Number(result.startedAt) >= activeAttempt.issuedAt
+        && resultBelongsToRequest
       ) activeAttempt.terminal = structuredClone(result);
     };
     socket.on('state-update', receiveState);
@@ -978,6 +1071,7 @@ async function run() {
         outputs: [],
         traceMap: new Map(),
         terminal: null,
+        resultsByLabel: new Map(),
         obstructionSealedAt: null,
         deliveryBaseline: countTargetItem(DELIVER_ITEM),
         deliveryObservedAt: null,
@@ -1094,7 +1188,9 @@ async function run() {
       await waitFor(
         () => activeAttempt.terminal,
         Boolean,
-        `${runId} interrupted follow terminal result`,
+        options.mode === 'deliver'
+          ? `${runId} goal terminal result (labels seen: ${[...activeAttempt.resultsByLabel.keys()].join(', ') || 'none'})`
+          : `${runId} interrupted follow terminal result`,
         5_000,
       );
 
@@ -1136,6 +1232,14 @@ async function run() {
         : null;
       const fixtureVerified = deliverCourse
         ? [paperBefore, paperAfter].every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
+          // The world premise, not just the geometry. The course must stand on
+          // real ground and stay dry past the distance acquisition relocates,
+          // and the material must actually have been placed. On the island
+          // fixture all three of these are false, and the run reported an
+          // ambiguous 'unreachable' twenty minutes later instead of saying so.
+          && paperBefore.groundVerified === true
+          && paperBefore.dryLandVerified === true
+          && paperBefore.sourceVerified === true
         : obstructionCourse
         ? [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
             .every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
@@ -1223,6 +1327,9 @@ async function run() {
           deliveryItem: options.mode === 'deliver' ? DELIVER_ITEM : null,
           deliveryQuantity: options.mode === 'deliver' ? DELIVER_QUANTITY : null,
           deliverySourcePresent: paperBefore.sourceVerified,
+          deliveryGroundPresent: paperBefore.groundVerified,
+          deliveryDryLandVerified: paperBefore.dryLandVerified,
+          deliveryDryLandProbes: paperBefore.dryLandProbes,
           deliveryBaseline: activeAttempt.deliveryBaseline,
           deliveryFinal: activeAttempt.deliveryFinal,
           deliveryObservedAt: activeAttempt.deliveryObservedAt,
@@ -1239,6 +1346,11 @@ async function run() {
         targetPathUpdates: activeAttempt.targetPathUpdates,
         outputs: activeAttempt.outputs,
         traces,
+        // Every terminal result this request produced, keyed by label. Without
+        // this a course whose expected label is wrong looks like a hang rather
+        // than a naming mismatch.
+        resultLabels: [...activeAttempt.resultsByLabel.keys()],
+        results: Object.fromEntries(activeAttempt.resultsByLabel),
         resyncRequests: activeAttempt.resyncRequests,
         passed,
       });

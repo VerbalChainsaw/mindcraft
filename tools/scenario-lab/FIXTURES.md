@@ -29,6 +29,7 @@ World `viability-pilot-disposable`, seed `3579780610592225162`.
 npm run scenario:doctor        # ready? names whatever is blocking
 npm run scenario:follow        # open-ground follow
 npm run scenario:obstruction   # follow through terrain that must be broken
+npm run scenario:deliver       # typed goal: acquire an item and hand it over
 npm run scenario:list          # what exists and why
 ```
 
@@ -248,9 +249,70 @@ building and anything that searches for resources needs a world that supports
 it. That is why stone-recovery shipped its own world -- that was the necessary
 choice for its behaviour class, not the lazy one.
 
-A typed-goal scenario therefore needs a dry-land fixture. That is real authoring
-work, not a fill command, and it gates deleting goal-director (see
-ARCHITECTURE.md, Coverage gate).
+A typed-goal scenario therefore needs a dry-land world. **That turned out not to
+mean authoring one.** See the next section.
+
+## A third kind of fixture: generated, not captured
+
+Resolved 2026-08-17. The conclusion above -- that a dry-land world is "real
+authoring work, not a fill command" -- followed from the evidence that the world
+must be dry, but not from the evidence that a world must be *built*. Paper will
+generate one from `server.properties` alone.
+
+`deliver-item-goal` runs on `tools/scenario-lab/fixtures/deliver-item-flat-v1`.
+That directory holds no world at all: a `fixture-metadata.json` carrying a
+superflat layer recipe, and the bot profile. The worker writes `level-type`,
+`generator-settings` and `generate-structures`, and Paper builds the world at
+boot.
+
+| | captured (`archive`) | generated |
+|---|---|---|
+| world | `follow-world.zip` | a layer recipe in the metadata |
+| lives | outside the repo, gitignored | **in the repo** |
+| integrity | archive sha256 | recipe sha256, same pin |
+| can rot | yes -- see stone-recovery | no |
+| re-freeze on a skills.js edit | yes | no |
+
+The layer stack is the whole trick:
+
+```
+bedrock 1 + stone 155 + dirt 7 + grass_block 1 = 164 layers
+world min build height -64, so the top solid block is y=99
+```
+
+The course constants in `verify-follow-field.mjs` already put `BOT_START`,
+`TARGET_START` and `DELIVER_SOURCE` at y=100. A surface whose standing level is
+y=100 therefore fits the existing geometry with **no coordinate changes** -- the
+course is unchanged; only the ground under it is. Get that arithmetic wrong and
+the course floats, which is the island failure with extra steps.
+
+Two things the deliver course provisions that the follow courses do not, both
+before its first `fill`:
+
+- `forceload add` over the course and the probe ring. A `fill` or an
+  `execute if block` in an unloaded chunk reports a false negative, and a
+  generated world starts with nothing loaded out there.
+- `setworldspawn` at the course. A generated world spawns players at the origin,
+  ~1,440 blocks away, so without this one death sends the companion on exactly
+  the cross-country march `DEATH_RESUME_MAX_DISPLACEMENT` exists to stop.
+
+**The premise is measured, not assumed.** `deliveryGroundPresent` probes the
+block under the course; `deliveryDryLandVerified` probes all four compass points
+at 40 blocks -- past the 32-block `ACQUISITION_REGION_RELOCATION_DISTANCE`, so
+"there is somewhere dry to relocate to" is proven in every direction the
+relocation could choose, not just the one that happened to work. Both are
+required by `fixtureVerified`, so a course laid on the wrong world fails loudly
+and immediately instead of surfacing as an ambiguous `unreachable` twenty
+minutes later.
+
+That last part was verified by replaying the 2026-08-16 island runs through the
+current evidence adapter: `dry-land-fixture-confirmed` and
+`item-delivered-to-recipient` are both absent there and both present on the
+generated fixture. The check discriminates on real data from both worlds.
+
+**Build new courses this way when the behaviour needs terrain.** A recipe is
+readable, diffable, survives a lost directory, and needs no machine-local path
+or `SCENARIO_LAB_*_FIXTURE_ROOT` override at all.
 
 ## Superseded note (kept for context)
 

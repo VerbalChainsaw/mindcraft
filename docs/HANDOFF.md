@@ -10,6 +10,7 @@ design. This page is what you need in the first five minutes.
 npm run scenario:doctor        # can it run right now, and what is blocking
 npm run scenario:follow        # follow a player on open ground
 npm run scenario:obstruction   # follow through terrain that must be broken
+npm run scenario:deliver       # typed goal: acquire an item and hand it over
 npm run scenario:list          # what exists and why
 ```
 
@@ -52,14 +53,17 @@ harness simply times out.
 
 ## Open work, in order
 
-1. **A dry-land fixture for a typed-goal scenario.** The follow world is an
-   island. Acquisition relocates 32 blocks, lands in open ocean, drowns, and
-   self-preservation interrupts the goal. Five runs and the full evidence chain
-   are in `ARCHITECTURE.md`. Geometry can be laid programmatically with `fill`,
-   but acquisition needs terrain — this part is world authoring.
-2. **Then the lane collapse** (`ARCHITECTURE.md` Step 4). It is gated on that
-   coverage, not on nerve: deleting 6,388 lines across five directors with
-   follow-only coverage would be blind.
+1. **A scenario for a multi-step agenda request.** This is now the only thing
+   gating Step 4. `agenda-director` is 2,153 lines with no live coverage.
+   Copy the deliver course: it cost a generated world recipe and ~200 lines,
+   no new framework. Read the generated-fixture section of
+   `tools/scenario-lab/FIXTURES.md` first.
+2. **Then the lane collapse** (`ARCHITECTURE.md` Step 4). Still gated, and now
+   on exactly one missing scenario rather than two. Deleting `agenda-director`
+   with nothing exercising a multi-step request would be blind in the same way
+   follow-only coverage was.
+
+The typed-goal half of that gate closed on 2026-08-17 — see below.
 
 ## Standing rules worth repeating
 
@@ -72,6 +76,44 @@ harness simply times out.
   The outcome belongs in the result file.
 - **Verify the check could have failed.** Four things passed for the wrong
   reason in one session, including a test asserting against an empty object.
+
+## What changed on 2026-08-17
+
+**The typed-goal course passes.** `npm run scenario:deliver` exits 0 on HEAD:
+both request forms, `FollowTarget` 0 -> 1 dirt, zero safety violations, no
+deaths. It is the first scenario that exercises `goal-director` rather than
+`!followPlayer`.
+
+The blocker was never the harness. It was the world: the follow fixture is an
+island, so acquisition relocated 32 blocks into open ocean and drowned. The
+previous conclusion — recorded in three docs — was that this needed a
+hand-authored dry-land world. It did not. Paper generates one from
+`server.properties`, so the fixture is a **superflat layer recipe checked into
+the repo**, not a captured `.zip`:
+
+- `tools/scenario-lab/fixtures/deliver-item-flat-v1/` — text, diffable, cannot
+  rot the way `stone-recovery`'s missing `trial-world.zip` did, and needs no
+  machine-local path.
+- 164 layers put the top solid block at y=99, so the standing surface is y=100
+  — exactly where the existing course constants already were. **No coordinate
+  changes.** Get that arithmetic wrong and the course floats.
+- `scenario:doctor` checks the recipe hash against the manifest, so an edited
+  recipe fails at the door rather than deep inside the worker.
+
+**Two harness assumptions were follow-shaped and had to be branched**, not
+loosened: the terminal-result listener only ever accepted `action:followPlayer`
+(the deliver course ends on `action:givePlayer`), and the worker's false-success
+guard required `doorwayCrossed` / `corridorCompleted` / `finalWaypointReached`
+— follow criteria the deliver recipient can never satisfy because it does not
+move. The deliver branch is strictly stronger: it also requires that the item
+physically changed hands.
+
+**The fixture premise is measured, not assumed.** Four dry-land probes at 40
+blocks — past the 32-block relocation — plus a ground probe under the course,
+all required by `fixtureVerified`. Verified discriminating by replaying the
+2026-08-16 island runs through the current evidence adapter:
+`dry-land-fixture-confirmed` and `item-delivered-to-recipient` are absent there
+and present on the generated fixture.
 
 ## What changed on 2026-08-16
 

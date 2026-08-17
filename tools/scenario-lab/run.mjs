@@ -33,6 +33,18 @@ const SCENARIOS = Object.freeze({
   'obstruction-follow':
     'Follow a player when terrain must be broken to reach them. Fails if the '
     + 'companion cannot dig — the 2026-08-16 defect.',
+  'deliver-item-goal':
+    'Typed goal end to end: acquire a block of dirt and physically hand it to '
+    + 'the player. The only course that exercises goal-director.',
+});
+
+// The deliver course runs on a generated flat world instead of the captured
+// follow world. That is not a preference: the follow fixture is an island, so
+// acquisition relocates 32 blocks into open ocean and drowns, and the goal is
+// interrupted every time. This fixture is a text recipe, lives in the repo, and
+// needs no machine-local path or override.
+const GENERATED_FIXTURES = Object.freeze({
+  'deliver-item-goal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
 });
 
 // The fixture is machine-local and gitignored. An explicit override wins outright. Falling back to the machine-local default
@@ -42,7 +54,17 @@ const FIXTURE_ROOTS = process.env.SCENARIO_LAB_FOLLOW_FIXTURE_ROOT
   ? [process.env.SCENARIO_LAB_FOLLOW_FIXTURE_ROOT]
   : ['C:/Users/zerop/Development/JordanWorkspace/artifacts/minecraft-validation/fixtures/doorway-corridor-follow-v1'];
 
-function resolveFixtureRoot() {
+function resolveFixtureRoot(scenario) {
+  const generated = GENERATED_FIXTURES[scenario];
+  if (generated) {
+    if (existsSync(path.join(generated, 'fixture-metadata.json'))) return generated;
+    throw new Error(
+      `The generated fixture for '${scenario}' is missing its recipe.\n`
+      + `Expected: ${path.join(generated, 'fixture-metadata.json')}\n`
+      + 'This fixture is checked into the repo — restore it from git rather than\n'
+      + 'looking for a world archive. See tools/scenario-lab/FIXTURES.md.\n',
+    );
+  }
   for (const candidate of FIXTURE_ROOTS) {
     if (existsSync(path.join(candidate, 'follow-world.zip'))) return candidate;
   }
@@ -82,7 +104,7 @@ async function main(argv) {
     return 2;
   }
 
-  const fixtureRoot = resolveFixtureRoot();
+  const fixtureRoot = resolveFixtureRoot(scenario);
   const outputDir = outputDirectory(scenario, Date.now());
 
   process.stdout.write(`scenario    : ${scenario}\n`);

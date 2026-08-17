@@ -62,7 +62,7 @@ function readyManifest(manifest) {
   return rehash(ready);
 }
 
-test('the frozen v1 manifest registers two bounded replays and keeps other families unavailable', async () => {
+test('the frozen v1 manifest registers three bounded replays and keeps other families unavailable', async () => {
   const manifest = await loadScenarioManifest();
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
@@ -105,7 +105,30 @@ test('the frozen v1 manifest registers two bounded replays and keeps other famil
   assert.equal(obstruction.seed, follow.seed);
   assert.ok(obstruction.expectedEvidence.includes('corridor-progress-confirmed'));
 
-  const registered = new Set([stone.id, follow.id, obstruction.id]);
+  // The deliver course is the only registered scenario that exercises a typed
+  // goal rather than !followPlayer, and the only one on a generated world. Its
+  // fixture hash is the sha256 of the layer recipe, not of an archive -- pinned
+  // here for the same reason the follow archive hash is: an edited recipe is a
+  // different world, and a scenario that silently ran on one would be worthless.
+  const deliver = manifest.scenarios.find(({ id }) => id === 'deliver-item-goal');
+  assert.equal(deliver.status, 'not-run');
+  assert.equal(deliver.executor.safe, true);
+  assert.equal(deliver.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(deliver.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(deliver.world.fixtureId, 'scenario-lab.deliver-item-flat.v1');
+  assert.equal(deliver.world.fixtureHash, '5648172f406cd63604db1c8cf4f53923d4e8ec4e18a41ac92dd9fd12ef82489e');
+  assert.equal(deliver.seed, '8140427791654321');
+  assert.notEqual(deliver.world.fixtureHash, follow.world.fixtureHash);
+  assert.equal(deliver.requestForms[0].request, '!requestItemGoal("deliver","dirt",1,"FollowTarget")');
+  assert.ok(deliver.expectedEvidence.includes('item-delivered-to-recipient'));
+  assert.ok(deliver.expectedEvidence.includes('dry-land-fixture-confirmed'));
+  // Follow evidence must NOT be required here: the recipient never moves, so a
+  // doorway or corridor requirement would be unsatisfiable by construction --
+  // the failure mode that made request-correlation impossible in August.
+  assert.ok(!deliver.expectedEvidence.includes('doorway-crossing-confirmed'));
+  assert.ok(!deliver.expectedEvidence.includes('corridor-progress-confirmed'));
+
+  const registered = new Set([stone.id, follow.id, obstruction.id, deliver.id]);
   assert.ok(manifest.scenarios
     .filter(({ id }) => !registered.has(id))
     .every(({ status, executor }) => (

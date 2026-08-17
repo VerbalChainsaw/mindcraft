@@ -50,6 +50,20 @@ function sha256(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
+// What the manifest froze for a scenario's world, or null if it is unregistered.
+// Read straight from the file so this check runs before the manifest section
+// below and still reports on the same registration the worker will enforce.
+function registeredFixtureHash(scenarioId) {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(path.join(REPO, 'tools', 'scenario-lab', 'scenarios.v1.json'), 'utf8'),
+    );
+    return manifest.scenarios.find(scenario => scenario.id === scenarioId)?.world?.fixtureHash || null;
+  } catch {
+    return null;
+  }
+}
+
 function portHolder(port) {
   try {
     const out = execFileSync('powershell.exe', [
@@ -81,6 +95,33 @@ if (!fixtureRoot) {
       'The frozen fixture is damaged or replaced. See tools/scenario-lab/FIXTURES.md.');
   } else {
     record(true, 'fixture', `${fixtureRoot} (3 files, hashes match)`);
+  }
+}
+
+// --- generated fixture -------------------------------------------------------
+// The deliver course carries a text recipe instead of a captured world, so the
+// check is that the recipe is present and still hashes to what the manifest
+// registered -- the same guarantee the archive hash gives, without a binary that
+// can rot. A recipe edited without re-registering would otherwise surface as a
+// hash mismatch deep inside the worker.
+{
+  const root = path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1');
+  const recipe = path.join(root, 'fixture-metadata.json');
+  const profile = path.join(root, 'scenario-profile.json');
+  const missing = [recipe, profile].filter(file => !existsSync(file));
+  if (missing.length) {
+    record(false, 'deliver fixture', `missing: ${missing.map(f => path.basename(f)).join(', ')}`,
+      'This fixture is checked into the repo -- restore it from git. See tools/scenario-lab/FIXTURES.md.');
+  } else {
+    const registered = registeredFixtureHash('deliver-item-goal');
+    const actual = sha256(recipe);
+    if (registered && registered !== actual) {
+      record(false, 'deliver fixture', `recipe hash ${actual} does not match the registered ${registered}`,
+        'Recompute world.fixtureHash and the manifestHash after editing the recipe. See tools/scenario-lab/FIXTURES.md.');
+    } else {
+      const surface = JSON.parse(readFileSync(recipe, 'utf8'))?.generation?.surface;
+      record(true, 'deliver fixture', `generated flat world, surface y=${surface?.stand_y} (recipe hash matches)`);
+    }
   }
 }
 
@@ -131,7 +172,7 @@ try {
   // and a trial-bot-memory directory that exist nowhere on this machine.
   // Reporting it as runnable would send the next agent chasing a fixture that
   // cannot be produced.
-  const DRIVEABLE = new Set(['doorway-corridor-follow', 'obstruction-follow']);
+  const DRIVEABLE = new Set(['doorway-corridor-follow', 'obstruction-follow', 'deliver-item-goal']);
   const notRun = manifest.scenarios.filter(s => s.status === 'not-run').map(s => s.id);
   const runnable = notRun.filter(id => DRIVEABLE.has(id));
   const blocked = notRun.filter(id => !DRIVEABLE.has(id));
@@ -158,6 +199,9 @@ if (failed.length) {
   for (const r of failed) if (r.fix) process.stdout.write(`  - ${r.name}: ${r.fix}\n`);
   process.stdout.write('\n');
 } else {
-  process.stdout.write('\nReady. Run: npm run scenario:follow  |  npm run scenario:obstruction\n');
+  process.stdout.write(
+    '\nReady. Run: npm run scenario:follow  |  npm run scenario:obstruction'
+    + '  |  npm run scenario:deliver\n',
+  );
 }
 process.exitCode = failed.length ? 1 : 0;

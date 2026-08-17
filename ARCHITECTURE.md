@@ -113,7 +113,8 @@ Written down so they don't come back:
 
 ## Acceptance
 
-**`npm run scenario:follow-field` exits 0 on the current commit.**
+**A scenario exits 0 on the current commit.** As of 2026-08-17 three do:
+`scenario:follow`, `scenario:obstruction` and `scenario:deliver`.
 
 Nothing is "done" until a scenario passes on HEAD. As of this writing the
 scenario manifest records zero passing runs and its `candidateCommit` is 250
@@ -232,10 +233,14 @@ blocks is open ocean; the bot enters an unsafe medium, starts drowning, and
 self-preservation seizes the body, interrupting the collection. Repeat until
 timeout.
 
-**A typed-goal scenario needs a dry-land fixture.** Geometry can be laid
-programmatically with `fill`, but acquisition needs terrain to search and
-relocate through. That is world-authoring work, and it is the single remaining
-prerequisite for Step 4.
+**A typed-goal scenario needs a dry-land world — RESOLVED 2026-08-17.** The
+world does not have to be authored, only generated. `deliver-item-goal` runs on
+a superflat recipe (`tools/scenario-lab/fixtures/deliver-item-flat-v1`) whose
+surface is y=100, which is where the existing course constants already sit, so
+the course geometry is unchanged. `npm run scenario:deliver` exits 0 on HEAD:
+both request forms delivered, `FollowTarget` 0 -> 1 dirt, zero safety
+violations. The fixture premise is measured rather than assumed — four
+dry-land probes at 40 blocks, past the 32-block relocation.
 
 The course itself is worth keeping. It never passed and still produced four
 engine defects — the route probe budget, timeout-as-unreachable, goal-survives-
@@ -269,9 +274,19 @@ plays. That is the exact failure mode this whole effort exists to end.
 
 **Prerequisite for Step 4:** a scenario that exercises a typed goal
 (acquire an item and deliver it) and one that exercises a multi-step agenda
-request. The course machinery is programmatic — `provisionFixture` lays geometry
-with `fill` commands — so a new course needs no new world fixture. See
-`obstruction-follow` for the pattern.
+request.
+
+- Typed goal: **DONE** (2026-08-17). `deliver-item-goal` passes on HEAD and
+  covers `goal-director` end to end — `!requestItemGoal` dispatching
+  `!collectBlocksInRange` then `!givePlayer`, with the item verified in the
+  recipient's inventory. Both the direct and natural-language forms pass.
+- Multi-step agenda: **still missing.** `agenda-director` (2,153 lines) has no
+  live coverage.
+
+**Step 4 remains gated.** Half the prerequisite is met, not all of it. Deleting
+`agenda-director` with no scenario exercising a multi-step request would repeat
+exactly the mistake this gate exists to prevent. The deliver course is the
+pattern to copy: it needed a generated world and ~200 lines, no new framework.
 
 Until then, treat the lane count as a known cost, not an emergency.
 
