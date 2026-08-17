@@ -3053,7 +3053,7 @@ function collectionDecisionEvidence(selection) {
  * expiry. Requires at least one observation: an empty candidate list proves
  * nothing either way and must not trigger a wider re-probe.
  */
-function collectionRejectionsAreAllTimeouts(selection) {
+export function collectionRejectionsAreAllTimeouts(selection) {
     const statuses = collectionDecisionEvidence(selection).routeStatuses || {};
     const entries = Object.entries(statuses);
     if (entries.length === 0) return false;

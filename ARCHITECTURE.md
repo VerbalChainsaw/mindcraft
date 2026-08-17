@@ -192,12 +192,11 @@ before finishing. Live: "Found 12 dirt candidates, but none has a safe reachable
 route (timeout:12)" with dirt two blocks away and visible, followed by a 32-block
 relocation. Raised to 400ms; compute budget unchanged.
 
-**2. A timeout is classified as unreachable — OPEN.** The skill records
-`routeStatuses {timeout: 12}` and reports `outcome: 'unreachable'`. An
-inconclusive probe is treated as a negative result. It should re-probe with a
-larger budget when every candidate failed on a clock expiry. Needs a budget
-threaded through `probeCollectionRoute` -> `collectionCandidateObservations` ->
-`selectCollectionCandidate`.
+**2. A timeout is classified as unreachable — FIXED.** The skill recorded
+`routeStatuses {timeout: 12}` and reported `outcome: 'unreachable'`. When every
+rejection is a clock expiry the candidates are now re-probed once at 1500ms
+before concluding. `noPath` is deliberately excluded: re-probing a genuine
+missing route would hide the defect class this harness exists to catch.
 
 **3. A typed goal survives death and continues from the respawn point — OPEN.**
 The bot died mid-goal, respawned ~1,400 blocks away at world spawn, and the goal
