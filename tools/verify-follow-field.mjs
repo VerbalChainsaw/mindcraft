@@ -116,6 +116,9 @@ const DELIVER_WORLD_SPAWN = Object.freeze({ x: 1033, y: 100, z: 1011 });
 
 // A* budget for the controlled target. Four times the library default of 5s.
 const TARGET_THINK_TIMEOUT_MS = 20_000;
+// How many clarifying questions the scenario will answer. Bounded so a bot
+// that only ever asks cannot pass by conversation alone.
+const MAX_CLARIFICATION_ANSWERS = 4;
 // One bounded retry when the target's SEARCH is cut short. Deliberately does
 // not cover 'NoPath': no route existing is a real result the scenario must
 // report, while a search that ran out of clock is an artifact of machine load.
@@ -1016,7 +1019,19 @@ async function run() {
     socket.on('state-delta', receiveState);
     socket.on('bot-output', (agentName, output) => {
       if (agentName === options.bot && activeAttempt && activeAttempt.outputs.length < 64) {
-        activeAttempt.outputs.push({ at: Date.now(), output: String(output).slice(0, 1_000) });
+        const text = String(output).slice(0, 1_000);
+        activeAttempt.outputs.push({ at: Date.now(), output: text });
+        // A companion that asks instead of thrashing is the behaviour we want,
+        // but an unattended scenario has nobody to answer, so the first run to
+        // reach the furnace step asked about cobblestone and then waited out the
+        // entire delivery window. A real player would just say yes. Answer it,
+        // bounded, and record every answer as evidence so the transcript shows
+        // exactly how much help the companion was given.
+        if (orchestrationCourse && /\?/.test(text) && activeAttempt.answers.length < MAX_CLARIFICATION_ANSWERS) {
+          const answer = 'Yes, go ahead. Get whatever you need and do it yourself.';
+          activeAttempt.answers.push({ at: Date.now(), question: text, answer });
+          target.chat(answer);
+        }
       }
     });
     socket.emit('listen-to-agents');
@@ -1121,6 +1136,7 @@ async function run() {
         traceMap: new Map(),
         terminal: null,
         resultsByLabel: new Map(),
+        answers: [],
         obstructionSealedAt: null,
         deliveryBaseline: countTargetItem(DELIVER_ITEM),
         deliveryObservedAt: null,
@@ -1399,6 +1415,7 @@ async function run() {
         // this a course whose expected label is wrong looks like a hang rather
         // than a naming mismatch.
         resultLabels: [...activeAttempt.resultsByLabel.keys()],
+        clarificationAnswers: activeAttempt.answers,
         results: Object.fromEntries(activeAttempt.resultsByLabel),
         resyncRequests: activeAttempt.resyncRequests,
         passed,
