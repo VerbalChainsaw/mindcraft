@@ -1198,6 +1198,23 @@ async function run() {
         issuedAt: activeAttempt.issuedAt,
         activeAt: activeAttempt.activeAt || null,
         commandAck: activeAttempt.commandAck,
+        // Fixture state as captured BEFORE the request. Without this an
+        // incomplete attempt cannot answer whether its own course was laid
+        // correctly, so a failure is indistinguishable from a mis-provisioned
+        // fixture. Three deliver runs failed without recording whether their
+        // acquisition source block was ever placed.
+        paperBefore: activeAttempt.paperBefore || null,
+        fixtureBefore: activeAttempt.paperBefore
+          ? {
+              wallVerified: activeAttempt.paperBefore.wallVerified,
+              doorwayVerified: activeAttempt.paperBefore.doorwayVerified,
+              platformVerified: activeAttempt.paperBefore.platformVerified,
+              plugVerified: activeAttempt.paperBefore.plugVerified,
+              sourceVerified: activeAttempt.paperBefore.sourceVerified,
+            }
+          : null,
+        deliveryBaseline: activeAttempt.deliveryBaseline ?? null,
+        obstructionSealedAt: activeAttempt.obstructionSealedAt || null,
         waypointFailure: activeAttempt.waypointFailure || null,
         waypoints: activeAttempt.waypoints,
         samples: activeAttempt.samples,
