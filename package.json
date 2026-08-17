@@ -71,7 +71,9 @@
     "scenario:obstruction": "node tools/scenario-lab/run.mjs obstruction-follow",
     "scenario:deliver": "node tools/scenario-lab/run.mjs deliver-item-goal",
     "scenario:list": "node tools/scenario-lab/run.mjs --list",
-    "scenario:doctor": "node tools/scenario-lab/doctor.mjs"
+    "scenario:doctor": "node tools/scenario-lab/doctor.mjs",
+    "audit:wiring": "node tools/wiring-audit.mjs --assert",
+    "audit:silent": "node tools/sweep-silent-failures.mjs"
   },
   "devDependencies": {
     "patch-package": "^8.0.0"

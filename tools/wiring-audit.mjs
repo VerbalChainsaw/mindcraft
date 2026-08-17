@@ -102,10 +102,20 @@ async function auditCommands() {
   // negation operator, and treating it as a command name buries every real
   // finding under fifty invented ones.
   const STRING_LITERAL = /'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g;
+  // Comments carry example syntax. A JSDoc line reading "Parse a generated
+  // `!command(...)` string" is documentation, not an emission, but the
+  // backticks make it look like a template literal to the scan above -- and it
+  // was this audit's only broken wire. Strip comments first, for the same
+  // reason the negation-operator case is excluded: one invented finding costs
+  // more trust than it can ever be worth. Line comments are stripped only when
+  // they begin a line, so a `//` inside a URL string is left alone.
+  const stripComments = (text) => text
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^[ 	]*\/\/.*$/gm, ' ');
   const emitted = new Map();
   for (const file of sourceFiles) {
     if (file.includes(`${path.sep}commands${path.sep}`) || file.includes(`${path.sep}public${path.sep}`)) continue;
-    for (const literal of read(file).matchAll(STRING_LITERAL)) {
+    for (const literal of stripComments(read(file)).matchAll(STRING_LITERAL)) {
       const body = literal[1] ?? literal[2] ?? literal[3] ?? '';
       for (const match of body.matchAll(/(?:^|[\s;])!([a-zA-Z][a-zA-Z0-9_]*)\s*\(/g)) {
         const name = `!${match[1]}`;

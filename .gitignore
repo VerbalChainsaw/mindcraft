@@ -36,3 +36,8 @@ src/mindcraft-py/__pycache__/
 
 # Scenario Lab run artifacts (evidence, worlds, logs) -- reproducible, not source
 validation-output/
+
+# codeplan decision records -- the codeplan skill's own contract expects this
+# path to be gitignored. Untracked-but-not-ignored made 56 deliberate decision
+# records read as debris in every `git status`.
+.codeplan/
