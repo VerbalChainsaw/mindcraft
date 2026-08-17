@@ -433,9 +433,12 @@ test('stone-recovery evidence requires physical success and the declared request
   assert.equal(result.evidenceCompleteness, 'complete');
   assert.equal(result.liveScenarioPassed, true);
 
+  // stone-recovery still uses its own evidence adapter, which was NOT changed by
+  // the model-first work. Its declared route contract stands.
   const modelRouted = makeRun('natural-language', 'model-selected');
   assert.equal(modelRouted.success, false);
   assert.ok(modelRouted.safetyInvariantViolations.includes('deterministic-local-request-route'));
+
 });
 
 test('follow-field evidence requires correlated physical completion and quiescence', async () => {
@@ -554,10 +557,17 @@ test('follow-field evidence requires correlated physical completion and quiescen
   assert.equal(result.evidenceCompleteness, 'complete');
   assert.equal(result.liveScenarioPassed, true);
 
+  // Model-first inverted this. A model-selected route is the intended behaviour
+  // now -- the model picks the command, and four registered commands legitimately
+  // serve "follow me". Correlation dropped the command NAME and the route, not
+  // the request linkage.
   const modelRouted = makeRun('natural-language', 'model-selected');
-  assert.equal(modelRouted.success, false);
-  assert.ok(modelRouted.safetyInvariantViolations.includes('deterministic-local-request-route'));
+  assert.equal(modelRouted.success, true);
+  assert.ok(!modelRouted.safetyInvariantViolations.includes('deterministic-local-request-route'));
 
+  // The guard that mattered is unchanged and is asserted right below: the deed,
+  // not the name. A run that did not cross the doorway still fails, whatever
+  // command it claimed to use.
   const falseSuccess = makeRun('direct', 'explicit-command', { doorwayCrossed: false });
   assert.equal(falseSuccess.success, false);
   assert.ok(falseSuccess.safetyInvariantViolations.includes('no-false-success'));

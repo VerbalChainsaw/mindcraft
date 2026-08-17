@@ -141,16 +141,27 @@ function requestCandidates(attempt) {
   return candidates;
 }
 
-function requestCorrelated(attempt, expectedRoute) {
+// Correlation proves the action came from THIS request. It deliberately does not
+// assert which command the model chose, or which route it arrived by.
+//
+// It used to require selectedSkill '!followPlayer', args ['FollowTarget', 3] and
+// routeOrigin 'deterministic-nl'. All three describe a deterministic regex table
+// that model-first removes on purpose, and four registered commands legitimately
+// serve "follow me". Asserting the name made this evidence unsatisfiable by
+// construction the moment the architecture changed -- the same failure recorded
+// in FIXTURES.md for August, where the scenario demanded evidence its own
+// configuration forbade producing.
+//
+// This is not weaker. A command name proves an intention; doorway crossing,
+// corridor progress, botTravel >= 7, targetTravel >= 12 and finalDistance <= 4.5
+// prove the deed, they are asserted separately, and they cannot co-occur by
+// accident. See .codeplan/model-chosen-action-evidence.md.
+function requestCorrelated(attempt) {
   const actionId = attempt?.terminal?.actionId;
   return Boolean(actionId && requestCandidates(attempt).some((candidate) => (
     candidate?.actionId === actionId
     && typeof candidate?.requestId === 'string'
     && candidate.requestId.length > 0
-    && candidate?.routeOrigin === expectedRoute
-    && candidate?.selectedSkill === '!followPlayer'
-    && String(candidate?.args?.[0] || '') === 'FollowTarget'
-    && candidate?.args?.[1] === 3
   )));
 }
 
@@ -208,7 +219,8 @@ function lifecycleComplete(attempt) {
     && activeAt >= issuedAt
     && typeof terminal?.actionId === 'string'
     && terminal.actionId.length > 0
-    && terminal?.label === 'action:followPlayer'
+    && typeof terminal?.label === 'string'
+    && terminal.label.startsWith('action:')
     && terminal?.phase === 'interrupted'
     && terminal?.code === 'interrupted'
     && startedAt >= issuedAt
@@ -263,7 +275,7 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
   const deliverCourse = course === 'deliver-item' || course === 'orchestrate-charcoal';
   const correlated = deliverCourse
     ? deliverRequestCorrelated(attempt)
-    : Boolean(expectedRoute && requestCorrelated(attempt, expectedRoute));
+    : Boolean(expectedRoute && requestCorrelated(attempt));
   const instrumentationConfirmed = instrumentationModeConfirmed(report, instrumentationMode);
   const checks = deliverCourse
     ? {
@@ -350,6 +362,10 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
     elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : 0,
     actionId: attempt?.terminal?.actionId || null,
     routeOrigin: expectedRoute,
+    // Which command the model actually chose, recorded for review rather than
+    // asserted. A change here is worth a human look; it is not a failure.
+    selectedSkill: attempt?.terminal?.evidence?.request?.selectedSkill || null,
+    observedRouteOrigin: attempt?.terminal?.evidence?.request?.routeOrigin || null,
     instrumentationMode,
     routeCorrelated: correlated,
     checks,

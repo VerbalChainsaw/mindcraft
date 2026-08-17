@@ -1180,9 +1180,18 @@ async function run() {
           // fixed follow action. Requiring a specific label here would make the
           // wait a test of the goal's internal command choice.
           if (options.mode === 'deliver') return compact.idle === false;
-          return compact.idle === false
-            && compact.current === 'action:followPlayer'
-            && Boolean(compact.pathfinding);
+          // Ownership is a physical state: not idle, and actively pathfinding.
+          // This used to also require current === 'action:followPlayer'. Under
+          // model-first the model picks the command, and four registered
+          // commands legitimately serve "follow me" -- it chose !follow, which
+          // reports action:follow. The harness then never confirmed ownership,
+          // so it never started walking the target, so the companion followed a
+          // stationary player and travelled 0.0 blocks. The whole failure came
+          // from one hard-coded name. What the course actually needs to know is
+          // that the body is moving under a request, and that is measured here;
+          // whether it crossed the doorway and the corridor is measured later
+          // and is what the scenario really asserts.
+          return compact.idle === false && Boolean(compact.pathfinding);
         },
         `${runId} active ${options.mode === 'deliver' ? 'goal' : 'follow'} ownership`,
         options.mode === 'deliver' ? 30_000 : 15_000,
