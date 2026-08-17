@@ -1587,11 +1587,22 @@ function safeMovements(bot) {
 
     const policy = traversalPolicy(bot);
     if (policy === 'full') {
-        // Full permits native jump/parkour geometry, but ordinary locomotion
-        // still has no authority to place blocks. Pillaring is construction,
-        // not walking, and it also explodes A*'s candidate space in forests
-        // and uneven terrain.
         movements.allowParkour = true;
+        // Placing and towering are ordinary player moves, not construction. A
+        // player who digs into a hole nerd-poles out; they do not stand there
+        // concluding the world is unreachable. With these off, pathfinder runs
+        // its whole-volume A* with three of its four action classes deleted and
+        // can only answer "no path" -- which is what it kept answering, from
+        // inside a one-block shaft, about stone it was standing in.
+        //
+        // The old note here worried that pillaring explodes A*'s candidate
+        // space. That is what placeCost above is for: at 8 against digCost 10
+        // and a default walk of 1, placement is a last resort the search reaches
+        // for only when walking and digging genuinely fail. Scaffolding is
+        // pathfinder's own default of dirt and cobblestone, so it spends rubble,
+        // not anything precious.
+        movements.allow1by1towers = true;
+        movements.canPlaceBlocks = true;
     }
     // Collection restores this to authorize an explicitly selected resource,
     // which is deliberately not ordinary terrain.
@@ -2651,6 +2662,26 @@ export function assessStableMiningCollectionTarget(bot, block) {
     if (!dropSupport.safe) return { ...dropSupport, stances: [] };
     const stances = collectionStandingPositions(bot, block);
     if (stances.length === 0) {
+        // collectionStandingPositions only counts cells that are ALREADY clear
+        // with an ALREADY solid floor. Inside a stone shaft nothing qualifies,
+        // so a companion holding a pickaxe in a world made of stone was told
+        // twelve blocks were unreachable.
+        //
+        // "This cell is stone" and "this cell is bedrock" are not the same
+        // answer. One is a hard no; the other is one swing of a pickaxe.
+        // prospectiveMiningStandingPositions already models the second case --
+        // it was simply never consulted here, only in a bounded recovery much
+        // further downstream. Ask it before declaring anything unreachable, and
+        // let pathfinder work out the actual sequence of moves.
+        const prospective = prospectiveMiningStandingPositions(bot, block);
+        if (prospective.length > 0) {
+            return {
+                safe: true,
+                code: 'prospective_stance_available',
+                dropDepth: dropSupport.dropDepth,
+                stances: prospective,
+            };
+        }
         return {
             safe: false,
             code: 'no_safe_stance',
