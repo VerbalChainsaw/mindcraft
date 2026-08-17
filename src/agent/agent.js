@@ -366,6 +366,17 @@ export class Agent {
             taskStart = Date.now();
         }
         this.task = new Task(this, settings.task, taskStart);
+        // ARCHITECTURE.md Step 6, behind a flag. When true the deterministic
+        // pre-LLM interceptors stand down and the model chooses the next command
+        // itself. Default false, so ordinary bots are unchanged.
+        //
+        // A live run on 2026-08-17 showed a flag is the only way to ask the
+        // question. "Go get some wood and make me some charcoal" never reached
+        // the model: dispatchPlayerAgenda parsed it, queued "harvest 32 logs,
+        // then get 1 additional charcoal", and returned handled. Blocking
+        // !addToAgenda changed nothing, because the interception happens
+        // upstream of command selection entirely.
+        this.llm_sequencing = settings.llm_sequencing === true;
         this.blocked_actions = resolveBlockedActions({
             configured: settings.blocked_actions,
             task: this.task.blocked_actions,
@@ -1014,6 +1025,10 @@ export class Agent {
     async dispatchPlayerAgenda(source, canonicalPlayer, message, requesterPosition = null, {
         historyMessage = message,
     } = {}) {
+        // Step 6: with LLM sequencing on, deterministic decomposition does not
+        // get first refusal. Returning false sends the line down to the model
+        // path instead of queueing a plan the model never saw.
+        if (this.llm_sequencing) return false;
         const director = this.agenda_director;
         if (!director?.addMany || !director?.validateMany) return false;
         const plan = parsePlayerAgenda(canonicalPlayer || source, message, {

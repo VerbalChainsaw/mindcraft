@@ -533,6 +533,13 @@ try {
         $launchSettings['allowed_commands'] = $allowedCommands
         $report.allowed_commands = $allowedCommands
     }
+    # Step 6 as a fixture switch: stand the deterministic pre-LLM interceptors
+    # down so the model chooses. Without it a plain-language chain is parsed and
+    # queued before command selection ever happens.
+    if ($null -ne $metadata.orchestration -and $metadata.orchestration.llm_sequencing -eq $true) {
+        $launchSettings['llm_sequencing'] = $true
+        $report.llm_sequencing = $true
+    }
     $launchSettingsJson = ($launchSettings | ConvertTo-Json -Compress -Depth 6)
 
     Save-Status 'backing-up-runtime'

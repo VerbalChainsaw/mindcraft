@@ -30,10 +30,22 @@
     "generate_structures": false,
     "generator_settings": {
       "layers": [
-        { "block": "minecraft:bedrock", "height": 1 },
-        { "block": "minecraft:stone", "height": 155 },
-        { "block": "minecraft:dirt", "height": 7 },
-        { "block": "minecraft:grass_block", "height": 1 }
+        {
+          "block": "minecraft:bedrock",
+          "height": 1
+        },
+        {
+          "block": "minecraft:stone",
+          "height": 155
+        },
+        {
+          "block": "minecraft:dirt",
+          "height": 7
+        },
+        {
+          "block": "minecraft:grass_block",
+          "height": 1
+        }
       ],
       "biome": "minecraft:forest",
       "lakes": false,
@@ -50,11 +62,24 @@
   "orchestration": {
     "principle": "mechanics are allowed, sequencing is not",
     "allowed_commands": [
-      "!stats", "!inventory", "!nearbyBlocks", "!entities",
-      "!craftable", "!getCraftingPlan", "!inspectMinecraft", "!searchForBlock",
-      "!goToCoordinates", "!goToPlayer", "!moveAway",
-      "!collectBlocks", "!craftRecipe", "!smeltItem", "!placeHere",
-      "!equip", "!givePlayer", "!digDown"
+      "!stats",
+      "!inventory",
+      "!nearbyBlocks",
+      "!entities",
+      "!craftable",
+      "!getCraftingPlan",
+      "!inspectMinecraft",
+      "!searchForBlock",
+      "!goToCoordinates",
+      "!goToPlayer",
+      "!moveAway",
+      "!collectBlocks",
+      "!craftRecipe",
+      "!smeltItem",
+      "!placeHere",
+      "!equip",
+      "!givePlayer",
+      "!digDown"
     ],
     "deliberately_excluded": {
       "!requestItemGoal": "goal-director runs the whole acquire-and-deliver chain",
@@ -63,7 +88,9 @@
       "!prepareWoodenTool": "survival-bootstraps the tool dependency -- the exact reasoning step under test",
       "!collectWood": "resolves 'wood' to any log type; the bot should name the block it wants",
       "!newAction": "writes JavaScript. A pass would prove code generation, not orchestration. Already blocked unless allow_insecure_coding."
-    }
+    },
+    "llm_sequencing": true,
+    "why_llm_sequencing": "Blocking commands is not enough. A live run on 2026-08-17 showed the request never reached the model: dispatchPlayerAgenda parsed 'wood and charcoal' as a chain, queued 'harvest 32 logs, then get 1 additional charcoal', and returned handled before command selection. The deterministic lane gets first refusal, which is exactly what ARCHITECTURE.md says is wrong with the hierarchy. This flag stands those interceptors down so the model actually chooses."
   },
   "profile": {
     "filename": "scenario-profile.json",
