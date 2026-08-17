@@ -7688,7 +7688,19 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 bot.modes.pause('elbow_room');
                 try {
                     bot.collectBlock.movements = targetScopedCollectionMovements(bot, fallbackBlock, {
-                        allowPillars: searchOptions?.allowPillars === true,
+                        // Pillars ON, deliberately. allowPillars gates both
+                        // canPlaceBlocks and allow1by1towers, so with it off a
+                        // companion standing in a hole it just dug has no upward
+                        // move at all and pathfinder answers "No path to the
+                        // goal!" -- which reads as being trapped. You cannot
+                        // really trap yourself in Minecraft: you nerd-pole out or
+                        // you mine sideways. Forbidding both and then reporting
+                        // the block unreachable is the bug.
+                        //
+                        // This is the last resort, after the stance check has
+                        // already given up. At that point the companion gets the
+                        // ordinary moves a player has.
+                        allowPillars: true,
                         allowNaturalRouteDigging: true,
                         requireReturnableRoute: false,
                     });
