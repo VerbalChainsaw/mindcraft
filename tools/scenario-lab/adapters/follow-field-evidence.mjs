@@ -100,6 +100,9 @@ function deliverFixtureDry(attempt) {
   // the thing being measured. Requiring a placed source there would demand
   // evidence the course is designed not to produce.
   const sourceRequired = physical?.course === 'deliver-item';
+  // The orchestration course lays no geometry at all, so wall and platform
+  // evidence does not exist for it by design.
+
   return physical?.deliveryGroundPresent === true
     && physical?.deliveryDryLandVerified === true
     && (sourceRequired ? physical?.deliverySourcePresent === true : true)

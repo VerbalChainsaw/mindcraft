@@ -363,6 +363,66 @@ pattern to copy: it needed a generated world and ~200 lines, no new framework.
 
 Until then, treat the lane count as a known cost, not an emergency.
 
+## Step 4 REVISED 2026-08-17 — reorder, do not delete
+
+Evidence from seven live runs changed this step. The original plan deleted 6,388
+lines of directors on the theory that the LLM would pick up the slack. That is
+the wrong trade, and the reason is measurable.
+
+**What was actually wrong.** `player-directives.js` holds a regex table that maps
+plain English onto composite job commands before any model is consulted:
+
+```
+/(?:harvest|collect|gather|chop|get).{0,32}(?:wood|logs?|trees?)/
+  -> !assignHarvestJob("logs", 32, player)   + a canned reply
+```
+
+"Go get some wood and make me some charcoal" matched on the wood clause, fired a
+job, and discarded the charcoal half without ever looking at it.
+`dispatchPlayerAgenda` does the same for anything that parses as a chain. So the
+model was not merely lowest priority; for these phrasings it was never called.
+
+**What the model does when it IS called.** Refused a composite it asked for, it
+composed a primitive instead, unprompted:
+
+```
+!collectWoodInRange(4, 64)  -> not available
+"Switching to safe primitive"  -> !collectBlocks("oak_log", 8)   executed
+```
+
+And when it could not reach the log, it asked:
+
+> "The nearest oak log is unreachable from my position. Would you like me to
+> search a wider area or try a different approach?"
+
+That is the Director's stated requirement, and it cost nothing to build. It was
+never a missing capability; the model was never consulted.
+
+**So the composites are not the defect.** They work, they represent real
+engineering, and a model that can call them is strictly more capable than one
+that must rebuild them from primitives every time. The defect is the ORDER.
+
+### The revised step
+
+1. The model decides. Deterministic interceptors do not get first refusal.
+   `llm_sequencing` already does this for `dispatchPlayerAgenda` and the regex
+   directive table.
+2. The full command surface stays available to it, jobs included. A composite is
+   a tool the model may choose, not a script that pre-empts it.
+3. When nothing fits, it composes primitives. When it is stuck, it asks.
+4. Reflex still preempts everything. That layer is unchanged.
+
+Nothing is deleted to get here. Lanes may still be retired later on evidence,
+one at a time, once the model is demonstrably choosing well without them — but
+that is cleanup, not a prerequisite, and it is no longer what unblocks the
+product.
+
+### What this does to the coverage gate
+
+The gate was sized for a large deletion. Reordering is reversible by one flag, so
+it does not need the same proof. The scenarios still matter, but as evidence the
+companion behaves — not as permission to delete.
+
 ## Step 4 — Collapse the lanes
 
 20 → 4. Delete these lanes and their directors:

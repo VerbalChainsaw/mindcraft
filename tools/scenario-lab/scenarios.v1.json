@@ -1,7 +1,7 @@
 {
  "schemaVersion": "scenario-lab.manifest.v1",
  "manifestRevision": "orchestration-charcoal-20260817.v1",
- "manifestHash": "fc06920c8e5f1f6549332209aaecd63676a830cf6f1bb8ae00394349507acf7f",
+ "manifestHash": "c40545120fb687f769fdc99ed700169781ef33ec512f20dd2e698201f186dfac",
  "title": "Release 0.1 deterministic Scenario Lab catalog",
  "candidateCommit": "12bdc21081a3e883b945d6eb001a543ba61e7902",
  "server": {
@@ -415,7 +415,7 @@
     "worldId": "orchestration-forest-v1",
     "fixtureId": "scenario-lab.orchestration-forest.v1",
     "fixtureVersion": 1,
-    "fixtureHash": "d28dca45313473b5863672a8f6f18e2818703cf3588ea6a172a467552f4da203",
+    "fixtureHash": "9a31ca4e71ec5d40013594a8922e88164851df2e792c3d867b80ce05847f42f8",
     "dimension": "overworld"
    },
    "timeoutMs": 900000,

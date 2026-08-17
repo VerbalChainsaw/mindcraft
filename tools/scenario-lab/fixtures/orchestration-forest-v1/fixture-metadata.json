@@ -61,7 +61,17 @@
   },
   "orchestration": {
     "principle": "mechanics are allowed, sequencing is not",
-    "allowed_commands": [
+    "deliberately_excluded": {
+      "!requestItemGoal": "goal-director runs the whole acquire-and-deliver chain",
+      "!assignMiningJob / !assignHarvestJob / !assign*Job": "persistent quotas with tool preparation and delivery built in",
+      "!addToAgenda / agenda commands": "sequencing lane; the LLM must hold the sequence",
+      "!prepareWoodenTool": "survival-bootstraps the tool dependency -- the exact reasoning step under test",
+      "!collectWood": "resolves 'wood' to any log type; the bot should name the block it wants",
+      "!newAction": "writes JavaScript. A pass would prove code generation, not orchestration. Already blocked unless allow_insecure_coding."
+    },
+    "llm_sequencing": true,
+    "why_llm_sequencing": "Blocking commands is not enough. A live run on 2026-08-17 showed the request never reached the model: dispatchPlayerAgenda parsed 'wood and charcoal' as a chain, queued 'harvest 32 logs, then get 1 additional charcoal', and returned handled before command selection. The deterministic lane gets first refusal, which is exactly what ARCHITECTURE.md says is wrong with the hierarchy. This flag stands those interceptors down so the model actually chooses.",
+    "prior_allowed_commands": [
       "!stats",
       "!inventory",
       "!nearbyBlocks",
@@ -81,16 +91,7 @@
       "!givePlayer",
       "!digDown"
     ],
-    "deliberately_excluded": {
-      "!requestItemGoal": "goal-director runs the whole acquire-and-deliver chain",
-      "!assignMiningJob / !assignHarvestJob / !assign*Job": "persistent quotas with tool preparation and delivery built in",
-      "!addToAgenda / agenda commands": "sequencing lane; the LLM must hold the sequence",
-      "!prepareWoodenTool": "survival-bootstraps the tool dependency -- the exact reasoning step under test",
-      "!collectWood": "resolves 'wood' to any log type; the bot should name the block it wants",
-      "!newAction": "writes JavaScript. A pass would prove code generation, not orchestration. Already blocked unless allow_insecure_coding."
-    },
-    "llm_sequencing": true,
-    "why_llm_sequencing": "Blocking commands is not enough. A live run on 2026-08-17 showed the request never reached the model: dispatchPlayerAgenda parsed 'wood and charcoal' as a chain, queued 'harvest 32 logs, then get 1 additional charcoal', and returned handled before command selection. The deterministic lane gets first refusal, which is exactly what ARCHITECTURE.md says is wrong with the hierarchy. This flag stands those interceptors down so the model actually chooses."
+    "why_full_surface": "The primitives-only run did its job: refused a composite, the model composed !collectBlocks instead, and asked when it could not reach the log. That question is answered. What matters now is the configuration the bot should actually ship with -- the model deciding, with every command available to it, jobs included. A composite is a tool the model may choose, not a script that pre-empts it. An empty allowlist means no restriction."
   },
   "profile": {
     "filename": "scenario-profile.json",

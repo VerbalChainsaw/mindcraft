@@ -53,7 +53,19 @@ harness simply times out.
 
 ## Open work, in order
 
-1. **A scenario for a multi-step agenda request.** This is now the only thing
+1. **Ship the reorder.** `llm_sequencing` on by default, full command surface
+   available to the model. Evidence on 2026-08-17: a regex table in
+   `player-directives.js` answered plain language before any model was consulted,
+   and when the model WAS consulted it composed primitives and asked for guidance
+   on its own. See ARCHITECTURE.md "Step 4 REVISED". Immediate blocker is the
+   Operator Hold retaining the body after a model-issued command.
+2. **Then judge the lanes on evidence**, one at a time, once the model is
+   demonstrably choosing well. No bulk deletion is required to get the product
+   working, which is the opposite of what this file said yesterday.
+
+Superseded, kept so it is not re-derived:
+
+3. **A scenario for a multi-step agenda request.** This is now the only thing
    gating Step 4. `agenda-director` is 2,153 lines with no live coverage.
    Copy the deliver course: it cost a generated world recipe and ~200 lines,
    no new framework. Read the generated-fixture section of

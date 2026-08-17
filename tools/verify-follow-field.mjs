@@ -497,6 +497,7 @@ async function run() {
   // possible moment.
   const deliverCourse = Object.hasOwn(DELIVER_SPEC, options.course);
   const obstructionCourse = options.course === 'obstruction-follow';
+  const orchestrationCourse = options.course === 'orchestrate-charcoal';
   if (deliverCourse) {
     const spec = DELIVER_SPEC[options.course];
     DELIVER_ITEM = spec.item;
@@ -716,7 +717,13 @@ async function run() {
             `setworldspawn ${DELIVER_WORLD_SPAWN.x} ${DELIVER_WORLD_SPAWN.y} ${DELIVER_WORLD_SPAWN.z}`,
           ]
         : []),
-      `fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`,
+      // The orchestration course wants open forest. Clearing the box and walling
+      // it is follow geometry, and it boxed a bot whose task is to find trees --
+      // the first full run reported "the nearest oak log is unreachable from my
+      // position" from inside it.
+      ...(orchestrationCourse
+        ? []
+        : [`fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`]),
       ...(deliverCourse && DELIVER_PLACE_SOURCE
         ? [
             `fill ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} ${DELIVER_SOURCE.x2} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z2} ${DELIVER_ITEM}`,
@@ -731,11 +738,15 @@ async function run() {
             `fill ${OBSTRUCTION_WALL.x} ${OBSTRUCTION_WALL.y1} ${OBSTRUCTION_WALL.z1} ${OBSTRUCTION_WALL.x} ${OBSTRUCTION_WALL.y2} ${OBSTRUCTION_WALL.z2} stone_bricks`,
             `fill ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y2} ${OBSTRUCTION_PLUG.z} air`,
           ]
+        : orchestrationCourse
+        ? []
         : [
             `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} stone_bricks`,
             `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
           ]),
-      `fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`,
+      ...(orchestrationCourse
+        ? []
+        : [`fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`]),
       // The acceptance fixture must not be preempted by a mob. Spawning is
       // already disabled for the run, so the only remaining threat is a mob
       // that already exists swimming or walking in from outside this box.
@@ -1260,7 +1271,9 @@ async function run() {
       const obstructionDugThrough = obstructionCourse
         ? Boolean(activeAttempt.obstructionSealedAt) && Boolean(paperAfter.doorwayVerified)
         : null;
-      const fixtureVerified = deliverCourse
+      const fixtureVerified = orchestrationCourse
+        ? paperBefore.groundVerified === true && paperBefore.dryLandVerified === true
+        : deliverCourse
         ? [paperBefore, paperAfter].every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
           // The world premise, not just the geometry. The course must stand on
           // real ground and stay dry past the distance acquisition relocates,
