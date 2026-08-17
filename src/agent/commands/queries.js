@@ -95,8 +95,26 @@ export const queryList = [
             res += `\n- Survival progression: ${progression.completedMilestones}/${progression.totalMilestones} prerequisites evidenced; current stage=${progression.currentStage}`;
             res += `\n- Next required milestone: ${progression.nextMilestone}`;
             res += `\n- Missing prerequisites: ${progression.missingPrerequisites.join(', ') || 'none'}`;
-            res += `\n- Order of operations: ${progression.nextOperation}`;
-            res += `\n- Next deterministic command: ${progression.recommendedCommand || 'none; stop and report the blocker'}`;
+            // Survival progression is reference, not an order. Under command
+            // autonomy every self-direction lane is already suppressed -- role
+            // work, job work, and the legacy self-prompt goal all stand down --
+            // and the model was the only lane still handed a "next command" to
+            // run. On 2026-08-17 an obstruction run put "Follow me through the
+            // doorway and down the corridor." in front of the model alongside
+            // "Next deterministic command: !collectWoodInRange(4, 64)". The
+            // model ran the wood command, never followed, and then asked the
+            // player whether they had another instruction. The progression data
+            // was right; naming it the next command while every other lane
+            // treated it as disabled is the defect, and it only became
+            // reachable once the model started choosing commands.
+            if (agent.runtime?.autonomy === 'command') {
+                res += '\n- Self-directed progression: disabled for this profile. Do what the player asked;'
+                    + ' never substitute progression work for a request. Idle and unasked, stay put and report.';
+                res += `\n- Progression suggestion, only valid if the player asks for progression work: ${progression.recommendedCommand || 'none'}`;
+            } else {
+                res += `\n- Order of operations: ${progression.nextOperation}`;
+                res += `\n- Next deterministic command: ${progression.recommendedCommand || 'none; stop and report the blocker'}`;
+            }
             if (progression.blocker) {
                 res += `\n- Progression blocker: ${progression.blocker}`;
             }
