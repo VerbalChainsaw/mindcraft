@@ -16,9 +16,6 @@ export const FAMILIES = Object.freeze([
   // acquisition drowns in it. See tools/scenario-lab/fixtures/.
   'deliver-item-goal',
   'doorway-corridor-follow',
-  // Plain language against a reduced command surface. The only scenario that
-  // tests whether the LLM orchestrates primitives or routes to a procedure.
-  'orchestration-charcoal',
   'elevation-follow',
   // Following a player when terrain is in the way. The doorway-corridor family
   // runs on open ground and passes identically with digging disabled, so it
@@ -26,6 +23,9 @@ export const FAMILIES = Object.freeze([
   // reach its player. This family exists to cover that.
   'obstruction-follow',
   'operator-stop-quiescence',
+  // Plain language against a reduced command surface. The only scenario that
+  // tests whether the LLM orchestrates primitives or routes to a procedure.
+  'orchestration-charcoal',
 ]);
 export const DEFAULT_MANIFEST_PATH = fileURLToPath(
   new URL('./scenario-lab/scenarios.v1.json', import.meta.url),

@@ -62,7 +62,7 @@ function readyManifest(manifest) {
   return rehash(ready);
 }
 
-test('the frozen v1 manifest registers three bounded replays and keeps other families unavailable', async () => {
+test('the frozen v1 manifest registers four bounded replays and keeps other families unavailable', async () => {
   const manifest = await loadScenarioManifest();
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
@@ -128,7 +128,27 @@ test('the frozen v1 manifest registers three bounded replays and keeps other fam
   assert.ok(!deliver.expectedEvidence.includes('doorway-crossing-confirmed'));
   assert.ok(!deliver.expectedEvidence.includes('corridor-progress-confirmed'));
 
-  const registered = new Set([stone.id, follow.id, obstruction.id, deliver.id]);
+  // The orchestration course is the only one that reduces the command surface
+  // and stands the deterministic interceptors down, so it is the only scenario
+  // that can tell whether the LLM orchestrates or merely routes. Its allowlist
+  // lives in the fixture recipe, which is why the recipe hash is pinned.
+  const orchestration = manifest.scenarios.find(({ id }) => id === 'orchestration-charcoal');
+  assert.equal(orchestration.status, 'not-run');
+  assert.equal(orchestration.executor.safe, true);
+  assert.equal(orchestration.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(orchestration.world.fixtureId, 'scenario-lab.orchestration-forest.v1');
+  assert.equal(orchestration.world.fixtureHash.length, 64);
+  assert.notEqual(orchestration.world.fixtureHash, deliver.world.fixtureHash);
+  // Both request forms carry the same plain-language sentence, through two entry
+  // points. Neither may be a command: a !command would route deterministically
+  // and prove nothing about orchestration.
+  assert.equal(orchestration.requestForms[0].request, orchestration.requestForms[1].request);
+  for (const form of orchestration.requestForms) {
+    assert.ok(!form.request.startsWith('!'), 'orchestration requests must be plain language');
+  }
+  assert.ok(orchestration.expectedEvidence.includes('item-delivered-to-recipient'));
+
+  const registered = new Set([stone.id, follow.id, obstruction.id, deliver.id, orchestration.id]);
   assert.ok(manifest.scenarios
     .filter(({ id }) => !registered.has(id))
     .every(({ status, executor }) => (
