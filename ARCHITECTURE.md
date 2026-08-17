@@ -39,7 +39,16 @@ exits.
 
 A command from the kid replaces the current intent immediately. No settlement,
 no obligation ledger, no material-change blocker, no persona pause, no
-negotiation. If Kevin can't do it, he says so in one sentence and stops.
+negotiation. If Kevin can't do it, he says so in one sentence — and if a
+single question would unblock him, he asks it instead of guessing or stopping.
+One question, then he waits.
+
+**Asking is the fallback.** Director intent, 2026-08-17: "I wanted Kevin to ask
+me instead of being confused." The retired contract had this, as
+`bounded-player-question` — stage six of seven, behind settle, reconcile,
+material-change retry, authorized alternative and decomposition. A companion
+who runs five mechanisms before asking a simple question reads as broken. No
+command to ask the player exists yet; that is a gap, not a design choice.
 
 **A player command is never deferred, queued behind, or paced by anything.**
 
@@ -66,8 +75,22 @@ Stay near the player. That's it. Idle does not start projects.
 - A primitive fails → tell the LLM why, let it choose the next one.
 - Bot restarts → the intent is gone. That is fine. The kid will ask again.
 
-No durable obligation ledger. No cross-session resumption. No settlement
-contracts. If Kevin forgets what he was doing after a creeper interrupts him
+No durable obligation ledger. No cross-session resumption of *work*. No
+settlement contracts.
+
+**What does survive: everything Kevin knows.** Home, landmarks, saved places,
+verified procedures, remembered facts. `activity-freshness.js` already draws
+this line — it expires in-flight work orders, typed goals, agenda queues and
+standing directives, and deliberately exempts knowledge. Steps 4 and 5 delete
+the obligation machinery, **not** `knowledge-store.js`, `landmark-memory.js`,
+`home-state-store.js`, `memory-recall.js`, `personal-memory.js` or
+`player-memory.js`. Those feed the prompter, which Step 6 promotes.
+
+Director intent, 2026-08-17: remembering where the house is, where the mine
+is, and where things happened is what makes Kevin a companion rather than a
+tool. `!rememberHere`, `!goToRememberedPlace`, `!savedPlaces` and
+`!rememberHome` already ship. Forgetting a task is fine. Forgetting the house
+is not. If Kevin forgets what he was doing after a creeper interrupts him
 twice, that is an acceptable companion. A companion who ignores the kid because
 he's settling an obligation from four minutes ago is not.
 
@@ -308,12 +331,14 @@ recipient's inventory", which is true or false regardless of whether
 | get me X (no delivery) | — | missing |
 | build me X | — | missing |
 | protect me / stay here | — | missing |
+| remember this place / take me there | — | **missing, and it matters** |
+| ask me when you're stuck | — | **no command exists** |
 
 **This list is provisional and the Director owns it.** It was written from the
-intent model above, not from observation. The real list comes from watching
-Jordan play and recording what he asks for — that is the only source that
-matters, since he is the acceptance test. Correct the table from a play session,
-then freeze it.
+intent model above, not from observation. **Ask the Director for the real
+list.** Do not infer it from the repo, and do not expect any agent or
+assistant to supply it — they are helping build this, they are not the
+player. The kid is the acceptance test; the Director is who you ask.
 
 **Two rules, once it is frozen:**
 
