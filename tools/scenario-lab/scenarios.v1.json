@@ -1,7 +1,7 @@
 {
  "schemaVersion": "scenario-lab.manifest.v1",
  "manifestRevision": "orchestration-charcoal-20260817.v1",
- "manifestHash": "c40545120fb687f769fdc99ed700169781ef33ec512f20dd2e698201f186dfac",
+ "manifestHash": "f7e9008d7fc4a9b423354dcc310ff41788a5d6fa9726c3ef4f70cec03c6726c5",
  "title": "Release 0.1 deterministic Scenario Lab catalog",
  "candidateCommit": "12bdc21081a3e883b945d6eb001a543ba61e7902",
  "server": {
@@ -418,7 +418,7 @@
     "fixtureHash": "9a31ca4e71ec5d40013594a8922e88164851df2e792c3d867b80ce05847f42f8",
     "dimension": "overworld"
    },
-   "timeoutMs": 900000,
+   "timeoutMs": 1500000,
    "requestForms": [
     {
      "form": "direct",

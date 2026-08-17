@@ -64,7 +64,10 @@ const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2:
 // forest rather than a prepared patch.
 const DELIVER_SPEC = Object.freeze({
   'deliver-item': Object.freeze({ item: 'dirt', quantity: 1, placeSource: true, waitMs: 120_000 }),
-  'orchestrate-charcoal': Object.freeze({ item: 'charcoal', quantity: 1, placeSource: false, waitMs: 600_000 }),
+  // 20 minutes. The 10-minute window ended with the furnace crafted and the
+  // companion gathering logs to smelt -- three steps from done. This chain is
+  // eight or nine physical stages, each with real travel and mining in it.
+  'orchestrate-charcoal': Object.freeze({ item: 'charcoal', quantity: 1, placeSource: false, waitMs: 1_200_000 }),
 });
 // Assigned once from the course in run(). Module-level so the existing deliver
 // code paths keep reading one name.
