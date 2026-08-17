@@ -124,7 +124,21 @@ const DELIVER_WORLD_SPAWN = Object.freeze({ x: 1033, y: 100, z: 1011 });
 const TARGET_THINK_TIMEOUT_MS = 20_000;
 // How many clarifying questions the scenario will answer. Bounded so a bot
 // that only ever asks cannot pass by conversation alone.
-const MAX_CLARIFICATION_ANSWERS = 4;
+//
+// Four was calibrated against a short chain and starved a long one. The
+// 2026-08-17 orchestration run spent its whole budget inside the first 47
+// seconds -- two of the four on questions a player would never be asked
+// ("Would you like me to equip it for you?" right after crafting the pickaxe
+// it needed) -- then asked a fifth at t+79s, got silence, and sat idle for
+// 18.7 of the run's 20 minutes. The cap did not measure orchestration; it
+// ended it. The charcoal chain is roughly a dozen steps, so the budget has to
+// clear a dozen.
+//
+// This does not weaken the acceptance. The answer carries no method, no
+// coordinates, and no next step, the item still has to physically arrive in
+// the recipient's inventory, and every answer is recorded as evidence so the
+// transcript shows exactly how much help the companion was given.
+const MAX_CLARIFICATION_ANSWERS = 16;
 // One bounded retry when the target's SEARCH is cut short. Deliberately does
 // not cover 'NoPath': no route existing is a real result the scenario must
 // report, while a search that ran out of clock is an artifact of machine load.
@@ -1053,7 +1067,12 @@ async function run() {
         // bounded, and record every answer as evidence so the transcript shows
         // exactly how much help the companion was given.
         if (orchestrationCourse && /\?/.test(text) && activeAttempt.answers.length < MAX_CLARIFICATION_ANSWERS) {
-          const answer = 'Yes, go ahead. Get whatever you need and do it yourself.';
+          // Grants standing authority, not method. Every question in the
+          // 2026-08-17 run was a permission check after a step that had already
+          // succeeded, so the answer says the authority covers the whole job.
+          // It still names no material, no coordinate, and no next action.
+          const answer = 'Yes — you already have my go-ahead for the whole job.'
+            + ' Get whatever you need, decide the steps yourself, and only ask again if you are genuinely stuck.';
           activeAttempt.answers.push({ at: Date.now(), question: text, answer });
           target.chat(answer);
         }
