@@ -256,13 +256,13 @@ Against that, Step 4 proposes deleting:
 
 | Director | Lines | Capability | Unit tests |
 |---|---:|---|---|
-| `goal-director` | 3,203 | typed goals — "get me 8 iron and come back" | 2 files |
-| `agenda-director` | 2,152 | multi-step player requests | 2 files |
-| `role-director` | 486 | autonomous role work | **0** |
-| `reaction-director` | 269 | speech and gesture reactions | 3 files |
-| `progression-director` | 207 | self-directed progression | **0** |
+| `goal-director` | 3,270 | typed goals — "get me 8 iron and come back" | 2 files |
+| `agenda-director` | 2,153 | multi-step player requests | 2 files |
+| `role-director` | 487 | autonomous role work | **0** |
+| `reaction-director` | 270 | speech and gesture reactions | 3 files |
+| `progression-director` | 208 | self-directed progression | **0** |
 
-6,317 lines, of which the live harness exercises none. Deleting typed goals and
+6,388 lines, of which the live harness exercises none. Deleting typed goals and
 the agenda with follow-only coverage would remove the capabilities behind every
 request that is not "come here", with no way to see what broke until someone
 plays. That is the exact failure mode this whole effort exists to end.
