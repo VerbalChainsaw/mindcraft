@@ -92,8 +92,18 @@ export const queryList = [
             res += `\n- Hazards: ${describe(perception.hazards)}`;
             res += `\n- Useful blocks/resources: ${describe(perception.usefulBlocks)}`;
             res += `\n- Reflex modes: ${modeState}`;
+            const selfDirects = agent.runtime?.autonomy !== 'command';
             res += `\n- Survival progression: ${progression.completedMilestones}/${progression.totalMilestones} prerequisites evidenced; current stage=${progression.currentStage}`;
-            res += `\n- Next required milestone: ${progression.nextMilestone}`;
+            // "Next required milestone" is an instruction wearing a label. The
+            // command lines below were already gated, but the milestone name
+            // steered anyway: after the 2026-08-18 run actually smelted the
+            // charcoal it was asked for, the model said "Now, I will craft
+            // torches, which is the next progression milestone" and spent the
+            // rest of the window on torches and iron ore. It never handed the
+            // charcoal over. Under command autonomy nothing here is required.
+            res += selfDirects
+                ? `\n- Next required milestone: ${progression.nextMilestone}`
+                : `\n- Milestone this would advance, for reference only: ${progression.nextMilestone}`;
             res += `\n- Missing prerequisites: ${progression.missingPrerequisites.join(', ') || 'none'}`;
             // Survival progression is reference, not an order. Under command
             // autonomy every self-direction lane is already suppressed -- role
@@ -107,9 +117,18 @@ export const queryList = [
             // was right; naming it the next command while every other lane
             // treated it as disabled is the defect, and it only became
             // reachable once the model started choosing commands.
-            if (agent.runtime?.autonomy === 'command') {
+            if (!selfDirects) {
                 res += '\n- Self-directed progression: disabled for this profile. Do what the player asked;'
                     + ' never substitute progression work for a request. Idle and unasked, stay put and report.';
+                // Measured 2026-08-18: asked to "go get some wood and make me
+                // some charcoal", the companion derived the whole chain on its
+                // own -- wood, pickaxe, crafting table, eight cobblestone,
+                // furnace -- and smelted the charcoal. Then it kept the
+                // charcoal and moved on to torches. Making the thing is not
+                // the favour; the person asked for it.
+                res += '\n- Finishing a fetch or make request: when a player asks you to get, make, bring or'
+                    + ' cook something FOR THEM, the job is not done while it is in your own inventory.'
+                    + ' Hand it over, then say so.';
                 res += `\n- Progression suggestion, only valid if the player asks for progression work: ${progression.recommendedCommand || 'none'}`;
             } else {
                 res += `\n- Order of operations: ${progression.nextOperation}`;
