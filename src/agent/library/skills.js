@@ -14509,7 +14509,26 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
                 log(bot, `${username} received ${actualTransferred} ${itemType}.`);
                 return true;
             }
-            if (!reclaimed || deliveryAttempts >= MAX_DELIVERY_DROP_ATTEMPTS) break;
+            if (deliveryAttempts >= MAX_DELIVERY_DROP_ATTEMPTS) break;
+            // `reclaimed` is set by a listener when the drop happens to come
+            // back on its own. Requiring it here meant the retry only ever ran
+            // in the case that had already recovered by luck, and the case that
+            // actually needs recovery -- the stack lying on the ground with
+            // nobody touching it -- broke out after one attempt and left the
+            // items there to despawn.
+            //
+            // Measured 2026-08-18: "You have reached RequestTarget. Discarded 8
+            // oak_planks. Failed to give oak_planks, it was never received."
+            // Every step of that request had succeeded. The player watched
+            // their planks land in the dirt.
+            //
+            // Go and pick them back up before trying again. Losing what someone
+            // asked for is worse than taking longer to hand it over.
+            if (!reclaimed) {
+                log(bot, `${username} did not pick that up; collecting it back to try again.`);
+                await pickupItem(bot, itemType, transferCount, 12, inventoryCount(bot, itemType))
+                    .catch(() => false);
+            }
             reclaimedAttempts += 1;
             const reacquired = await waitForWorldCondition(
                 bot,
