@@ -3144,6 +3144,34 @@ function collectionRejectionSummary(selection) {
         .join(', ');
 }
 
+// Rejections that are this project's policy rather than the engine's answer.
+// A bounded surface excavation is a rule about not strip-mining somebody's
+// landscape. It is not a statement that the block cannot be reached, and the
+// difference is the whole architecture.
+//
+// Measured live on 2026-08-17: a companion standing directly on a buried stone
+// column, holding a stone pickaxe, got twelve completed routes across
+// forty-two states from the engine, watched policy discard all twelve, and
+// then told the player "none has a safe reachable route". The model believed
+// the world was impossible and stopped. It was not impossible; it was not
+// allowed, which is a sentence the player can actually act on.
+const COLLECTION_POLICY_REFUSALS = Object.freeze({
+    surface_excavation_not_bounded:
+        `I will not dig an open-air shaft deeper than ${MAX_MINING_SURFACE_EXCAVATION_STEPS} steps`,
+    surface_excavation_budget_exceeded:
+        `I will not break more than ${MAX_MINING_SURFACE_EXCAVATION_BLOCKS} blocks open to the sky for one route`,
+});
+
+/**
+ * Was this refusal ours rather than the world's? `accessOutcome` is the mining
+ * search's own recorded outcome, so this reads the decision that was actually
+ * made instead of inferring one from route-status tallies.
+ */
+function collectionPolicyRefusal(accessOutcome) {
+    const reason = COLLECTION_POLICY_REFUSALS[String(accessOutcome || '')];
+    return reason ? { rule: String(accessOutcome), reason } : null;
+}
+
 function createCollectionSearch(bot, scanRange, options = {}) {
     const relocationEnabled = options?.relocate === true;
     const requestedRelocations = Number(options?.maxRelocations);
@@ -7718,9 +7746,16 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     bot.lastActionEvidence?.target?.z,
                 ].every(Number.isFinite)
             ) ? bot.lastActionEvidence : null;
+            // The outcome code stays 'unreachable' on purpose. Introducing a
+            // new code here once before broke job-director dispatch, which
+            // matches on these strings downstream. Carry the truth alongside it
+            // instead, and let the sentence the player and the model actually
+            // read be the honest one.
+            const policyRefusal = collectionPolicyRefusal(miningFailure?.outcome);
             setCollectionEvidence({
                 kind: 'collect',
                 outcome: 'unreachable',
+                ...(policyRefusal ? { refusal: policyRefusal } : {}),
                 target: miningFailure ? {
                     ...miningFailure.target,
                     decision: collectionDecisionEvidence(selection),
@@ -7804,10 +7839,20 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     continue;
                 }
             }
+            const plural = blocks.length === 1 ? '' : 's';
             log(
                 bot,
-                `Found ${blocks.length} ${blockType} candidate${blocks.length === 1 ? '' : 's'}, but none has a safe reachable route`
-                + `${rejectionSummary ? ` (${rejectionSummary})` : ''}.`,
+                policyRefusal
+                    // "I will not" and "I cannot" are different sentences, and
+                    // only one of them was ever true here. Saying the wrong one
+                    // taught the model to stop; the right one leaves the player
+                    // something to decide.
+                    ? `Found ${blocks.length} ${blockType} candidate${plural} and a route to reach ${blocks.length === 1 ? 'it' : 'them'},`
+                        + ` but ${policyRefusal.reason}, so I stopped rather than dig it.`
+                        + ` This is a restriction I am under, not something the world prevents`
+                        + `${rejectionSummary ? ` (${rejectionSummary})` : ''}.`
+                    : `Found ${blocks.length} ${blockType} candidate${plural}, but none has a safe reachable route`
+                        + `${rejectionSummary ? ` (${rejectionSummary})` : ''}.`,
             );
             break;
         }
