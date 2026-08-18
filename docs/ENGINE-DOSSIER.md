@@ -300,6 +300,27 @@ All measured, all on current HEAD.
 
 ---
 
+## 6a. Hypotheses tried and killed
+
+Recorded so a reviewer does not re-derive them. Each was plausible, and each was
+killed by measurement rather than argument.
+
+- **"Stone is excluded from the breakable-terrain set, so route digging cannot
+  tunnel to it."** False — `stone` is in `NATURAL_FILL_BLOCKS`.
+- **"A solid mass has no legal stance, so collection refuses it."** False — a
+  4×3×4 exposed outcrop collects on the first try, every run. The variable was
+  never solidity; it was whether the route had to descend through cover.
+- **"`bot.dig(block, true, 'raycast')` fails because the bot is not facing the
+  block, so aim first and retry."** Implemented, changed the measured outcome by
+  exactly nothing, reverted rather than committed. The block was fully enclosed —
+  no face existed to aim at. The real cause was excavation order (§1.3).
+- **"`!collect` and `!collectBlocksInRange` disagree about the same rock."**
+  False — both collect 3 from the same outcrop. The apparent difference was
+  partial results being reported as total failure.
+
+The general lesson, which held four times: **reading the code produced confident
+wrong answers; a probe that varied one thing produced right ones in minutes.**
+
 ## 7. Open risks
 
 - **Variance (§1.7) is unexplained.** Same seven cases, 3/7 → 5/7 → 5/7 different
