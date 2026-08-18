@@ -79,6 +79,12 @@ const PLAYER_ITEM_PLAN_COMMANDS = new Set(['!queueItemPlan']);
 const PLAYER_STORAGE_PLAN_COMMANDS = new Set(['!queueStoragePlan']);
 const MAX_CONSTRUCTION_COMPILATION_TURNS = 6;
 const MAX_ITEM_PLAN_COMPILATION_TURNS = 3;
+// How often a still-open player request is quoted back while the model is
+// working, and how many times in total. Loose enough that an honest multi-step
+// chain is not interrupted every turn, tight enough that drift is caught inside
+// a minute rather than after twenty.
+const COMMANDS_BETWEEN_REQUEST_REMINDERS = 6;
+const MAX_REQUEST_REMINDERS = 5;
 const MAX_INGAME_CHAT_CHARS = 240;
 const CHAT_SEGMENT_PREFIX_RESERVE = 12;
 const MIN_INGAME_CHAT_INTERVAL_MS = 450;
@@ -1644,6 +1650,14 @@ export class Agent {
         // that executes, so one nudge is available per stall rather than one per
         // request. See the conversation-response branch below.
         let stallNudged = false;
+        // Commands run since the player was last quoted back. The stall nudge
+        // only fires when the model STOPS, and a model can miss a request
+        // without ever stopping: on 2026-08-18 it smelted the four charcoal it
+        // was asked for and then spent the rest of the window collecting more
+        // logs, crafting planks and making a wooden axe. Busy is not the same as
+        // on-task, so the reminder also lands on a count.
+        let commandsSinceReminder = 0;
+        let driftReminders = 0;
         try {
             for (let i=0; i<max_responses; i++) {
                 if (checkInterrupt()) {
@@ -1803,6 +1817,29 @@ export class Agent {
 
                 if (execute_res)
                     this.history.add('system', execute_res);
+                // Quote the player back every few commands while their request
+                // is still open. Bounded, because a reminder that never stops
+                // is just noise, and silent after the request is satisfied --
+                // the model ends the loop by answering without a command, and
+                // the stall nudge covers that.
+                commandsSinceReminder += 1;
+                if (
+                    this.llm_sequencing
+                    && !self_prompt
+                    && playerSpeechAuthority === 'action_eligible'
+                    && !this.isOperatorHeld()
+                    && commandsSinceReminder >= COMMANDS_BETWEEN_REQUEST_REMINDERS
+                    && driftReminders < MAX_REQUEST_REMINDERS
+                ) {
+                    commandsSinceReminder = 0;
+                    driftReminders += 1;
+                    await this.history.add(
+                        'system',
+                        `Still open, in ${source}'s own words: "${String(message || '').slice(0, 300)}".`
+                        + ' If you already have what was asked for, hand it over now and say so.'
+                        + ' If a step remains, do that step. Gathering more than the request needs is not the request.',
+                    );
+                }
                 const submittedJob = this.last_persistent_job_submission;
                 const submittedAgendaPlan = this.last_agenda_plan_submission;
                 const deferredAssignmentAccepted = ['item_plan', 'storage_plan'].includes(deferredModelAssignment?.kind)
