@@ -1,6 +1,7 @@
 # Companion engine dossier
 
-**Self-contained.** Written 2026-08-18 for external review — another model or
+**Self-contained.** Start with `REVIEW-PACKET.md` for the dead-list, reproduction
+steps and trust notes. Written 2026-08-18 for external review — another model or
 engineer should be able to read this cold, with no access to the repo or the
 conversation that produced it. Supersedes nothing; `ENGINE-ALIGNMENT.md` and
 `ENGINE-RESEARCH.md` are folded in here.
@@ -300,7 +301,7 @@ All measured, all on current HEAD.
 
 ---
 
-## 6a. Hypotheses tried and killed
+## 6a. ☠ DEAD — hypotheses tried and killed, do not revisit
 
 Recorded so a reviewer does not re-derive them. Each was plausible, and each was
 killed by measurement rather than argument.
