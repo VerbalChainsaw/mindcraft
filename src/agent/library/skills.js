@@ -8299,6 +8299,32 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             }
             else {
                 const outcome = collectionErrorOutcome(err);
+                // One bad candidate used to erase every good one. This path
+                // returns immediately, so a run that collected two of three and
+                // then hit a candidate it could not route to reported
+                // "Failed (skill_unreachable)" and named no count at all --
+                // measured 2026-08-18, inventory up by two, report saying it
+                // had failed. The model then re-planned from nothing, twice,
+                // and told the player it "previously failed to mine cobblestone".
+                //
+                // What was collected was collected. Say so, keep the reason the
+                // run stopped, and let the caller compare against inventory.
+                if (collected > 0) {
+                    setCollectionEvidence({
+                        kind: 'collect',
+                        outcome: 'collected',
+                        target: lowestCollectedTarget || target,
+                        count: collected,
+                        stoppedBecause: outcome,
+                        error: String(err?.message || err).slice(0, 240),
+                        retryable: true,
+                    });
+                    log(
+                        bot,
+                        `Collected ${collected} ${blockType}, then stopped: ${err?.message || err}.`,
+                    );
+                    return true;
+                }
                 setCollectionEvidence({
                     kind: 'collect',
                     outcome,

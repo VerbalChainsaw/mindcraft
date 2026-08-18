@@ -190,6 +190,12 @@ async function main() {
     // fails and C collects, the cause is the stance the route digger works
     // from, not the cover and not the shape of the stone.
     { id: 'C', label: 'stone buried under cover, bot standing on the column', build: BURIED, stand: { x: 1032.5, y: 100, z: 1013.5 } },
+    // Same rock as B, same stance, different command. The orchestration run
+    // reported !collect returning noPath on the very outcrop where
+    // !collectBlocksInRange succeeded, so the two collection entry points
+    // disagree about the same stone. If D fails while B passes, the difference
+    // is in the options one passes and the other does not, not in the world.
+    { id: 'D', label: 'exposed outcrop via !collect instead of !collectBlocksInRange', build: OUTCROP, command: '!collect("cobblestone", 3)' },
   ]) {
     await emitAcknowledged(socket, 'send-message', [options.bot, { message: '!stop' }]);
     await delay(1_500);
@@ -207,7 +213,7 @@ async function main() {
     // Same clearance above, same tool, same start for both fixtures. Only the
     // position of the stone relative to the bot changes.
     await paper(`fill ${BOX.x1} ${BOX.y1 + 1} ${BOX.z1} ${BOX.x2} ${BOX.y2} ${BOX.z2} air`);
-    if (fixture.id !== 'B') {
+    if (fixture.id === 'A' || fixture.id === 'C') {
       // Cover, then stone beneath it. Everything between is ordinary dirt.
       await paper(`fill ${BOX.x1} ${BURIED_STONE_Y} ${BOX.z1} ${BOX.x2} ${BOX.y1} ${BOX.z2} dirt`);
       for (const column of BURIED) {
@@ -236,7 +242,8 @@ async function main() {
     const priorActionId = state()?.action?.lastResult?.actionId || null;
     outputs.length = 0;
 
-    await emitAcknowledged(socket, 'send-message', [options.bot, { message: COMMAND }]);
+    const command = fixture.command || COMMAND;
+    await emitAcknowledged(socket, 'send-message', [options.bot, { message: command }]);
 
     let terminal = null;
     try {
@@ -259,6 +266,7 @@ async function main() {
     results.push({
       fixture: fixture.id,
       geometry: fixture.label,
+      command: fixture.command || COMMAND,
       phase: terminal?.phase || null,
       code: terminal?.code || null,
       collected: after - before,
