@@ -1940,7 +1940,15 @@ export class Agent {
                         stallNudged = true;
                         await this.history.add(
                             'system',
-                            `The request from ${source} is not finished and nothing is running.`
+                            // Quote it. Asked for charcoal, one run answered the
+                            // nudge with "I have no outstanding steps now and
+                            // have crafted 24 torches as confirmed by: Action
+                            // output: Crafted 24 torch." That is real evidence
+                            // for the wrong thing, and it happened because the
+                            // nudge described the request instead of repeating
+                            // it. The words the player used are the standard.
+                            `This is what ${source} asked for: "${String(message || '').slice(0, 300)}".`
+                            + ' It is not finished and nothing is running.'
                             + ' If a step remains, issue the next command now.'
                             + ' If you are blocked, name exactly what is missing.'
                             // The first version of this offered "if it is

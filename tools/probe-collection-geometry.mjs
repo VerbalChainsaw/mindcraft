@@ -196,6 +196,14 @@ async function main() {
     // disagree about the same stone. If D fails while B passes, the difference
     // is in the options one passes and the other does not, not in the world.
     { id: 'D', label: 'exposed outcrop via !collect instead of !collectBlocksInRange', build: OUTCROP, command: '!collect("cobblestone", 3)' },
+    // Eight, not three. Three is satisfied by the outcrop's exposed faces; a
+    // furnace needs eight, which means going into the mass. The orchestration
+    // run asked for eight, collected five, and then reported no path to any
+    // reachable stone -- with a 4x3x4 block of it in front of the bot. If E
+    // stalls short while B and D pass, the wall is interior blocks: the route
+    // may break only the selected target, so reaching one behind another has
+    // no legal path by construction.
+    { id: 'E', label: 'exposed outcrop, eight cobblestone (needs interior blocks)', build: OUTCROP, command: '!collect("cobblestone", 8)' },
   ]) {
     await emitAcknowledged(socket, 'send-message', [options.bot, { message: '!stop' }]);
     await delay(1_500);

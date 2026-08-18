@@ -94,17 +94,23 @@ export const queryList = [
             res += `\n- Reflex modes: ${modeState}`;
             const selfDirects = agent.runtime?.autonomy !== 'command';
             res += `\n- Survival progression: ${progression.completedMilestones}/${progression.totalMilestones} prerequisites evidenced; current stage=${progression.currentStage}`;
-            // "Next required milestone" is an instruction wearing a label. The
-            // command lines below were already gated, but the milestone name
-            // steered anyway: after the 2026-08-18 run actually smelted the
-            // charcoal it was asked for, the model said "Now, I will craft
-            // torches, which is the next progression milestone" and spent the
-            // rest of the window on torches and iron ore. It never handed the
-            // charcoal over. Under command autonomy nothing here is required.
-            res += selfDirects
-                ? `\n- Next required milestone: ${progression.nextMilestone}`
-                : `\n- Milestone this would advance, for reference only: ${progression.nextMilestone}`;
-            res += `\n- Missing prerequisites: ${progression.missingPrerequisites.join(', ') || 'none'}`;
+            // Under command autonomy the milestone ladder has no consumer. Role
+            // work, job work and the self-prompt goal are all suppressed, so
+            // nothing in this bot acts on it except the model -- and the model
+            // kept acting on it. Reframing the wording was not enough: on
+            // 2026-08-18, asked for charcoal, one run crafted twenty-four
+            // torches instead and signed off with "I have no outstanding steps
+            // now", citing "Crafted 24 torch" as its evidence. Torches are the
+            // fuel_and_light milestone, and this ladder was the only thing in
+            // the prompt proposing them.
+            //
+            // A companion that acts on request does not need a private agenda
+            // in front of it. The stage line above stays as orientation; the
+            // rungs are gone.
+            if (selfDirects) {
+                res += `\n- Next required milestone: ${progression.nextMilestone}`;
+                res += `\n- Missing prerequisites: ${progression.missingPrerequisites.join(', ') || 'none'}`;
+            }
             // Survival progression is reference, not an order. Under command
             // autonomy every self-direction lane is already suppressed -- role
             // work, job work, and the legacy self-prompt goal all stand down --
@@ -129,7 +135,6 @@ export const queryList = [
                 res += '\n- Finishing a fetch or make request: when a player asks you to get, make, bring or'
                     + ' cook something FOR THEM, the job is not done while it is in your own inventory.'
                     + ' Hand it over, then say so.';
-                res += `\n- Progression suggestion, only valid if the player asks for progression work: ${progression.recommendedCommand || 'none'}`;
             } else {
                 res += `\n- Order of operations: ${progression.nextOperation}`;
                 res += `\n- Next deterministic command: ${progression.recommendedCommand || 'none; stop and report the blocker'}`;
