@@ -10241,7 +10241,16 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             await interruptibleDelay(bot, BLOCK_BREAK_SETTLE_MS);
         } catch (err) {
             setActionEvidence(bot, { kind: 'break', outcome: 'dig_blocked', target, error: err.message, retryable: true });
-            log(bot, `Could not break ${block.name}: ${err.message}.`);
+            // Which block, and from where. "Could not break dirt: Block not in
+            // view" with no coordinates is unactionable in a log and cost a
+            // full diagnostic cycle on 2026-08-17; the whole question is the
+            // geometry between the bot and the block.
+            const from = bot.entity?.position;
+            log(
+                bot,
+                `Could not break ${block.name} at ${x}, ${y}, ${z}: ${err.message}`
+                + `${from ? ` (standing at ${from.x.toFixed(1)}, ${from.y.toFixed(1)}, ${from.z.toFixed(1)})` : ''}.`,
+            );
             return false;
         }
         let remaining = bot.blockAt(Vec3(x, y, z));
@@ -16628,10 +16637,27 @@ export function orderMiningExcavationBlocks(blocks, origin = null) {
         // Clear the lowest gravity block while its solid plug remains in
         // place. Any higher gravity block then settles into that same bound
         // coordinate instead of falling through the future standing cell.
-        const gravityOrder = Number(!isFallingGameplayBlock(left))
-            - Number(!isFallingGameplayBlock(right));
+        const leftFalls = isFallingGameplayBlock(left);
+        const rightFalls = isFallingGameplayBlock(right);
+        const gravityOrder = Number(!leftFalls) - Number(!rightFalls);
         if (gravityOrder !== 0) return gravityOrder;
-        const heightOrder = Number(left?.position?.y) - Number(right?.position?.y);
+        const leftY = Number(left?.position?.y);
+        const rightY = Number(right?.position?.y);
+        // Gravity blocks keep the lowest-first rule above. Ordinary rock and
+        // soil must go the other way: top down, the way anyone digs.
+        //
+        // Lowest-first applied to everything, and it made descending steps
+        // impossible. Measured 2026-08-17: the companion broke the surface
+        // block, dropped in, and was then told to break a block one down and
+        // one over -- still capped by unbroken dirt, every face against solid
+        // ground. mineflayer raycasts for a visible face and correctly threw
+        // "Block not in view"; the route reversed out and twelve reachable
+        // candidates were reported as noPath. Nothing was wrong with the
+        // digging. It was asked to start at the bottom of a hole it had not
+        // opened yet.
+        const heightOrder = leftFalls && rightFalls
+            ? leftY - rightY
+            : rightY - leftY;
         if (heightOrder !== 0) return heightOrder;
         if (!origin?.distanceTo) return 0;
         return origin.distanceTo(left.position) - origin.distanceTo(right.position);
