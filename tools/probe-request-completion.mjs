@@ -255,6 +255,11 @@ async function main() {
     await paper(`gamemode survival ${RECIPIENT}`);
     await paper(`tp ${options.bot} ${STAND.x} ${STAND.y} ${STAND.z}`);
     await paper(`tp ${RECIPIENT} ${STAND.x + 2} ${STAND.y} ${STAND.z}`);
+    // Case 6 opened believing it held one cobblestone when it had been granted
+    // sixteen: the previous case's mining had left drops on the ground, and the
+    // bot picked them up after the clear. A case that inherits the last case's
+    // litter is not measuring what it claims to.
+    await paper(`kill @e[type=item,x=${STAND.x},y=40,z=${STAND.z},dx=120,dy=140,dz=120]`);
     await paper(`clear ${options.bot}`);
     await paper(`clear ${RECIPIENT}`);
     for (const [item, count] of testCase.grant) await paper(`give ${options.bot} ${item} ${count}`);

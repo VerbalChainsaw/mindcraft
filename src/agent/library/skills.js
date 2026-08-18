@@ -8172,11 +8172,42 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
                     });
                     try {
-                        await runBoundedCollectionOperation(
-                            bot,
-                            () => bot.collectBlock.collect(block),
-                            () => bot.collectBlock.cancelTask(),
-                        );
+                        try {
+                            await runBoundedCollectionOperation(
+                                bot,
+                                () => bot.collectBlock.collect(block),
+                                () => bot.collectBlock.cancelTask(),
+                            );
+                        } catch (routeError) {
+                            // "Deterministic access has already opened the legal
+                            // stance" is an assumption, and when it is wrong this
+                            // is the failure: only the target may be broken, so
+                            // a block under eight layers of dirt has no legal
+                            // approach at all. Measured 2026-08-18 on ordinary
+                            // superflat ground -- the selector scored a success
+                            // route to stone at (1032, 91, 1012) and collectblock
+                            // answered "No path to the goal!" for the same block
+                            // in the same breath. The engine was not wrong; it
+                            // was forbidden to dig the dirt in the way.
+                            //
+                            // A player digs down to the stone. Give the plugin
+                            // that same permission once, for this one target,
+                            // before reporting the block unreachable. The
+                            // no-candidate branch already ends this way; a
+                            // candidate we DID select deserves the same effort.
+                            if (!/no path|timeout/i.test(String(routeError?.message || ''))) throw routeError;
+                            log(bot, `No open approach to ${block.name}; digging down to it.`);
+                            bot.collectBlock.movements = targetScopedCollectionMovements(bot, block, {
+                                allowPillars: true,
+                                allowNaturalRouteDigging: true,
+                                requireReturnableRoute: false,
+                            });
+                            await runBoundedCollectionOperation(
+                                bot,
+                                () => bot.collectBlock.collect(block),
+                                () => bot.collectBlock.cancelTask(),
+                            );
+                        }
                     } finally {
                         const routeMovements = safeMovements(bot);
                         bot.collectBlock.movements = routeMovements;
