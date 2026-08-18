@@ -1942,8 +1942,17 @@ export class Agent {
                             'system',
                             `The request from ${source} is not finished and nothing is running.`
                             + ' If a step remains, issue the next command now.'
-                            + ' If it is complete, say so plainly and stop.'
                             + ' If you are blocked, name exactly what is missing.'
+                            // The first version of this offered "if it is
+                            // complete, say so plainly and stop", and the model
+                            // took that exit with no charcoal in its inventory:
+                            // "No unfinished step remains from the last
+                            // request." A bare completion claim is precisely
+                            // what the rest of this prompt stack forbids, so the
+                            // exit stays open but has to be paid for the same
+                            // way every other success claim is.
+                            + ' If you believe it is already complete, name the command output that confirms'
+                            + ' the player got what they asked for; do not claim completion from memory.'
                             + ' Do not ask permission to continue work you were already asked to do.',
                         );
                         this.history.save();
