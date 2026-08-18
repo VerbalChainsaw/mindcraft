@@ -92,7 +92,23 @@ export const queryList = [
             res += `\n- Hazards: ${describe(perception.hazards)}`;
             res += `\n- Useful blocks/resources: ${describe(perception.usefulBlocks)}`;
             res += `\n- Reflex modes: ${modeState}`;
-            const selfDirects = agent.runtime?.autonomy !== 'command';
+            // Prescriptive only when the companion is genuinely self-directing:
+            // no player request outstanding, and a profile that self-directs at
+            // all.
+            //
+            // This used to test `autonomy === 'command'` alone, which is what
+            // the scenario fixture uses -- and Kevin, the profile Gabriel
+            // actually plays with, is `balanced`. So every progression fix made
+            // on 2026-08-17/18 reached the test bot and none of them reached the
+            // real one. Proven live: Kevin, holding a player's request, was
+            // still shown "Next required milestone: Recover inventory after
+            // death / Next deterministic command: !recoverDeathItems()", and
+            // refused three separate requests because of it.
+            //
+            // An open request is the honest test, and it does not care what the
+            // profile is called.
+            const selfDirects = agent.runtime?.autonomy !== 'command'
+                && !agent.open_player_request;
             res += `\n- Survival progression: ${progression.completedMilestones}/${progression.totalMilestones} prerequisites evidenced; current stage=${progression.currentStage}`;
             // Under command autonomy the milestone ladder has no consumer. Role
             // work, job work and the self-prompt goal are all suppressed, so
@@ -124,8 +140,12 @@ export const queryList = [
             // treated it as disabled is the defect, and it only became
             // reachable once the model started choosing commands.
             if (!selfDirects) {
-                res += '\n- Self-directed progression: disabled for this profile. Do what the player asked;'
-                    + ' never substitute progression work for a request. Idle and unasked, stay put and report.';
+                res += agent.open_player_request
+                    ? '\n- Self-directed progression: stood down, because a player has asked you for something.'
+                        + ' None of the survival ladder is a precondition for their request, and an errand of your'
+                        + ' own that you cannot finish never blocks what they asked for. Do their thing.'
+                    : '\n- Self-directed progression: disabled for this profile. Do what the player asked;'
+                        + ' never substitute progression work for a request. Idle and unasked, stay put and report.';
                 // Measured 2026-08-18: asked to "go get some wood and make me
                 // some charcoal", the companion derived the whole chain on its
                 // own -- wood, pickaxe, crafting table, eight cobblestone,

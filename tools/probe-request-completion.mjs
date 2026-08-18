@@ -43,6 +43,10 @@ const STAND = Object.freeze({ x: 1033.5, y: 100, z: 1013.5 });
 // stalled case is obvious in minutes rather than after a lunch break.
 const CASE_TIMEOUT_MS = 180_000;
 
+// Cases 1-3 isolate hand-over. Cases 4-7 are drawn from the campaign record
+// Gabriel recovered on 2026-08-18 -- deeds that physically worked once and were
+// then frozen in prose instead of replayed. Each is trimmed to its
+// player-visible outcome so it runs in a minute rather than a session.
 const CASES = Object.freeze([
   {
     id: '1-give',
@@ -64,6 +68,45 @@ const CASES = Object.freeze([
     grant: [['minecraft:oak_log', 8]],
     request: 'Make me 4 sticks and hand them over.',
     want: { item: 'stick', count: 4 },
+  },
+  {
+    // Campaign 28: log -> planks -> sticks -> wooden pickaxe, equipped, with
+    // useful leftovers retained. Passed once, without repair.
+    id: '4-tool-prep',
+    label: 'campaign 28: prepare and equip a wooden pickaxe',
+    grant: [['minecraft:oak_log', 4]],
+    request: 'Make yourself a wooden pickaxe and equip it.',
+    want: { item: 'wooden_pickaxe', count: 1, holder: 'bot' },
+  },
+  {
+    // Campaigns 29 and 70: an exact spoken quantity, mined locally, delivered.
+    // The only case here that needs the mining chain, and the only one that has
+    // to dig -- superflat puts stone under seven layers of dirt, which is the
+    // geometry that was refusing every candidate until tonight.
+    id: '5-mine-exact',
+    label: 'campaigns 29/70: mine an exact quantity and deliver it',
+    grant: [['minecraft:stone_pickaxe', 1]],
+    request: 'Mine 4 cobblestone and bring them to me.',
+    want: { item: 'cobblestone', count: 4 },
+    timeoutMs: 300_000,
+  },
+  {
+    // Campaign 68: several distinct kit items from supplied ingredients, using
+    // an existing table, keeping exactly those items.
+    id: '6-kit',
+    label: 'campaign 68: craft a multi-item kit and keep it',
+    grant: [['minecraft:oak_planks', 32], ['minecraft:stick', 16], ['minecraft:cobblestone', 16]],
+    request: 'Make a stone sword and a stone shovel.',
+    want: { item: 'stone_sword', count: 1, holder: 'bot', also: [{ item: 'stone_shovel', count: 1 }] },
+  },
+  {
+    // M2 workshop milestone: exact recipe at the camp table, one output,
+    // delivered to the player who asked.
+    id: '7-workshop',
+    label: 'M2: craft at the table and deliver the exact output',
+    grant: [['minecraft:iron_ingot', 8], ['minecraft:stick', 8]],
+    request: 'Craft an iron axe and give it to me.',
+    want: { item: 'iron_axe', count: 1 },
   },
 ]);
 
@@ -158,6 +201,11 @@ const heldBy = (bot, item) => (bot?.inventory?.items() || [])
   .filter(entry => entry?.name === item)
   .reduce((total, entry) => total + (entry.count || 0), 0);
 
+// Some campaigns end with the companion holding the thing, not the player --
+// preparing its own pickaxe, keeping its own kit. Measuring those against the
+// recipient would fail a deed that actually worked.
+const botHolds = (states, name, item) => Number(states?.[name]?.inventory?.counts?.[item]) || 0;
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
 
@@ -218,7 +266,17 @@ async function main() {
     await paper(`kill @e[type=!player,x=${STAND.x},y=60,z=${STAND.z},dx=80,dy=80,dz=80]`);
     await delay(2_500);
 
-    const before = heldBy(recipient, testCase.want.item);
+    // Who has to end up holding it. Most campaigns end in the player's hands;
+    // a few -- preparing its own tool, keeping its own kit -- end in the
+    // companion's, and measuring those against the recipient would fail a deed
+    // that actually worked.
+    const wants = [testCase.want, ...(testCase.want.also || [])];
+    const holderOf = want => want.holder === 'bot' || testCase.want.holder === 'bot' ? 'bot' : 'recipient';
+    const readHeld = want => (holderOf(want) === 'bot'
+        ? botHolds(states, options.bot, want.item)
+        : heldBy(recipient, want.item));
+    const before = new Map(wants.map(want => [want.item, readHeld(want)]));
+    const satisfied = () => wants.every(want => readHeld(want) - (before.get(want.item) || 0) >= want.count);
     outputs.length = 0;
     const startedAt = Date.now();
 
@@ -229,10 +287,10 @@ async function main() {
     let delivered = false;
     try {
       await waitFor(
-        () => heldBy(recipient, testCase.want.item),
-        held => held - before >= testCase.want.count,
-        `${testCase.id} delivery`,
-        CASE_TIMEOUT_MS,
+        () => satisfied(),
+        done => done === true,
+        `${testCase.id} outcome`,
+        testCase.timeoutMs || CASE_TIMEOUT_MS,
       );
       delivered = true;
     } catch { /* recorded below */ }
@@ -241,8 +299,11 @@ async function main() {
       id: testCase.id,
       label: testCase.label,
       request: testCase.request,
-      want: `${testCase.want.count}x ${testCase.want.item}`,
-      received: heldBy(recipient, testCase.want.item) - before,
+      want: wants.map(want => `${want.count}x ${want.item}`).join(' + '),
+      holder: holderOf(testCase.want),
+      received: wants
+        .map(want => `${readHeld(want) - (before.get(want.item) || 0)}x ${want.item}`)
+        .join(' + '),
       delivered,
       seconds: Math.round((Date.now() - startedAt) / 1000),
       lastSaid: outputs.slice(-3),
