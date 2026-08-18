@@ -262,8 +262,8 @@ async function main() {
       phase: terminal?.phase || null,
       code: terminal?.code || null,
       collected: after - before,
-      detail: String(terminal?.detail || '').slice(0, 300),
-      outputs: outputs.slice(-4),
+      detail: String(terminal?.detail || '').slice(0, 1600),
+      outputs: outputs.slice(-6),
     });
   }
 
