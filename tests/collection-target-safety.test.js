@@ -329,14 +329,55 @@ test('mining allows a compact entrance but rejects a visible surface trench befo
         ok: true,
         outcome: 'compact_surface_entrance',
         visibleBlocks: 3,
+        surfaceColumns: 3,
         lastVisibleStep: 2,
     });
 
+    // A shaft straight down is one hole in the surface however deep it goes.
+    // The old metric counted sky-lit blocks, so every block of the shaft
+    // scored as fresh surface damage and anything past three deep was refused
+    // as "not bounded" -- which ended straight-down mining entirely when it
+    // landed on 2026-08-10. Depth is not disturbance; footprint is.
+    const shaftColumn = { x: 20, z: 0 };
+    const verticalShaft = assessMiningSurfaceDisturbance(bot, [
+        [visibleDirt(shaftColumn.x, shaftColumn.z)],
+        [visibleDirt(shaftColumn.x, shaftColumn.z)],
+        [visibleDirt(shaftColumn.x, shaftColumn.z)],
+        [visibleDirt(shaftColumn.x, shaftColumn.z)],
+        [visibleDirt(shaftColumn.x, shaftColumn.z)],
+        [visibleDirt(shaftColumn.x, shaftColumn.z)],
+    ]);
+    assert.equal(verticalShaft.ok, true);
+    assert.equal(verticalShaft.surfaceColumns, 1);
+    assert.equal(verticalShaft.lastVisibleStep, 0);
+
+    // Cutting ONE surface hole late in a route is not a trench, and refusing it
+    // was what stopped the companion descending at all: a staircase opens a new
+    // column on each of its first few steps by construction. What the rule
+    // protects against is width, and width is counted whenever it is cut.
     const lateSurfaceCut = assessMiningSurfaceDisturbance(bot, [
         [], [], [], [visibleDirt(4)],
     ]);
-    assert.equal(lateSurfaceCut.ok, false);
-    assert.equal(lateSurfaceCut.outcome, 'surface_excavation_not_bounded');
+    assert.equal(lateSurfaceCut.ok, true);
+    assert.equal(lateSurfaceCut.surfaceColumns, 1);
+
+    // A staircase down: one new column per descending step, then under cover.
+    const staircase = assessMiningSurfaceDisturbance(bot, [
+        [visibleDirt(30)], [visibleDirt(31)], [visibleDirt(32)], [visibleDirt(33)],
+        [block('stone', 34, 63, 0)], [block('stone', 35, 62, 0)],
+    ]);
+    assert.equal(staircase.ok, true);
+    assert.equal(staircase.surfaceColumns, 4);
+
+    // Width is still refused, whenever it is cut -- including late.
+    const lateTrench = assessMiningSurfaceDisturbance(bot, [
+        [], [], [], [
+            visibleDirt(40), visibleDirt(41), visibleDirt(42), visibleDirt(43),
+            visibleDirt(44), visibleDirt(45), visibleDirt(46),
+        ],
+    ]);
+    assert.equal(lateTrench.ok, false);
+    assert.equal(lateTrench.outcome, 'surface_excavation_budget_exceeded');
 
     const wideSurfaceCut = assessMiningSurfaceDisturbance(bot, [[
         visibleDirt(10),

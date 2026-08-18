@@ -248,7 +248,23 @@ const MINING_ROUTE_STEP_TIMEOUT_MS = 2_000;
 const MINING_ROUTE_STEP_ESTIMATE_MS = 450;
 const MINING_ROUTE_DEADLINE_RESERVE_MS = 3_500;
 const MAX_MINING_EXCAVATION_BLOCKS = 96;
-const MAX_MINING_SURFACE_EXCAVATION_BLOCKS = 6;
+// How much SURFACE a route may disturb, measured as the number of distinct
+// (x, z) columns it opens to the sky, and how late it may still be opening new
+// ones. Both bound the scar left on the landscape.
+//
+// These used to count sky-lit BLOCKS and the last step containing one, which
+// cannot tell a one-wide shaft from a seven-wide trench: every block of a
+// vertical shaft is lit through the hole above it, so depth read as surface
+// damage. Introduced 2026-08-10 in "Harden return-safe collection and
+// companion settlement", it silently ended straight-down mining -- Gabriel
+// reported digging down worked fine the week before, and he was right.
+// Measured 2026-08-17: twelve complete routes to buried stone, all discarded,
+// all reported to the player as unreachable.
+//
+// A shaft one block wide disturbs one column no matter how deep it goes. A
+// trench disturbs one per block. Counting columns is what the rule always
+// meant.
+const MAX_MINING_SURFACE_EXCAVATION_COLUMNS = 6;
 const MAX_MINING_SURFACE_EXCAVATION_STEPS = 3;
 const MAX_MINING_SURFACE_STAGE_DISTANCE = 10;
 const MAX_MINING_CORRIDOR_EXPANSIONS = 6_000;
@@ -3157,9 +3173,10 @@ function collectionRejectionSummary(selection) {
 // allowed, which is a sentence the player can actually act on.
 const COLLECTION_POLICY_REFUSALS = Object.freeze({
     surface_excavation_not_bounded:
-        `I will not dig an open-air shaft deeper than ${MAX_MINING_SURFACE_EXCAVATION_STEPS} steps`,
+        `I will not keep cutting new openings into the surface this far into a route`
+        + ` (past step ${MAX_MINING_SURFACE_EXCAVATION_STEPS})`,
     surface_excavation_budget_exceeded:
-        `I will not break more than ${MAX_MINING_SURFACE_EXCAVATION_BLOCKS} blocks open to the sky for one route`,
+        `I will not open more than ${MAX_MINING_SURFACE_EXCAVATION_COLUMNS} separate holes in the surface for one route`,
 });
 
 /**
@@ -16636,36 +16653,54 @@ function miningExcavationTouchesOpenSky(bot, block) {
 
 export function assessMiningSurfaceDisturbance(bot, stepExcavationBlocks) {
     const visible = [];
+    // Which surface columns this route opens, and the step each was FIRST
+    // opened at. Going deeper in a column already open is not new disturbance;
+    // that distinction is the whole correction.
+    const columnFirstOpenedAt = new Map();
     for (const [stepIndex, blocks] of (stepExcavationBlocks || []).entries()) {
         for (const block of blocks || []) {
             if (!miningExcavationTouchesOpenSky(bot, block)) continue;
             visible.push({ stepIndex, block });
+            const column = `${block?.position?.x}:${block?.position?.z}`;
+            if (!columnFirstOpenedAt.has(column)) columnFirstOpenedAt.set(column, stepIndex);
         }
     }
-    const lastVisibleStep = visible.reduce(
-        (maximum, entry) => Math.max(maximum, entry.stepIndex),
+    const surfaceColumns = columnFirstOpenedAt.size;
+    // Kept under its original name because callers and evidence read it: the
+    // last step at which this route opened a column it had not opened before.
+    const lastVisibleStep = [...columnFirstOpenedAt.values()].reduce(
+        (maximum, stepIndex) => Math.max(maximum, stepIndex),
         -1,
     );
-    if (visible.length > MAX_MINING_SURFACE_EXCAVATION_BLOCKS) {
+    if (surfaceColumns > MAX_MINING_SURFACE_EXCAVATION_COLUMNS) {
         return {
             ok: false,
             outcome: 'surface_excavation_budget_exceeded',
             visibleBlocks: visible.length,
+            surfaceColumns,
             lastVisibleStep,
         };
     }
-    if (lastVisibleStep >= MAX_MINING_SURFACE_EXCAVATION_STEPS) {
-        return {
-            ok: false,
-            outcome: 'surface_excavation_not_bounded',
-            visibleBlocks: visible.length,
-            lastVisibleStep,
-        };
-    }
+    // There used to be a second rule here: refuse the route if it opened any
+    // surface hole at or after step MAX_MINING_SURFACE_EXCAVATION_STEPS. It was
+    // a proxy for width that measured time instead, and it refused the two
+    // normal ways into the ground. A shaft failed it because every block of the
+    // shaft is lit through the hole above. A staircase failed it because each
+    // descending step opens one more column until it is under cover -- measured
+    // 2026-08-17 on a target four blocks down: three surface holes, the last at
+    // step three, refused with a footprint less than half its own budget.
+    //
+    // The footprint bound above already covers the case this was reaching for.
+    // Surfacing again later, anywhere, opens a column and is counted; a route
+    // that scars six separate holes is refused whenever it cuts them. The
+    // surface_excavation_not_bounded code is retained in the refusal vocabulary
+    // rather than deleted, because outcome strings are matched downstream and
+    // removing one has broken dispatch here before.
     return {
         ok: true,
         outcome: visible.length > 0 ? 'compact_surface_entrance' : 'subterranean_route',
         visibleBlocks: visible.length,
+        surfaceColumns,
         lastVisibleStep,
     };
 }
@@ -18251,6 +18286,14 @@ export async function mineSearchTunnel(
             log(
                 bot,
                 `Rejected the known ${stagedTarget.name} target before excavation: ${String(plan.outcome || 'no safe route').replace(/_/g, ' ')}`
+                // A surface refusal that does not say how much surface it saw
+                // cannot be argued with. These two numbers are the whole basis
+                // of the decision, so they belong in the sentence that reports
+                // it -- and they are what shows whether a rejected route was a
+                // one-hole shaft or a trench.
+                + `${Number.isFinite(plan.surfaceColumns)
+                    ? ` [surface holes ${plan.surfaceColumns}, last new hole at step ${plan.lastVisibleStep}]`
+                    : ''}`
                 + `${searchSummary ? ` (${plan.consideredRoutes} completed routes, ${plan.expandedStates || 0} states; ${searchSummary})` : ''}.`,
             );
             return false;
