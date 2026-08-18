@@ -1640,6 +1640,10 @@ export class Agent {
                 interruptNow: checkInterrupt(),
             }));
         }
+        // Whether this stall has already been prodded. Re-armed by every command
+        // that executes, so one nudge is available per stall rather than one per
+        // request. See the conversation-response branch below.
+        let stallNudged = false;
         try {
             for (let i=0; i<max_responses; i++) {
                 if (checkInterrupt()) {
@@ -1790,6 +1794,12 @@ export class Agent {
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
+                // A command is real progress, so the stall nudge below re-arms.
+                // One nudge per stall, not one per request: a dozen-step chain
+                // stalls a dozen times and each one deserves the same single
+                // prod, while a model that stops twice running has genuinely
+                // stopped and is left alone.
+                stallNudged = false;
 
                 if (execute_res)
                     this.history.add('system', execute_res);
@@ -1896,6 +1906,49 @@ export class Agent {
                 } else {
                     this.history.add(this.name, res);
                     this.routeResponse(source, res);
+                    // Nothing owns a plain-language multi-step request across
+                    // turns. goal-director owns typed goals, self-prompter owns
+                    // autonomous ones, agenda-director owns parsed plans -- but
+                    // "Go get some wood and make me some charcoal" under
+                    // llm_sequencing is owned by nobody, and this branch ends
+                    // the loop the first time the model answers without a
+                    // command. latestMessageRequestsAction stops requiring one
+                    // as soon as any command has produced an outcome, so from
+                    // turn two onward the companion is free to stop mid-chain.
+                    //
+                    // On 2026-08-17 both halves of the charcoal gate did exactly
+                    // that. Direct crafted a stone pickaxe at t+95s and said
+                    // "ready for use. Let me know what you want to do next!";
+                    // natural language stopped at t+102s. Both then stood idle,
+                    // not held, for eighteen of their twenty minutes. Answering
+                    // questions does not reach this: neither stall was a
+                    // question, and one had no question mark at all.
+                    //
+                    // So prod it once. If a step remains the model issues it and
+                    // the chain continues; if it is genuinely finished it says
+                    // so and the second command-less answer ends the loop. The
+                    // cost of being wrong is one turn.
+                    if (
+                        this.llm_sequencing
+                        && !stallNudged
+                        && used_command
+                        && !self_prompt
+                        && playerSpeechAuthority === 'action_eligible'
+                        && !this.isOperatorHeld()
+                        && !checkInterrupt()
+                    ) {
+                        stallNudged = true;
+                        await this.history.add(
+                            'system',
+                            `The request from ${source} is not finished and nothing is running.`
+                            + ' If a step remains, issue the next command now.'
+                            + ' If it is complete, say so plainly and stop.'
+                            + ' If you are blocked, name exactly what is missing.'
+                            + ' Do not ask permission to continue work you were already asked to do.',
+                        );
+                        this.history.save();
+                        continue;
+                    }
                 }
                 break;
             }
