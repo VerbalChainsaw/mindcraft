@@ -9,7 +9,7 @@ const certification = await readFile(
 );
 
 test('local rules cannot weaken Golden Rules and require both non-trivial workflows', () => {
-  assert.match(agents, /may never weaken, negate, bypass, or\ncontradict them/u);
+  assert.match(agents, /may never weaken, negate, bypass, or\s+contradict them/u);
   assert.match(agents, /every non-trivial change, invoke both `codeplan` and `center-audit`/u);
   assert.doesNotMatch(agents, /Do not invoke planning/u);
 });
@@ -18,8 +18,8 @@ test('accepted lower-layer capability stays frozen until real reopening evidence
   assert.match(agents, /Once a gameplay capability has passed real physical acceptance, freeze/u);
   assert.match(agents, /source inside its owning contract changed/u);
   assert.match(agents, /new physical runtime evidence directly contradicts the prior acceptance/u);
-  assert.match(agents, /different noun,\nquantity, caller, prompt form/u);
-  assert.match(agents, /traversal does not reopen or recertify the lower layer/u);
+  assert.match(agents, /different noun,\s+quantity, caller, prompt form/u);
+  assert.match(agents, /traversal\s+does not reopen or recertify the lower layer/u);
 });
 
 test('certification map is selective and cannot silently rerun bootstrap or smelting', () => {
