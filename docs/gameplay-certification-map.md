@@ -48,9 +48,45 @@ Immediate danger, critical health, or critical hunger must override normal
 progression. After every material state change, inspect again. A stale previous
 answer is not evidence.
 
+## Certification selection and frozen capabilities
+
+**This map is a toolbox, not a checklist.** Before any certification run, name
+the exact changed contract or new contradictory physical evidence and select
+only the station or scenario needed to prove or falsify that claim.
+
+A capability that has already passed real physical acceptance remains frozen.
+Do not rerun or re-certify collection, crafting, furnace access, smelting,
+delivery, traversal, combat, construction, or any other accepted lower-layer
+mechanic merely because a higher-level mission, executive, planner, or scenario
+uses it.
+
+A frozen capability may be reopened only when:
+
+1. source in its owning contract changed;
+2. a dependency, protocol, or contract it relies on changed; or
+3. new physical runtime evidence directly contradicts the saved acceptance.
+
+Repetition, preparation, curiosity, confidence-building, prompt-form changes,
+noun or quantity substitutions, caller changes, and a new higher-level scenario
+are not reopening evidence.
+
+A higher-layer end-to-end proof may traverse frozen lower-layer mechanics once
+when that traversal is necessary to prove the changed higher-layer contract.
+Score the changed higher-layer contract. Do not silently turn that traversal
+into lower-layer recertification. If a lower layer produces a materially new
+failure class during the run, preserve that evidence and reopen only the
+specific affected contract.
+
+Run the full map or the full clean-room bootstrap progression only when the
+Director explicitly requests broad certification or a genuinely cross-cutting
+change invalidates several previously accepted contracts. Otherwise use the
+smallest relevant station and stop when the changed contract is proven.
+
 ## Order of operations
 
-For independent survival progression, the bot must obey this dependency chain:
+For a **full clean-room survival progression campaign**, the bot must obey this
+dependency chain. This sequence is not a standing requirement for ordinary
+repair or higher-layer verification:
 
 1. logs;
 2. planks;
@@ -83,7 +119,7 @@ tactical skill.
 | Station | Bounds | Physical pass condition |
 | --- | --- | --- |
 | Hub | `995..1020, 995..1020` | From the lime start block, awareness identifies the current body and progression state before movement. |
-| Bootstrap | `1025..1065, 995..1035` | Starting with an empty inventory, obtain a crafting table, stone pickaxe, furnace, fuel, torches, smelted iron, iron pickaxe, shield, bucket, safe food, and a bed or lit shelter. Each prerequisite must precede the operation that needs it. |
+| Bootstrap | `1025..1065, 995..1035` | **Full-baseline only.** Starting with an empty inventory, obtain a crafting table, stone pickaxe, furnace, fuel, torches, smelted iron, iron pickaxe, shield, bucket, safe food, and a bed or lit shelter. Each prerequisite must precede the operation that needs it. Do not select this station merely to prepare for or re-prove a higher-level change. |
 | Traversal | `1070..1145, 995..1018` | Open the door, cross water, survive the safety-catch gap without teleporting, climb and descend the ladder tower, enter and leave the mine chamber, reach the lime block, and return. |
 | Mounted transport | `1074..1139, 1022..1039` | Mount the boat, steer it down the water lane, stop it mid-route on command, complete the lane, and dismount. Mount the genuinely saddled horse, steer it down the fenced land lane, stop, complete the lane, and dismount. Unsaddled pigs/striders must report their saddle and steering-item prerequisites rather than claim movement. |
 | Farming | `1025..1065, 1040..1075` | Harvest and replant the mature plots, plant the empty hydrated plot, and breed at least one animal pair without emptying a breeding population. |
