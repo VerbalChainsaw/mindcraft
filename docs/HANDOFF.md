@@ -1,9 +1,9 @@
 # Handoff — next session / forward proof boundary
 
 **Prepared 2026-08-21. Current tranche state: Phase 5 code and acquisition
-preparation are complete. One isolated recorded-trace cell is `ACCEPTED / CLOSED`;
-the other 111 cells remain `PENDING`. No additional gameplay run is currently
-authorized.**
+preparation are complete. One isolated recorded-trace cell is `ACCEPTED / CLOSED`.
+The Director authorized the complete 112-cell matrix in an isolated frozen-source
+subagent runtime while Phase 6 source work proceeds separately.**
 
 `ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
 governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and

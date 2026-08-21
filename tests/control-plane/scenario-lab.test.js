@@ -1327,12 +1327,19 @@ test('Phase 5 acquisition plan covers every isolated axis cell and discloses acc
   assert.equal(new Set(plan.cells.map(cell => cell.runId)).size, plan.totalCells);
   assert.equal(new Set(plan.cells.map(cell => cell.resetId)).size, plan.totalCells);
   assert.deepEqual(plan.acceptedSegmentsRepeated, [
+    'Typed item acquisition and delivery',
     'Campaign 28',
     'Campaign 29',
     'Campaign 70',
     'Campaign 68',
     'M2',
   ]);
+  for (const caseId of ['1-give', '2-craft-give', '3-chain-give']) {
+    assert.deepEqual(
+      plan.cells.find(cell => cell.caseId === caseId).acceptedSegments,
+      ['Typed item acquisition and delivery'],
+    );
+  }
   assert.match(plan.preflightAxis.off, /advisory\/advisory/);
   assert.match(plan.preflightAxis.on, /strict\/strict/);
   assert.equal(createVarianceAcquisitionPlan({ trials: 3, context }).totalCells, 168);

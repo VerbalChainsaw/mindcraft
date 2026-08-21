@@ -65,6 +65,7 @@ export const REQUEST_COMPLETION_CASES = Object.freeze([
     grants: [{ item: 'minecraft:oak_log', count: 8 }],
     outcomes: [{ holder: 'recipient', item: 'oak_log', count: 4 }],
     recordedResponse: 'I will give you four oak logs. !requestItemGoal("deliver", "oak_log", 4, "FollowTarget", "delivery")',
+    acceptedSegments: ['Typed item acquisition and delivery'],
     timeoutMs: 180_000,
   }),
   defineCase({
@@ -74,6 +75,7 @@ export const REQUEST_COMPLETION_CASES = Object.freeze([
     grants: [{ item: 'minecraft:oak_log', count: 8 }],
     outcomes: [{ holder: 'recipient', item: 'oak_planks', count: 8 }],
     recordedResponse: 'I will make and deliver eight oak planks. !requestItemGoal("deliver", "oak_planks", 8, "FollowTarget", "delivery")',
+    acceptedSegments: ['Typed item acquisition and delivery'],
     timeoutMs: 180_000,
   }),
   defineCase({
@@ -83,6 +85,7 @@ export const REQUEST_COMPLETION_CASES = Object.freeze([
     grants: [{ item: 'minecraft:oak_log', count: 8 }],
     outcomes: [{ holder: 'recipient', item: 'stick', count: 4 }],
     recordedResponse: 'I will make and deliver four sticks. !requestItemGoal("deliver", "stick", 4, "FollowTarget", "delivery")',
+    acceptedSegments: ['Typed item acquisition and delivery'],
     timeoutMs: 180_000,
   }),
   defineCase({

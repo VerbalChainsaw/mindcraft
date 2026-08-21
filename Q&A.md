@@ -111,3 +111,26 @@ Director's hand-entered overrides are authoritative.
   repair the smallest owning seam and run focused static verification. This
   answer does not authorize a game launch, physical course, accepted-campaign
   rerun, dependency change, commit, or push.
+
+---
+
+## Q-005 — Run the complete Phase 5 matrix while Phase 6 proceeds?
+
+- **Asked:** 2026-08-21
+- **Question:**
+  > After I correct the missing overlap disclosure, which execution do you
+  > authorize?
+- **Disclosed boundary:** The complete matrix is 112 isolated cells over seven
+  cases, two trials, recorded/frozen model, telemetry off/on, and preflight
+  advisory/strict. It repeats typed item acquisition/delivery, Campaigns 28, 29,
+  70, 68, and M2; uses 56 local-provider and 56 `openai / gpt-4.1` cells; may
+  issue up to 112 paid requests; and is expected to take 8–12 hours. Phase 6
+  source work must use a separate checkout and cannot share its physical runtime.
+- **Answer (2026-08-21, Director):**
+  > "Matrix + Phase 6 (Recommended)"
+- **Operational interpretation:** Correct and verify the overlap manifest, commit
+  one immutable matrix snapshot, assign the complete matrix to an isolated
+  subagent runtime, and continue Phase 6 source mapping/implementation separately.
+  Stop the matrix immediately on provider authentication, quota, billing,
+  rate-limit, or routing failure; do not retry or switch providers without new
+  approval.
