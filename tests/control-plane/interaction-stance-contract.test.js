@@ -142,14 +142,61 @@ test('shared stance execution attributes legality, planning, and physical execut
   });
   assert.equal(noLegal.failureStage, 'no_legal_stance');
 
+  let rejectedRouteExecuted = false;
   const noPlan = await reachInteractionStance(bot, {
     kind: 'workstation',
     target,
     goal,
     candidates: [stance],
-    probeStances: () => ({ reachable: false, status: 'noPath', pathLength: 0 }),
+    probeStances: () => ({ reachable: false, conclusive: true, status: 'noPath', pathLength: 0 }),
+    navigateGoal: () => {
+      rejectedRouteExecuted = true;
+      return true;
+    },
   });
   assert.equal(noPlan.failureStage, 'path_not_found');
+  assert.equal(rejectedRouteExecuted, false);
+
+  let executedGoal = null;
+  const inconclusive = await reachInteractionStance(bot, {
+    kind: 'workstation',
+    target,
+    goal,
+    candidates: [stance],
+    probeStances: () => ({ reachable: false, conclusive: false, status: 'timeout', pathLength: 1 }),
+    navigateGoal: (candidateBot, candidateGoal) => {
+      assert.equal(candidateBot, bot);
+      executedGoal = candidateGoal;
+      bot.entity.position = new Vec3(stance.x, stance.y, stance.z);
+      return true;
+    },
+  });
+  assert.equal(executedGoal, goal);
+  assert.equal(inconclusive.status, 'ready');
+  assert.equal(inconclusive.failureStage, null);
+  assert.equal(inconclusive.path.status, 'timeout');
+  bot.entity.position = new Vec3(0, 64, 0);
+
+  bot.preflightPolicy = { interactionStance: 'strict' };
+  let strictRouteExecuted = false;
+  const strictInconclusive = await reachInteractionStance(bot, {
+    kind: 'workstation',
+    target,
+    goal,
+    candidates: [stance],
+    probeStances: () => ({ reachable: false, conclusive: false, status: 'timeout', pathLength: 1 }),
+    navigateGoal: () => {
+      strictRouteExecuted = true;
+      return true;
+    },
+  });
+  assert.equal(strictRouteExecuted, false);
+  assert.equal(strictInconclusive.status, 'failed');
+  assert.equal(strictInconclusive.failureStage, null);
+  assert.equal(strictInconclusive.code, 'route_unproven');
+  assert.equal(strictInconclusive.stages.planning.status, 'unknown');
+  assert.equal(strictInconclusive.stages.execution.status, 'unknown');
+  delete bot.preflightPolicy;
 
   const stalled = await reachInteractionStance(bot, {
     kind: 'workstation',

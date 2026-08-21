@@ -1,9 +1,9 @@
 {
  "schemaVersion": "scenario-lab.manifest.v1",
- "manifestRevision": "orchestration-charcoal-20260817.v1",
- "manifestHash": "f7e9008d7fc4a9b423354dcc310ff41788a5d6fa9726c3ef4f70cec03c6726c5",
+ "manifestRevision": "phase-4-route-probe-inconclusive-20260820.v1",
+ "manifestHash": "0aa991ac9cbf9a8fa05e3cae98d7859624dbf38658fe0b40667282fdd3dc4bf3",
  "title": "Release 0.1 deterministic Scenario Lab catalog",
- "candidateCommit": "12bdc21081a3e883b945d6eb001a543ba61e7902",
+ "candidateCommit": "ad37a3d2f2ab70d52cac93f22e5e6ebc16b0f748",
  "server": {
   "implementation": "paper",
   "version": "1.21.11",
@@ -408,14 +408,14 @@
   {
    "id": "orchestration-charcoal",
    "family": "orchestration-charcoal",
-   "title": "Plain language to charcoal, on primitives only",
+   "title": "Plain language to one charcoal Mission vertical slice",
    "status": "not-run",
    "seed": "5514418771093312",
    "world": {
     "worldId": "orchestration-forest-v1",
     "fixtureId": "scenario-lab.orchestration-forest.v1",
     "fixtureVersion": 1,
-    "fixtureHash": "9a31ca4e71ec5d40013594a8922e88164851df2e792c3d867b80ce05847f42f8",
+    "fixtureHash": "7ed5b7cc1b174f127464f9aaeba7f80e816fae1e31a5bfcc01f8927ca76de3a8",
     "dimension": "overworld"
    },
    "timeoutMs": 1500000,
@@ -455,6 +455,62 @@
      "node",
      "tools/scenario-lab/run.mjs",
      "orchestration-charcoal"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
+  },
+  {
+   "id": "route-probe-inconclusive",
+   "family": "route-probe-inconclusive",
+   "title": "Inconclusive whole-route probe remains unproven",
+   "status": "not-run",
+   "seed": "8140427791654321",
+   "world": {
+    "worldId": "deliver-item-flat-v1",
+    "fixtureId": "scenario-lab.deliver-item-flat.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "5648172f406cd63604db1c8cf4f53923d4e8ec4e18a41ac92dd9fd12ef82489e",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 180000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "!goToCoordinates(1038,100,1013,0,true)",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "!goToCoordinates(1038,100,1013,0,true)",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "instrumentation-mode-confirmed",
+    "route-probe-lifecycle",
+    "route-probe-inconclusive-confirmed",
+    "no-unproven-movement-confirmed",
+    "terrain-preserved-confirmed",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+     "route-probe-inconclusive"
     ],
     "evidenceAdapterId": "follow-field-evidence-v1"
    },

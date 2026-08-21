@@ -35,6 +35,7 @@ const USEFUL_DROP_POLICIES = new Set(['ignore', 'collect']);
 const JOB_MODES = new Set(['off', 'simple', 'resumable']);
 const DEPOSIT_POLICIES = new Set(['inventory', 'leader', 'assigned']);
 const REACTION_MODES = new Set(['off', 'minimal', 'natural']);
+const PREFLIGHT_INCONCLUSIVE_POLICIES = new Set(['strict', 'advisory']);
 const MAX_SPECIALTIES = 12;
 const MAX_TEXT = 240;
 
@@ -112,6 +113,9 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
   const reactions = raw.reactions && typeof raw.reactions === 'object' && !Array.isArray(raw.reactions)
     ? raw.reactions
     : {};
+  const preflight = raw.preflight && typeof raw.preflight === 'object' && !Array.isArray(raw.preflight)
+    ? raw.preflight
+    : {};
   const character = normalizeCharacterIdentity(profile.identity || identity, {
     displayName: profile.displayName || profile.name,
     appearance: profile.appearance,
@@ -175,6 +179,23 @@ export function normalizeRuntimeBehavior(profile = {}, legacySettings = {}) {
       mode: enumValue(reactions.mode, REACTION_MODES, reactionFallback),
       maxSpeechPerMinute: boundedInteger(reactions.maxSpeechPerMinute, 4, 0, 12),
       maxGesturesPerMinute: boundedInteger(reactions.maxGesturesPerMinute, 8, 0, 24),
+    }),
+    // These policies control only what happens after an advisory Pathfinder
+    // probe ends inconclusively. Conclusive noPath and safety vetoes remain
+    // binding in both modes. Defaults preserve the current consumer behavior:
+    // collection retries instead of selecting an unproven target, while an
+    // interaction stance lets real Pathfinder decide after the advisory probe.
+    preflight: Object.freeze({
+      collectionRoute: enumValue(
+        preflight.collectionRoute,
+        PREFLIGHT_INCONCLUSIVE_POLICIES,
+        'strict',
+      ),
+      interactionStance: enumValue(
+        preflight.interactionStance,
+        PREFLIGHT_INCONCLUSIVE_POLICIES,
+        'advisory',
+      ),
     }),
     assignment: Object.freeze({
       leader: text(assignment.leader, '', 16),
@@ -261,6 +282,7 @@ export function runtimeBehaviorToProfile(behavior) {
     survival: { ...config.survival },
     jobs: { ...config.jobs },
     reactions: { ...config.reactions },
+    preflight: { ...config.preflight },
     assignment: {
       ...config.assignment,
       deposit: config.assignment.deposit ? { ...config.assignment.deposit } : null,

@@ -1,9 +1,10 @@
-# Campaign record: what has physically worked
+# Campaign record: archaeology and non-regression contract
 
 **Author: Gabriel (the Director), 2026-08-18.** Evidence-based archaeology over
 the project's own artifacts, transcribed here because it existed nowhere in the
-repo. Read alongside `ENGINE-DOSSIER.md`, which diagnoses the current failures —
-this document is the counterweight: the behaviours that provably worked.
+repo. `ARCHITECTURE.md` governs. This document preserves physical evidence and
+defines non-regression outcomes; it is not an implementation plan or work order.
+Current diagnosis and migration status live only in `ARCHITECTURE.md`.
 
 The correction that matters most: **there was never one continuously flawless
 long-haul build.** There were many genuinely good campaigns, each often followed
@@ -11,10 +12,39 @@ by a different failure at the next seam. That pattern is itself the diagnosis.
 
 ## Classification
 
-- 28 strong or complete campaign outcomes
+- 29 strong or complete campaign outcomes
 - 35 partial campaigns with a physically verified useful success before another
   seam failed
-- 5 controlled repeatability sets
+- 6 controlled repeatability sets
+
+These labels describe overlapping evidence views, not 68 disjoint campaigns. A
+repeatability set groups repeated executions of behavior that may also appear in
+the strong set. A campaign classified strong for one accepted chain can also have
+later partial or failed seams; tables below name the preserved outcome precisely.
+
+## Current accepted-boundary ledger
+
+This ledger prevents accepted evidence from silently becoming runnable work again.
+Only `PENDING`, `ACTIVE`, `ACCEPTED / CLOSED`, and `DEAD` are valid test states.
+
+| Boundary | State | Preserved evidence |
+|---|---|---|
+| Phases 1–2 lifecycle, halt acknowledgement, physical settlement, Pathfinder and CollectBlock transfer | `ACCEPTED / CLOSED` | Focused lifecycle checks and the accepted physical interruption-and-transfer run. |
+| Typed item acquisition and delivery | `ACCEPTED / CLOSED` | Passing direct and natural-language aggregate with physical transfer. |
+| Doorway/corridor follow | `ACCEPTED / CLOSED` | 10/10 controlled set plus later complete Scenario Lab aggregates. |
+| Obstruction follow through breakable terrain | `ACCEPTED / CLOSED` | 18 consecutive passing scenario results, each with both request forms. |
+| Phase 3 exact eight-charcoal Mission | `ACCEPTED / CLOSED` | `validation-output/orchestration-charcoal-2026-08-19T08-49-44-151/orchestration-charcoal.result.v1.json`: two of two forms completed, complete evidence, zero retries, blockers, missing evidence, missing fields, timeouts, deaths, conflicts, unsafe state, or safety violations. |
+| Phase 4 `probeSafeNavigationGoal` -> `goToGoal` inconclusive-route truth contract | `ACCEPTED / CLOSED` | `validation-output/route-probe-inconclusive-2026-08-20T20-59-54-989/route-probe-inconclusive.result.v1.json`: two of two explicit-command transports completed with `timeout`, `conclusive: false`, retryable `skill_route_unproven`, zero movement, intact terrain, complete evidence, Hold, full restoration, and no remaining managed Java or safety violation. |
+| Phase 4 `probeSafeNavigationStances` result-shape truth contract | `ACCEPTED / CLOSED` | Static contract only: an isolated failing-before timeout probe returned no `conclusive` field; after the one-field owner repair, the direct timeout/`noPath`/success contract test and the full `critical-runtime-output` file (`24/24`) pass. No physical gameplay or consumer acceptance is claimed. |
+| Any confidence rerun of an accepted boundary | `DEAD` | Saved evidence must be used unless the Director explicitly authorizes the exact disclosed rerun after materially contradictory evidence. |
+| Phase 4 `reachInteractionStance` inconclusive-probe consumer truth | `ACCEPTED / CLOSED` | `artifacts/interaction-stance-inconclusive-20260820-r4/live-report.json`: the real producer timed out inconclusively, the shared helper permitted real Pathfinder to traverse 70.19 blocks to the original legal stance, the body settled, no later interaction occurred, inventory and terrain remained intact, and the fixture, configuration, memory, and managed Java runtime were fully restored. Focused conclusive-`noPath` and inconclusive-execution checks pass `7/7`; no provider or accepted campaign ran. |
+| In-flight Mission replacement and graceful Activity handoff | `ACCEPTED / CLOSED` | Deterministic failing-before reproduction installed Mission 2 while Mission 1's Activity remained `RUNNING`, then discarded its settlement without one stop call. The controller now validates first, awaits existing ActionManager stop plus correlated Activity settlement, and only then installs the replacement; invalid input and failed halt leave the old Mission current. Focused Mission checks pass `7/7`; adjacent ActionManager lifecycle/correlation checks pass `14/14`. No provider, world, or accepted exact-charcoal campaign ran. |
+| Phase 5 `1-give`, trial 1, recorded trace, telemetry off, advisory preflight | `ACCEPTED / CLOSED` | `validation-output/phase5-variance-20260821-v3`: one isolated real-Minecraft cell passed. Kevin began with eight oak logs and physically delivered exactly four to `FollowTarget`; the provider received one request; runtime and provider input/output fingerprints matched; the action settled as `skill_delivered`; the fixture and runtime were restored; Kevin ended held; the test player disconnected; no managed Java or recorded-provider process remained. This closes only this exact cell, not the frozen-model arm or the matrix. |
+| Remaining Phase 5 variance cells | `PENDING` | The saved partial acquisition state contains 1 of 112 valid cells and no matrix verdict. Each additional cell remains a separate execution boundary; accepted-overlap runs require exact per-run disclosure and authorization. |
+
+`tools/scenario-lab/scenarios.v1.json` is a definition and availability catalog,
+not an execution ledger. A static `not-run` value there cannot reopen a boundary
+marked `ACCEPTED / CLOSED` here.
 
 ## Commit anchors
 
@@ -46,6 +76,14 @@ waypoint arrival and stable stop were real.
 4. **Doorway follow under the later Scenario Lab** — three consecutive passes.
 5. **Typed item acquisition and delivery** — one aggregate run passing both
    forms, item physically transferred, both invocations in ~54s total.
+6. **Phase 3 exact eight-charcoal Mission** — the final direct and natural-language
+   aggregate completed both request forms, delivered exactly eight charcoal to the
+   physical requester, captured complete lifecycle/correlation/delivery/cleanup
+   evidence, and reported no safety violation.
+7. **Phase 4 inconclusive whole-route truth** — both explicit-command transports
+   forced the strict route probe to exhaust its clock. Kevin returned retryable
+   `route_unproven`, never reported `path_not_found`, travelled 0 blocks, left the
+   protected course byte-equivalent, settled under Hold, and cleaned up fully.
 
 ## Strong or complete family-campaign successes
 
@@ -92,6 +130,8 @@ Selected campaigns, by what physically succeeded:
 | 76 | Full workshop transaction: supplied recipe → existing table → one Iron Pickaxe → exact Kid delivery → Dad return → terminal Hold |
 | M2 | Kid's natural request bound the exact camp Crafting Table and recipe; crafted one Iron Axe, delivered to Dad, returned 2.697 blocks from Kid, retained no output, preserved terrain |
 | M3 | Dad asked Kevin to give the sole Bread to "one of us" and wait. Asked exactly once, retained custody and Hold before the answer, accepted KidPlayer, delivered exactly one Bread, retained none |
+| Phase 3 charcoal | A natural or direct request created one in-memory Mission, planned prerequisites incrementally, acquired wood/tool/stone/furnace/fuel, produced exactly eight charcoal, delivered it to the physical requester, and terminated with complete evidence and no unsettled lease |
+| Phase 4 route truth | An inconclusive whole-route search remained explicitly unproven and retryable; it caused no locomotion or excavation, did not claim `path_not_found`, settled under Hold, and restored the isolated fixture and runtime completely |
 
 ## Partial campaigns worth preserving as regression scenarios
 
@@ -106,7 +146,6 @@ Representative examples:
 - **Campaign 51** — from an empty, tool-less state, removed an entire eight-log
   spruce trunk, collected seven, reclaimed both scaffolds, left no residue,
   travelled at most 4.11 blocks. Then told Kid harvesting had not begun.
-- **Campaign 59** — see above; the real preemption acceptance.
 - **Campaign 67** — crafted exactly eight Torches in 50 ms, delivered four,
   retained four; the synchronous checklist failed to apply terminal Hold.
 
@@ -120,23 +159,90 @@ before closing; the same contract was later accepted as M3. The
 a success baseline: 15 minutes, 65 action results, 37 alerts, ending in failed
 dirt-delivery and lumberjack states.
 
-## What the author concluded
+## Dated recovery conclusion (archaeology, not a work order)
 
 > The historical problem is not that none of this ever worked. It is that each
 > successful behaviour was frozen in prose and narrow receipts, while later
 > changes did not continuously replay the broad player-valued chains. That
 > allowed individually "accepted" mechanics to stop composing.
 
-Recovery is therefore not a rollback:
+The Director concluded on 2026-08-18 that recovery was not a rollback:
 
 1. Treat `12bdc210` as the broad behaviour corpus.
 2. Treat `b47117b` as the exact repeatability standard.
-3. Promote the strongest campaigns — **28, 29, 59, 65, M2, M3, 68, 69, 70, 76** —
-   into current-HEAD scenario outcomes.
+3. Promote the strongest campaigns into current-working-tree scenario outcomes.
 4. Compare HEAD against those player-visible deeds, without restoring the old
    director/receipt architecture merely because it happened to contain them.
 
-**Status of (3):** campaigns 28, 29/70, 68 and M2 are promoted into
-`tools/probe-request-completion.mjs` and run at HEAD. Campaigns 59, 65, 69, M3
-and 76 are not yet promoted; 59 and M3 need a second player and a scripted
-hostile.
+**Status recorded on 2026-08-18:** campaigns 28, 29/70, 68 and M2 had been
+promoted into `tools/probe-request-completion.mjs` and run against that working
+tree. Campaigns 59, 65, 69, M3 and 76 had not; 59 and M3 required a second player
+and a scripted hostile/answer flow. This status is dated evidence, not current
+authorization or a queue.
+
+## Superseded engine hypotheses preserved
+
+The engine reviews proposed several mechanisms before the canonical architecture
+was reconciled. They remain useful archaeology so they are not rediscovered as
+current instructions:
+
+- An early diagnosis said project execution globally discarded Pathfinder
+  `partial` results and proposed an outer partial-walk/replan loop. Current owned
+  source disproves the broad premise: `goto()` keeps running and the fork installs
+  partial paths while search continues. The remaining targets are specific
+  preflight/probe consumers that turn partial or timeout into vetoes.
+- An early proposal made one utility arbiter the sole request lifecycle owner,
+  reduced all states to permissions/goal/acceptance, and treated
+  `did / engine_cannot / we_will_not / unknown` as the internal result type. The
+  canonical design instead uses hard priority bands, one in-memory Mission,
+  incremental causal planning, ActivityExecutive body ownership, and orthogonal
+  lifecycle/effect/reason/retry/evidence fields. The four phrases survive only as
+  player-facing renderings.
+- An early activity proposal assumed a thin adapter could halt and release a
+  promise synchronously. Current `ActionManager` evidence shows cancellation can
+  remain unsettled after its stop ceiling. The canonical lifecycle requires halt
+  acknowledgement and physical settlement; timeout never releases ownership.
+- Earlier text recommended flipping traversal to `full`. Shipping
+  `profiles/local-quickstart.json` already requests `full`; `preserve` is only the
+  absent-setting fallback in `agent.js`. Effective `Movements` still require
+  per-specialist instrumentation.
+- The original research passes were not independent: they read repository rules
+  and earlier diagnosis before source. Their agreement is anchored convergence,
+  not separate proof.
+- The observed 3/7 → 5/7 → 5/7 with different members → 4/7 variance did not
+  establish its cause. Lifecycle, model sampling, fixture cleanliness, timing,
+  and preflight behavior remain separated only by the canonical variance matrix.
+
+## Non-regression contract
+
+`ARCHITECTURE.md` defines the implementation and migration gates. This record
+defines what the replacement must continue to do. The entire broader record above
+is in scope, with these campaigns explicitly mandatory: **28, 59, 64, 65, 68, 69,
+70, 76, M2, M3, 13, 41, 46, 53, and Phase 3 charcoal**.
+
+Equivalent player-visible outcomes must repeatedly pass before any corresponding
+causal planner, director, lane, preflight, or legacy state is deleted:
+
+| Contract family | Required preserved evidence |
+|---|---|
+| exact item work | 28, 68, 70, 76, M2, Phase 3 charcoal: recipes, exact quantity, causal prerequisites, correct existing workstation, tool/custody, delivery, return, Hold, leftovers and terrain |
+| interruption and resumption | 59: attributed threat, safe retreat, same Mission replanned from current reality, arrival, no spent ordinary attempt or stale closure replay |
+| authority and persistence | 64: Operator Stop/Hold across restart, stale work cancelled, fresh request does not resurrect movement |
+| critical survival | 65: exact food pickup/use and verified hunger/health effect, then Hold |
+| moving-player identity | 69: exact KidPlayer follow, bounded spacing, retained custody, final Hold |
+| clarification | M3: sole item retained, one mission-bound question, answer bound to exact recipient, exact delivery, wait |
+| terrain stewardship | 13 and 53: complete tree collection, exact custody/delivery where requested, scaffold cleanup, no residue |
+| placement | 41: legal useful site, exact table custody, no collateral terrain mutation |
+| vehicle | 46: exact vehicle, approach, mount, stable posture, dismount, cleanup and Hold |
+
+For every replacement path, evidence must include the physical acceptance
+predicate, partial effects, mission/activity/specialist correlation, effective
+movement profile where relevant, cancel request/acknowledgement, settlement, world
+revision, no unsettled lease, and an ordinary-player-sense verdict. A focused unit
+test or one lucky pass is insufficient. Demotion is reversible; deletion waits for
+repeated coverage before and after removal.
+
+No historical success authorizes restoration of the old obligation ledger,
+gameplay receipt bureaucracy, global partial loop, global traversal flip, or
+duplicate voxel-topology planner. Preserve the deed, not necessarily the mechanism
+that once produced it.

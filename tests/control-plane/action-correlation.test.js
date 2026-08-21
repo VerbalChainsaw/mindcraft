@@ -10,6 +10,7 @@ import {
   normalizeCommandRouteOrigin,
 } from '../../src/agent/commands/index.js';
 import { DecisionTraceRecorder } from '../../src/agent/runtime/decision-trace.js';
+import { actionResultToTelemetry } from '../../src/agent/runtime/action-result.js';
 
 function createHarness() {
   const acquisitions = [];
@@ -180,6 +181,8 @@ test('ActionManager propagates the bounded request context to the exact action s
     selectedSkill: '!build',
     args: ['oak_planks', 4],
     requestedAt: 2000,
+    missionId: 'mission-charcoal-1',
+    activityId: 'mission-charcoal-1:activity:4',
   });
 
   const outcome = await agent.actions.runWithRequestContext(context, () => (
@@ -195,6 +198,43 @@ test('ActionManager propagates the bounded request context to the exact action s
   assert.equal(acquisitions[0].selectedSkill, '!build');
   assert.deepEqual(acquisitions[0].args, ['oak_planks', 4]);
   assert.equal(acquisitions[0].requestedAt, 2000);
+
+  const telemetry = actionResultToTelemetry(outcome.result);
+  assert.equal(telemetry.evidence.request.missionId, context.missionId);
+  assert.equal(telemetry.evidence.request.activityId, context.activityId);
+  assert.deepEqual(telemetry.evidence.activity, {
+    missionId: context.missionId,
+    activityId: context.activityId,
+    lifecycle: 'SUCCEEDED',
+  });
+});
+
+test('live telemetry preserves mismatched Mission identity for downstream rejection', () => {
+  const telemetry = actionResultToTelemetry({
+    actionId: 'action-mismatch',
+    phase: 'succeeded',
+    code: 'skill_delivered',
+    label: 'action:givePlayer',
+    evidence: {
+      request: {
+        requestId: 'request-mismatch',
+        routeOrigin: 'mission-director',
+        selectedSkill: '!givePlayer',
+        args: ['FollowTarget', 'charcoal', 8],
+        missionId: 'mission-request',
+        activityId: 'activity-request',
+      },
+      activity: {
+        missionId: 'mission-other',
+        activityId: 'activity-other',
+        lifecycle: 'SUCCEEDED',
+      },
+    },
+  });
+
+  assert.equal(telemetry.evidence.request.missionId, 'mission-request');
+  assert.equal(telemetry.evidence.activity.missionId, 'mission-other');
+  assert.notEqual(telemetry.evidence.activity.activityId, telemetry.evidence.request.activityId);
 });
 
 test('loop detection distinguishes concrete arguments behind one action label', async () => {

@@ -26,10 +26,20 @@ export const FAMILIES = Object.freeze([
   // Plain language against a reduced command surface. The only scenario that
   // tests whether the LLM orchestrates primitives or routes to a procedure.
   'orchestration-charcoal',
+  // Phase 4 truth boundary: an unfinished whole-route search remains
+  // explicitly unproven and cannot authorize movement or terrain mutation.
+  'route-probe-inconclusive',
 ]);
 export const DEFAULT_MANIFEST_PATH = fileURLToPath(
   new URL('./scenario-lab/scenarios.v1.json', import.meta.url),
 );
+export const VARIANCE_EXECUTION_MODES = Object.freeze(['recorded-trace', 'frozen-model']);
+export const VARIANCE_TELEMETRY_MODES = Object.freeze(['off', 'on']);
+export const VARIANCE_PREFLIGHT_MODES = Object.freeze(['off', 'on']);
+// One observation cannot contain run-to-run variation. Two is the mathematical
+// minimum for comparison, not a confidence or campaign quota; every additional
+// independently supplied trial remains accepted and is included in the report.
+export const MIN_INDEPENDENT_VARIANCE_TRIALS = 2; // Owner: comparison math; prevents a false variance claim from one observation.
 
 const DECLARATION_STATUSES = ['unavailable', 'not-run', 'blocked'];
 const FORMS = ['direct', 'natural-language'];
@@ -44,6 +54,12 @@ const MAX_SIGNED_64 = (1n << 63n) - 1n;
 function plain(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
+
+const sortedDiagnostics = (diagnostics) => [...diagnostics].sort((left, right) => (
+  left.path.localeCompare(right.path)
+  || left.code.localeCompare(right.code)
+  || left.message.localeCompare(right.message)
+));
 
 function checker() {
   const errors = [];
@@ -442,6 +458,477 @@ export function createExecutionResult(manifest, scenarioId, observation = {}) {
   };
 }
 
+export function computeVarianceMatrixHash(matrix) {
+  const withoutHash = { ...matrix };
+  delete withoutHash.matrixHash;
+  return sha256(Buffer.from(canonicalJson(withoutHash), 'utf8'));
+}
+
+function validateVarianceCase(value, pathname, c) {
+  const keys = [
+    'id',
+    'fixtureFingerprint',
+    'inputFingerprint',
+    'recordedTraceFingerprint',
+    'frozenModelFingerprint',
+  ];
+  if (!c.object(value, pathname, keys)) return;
+  c.string(value.id, `${pathname}/id`, { max: Infinity, pattern: ID });
+  for (const key of keys.slice(1)) {
+    c.string(value[key], `${pathname}/${key}`, { min: 64, max: 64, pattern: HEX64 });
+  }
+}
+
+function validateVarianceObservation(value, pathname, c) {
+  const keys = [
+    'runId',
+    'caseId',
+    'trial',
+    'executionMode',
+    'telemetryMode',
+    'preflightMode',
+    'resetId',
+    'fixtureFingerprint',
+    'inputFingerprint',
+    'driverFingerprint',
+    'modelOutputFingerprint',
+    'modelRouteFingerprint',
+    'decisionFingerprint',
+    'preflightFingerprint',
+    'lifecycleFingerprint',
+    'outcomeFingerprint',
+    'passed',
+    'settledBefore',
+    'settledAfter',
+    'elapsedMs',
+  ];
+  if (!c.object(value, pathname, keys)) return;
+  c.string(value.runId, `${pathname}/runId`, { max: Infinity, pattern: ID });
+  c.string(value.caseId, `${pathname}/caseId`, { max: Infinity, pattern: ID });
+  c.integer(value.trial, `${pathname}/trial`, 1, Number.MAX_SAFE_INTEGER, true);
+  c.enumeration(value.executionMode, `${pathname}/executionMode`, VARIANCE_EXECUTION_MODES);
+  c.enumeration(value.telemetryMode, `${pathname}/telemetryMode`, VARIANCE_TELEMETRY_MODES);
+  c.enumeration(value.preflightMode, `${pathname}/preflightMode`, VARIANCE_PREFLIGHT_MODES);
+  c.string(value.resetId, `${pathname}/resetId`, { max: Infinity, pattern: ID });
+  for (const key of [
+    'fixtureFingerprint',
+    'inputFingerprint',
+    'driverFingerprint',
+    'decisionFingerprint',
+    'outcomeFingerprint',
+  ]) {
+    c.string(value[key], `${pathname}/${key}`, { min: 64, max: 64, pattern: HEX64 });
+  }
+  for (const key of [
+    'modelOutputFingerprint',
+    'modelRouteFingerprint',
+    'preflightFingerprint',
+    'lifecycleFingerprint',
+  ]) {
+    if (value[key] !== null) {
+      c.string(value[key], `${pathname}/${key}`, { min: 64, max: 64, pattern: HEX64 });
+    }
+  }
+  for (const key of ['passed', 'settledBefore', 'settledAfter']) {
+    if (typeof value[key] !== 'boolean') c.add(`${pathname}/${key}`, 'type', 'must be a boolean');
+  }
+  if (typeof value.elapsedMs !== 'number' || !Number.isFinite(value.elapsedMs)) {
+    c.add(`${pathname}/elapsedMs`, 'type', 'must be a finite number');
+  } else if (value.elapsedMs < 0) {
+    c.add(`${pathname}/elapsedMs`, 'bounds', 'must be non-negative');
+  }
+}
+
+const varianceCellKey = (observation, includeTrial = true) => [
+  observation.caseId,
+  ...(includeTrial ? [observation.trial] : []),
+  observation.executionMode,
+  observation.telemetryMode,
+  observation.preflightMode,
+].join('|');
+
+export function validateVarianceMatrix(matrix) {
+  const c = checker();
+  const keys = [
+    'schemaVersion',
+    'matrixRevision',
+    'matrixHash',
+    'candidateCommit',
+    'cases',
+    'observations',
+  ];
+  if (!c.object(matrix, '/', keys)) return sortedDiagnostics(c.errors);
+  c.string(matrix.schemaVersion, '/schemaVersion', { max: Infinity });
+  if (matrix.schemaVersion !== 'scenario-lab.variance-matrix.v1') {
+    c.add('/schemaVersion', 'const', 'must be scenario-lab.variance-matrix.v1');
+  }
+  c.string(matrix.matrixRevision, '/matrixRevision', { max: Infinity, pattern: TEXT });
+  c.string(matrix.matrixHash, '/matrixHash', { min: 64, max: 64, pattern: HEX64 });
+  c.string(matrix.candidateCommit, '/candidateCommit', { min: 40, max: 40, pattern: HEX40 });
+  if (c.array(matrix.cases, '/cases', 1, Infinity)) {
+    matrix.cases.forEach((item, index) => validateVarianceCase(item, `/cases/${index}`, c));
+  }
+  if (c.array(matrix.observations, '/observations', 1, Infinity)) {
+    matrix.observations.forEach((item, index) => (
+      validateVarianceObservation(item, `/observations/${index}`, c)
+    ));
+  }
+
+  const cases = new Map();
+  if (Array.isArray(matrix.cases)) {
+    matrix.cases.forEach((item, index) => {
+      if (!plain(item) || typeof item.id !== 'string') return;
+      if (cases.has(item.id)) {
+        c.add(`/cases/${index}/id`, 'duplicate-id', `duplicates ${cases.get(item.id).path}`);
+      } else {
+        cases.set(item.id, { ...item, path: `/cases/${index}` });
+      }
+    });
+  }
+
+  const seen = {
+    runId: new Map(),
+    resetId: new Map(),
+    cell: new Map(),
+  };
+  if (Array.isArray(matrix.observations)) {
+    matrix.observations.forEach((observation, index) => {
+      if (!plain(observation)) return;
+      const pathname = `/observations/${index}`;
+      for (const key of ['runId', 'resetId']) {
+        const value = observation[key];
+        if (typeof value !== 'string') continue;
+        if (seen[key].has(value)) {
+          c.add(`${pathname}/${key}`, `duplicate-${key}`, `duplicates ${seen[key].get(value)}`);
+        } else {
+          seen[key].set(value, `${pathname}/${key}`);
+        }
+      }
+      if (
+        typeof observation.caseId === 'string'
+        && Number.isInteger(observation.trial)
+        && VARIANCE_EXECUTION_MODES.includes(observation.executionMode)
+        && VARIANCE_TELEMETRY_MODES.includes(observation.telemetryMode)
+        && VARIANCE_PREFLIGHT_MODES.includes(observation.preflightMode)
+      ) {
+        const key = varianceCellKey(observation);
+        if (seen.cell.has(key)) {
+          c.add(pathname, 'duplicate-cell', `duplicates ${seen.cell.get(key)}`);
+        } else {
+          seen.cell.set(key, pathname);
+        }
+      }
+
+      const declared = cases.get(observation.caseId);
+      if (!declared) {
+        if (typeof observation.caseId === 'string') {
+          c.add(`${pathname}/caseId`, 'unknown-case', 'must name a declared matrix case');
+        }
+        return;
+      }
+      for (const [field, expected] of [
+        ['fixtureFingerprint', declared.fixtureFingerprint],
+        ['inputFingerprint', declared.inputFingerprint],
+      ]) {
+        if (observation[field] !== expected) {
+          c.add(`${pathname}/${field}`, 't0-contamination', `must match ${declared.path}/${field}`);
+        }
+      }
+      const expectedDriver = observation.executionMode === 'recorded-trace'
+        ? declared.recordedTraceFingerprint
+        : declared.frozenModelFingerprint;
+      if (observation.driverFingerprint !== expectedDriver) {
+        c.add(`${pathname}/driverFingerprint`, 'driver-drift', 'must match the declared execution driver');
+      }
+      if (observation.executionMode === 'recorded-trace' && observation.modelOutputFingerprint !== null) {
+        c.add(`${pathname}/modelOutputFingerprint`, 'relationship', 'must be null when no model is called');
+      }
+      if (observation.executionMode === 'recorded-trace' && observation.modelRouteFingerprint !== null) {
+        c.add(`${pathname}/modelRouteFingerprint`, 'relationship', 'must be null when no model is called');
+      }
+      if (observation.executionMode === 'frozen-model' && !HEX64.test(observation.modelOutputFingerprint || '')) {
+        c.add(`${pathname}/modelOutputFingerprint`, 'relationship', 'must fingerprint the observed model output');
+      }
+      if (observation.executionMode === 'frozen-model' && !HEX64.test(observation.modelRouteFingerprint || '')) {
+        c.add(`${pathname}/modelRouteFingerprint`, 'relationship', 'must fingerprint the selected provider route');
+      }
+      if (observation.preflightMode === 'off' && observation.preflightFingerprint !== null) {
+        c.add(`${pathname}/preflightFingerprint`, 'relationship', 'must be null when preflights are off');
+      }
+      if (observation.preflightMode === 'on' && !HEX64.test(observation.preflightFingerprint || '')) {
+        c.add(`${pathname}/preflightFingerprint`, 'relationship', 'must fingerprint the observed preflight result');
+      }
+      if (observation.telemetryMode === 'off' && observation.lifecycleFingerprint !== null) {
+        c.add(`${pathname}/lifecycleFingerprint`, 'relationship', 'must be null when lifecycle telemetry is off');
+      }
+      if (observation.telemetryMode === 'on' && !HEX64.test(observation.lifecycleFingerprint || '')) {
+        c.add(`${pathname}/lifecycleFingerprint`, 'relationship', 'must fingerprint the observed lifecycle sequence');
+      }
+      if (observation.settledBefore !== true) {
+        c.add(`${pathname}/settledBefore`, 'unsettled-boundary', 'the prior activity must be physically settled');
+      }
+      if (observation.settledAfter !== true) {
+        c.add(`${pathname}/settledAfter`, 'unsettled-boundary', 'the measured activity must be physically settled');
+      }
+    });
+  }
+
+  if (HEX64.test(matrix.matrixHash || '')) {
+    try {
+      const computed = computeVarianceMatrixHash(matrix);
+      if (computed !== matrix.matrixHash) {
+        c.add('/matrixHash', 'hash-mismatch', `must equal ${computed}`);
+      }
+    } catch {
+      c.add('/matrixHash', 'hash-unavailable', 'could not hash malformed matrix content');
+    }
+  }
+  return sortedDiagnostics(c.errors);
+}
+
+const observationSort = (left, right) => (
+  left.caseId.localeCompare(right.caseId)
+  || left.trial - right.trial
+  || left.executionMode.localeCompare(right.executionMode)
+  || left.telemetryMode.localeCompare(right.telemetryMode)
+  || left.preflightMode.localeCompare(right.preflightMode)
+  || left.runId.localeCompare(right.runId)
+);
+
+const distinct = (rows, field) => new Set(rows.map((row) => row[field]));
+
+function sourceSignal(source, evidence, complete) {
+  return {
+    source,
+    status: evidence.length ? 'supported' : (complete ? 'not-observed' : 'unmeasured'),
+    evidence,
+  };
+}
+
+export function analyzeVarianceMatrix(matrix) {
+  const validation = validateVarianceMatrix(matrix);
+  const identity = {
+    revision: plain(matrix) && typeof matrix.matrixRevision === 'string' ? matrix.matrixRevision : null,
+    hash: plain(matrix) && typeof matrix.matrixHash === 'string' ? matrix.matrixHash : null,
+    candidateCommit: plain(matrix) && typeof matrix.candidateCommit === 'string'
+      ? matrix.candidateCommit
+      : null,
+  };
+  if (validation.length) {
+    return {
+      schemaVersion: 'scenario-lab.variance-report.v1',
+      matrix: identity,
+      valid: false,
+      complete: false,
+      verdict: 'invalid',
+      coverage: [],
+      variableCells: [],
+      axisComparisons: [],
+      signals: [],
+      diagnostics: validation,
+    };
+  }
+
+  const observations = [...matrix.observations].sort(observationSort);
+  const byExactCell = new Map(observations.map((row) => [varianceCellKey(row), row]));
+  const coverageDiagnostics = [];
+  const coverage = matrix.cases
+    .map(({ id }) => {
+      const trials = [...new Set(observations
+        .filter((row) => row.caseId === id)
+        .map((row) => row.trial))]
+        .sort((left, right) => left - right);
+      const trialCoverage = trials.map((trial) => {
+        const missingCells = [];
+        for (const executionMode of VARIANCE_EXECUTION_MODES) {
+          for (const telemetryMode of VARIANCE_TELEMETRY_MODES) {
+            for (const preflightMode of VARIANCE_PREFLIGHT_MODES) {
+              const key = [id, trial, executionMode, telemetryMode, preflightMode].join('|');
+              if (!byExactCell.has(key)) {
+                missingCells.push({ executionMode, telemetryMode, preflightMode });
+              }
+            }
+          }
+        }
+        if (missingCells.length) {
+          coverageDiagnostics.push({
+            path: `/coverage/${id}/${trial}`,
+            code: 'matrix-cells-missing',
+            message: `${missingCells.length} required axis cell(s) are missing`,
+          });
+        }
+        return { trial, complete: missingCells.length === 0, missingCells };
+      });
+      if (trials.length < MIN_INDEPENDENT_VARIANCE_TRIALS) {
+        coverageDiagnostics.push({
+          path: `/coverage/${id}`,
+          code: 'independent-comparison-missing',
+          message: 'at least two independent trials are required to measure run-to-run variation',
+        });
+      }
+      return {
+        caseId: id,
+        trialCount: trials.length,
+        independentlyComparable: trials.length >= MIN_INDEPENDENT_VARIANCE_TRIALS,
+        trials: trialCoverage,
+      };
+    })
+    .sort((left, right) => left.caseId.localeCompare(right.caseId));
+  const complete = coverageDiagnostics.length === 0;
+
+  const acrossTrials = new Map();
+  for (const row of observations) {
+    const key = varianceCellKey(row, false);
+    acrossTrials.set(key, [...(acrossTrials.get(key) || []), row]);
+  }
+  const variableCells = [...acrossTrials.entries()]
+    .filter(([, rows]) => distinct(rows, 'passed').size > 1)
+    .map(([key, rows]) => ({
+      key,
+      caseId: rows[0].caseId,
+      executionMode: rows[0].executionMode,
+      telemetryMode: rows[0].telemetryMode,
+      preflightMode: rows[0].preflightMode,
+      decisionVaried: distinct(rows, 'decisionFingerprint').size > 1,
+      lifecycleVaried: distinct(rows, 'lifecycleFingerprint').size > 1,
+      modelOutputVaried: distinct(rows, 'modelOutputFingerprint').size > 1,
+      modelRouteVaried: distinct(rows, 'modelRouteFingerprint').size > 1,
+      outcomes: rows.map((row) => ({
+        trial: row.trial,
+        runId: row.runId,
+        passed: row.passed,
+        elapsedMs: row.elapsedMs,
+        outcomeFingerprint: row.outcomeFingerprint,
+      })),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
+
+  const axisComparisons = [];
+  const compare = (caseId, trial, axis, left, right) => {
+    if (!left || !right) return;
+    axisComparisons.push({
+      caseId,
+      trial,
+      axis,
+      leftRunId: left.runId,
+      rightRunId: right.runId,
+      outcomeChanged: left.passed !== right.passed
+        || left.outcomeFingerprint !== right.outcomeFingerprint,
+      decisionChanged: left.decisionFingerprint !== right.decisionFingerprint,
+    });
+  };
+  for (const item of coverage) {
+    for (const { trial } of item.trials) {
+      const get = (executionMode, telemetryMode, preflightMode) => byExactCell.get(
+        [item.caseId, trial, executionMode, telemetryMode, preflightMode].join('|'),
+      );
+      for (const executionMode of VARIANCE_EXECUTION_MODES) {
+        for (const preflightMode of VARIANCE_PREFLIGHT_MODES) {
+          compare(
+            item.caseId,
+            trial,
+            'telemetry',
+            get(executionMode, 'off', preflightMode),
+            get(executionMode, 'on', preflightMode),
+          );
+        }
+        for (const telemetryMode of VARIANCE_TELEMETRY_MODES) {
+          compare(
+            item.caseId,
+            trial,
+            'preflight',
+            get(executionMode, telemetryMode, 'off'),
+            get(executionMode, telemetryMode, 'on'),
+          );
+        }
+      }
+      for (const telemetryMode of VARIANCE_TELEMETRY_MODES) {
+        for (const preflightMode of VARIANCE_PREFLIGHT_MODES) {
+          compare(
+            item.caseId,
+            trial,
+            'execution',
+            get('recorded-trace', telemetryMode, preflightMode),
+            get('frozen-model', telemetryMode, preflightMode),
+          );
+        }
+      }
+    }
+  }
+  axisComparisons.sort((left, right) => (
+    left.caseId.localeCompare(right.caseId)
+    || left.trial - right.trial
+    || left.axis.localeCompare(right.axis)
+    || left.leftRunId.localeCompare(right.leftRunId)
+  ));
+
+  const modelSampling = variableCells.filter((cell) => {
+    if (
+      cell.executionMode !== 'frozen-model'
+      || !cell.decisionVaried
+      || !cell.modelOutputVaried
+      || cell.modelRouteVaried
+    ) return false;
+    const control = acrossTrials.get([
+      cell.caseId,
+      'recorded-trace',
+      cell.telemetryMode,
+      cell.preflightMode,
+    ].join('|')) || [];
+    return control.length >= MIN_INDEPENDENT_VARIANCE_TRIALS
+      && distinct(control, 'passed').size === 1
+      && distinct(control, 'decisionFingerprint').size === 1;
+  }).map((cell) => cell.key);
+  const modelRouting = variableCells
+    .filter((cell) => cell.executionMode === 'frozen-model' && cell.modelRouteVaried)
+    .map((cell) => cell.key);
+  const lifecycle = variableCells
+    .filter((cell) => cell.telemetryMode === 'on' && !cell.decisionVaried && cell.lifecycleVaried)
+    .map((cell) => cell.key);
+  const downstreamRuntime = variableCells
+    .filter((cell) => cell.executionMode === 'recorded-trace' || !cell.decisionVaried)
+    .map((cell) => cell.key);
+  const residualTiming = variableCells
+    .filter((cell) => cell.telemetryMode === 'on' && !cell.decisionVaried && !cell.lifecycleVaried)
+    .map((cell) => cell.key);
+  const preflight = axisComparisons
+    .filter((comparison) => comparison.axis === 'preflight' && comparison.outcomeChanged)
+    .map((comparison) => `${comparison.caseId}|${comparison.trial}|${comparison.leftRunId}|${comparison.rightRunId}`);
+  const telemetry = axisComparisons
+    .filter((comparison) => comparison.axis === 'telemetry' && comparison.outcomeChanged)
+    .map((comparison) => `${comparison.caseId}|${comparison.trial}|${comparison.leftRunId}|${comparison.rightRunId}`);
+  const signals = [
+    sourceSignal('model-sampling', modelSampling, complete),
+    sourceSignal('model-routing', modelRouting, complete),
+    sourceSignal('lifecycle', lifecycle, complete),
+    sourceSignal('preflight', preflight, complete),
+    sourceSignal('telemetry-observer-effect', telemetry, complete),
+    sourceSignal('downstream-runtime', downstreamRuntime, complete),
+    sourceSignal('timing-or-unobserved-runtime', residualTiming, complete),
+  ];
+  const supported = signals.some((signal) => signal.status === 'supported');
+  const verdict = !complete
+    ? 'incomplete'
+    : supported
+      ? 'source-signals-observed'
+      : variableCells.length
+        ? 'variance-unattributed'
+        : 'stable';
+
+  return {
+    schemaVersion: 'scenario-lab.variance-report.v1',
+    matrix: identity,
+    valid: true,
+    complete,
+    verdict,
+    coverage,
+    variableCells,
+    axisComparisons,
+    signals,
+    diagnostics: sortedDiagnostics(coverageDiagnostics),
+  };
+}
+
 async function writeExclusivePair(entries) {
   const opened = [];
   try {
@@ -524,9 +1011,10 @@ export async function runScenarioLabCli(
     list: ['--manifest'],
     validate: ['--manifest'],
     plan: ['--manifest', '--scenario', '--output-dir'],
+    variance: ['--input'],
   };
   if (!Object.hasOwn(allowed, command)) {
-    stdout.write(`${canonicalJson(failure(command, 'usage', 'command must be list, validate, or plan'))}\n`);
+    stdout.write(`${canonicalJson(failure(command, 'usage', 'command must be list, validate, plan, or variance'))}\n`);
     return 2;
   }
   const parsed = parseOptions(argv.slice(1), allowed[command]);
@@ -537,6 +1025,31 @@ export async function runScenarioLabCli(
   if (command === 'plan' && (!parsed.options['--scenario'] || !parsed.options['--output-dir'])) {
     stdout.write(`${canonicalJson(failure(command, 'usage', 'plan requires --scenario and --output-dir'))}\n`);
     return 2;
+  }
+  if (command === 'variance' && !parsed.options['--input']) {
+    stdout.write(`${canonicalJson(failure(command, 'usage', 'variance requires --input'))}\n`);
+    return 2;
+  }
+
+  if (command === 'variance') {
+    let matrix;
+    try {
+      matrix = JSON.parse(await readFile(path.resolve(parsed.options['--input']), 'utf8'));
+    } catch (error) {
+      stdout.write(`${canonicalJson(failure(
+        command,
+        error instanceof SyntaxError ? 'malformed-json' : 'read-failed',
+        error instanceof SyntaxError
+          ? 'variance input must contain valid JSON'
+          : 'variance input could not be read',
+        '/input',
+      ))}\n`);
+      return 2;
+    }
+    const report = analyzeVarianceMatrix(matrix);
+    stdout.write(`${canonicalJson(report)}\n`);
+    if (!report.valid) return 2;
+    return report.complete ? 0 : 3;
   }
 
   const loaded = await loadForCli(parsed.options['--manifest'] ?? DEFAULT_MANIFEST_PATH);

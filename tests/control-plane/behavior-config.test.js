@@ -30,6 +30,10 @@ test('Given explicit behavior policies, normalization preserves bounded survival
         maxSpeechPerMinute: 4,
         maxGesturesPerMinute: 8,
       },
+      preflight: {
+        collectionRoute: 'advisory',
+        interactionStance: 'strict',
+      },
       assignment: {
         leader: 'Director',
         deposit: { name: 'ore_barrel', x: 12.8, y: 64, z: -7.1 },
@@ -57,9 +61,14 @@ test('Given explicit behavior policies, normalization preserves bounded survival
     maxSpeechPerMinute: 4,
     maxGesturesPerMinute: 8,
   });
+  assert.deepEqual(runtime.preflight, {
+    collectionRoute: 'advisory',
+    interactionStance: 'strict',
+  });
   assert.equal(Object.isFrozen(runtime.survival), true);
   assert.equal(Object.isFrozen(runtime.jobs), true);
   assert.equal(Object.isFrozen(runtime.reactions), true);
+  assert.equal(Object.isFrozen(runtime.preflight), true);
   assert.deepEqual(runtime.assignment.deposit, {
     name: 'ore_barrel',
     x: 12,
@@ -71,6 +80,7 @@ test('Given explicit behavior policies, normalization preserves bounded survival
   assert.deepEqual(persisted.survival, runtime.survival);
   assert.deepEqual(persisted.jobs, runtime.jobs);
   assert.deepEqual(persisted.reactions, runtime.reactions);
+  assert.deepEqual(persisted.preflight, runtime.preflight);
   assert.deepEqual(persisted.assignment.deposit, runtime.assignment.deposit);
 });
 
@@ -80,4 +90,8 @@ test('Given a legacy profile without runtime behavior, normalization preserves c
   assert.equal(runtime.survival.mode, 'basic');
   assert.equal(runtime.jobs.mode, 'simple');
   assert.equal(runtime.reactions.mode, 'minimal');
+  assert.deepEqual(runtime.preflight, {
+    collectionRoute: 'strict',
+    interactionStance: 'advisory',
+  });
 });

@@ -904,6 +904,51 @@ function getPerceptionSnapshot(agent, bot, nearbyEntities, { deep = false, now =
     );
 }
 
+const MODEL_MEASUREMENT_HASH = /^[a-f0-9]{64}$/;
+
+const modelMeasurementHash = value => (
+    typeof value === 'string' && MODEL_MEASUREMENT_HASH.test(value) ? value : null
+);
+
+const modelMeasurementDuration = value => (
+    Number.isFinite(value) && value >= 0 ? value : null
+);
+
+export function getModelMeasurementState(agent) {
+    const conversation = agent?.prompter?.performance?.conversation;
+    if (!conversation || typeof conversation !== 'object' || Array.isArray(conversation)) {
+        return { conversation: null };
+    }
+    const attempts = Array.isArray(conversation.attempts)
+        ? conversation.attempts.map(attempt => ({
+            attempt: Number.isSafeInteger(attempt?.attempt) && attempt.attempt >= 1
+                ? attempt.attempt
+                : null,
+            inputFingerprint: modelMeasurementHash(attempt?.inputFingerprint),
+            outputFingerprint: modelMeasurementHash(attempt?.outputFingerprint),
+            modelRouteFingerprint: modelMeasurementHash(attempt?.modelRouteFingerprint),
+            outcome: typeof attempt?.outcome === 'string' ? attempt.outcome : null,
+        }))
+        : [];
+    return {
+        conversation: {
+            sampledAt: Number.isFinite(conversation.sampledAt) ? conversation.sampledAt : null,
+            attempt: Number.isSafeInteger(conversation.attempt) && conversation.attempt >= 0
+                ? conversation.attempt
+                : null,
+            promptBuildMs: modelMeasurementDuration(conversation.promptBuildMs),
+            providerMs: modelMeasurementDuration(conversation.providerMs),
+            totalMs: modelMeasurementDuration(conversation.totalMs),
+            outcome: typeof conversation.outcome === 'string' ? conversation.outcome : null,
+            modelConfigFingerprint: modelMeasurementHash(conversation.modelConfigFingerprint),
+            inputFingerprint: modelMeasurementHash(conversation.inputFingerprint),
+            outputFingerprint: modelMeasurementHash(conversation.outputFingerprint),
+            modelRouteFingerprint: modelMeasurementHash(conversation.modelRouteFingerprint),
+            attempts,
+        },
+    };
+}
+
 export function getFullState(agent, { deep = false } = {}) {
     const bot = agent.bot;
     const sampledAt = Date.now();
@@ -1079,8 +1124,12 @@ export function getFullState(agent, { deep = false } = {}) {
                 comportment: agent.runtime?.comportment?.preset || 'neutral',
                 traversal: agent.runtime?.traversal || 'preserve',
                 narration: agent.runtime?.narration || 'quiet',
+                preflight: agent.runtime?.preflight
+                    ? { ...agent.runtime.preflight }
+                    : null,
             },
         },
+        modelMeasurement: getModelMeasurementState(agent),
         persona: agent.getPersona?.() || '',
         gameplay: {
             position,
@@ -1111,6 +1160,8 @@ export function getFullState(agent, { deep = false } = {}) {
             held: agent.isOperatorHeld?.() === true,
             stopRequestedAt: Number.isFinite(agent.actions?.stopRequestedAt) ? agent.actions.stopRequestedAt : null,
             stopTimedOutAt: Number.isFinite(agent.actions?.stopTimedOutAt) ? agent.actions.stopTimedOutAt : null,
+            activity: agent.actions?.activitySnapshot?.() || null,
+            mission: agent.charcoal_mission?.snapshot?.() || null,
             lastResult: actionResultToTelemetry(agent.last_action_result || agent.actions?.lastResult),
             survivalDirector,
             goalDirector,

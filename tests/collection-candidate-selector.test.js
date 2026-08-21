@@ -55,6 +55,32 @@ test('unproven, unsafe, and timed-out route probes are not promoted into movemen
     }
 });
 
+test('advisory comparison mode lets real execution test only inconclusive route results', () => {
+    for (const routeStatus of ['timeout', 'probe_error', 'unknown']) {
+        const [ranked] = rankCollectionCandidates(
+            [candidate({ routeStatus })],
+            { inconclusive: 'advisory' },
+        );
+        assert.equal(ranked.reachable, true, routeStatus);
+        assert.equal(Number.isFinite(ranked.score), true, routeStatus);
+    }
+    for (const routeStatus of [
+        'noPath',
+        'action_deadline',
+        'unreachable',
+        'unsafe_drop_support',
+        'no_safe_stance',
+        'target_unloaded',
+    ]) {
+        const [ranked] = rankCollectionCandidates(
+            [candidate({ routeStatus })],
+            { inconclusive: 'advisory' },
+        );
+        assert.equal(ranked.reachable, false, routeStatus);
+        assert.equal(ranked.score, Number.POSITIVE_INFINITY, routeStatus);
+    }
+});
+
 test('local hazards outweigh a modest distance advantage', () => {
     const ranked = rankCollectionCandidates([
         candidate({

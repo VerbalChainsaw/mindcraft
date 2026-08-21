@@ -42,6 +42,7 @@ import {
   goToPlayer,
   localNavigationEscapeStances,
   probeSafeNavigationGoal,
+  probeSafeNavigationStances,
   probeSafeRoundTripNavigationStances,
   ResponsiveFollowGoal,
 } from '../src/agent/library/skills.js';
@@ -189,6 +190,114 @@ test('a cave stance is bindable only when native Pathfinder proves the return ro
   ]);
 });
 
+test('round-trip route probing keeps checking supplied candidates while time remains', () => {
+  const home = new Vec3(0, 70, 0);
+  const candidates = Array.from(
+    { length: 129 },
+    (_, index) => new Vec3(index + 1, 60, 0),
+  );
+  let inboundCalls = 0;
+  const bot = {
+    entity: { position: home.clone() },
+    pathfinder: {
+      tickTimeout: 40,
+      getPathFromTo(_movements, start) {
+        return (function* routeByDirection() {
+          const inbound = start.equals(home);
+          if (inbound) {
+            const target = candidates[inboundCalls];
+            inboundCalls += 1;
+            yield { result: { status: 'success', path: [target.clone()] } };
+            return;
+          }
+          const returnable = start.equals(candidates.at(-1));
+          yield { result: returnable
+            ? { status: 'success', path: [home.clone()] }
+            : { status: 'noPath', path: [] } };
+        }());
+      },
+    },
+  };
+
+  const route = probeSafeRoundTripNavigationStances(
+    bot,
+    candidates,
+    home,
+    5_000,
+    {},
+  );
+
+  assert.equal(route.reachable, true);
+  assert.deepEqual(route.terminalPosition, {
+    x: candidates.at(-1).x,
+    y: candidates.at(-1).y,
+    z: candidates.at(-1).z,
+  });
+  assert.equal(route.returnStatus, 'success');
+  assert.equal(route.roundTripCandidatesChecked, candidates.length);
+  assert.equal(inboundCalls, candidates.length);
+});
+
+test('round-trip route probing preserves an unfinished return search as inconclusive', () => {
+  const home = new Vec3(0, 70, 0);
+  const candidates = [new Vec3(1, 60, 0), new Vec3(2, 60, 0)];
+  let inboundCalls = 0;
+  const bot = {
+    entity: { position: home.clone() },
+    pathfinder: {
+      tickTimeout: 40,
+      getPathFromTo(_movements, start) {
+        return (function* routeByDirection() {
+          if (start.equals(home)) {
+            const target = candidates[inboundCalls];
+            inboundCalls += 1;
+            yield { result: { status: 'success', path: [target.clone()] } };
+            return;
+          }
+          yield { result: start.equals(candidates[0])
+            ? { status: 'timeout', path: [] }
+            : { status: 'noPath', path: [] } };
+        }());
+      },
+    },
+  };
+
+  const route = probeSafeRoundTripNavigationStances(bot, candidates, home, 5_000, {});
+
+  assert.equal(route.reachable, false);
+  assert.equal(route.conclusive, false);
+  assert.equal(route.status, 'return_route_unproven');
+  assert.equal(route.roundTripCandidatesChecked, candidates.length);
+});
+
+test('round-trip route probing treats completed inbound noPath as conclusive', () => {
+  const home = new Vec3(0, 70, 0);
+  const bot = {
+    entity: { position: home.clone() },
+    pathfinder: {
+      tickTimeout: 40,
+      getPathFromTo() {
+        return (function* noRoute() {
+          yield { result: { status: 'noPath', path: [] } };
+        }());
+      },
+    },
+  };
+
+  const route = probeSafeRoundTripNavigationStances(
+    bot,
+    [new Vec3(1, 60, 0)],
+    home,
+    5_000,
+    {},
+  );
+
+  assert.equal(route.reachable, false);
+  assert.equal(route.conclusive, true);
+  assert.equal(route.status, 'noPath');
+  assert.equal(route.roundTripCandidatesChecked, 0);
+});
+
 test('local navigation recovery offers supported nearby stances without inventing a descent', () => {
   const origin = new Vec3(0, 64, 0);
   const bot = {
@@ -230,11 +339,15 @@ test('local navigation recovery does not execute a stance with no native return 
       getPathTo() {
         return { status: 'success', path: [new Vec3(1, 64, 0)] };
       },
-      getPathFromTo(_movements, start) {
+      getPathFromTo(_movements, start, goal) {
         const inbound = start.x === origin.x && start.y === origin.y && start.z === origin.z;
         return (function * routeByDirection() {
+          const selected = goal?.goals?.[0];
           yield { result: inbound
-            ? { status: 'success', path: [new Vec3(1, 64, 0)] }
+            ? {
+              status: 'success',
+              path: [new Vec3(selected.x, selected.y, selected.z)],
+            }
             : { status: 'noPath', path: [] } };
         }());
       },
@@ -276,10 +389,92 @@ test('planned navigation distinguishes a missing complete route before execution
 
   assert.deepEqual(route, {
     reachable: false,
+    conclusive: true,
     status: 'noPath',
     pathLength: 1,
   });
   assert.deepEqual(bot.entity.position, origin);
+});
+
+test('probe navigation preserves inconclusive status', () => {
+  const origin = new Vec3(0, 64, 0);
+  const bot = {
+    entity: { position: origin.clone() },
+    blockAt(position) {
+      return position.y === 63
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    pathfinder: {
+      getPathTo() {
+        return { status: 'timeout', path: [new Vec3(1, 64, 0)] };
+      },
+    },
+  };
+
+  const route = probeSafeNavigationGoal(
+    bot,
+    { isEnd: () => false, heuristic: () => 1 },
+    500,
+    {},
+  );
+
+  assert.deepEqual(route, {
+    reachable: false,
+    conclusive: false,
+    status: 'timeout',
+    pathLength: 1,
+  });
+  assert.deepEqual(bot.entity.position, origin);
+});
+
+test('stance navigation preserves conclusive status from native probe results', () => {
+  const origin = new Vec3(0, 64, 0);
+  const destination = new Vec3(3, 64, 0);
+  const cases = [
+    {
+      status: 'timeout',
+      path: [new Vec3(1, 64, 0)],
+      reachable: false,
+      conclusive: false,
+      terminalPosition: null,
+    },
+    {
+      status: 'noPath',
+      path: [],
+      reachable: false,
+      conclusive: true,
+      terminalPosition: null,
+    },
+    {
+      status: 'success',
+      path: [destination.clone()],
+      reachable: true,
+      conclusive: true,
+      terminalPosition: { x: destination.x, y: destination.y, z: destination.z },
+    },
+  ];
+
+  for (const expected of cases) {
+    const bot = {
+      entity: { position: origin.clone() },
+      pathfinder: {
+        getPathTo() {
+          return { status: expected.status, path: expected.path.map(position => position.clone()) };
+        },
+      },
+    };
+
+    const route = probeSafeNavigationStances(bot, [destination], 500, {});
+    assert.deepEqual(route, {
+      reachable: expected.reachable,
+      conclusive: expected.conclusive,
+      status: expected.status,
+      pathLength: expected.path.length,
+      terminalPosition: expected.terminalPosition,
+    }, expected.status);
+    assert.deepEqual(bot.entity.position, origin);
+  }
 });
 
 test('planned navigation continues native Pathfinder partial compute slices to a terminal route', () => {
@@ -319,6 +514,7 @@ test('planned navigation continues native Pathfinder partial compute slices to a
 
   assert.deepEqual(route, {
     reachable: true,
+    conclusive: true,
     status: 'success',
     pathLength: 2,
   });

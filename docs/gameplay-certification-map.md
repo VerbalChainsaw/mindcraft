@@ -4,6 +4,10 @@ This is a bounded, resettable physical course for observing whether a real
 Mindcraft/Mineflayer bot can play Minecraft. It is not a synthetic test suite.
 Every pass condition is a Minecraft state change, not a chat claim.
 
+**Authority:** this map is a physical evidence course and non-regression
+instrument. It is not an architecture, a work order, or permission to implement
+features; `ARCHITECTURE.md` governs.
+
 ## Operating the map
 
 Start the managed Paper server and MindServer, then run:

@@ -443,6 +443,32 @@ test('nearer unsupported blocks cannot hide a supported mining target from the b
     assert.deepEqual(selected.map(value => value.position), [supported.position]);
 });
 
+test('supported mining candidates span the bounded search instead of one obstructed local cluster', () => {
+    const candidates = Array.from({ length: 80 }, (_, index) => block('stone', index, 64, 0));
+    const blocks = new Map();
+    for (const candidate of candidates) {
+        blocks.set(`${candidate.position.x}:${candidate.position.y}:${candidate.position.z}`, candidate);
+        blocks.set(`${candidate.position.x}:63:${candidate.position.z}`, block('stone', candidate.position.x, 63, candidate.position.z));
+    }
+    const bot = {
+        findBlocks({ matching, count }) {
+            return candidates
+                .filter(candidate => matching(candidate))
+                .slice(0, count)
+                .map(candidate => candidate.position);
+        },
+        blockAt(position) {
+            return blocks.get(`${position.x}:${position.y}:${position.z}`)
+                || block('air', position.x, position.y, position.z);
+        },
+    };
+
+    const selected = findStableMiningCollectionCandidates(bot, value => value.name === 'stone', 128);
+    assert.equal(selected.length, 12);
+    assert.equal(selected[0].position.x, 0);
+    assert.ok(selected.some(value => value.position.x >= 70));
+});
+
 test('settled falling material is support only while its bounded column remains anchored', () => {
     const blocks = new Map();
     const put = value => blocks.set(`${value.position.x}:${value.position.y}:${value.position.z}`, value);

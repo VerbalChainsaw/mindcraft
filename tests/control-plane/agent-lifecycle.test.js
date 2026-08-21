@@ -18,6 +18,7 @@ import {
   Agent,
   boundedChatSegments,
   configureSurvivalOwnership,
+  correlatedPersistentGoalAssignmentAccepted,
   correlatedPersistentJobSubmissionAccepted,
   emitStartupMilestone,
   hasPendingDeathRecovery,
@@ -2095,4 +2096,36 @@ test('deferred construction accepts only a new exact correlated job submission',
       accepted: true,
     },
   }), true);
+});
+
+test('a model-selected typed goal ends its command loop only after a new durable goal is accepted', () => {
+  const previousGoalIds = ['goal-existing', 'goal-previous'];
+
+  assert.equal(correlatedPersistentGoalAssignmentAccepted({
+    commandName: '!requestItemGoal',
+    previousGoalIds,
+    activeGoal: { id: 'goal-existing' },
+    lastGoal: null,
+  }), false, 'an unchanged busy goal is not a new accepted assignment');
+
+  assert.equal(correlatedPersistentGoalAssignmentAccepted({
+    commandName: '!requestItemGoal',
+    previousGoalIds,
+    activeGoal: { id: 'goal-new' },
+    lastGoal: null,
+  }), true, 'a newly active goal owns the physical continuation');
+
+  assert.equal(correlatedPersistentGoalAssignmentAccepted({
+    commandName: '!requestItemGoal',
+    previousGoalIds,
+    activeGoal: null,
+    lastGoal: { id: 'goal-new', phase: 'complete' },
+  }), true, 'a goal that completed quickly still owns the terminal handoff');
+
+  assert.equal(correlatedPersistentGoalAssignmentAccepted({
+    commandName: '!stats',
+    previousGoalIds,
+    activeGoal: { id: 'goal-new' },
+    lastGoal: null,
+  }), false, 'an unrelated command cannot inherit a concurrent goal transition');
 });

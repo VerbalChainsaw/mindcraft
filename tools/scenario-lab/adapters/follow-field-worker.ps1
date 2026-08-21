@@ -43,10 +43,16 @@ param(
     # scenario. 'obstruction-follow' spans the wall across the full course width
     # and plugs the doorway with a breakable block, so following the player
     # REQUIRES breaking it -- the case the registered course does not exercise.
-    [ValidateSet('doorway-corridor', 'obstruction-follow', 'deliver-item', 'orchestrate-charcoal')]
+    [ValidateSet('doorway-corridor', 'obstruction-follow', 'deliver-item', 'orchestrate-charcoal', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion')]
     [string]$Course = 'doorway-corridor',
 
-    [string]$FixtureRoot = ''
+    [string]$FixtureRoot = '',
+
+    [string]$VarianceExecutionMode = '',
+
+    [string]$VarianceCase = '',
+
+    [string]$PreflightMode = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,6 +84,26 @@ if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
 if ([string]::IsNullOrWhiteSpace($FixtureRoot)) {
     throw 'FixtureRoot or SCENARIO_LAB_FOLLOW_FIXTURE_ROOT must identify the frozen fixture directory.'
 }
+if ($Course -eq 'request-completion') {
+    if ($RequestForm -ne 'natural-language') {
+        throw 'The Phase 5 request-completion course must use controlled player chat.'
+    }
+    if ($VarianceExecutionMode -notin @('recorded-trace', 'frozen-model')) {
+        throw 'VarianceExecutionMode must be recorded-trace or frozen-model.'
+    }
+    if ($VarianceCase -notmatch '^[a-z0-9][a-z0-9._:-]*$') {
+        throw 'VarianceCase must be a lowercase Scenario Lab identifier.'
+    }
+    if ($PreflightMode -notin @('off', 'on')) {
+        throw 'PreflightMode must be off or on.'
+    }
+} elseif (
+    -not [string]::IsNullOrWhiteSpace($VarianceExecutionMode) -or
+    -not [string]::IsNullOrWhiteSpace($VarianceCase) -or
+    -not [string]::IsNullOrWhiteSpace($PreflightMode)
+) {
+    throw 'VarianceExecutionMode, VarianceCase, and PreflightMode belong only to request-completion.'
+}
 
 $archive = Join-Path $FixtureRoot 'follow-world.zip'
 $fixtureProfile = Join-Path $FixtureRoot 'scenario-profile.json'
@@ -90,8 +116,12 @@ $captureScript = Join-Path $PSScriptRoot 'capture-agent-state.mjs'
 $runner = Join-Path $PSScriptRoot 'run-follow-field.mjs'
 $evidenceAdapter = Join-Path $PSScriptRoot 'follow-field-evidence.mjs'
 $harness = Join-Path $repo 'tools\verify-follow-field.mjs'
+$varianceCases = Join-Path $repo 'tools\scenario-lab\variance-cases.mjs'
+$varianceCoordinator = Join-Path $repo 'tools\scenario-lab\run-variance-matrix.mjs'
+$recordedTraceProvider = Join-Path $PSScriptRoot 'recorded-trace-provider.mjs'
 $directiveRouter = Join-Path $repo 'src\agent\player-directives.js'
 $skills = Join-Path $repo 'src\agent\library\skills.js'
+$behaviorConfig = Join-Path $repo 'src\agent\runtime\behavior-config.js'
 # MindServer's port comes from launcher-config.json, not from this worker. It
 # was 8080 when this scenario was frozen and is 8081 now, so the hardcoded URL
 # silently polled a dead port and the run died in `waiting-for-world-ready`
@@ -127,6 +157,10 @@ $stackStderr = Join-Path $runDir 'stack-stderr.log'
 $harnessStdout = Join-Path $runDir 'harness-stdout.log'
 $harnessStderr = Join-Path $runDir 'harness-stderr.log'
 $harnessEvidencePath = Join-Path $runDir 'follow-field-evidence.json'
+$recordedTraceReadyPath = Join-Path $runDir 'recorded-trace-provider-ready.json'
+$recordedTraceEvidencePath = Join-Path $runDir 'recorded-trace-provider-evidence.json'
+$recordedTraceStdout = Join-Path $runDir 'recorded-trace-provider-stdout.log'
+$recordedTraceStderr = Join-Path $runDir 'recorded-trace-provider-stderr.log'
 $worldPath = Join-Path $managed $worldName
 $extractRoot = Join-Path $runDir 'archive-extract'
 $preMemory = Join-Path $runDir 'pre-run-bot-memory'
@@ -138,6 +172,8 @@ $markerPath = Join-Path $managed 'scenario-lab-managed-runtime.active'
 $nodePath = $null
 $mainProcess = $null
 $harnessProcess = $null
+$recordedTraceProcess = $null
+$previousRecordedTraceKey = $null
 $sourceWorldName = $null
 $sourceSeed = $null
 $sourceExtractPath = $null
@@ -156,6 +192,16 @@ $report = [ordered]@{
     updated_utc = [DateTime]::UtcNow.ToString('o')
     request_form = $RequestForm
     request_message = $RequestMessage
+    variance = if ($Course -eq 'request-completion') {
+        [ordered]@{
+            case_id = $VarianceCase
+            execution_mode = $VarianceExecutionMode
+            preflight_mode = $PreflightMode
+        }
+    } else { $null }
+    recorded_trace_profile = $null
+    recorded_trace = $null
+    frozen_model_profile = $null
     candidate_commit = $ExpectedCandidateCommit
     instrumentation = [ordered]@{
         requested_mode = $InstrumentationMode
@@ -323,8 +369,12 @@ try {
         $runner,
         $evidenceAdapter,
         $harness,
+        $varianceCases,
+        $varianceCoordinator,
+        $recordedTraceProvider,
         $directiveRouter,
-        $skills
+        $skills,
+        $behaviorConfig
     )) {
         if (-not (Test-Path -LiteralPath $required)) { throw "Missing required path: $required" }
     }
@@ -415,6 +465,13 @@ try {
         if ($metadataHash -ne $ExpectedFixtureHash) {
             throw "Generated fixture recipe hash mismatch: expected $ExpectedFixtureHash but the recipe hashes to $metadataHash."
         }
+        if (
+            $null -ne $metadata.profile -and
+            -not [string]::IsNullOrWhiteSpace([string]$metadata.profile.sha256) -and
+            $profileHash -ne [string]$metadata.profile.sha256
+        ) {
+            throw 'Generated fixture profile hash does not match its registered metadata.'
+        }
     }
     $boundCandidateFiles = [ordered]@{
         follow_worker = [ordered]@{
@@ -437,6 +494,18 @@ try {
             relative_path = 'tools/verify-follow-field.mjs'
             path = $harness
         }
+        variance_cases = [ordered]@{
+            relative_path = 'tools/scenario-lab/variance-cases.mjs'
+            path = $varianceCases
+        }
+        variance_coordinator = [ordered]@{
+            relative_path = 'tools/scenario-lab/run-variance-matrix.mjs'
+            path = $varianceCoordinator
+        }
+        recorded_trace_provider = [ordered]@{
+            relative_path = 'tools/scenario-lab/adapters/recorded-trace-provider.mjs'
+            path = $recordedTraceProvider
+        }
         directive_router = [ordered]@{
             relative_path = 'src/agent/player-directives.js'
             path = $directiveRouter
@@ -445,12 +514,27 @@ try {
             relative_path = 'src/agent/library/skills.js'
             path = $skills
         }
+        behavior_config = [ordered]@{
+            relative_path = 'src/agent/runtime/behavior-config.js'
+            path = $behaviorConfig
+        }
     }
     $blobChecks = [ordered]@{}
     foreach ($entry in $boundCandidateFiles.GetEnumerator()) {
         $relativePath = [string]$entry.Value.relative_path
         $absolutePath = [string]$entry.Value.path
-        $candidateBlob = ((& git -C $repo rev-parse "${ExpectedCandidateCommit}:$relativePath" 2>&1 | Out-String).Trim())
+        # `rev-parse <commit>:<path>` writes a fatal error when a required
+        # regression source is new in the working tree. With the worker's
+        # ErrorActionPreference that aborts before RegressionMode can record the
+        # expected mismatch. `ls-tree` represents an absent path as an empty,
+        # successful lookup, so provenance remains complete without weakening
+        # certification mode.
+        $candidateTreeEntry = ((& git -C $repo ls-tree $ExpectedCandidateCommit -- $relativePath 2>&1 | Out-String).Trim())
+        $candidateBlob = if ($candidateTreeEntry -match '^[0-9]{6}\s+blob\s+([a-f0-9]{40})\s') {
+            $Matches[1]
+        } else {
+            $null
+        }
         $currentBlob = ((& git -C $repo hash-object "--path=$relativePath" -- $absolutePath 2>&1 | Out-String).Trim())
         $blobMatched = ($candidateBlob -match '^[a-f0-9]{40}$') -and ($currentBlob -eq $candidateBlob)
         if (-not $blobMatched -and -not $RegressionMode) {
@@ -459,6 +543,7 @@ try {
         $blobChecks[$entry.Key] = [ordered]@{
             relative_path = $relativePath
             candidate_blob = $candidateBlob
+            candidate_present = ($null -ne $candidateBlob)
             current_blob = $currentBlob
             matched = $blobMatched
         }
@@ -507,6 +592,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Capture script syntax check failed.' }
     & $nodePath --check $harness
     if ($LASTEXITCODE -ne 0) { throw 'Follow harness syntax check failed.' }
+    & $nodePath --check $varianceCases
+    if ($LASTEXITCODE -ne 0) { throw 'Variance case contract syntax check failed.' }
+    & $nodePath --check $recordedTraceProvider
+    if ($LASTEXITCODE -ne 0) { throw 'Recorded trace provider syntax check failed.' }
 
     $scenarioProfile = Get-Content -LiteralPath $fixtureProfile -Raw | ConvertFrom-Json
     if ([string]$scenarioProfile.name -ne 'MindcraftBot') {
@@ -516,6 +605,83 @@ try {
         $scenarioProfile | Add-Member -NotePropertyName runtime -NotePropertyValue ([pscustomobject]@{ autonomy = 'command' }) -Force
     } else {
         $scenarioProfile.runtime | Add-Member -NotePropertyName autonomy -NotePropertyValue 'command' -Force
+    }
+    if ($Course -eq 'request-completion') {
+        $preflightPolicy = if ($PreflightMode -eq 'on') {
+            [pscustomobject]@{ collectionRoute = 'strict'; interactionStance = 'strict' }
+        } else {
+            [pscustomobject]@{ collectionRoute = 'advisory'; interactionStance = 'advisory' }
+        }
+        $scenarioProfile.runtime | Add-Member -NotePropertyName preflight -NotePropertyValue $preflightPolicy -Force
+    }
+    if ($Course -eq 'request-completion' -and $VarianceExecutionMode -eq 'frozen-model') {
+        $configuredConversationModels = @($scenarioProfile.model)
+        if ($configuredConversationModels.Count -lt 1 -or $null -eq $configuredConversationModels[0]) {
+            throw 'The Phase 5 frozen-model arm has no configured conversation model.'
+        }
+        # The variance axis must name one fixed model route. Leaving the fixture's
+        # ordinary fallback list active would let one cell silently change models
+        # after a provider failure and would no longer be a frozen-model sample.
+        $scenarioProfile.model = $configuredConversationModels[0]
+        $report.frozen_model_profile = [ordered]@{
+            api = [string]$scenarioProfile.model.api
+            model = [string]$scenarioProfile.model.model
+            url = if ($null -ne $scenarioProfile.model.url) { [string]$scenarioProfile.model.url } else { $null }
+            route_count = 1
+        }
+    }
+    if ($Course -eq 'request-completion' -and $VarianceExecutionMode -eq 'recorded-trace') {
+        $recordedTraceProcess = Start-Process -FilePath $nodePath -ArgumentList @(
+            $recordedTraceProvider,
+            '--case', $VarianceCase,
+            '--ready-file', $recordedTraceReadyPath,
+            '--evidence-file', $recordedTraceEvidencePath
+        ) -WorkingDirectory $repo -PassThru -WindowStyle Hidden -RedirectStandardOutput $recordedTraceStdout -RedirectStandardError $recordedTraceStderr
+        $recordedReadyDeadline = [DateTime]::UtcNow.AddSeconds(15)
+        while ([DateTime]::UtcNow -lt $recordedReadyDeadline -and -not (Test-Path -LiteralPath $recordedTraceReadyPath)) {
+            $recordedTraceProcess.Refresh()
+            if ($recordedTraceProcess.HasExited) {
+                throw "Recorded trace provider exited during startup with code $($recordedTraceProcess.ExitCode)."
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not (Test-Path -LiteralPath $recordedTraceReadyPath)) {
+            throw 'Recorded trace provider did not publish its loopback endpoint within 15 seconds.'
+        }
+        $recordedReady = Get-Content -LiteralPath $recordedTraceReadyPath -Raw | ConvertFrom-Json
+        if (
+            [string]$recordedReady.caseId -ne $VarianceCase -or
+            [string]$recordedReady.host -ne '127.0.0.1' -or
+            [string]$recordedReady.driverFingerprint -notmatch '^[a-f0-9]{64}$'
+        ) {
+            throw 'Recorded trace provider readiness evidence is invalid.'
+        }
+        $recordedModel = [pscustomobject]@{
+            api = 'openai_compatible'
+            model = [string]$recordedReady.model
+            url = [string]$recordedReady.baseUrl
+            params = [pscustomobject]@{
+                api_key_env = 'OPENAI_COMPATIBLE_API_KEY'
+                timeout = 15
+                max_retries = 0
+            }
+        }
+        $scenarioProfile.model = $recordedModel
+        $scenarioProfile.reasoning_model = $recordedModel
+        $scenarioProfile.autonomy_model = $recordedModel
+        $scenarioProfile.memory_model = $recordedModel
+        $report.recorded_trace_profile = [ordered]@{
+            api = 'openai_compatible'
+            model = [string]$recordedReady.model
+            url = [string]$recordedReady.baseUrl
+            driverFingerprint = [string]$recordedReady.driverFingerprint
+        }
+    }
+    $maxPromptTurns = if ($Course -eq 'request-completion') {
+        [int]$scenarioProfile.runtime.limits.maxPromptTurns
+    } else { 0 }
+    if ($Course -eq 'request-completion' -and $maxPromptTurns -lt 1) {
+        throw 'The Phase 5 request-completion profile must declare a positive maxPromptTurns boundary.'
     }
     $scenarioProfileJson = ($scenarioProfile | ConvertTo-Json -Depth 30) + [Environment]::NewLine
     [IO.File]::WriteAllText($scenarioProfilePath, $scenarioProfileJson, [Text.UTF8Encoding]::new($false))
@@ -549,6 +715,10 @@ try {
     if ($null -ne $metadata.orchestration -and $metadata.orchestration.llm_sequencing -eq $true) {
         $launchSettings['llm_sequencing'] = $true
         $report.llm_sequencing = $true
+    }
+    if ($null -ne $metadata.orchestration -and $metadata.orchestration.charcoal_mission_mode -in @('active', 'shadow', 'off')) {
+        $launchSettings['charcoal_mission_mode'] = [string]$metadata.orchestration.charcoal_mission_mode
+        $report.charcoal_mission_mode = [string]$metadata.orchestration.charcoal_mission_mode
     }
     $launchSettingsJson = ($launchSettings | ConvertTo-Json -Compress -Depth 6)
 
@@ -604,8 +774,12 @@ try {
 
     Save-Status 'starting-runtime'
     $previousSettingsJson = [Environment]::GetEnvironmentVariable('SETTINGS_JSON', [EnvironmentVariableTarget]::Process)
+    $previousRecordedTraceKey = [Environment]::GetEnvironmentVariable('OPENAI_COMPATIBLE_API_KEY', [EnvironmentVariableTarget]::Process)
     try {
         [Environment]::SetEnvironmentVariable('SETTINGS_JSON', $launchSettingsJson, [EnvironmentVariableTarget]::Process)
+        if ($Course -eq 'request-completion' -and $VarianceExecutionMode -eq 'recorded-trace') {
+            [Environment]::SetEnvironmentVariable('OPENAI_COMPATIBLE_API_KEY', 'scenario-local-recorded-trace', [EnvironmentVariableTarget]::Process)
+        }
         # Keep the held replay bot loaded. The harness requires an Operator Hold
         # (waitForHeld), and a held bot with no human online otherwise unloads
         # after a 10s grace -- which raced the measurement and killed roughly a
@@ -615,6 +789,7 @@ try {
         $mainProcess = Start-Process -FilePath $nodePath -ArgumentList @('main.js', '--profile', $scenarioProfilePath) -WorkingDirectory $repo -PassThru -WindowStyle Hidden -RedirectStandardOutput $stackStdout -RedirectStandardError $stackStderr
     } finally {
         [Environment]::SetEnvironmentVariable('SETTINGS_JSON', $previousSettingsJson, [EnvironmentVariableTarget]::Process)
+        [Environment]::SetEnvironmentVariable('OPENAI_COMPATIBLE_API_KEY', $previousRecordedTraceKey, [EnvironmentVariableTarget]::Process)
     }
     if ($null -eq $mainProcess) { throw 'The isolated launcher process was not created.' }
     $report.main_pid = $mainProcess.Id
@@ -697,12 +872,29 @@ try {
         # Every delivering course measures in deliver mode. Keyed to one course
         # name, orchestrate-charcoal silently ran in follow mode and timed out
         # waiting for follow ownership that a charcoal task never produces.
-        '--mode', $(if ($Course -in @('deliver-item', 'orchestrate-charcoal')) { 'deliver' } else { 'follow' }),
+        '--mode', $(if ($Course -eq 'request-completion') {
+            'request-completion'
+        } elseif ($Course -in @('deliver-item', 'orchestrate-charcoal')) {
+            'deliver'
+        } elseif ($Course -eq 'route-probe-inconclusive') {
+            'route-probe'
+        } elseif ($Course -eq 'interaction-stance-inconclusive') {
+            'interaction-stance'
+        } else {
+            'follow'
+        }),
         '--course', $Course,
         '--request-file', $requestPath,
         '--authorized-active-world'
     )
     if ($RequestForm -eq 'natural-language') { $harnessArgs += '--natural-language' }
+    if ($Course -eq 'request-completion') {
+        $harnessArgs += @(
+            '--variance-case', $VarianceCase,
+            '--preflight-mode', $PreflightMode,
+            '--max-prompt-turns', [string]$maxPromptTurns
+        )
+    }
     $harnessStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $harnessStartInfo = New-Object System.Diagnostics.ProcessStartInfo
     $harnessStartInfo.FileName = $nodePath
@@ -717,7 +909,15 @@ try {
     if (-not $harnessProcess.Start()) { throw 'Follow field harness process was not created.' }
     $harnessStdoutTask = $harnessProcess.StandardOutput.ReadToEndAsync()
     $harnessStderrTask = $harnessProcess.StandardError.ReadToEndAsync()
-    $harnessTimedOut = -not $harnessProcess.WaitForExit($TimeoutMs)
+    # Request-completion owns bounded waits inside the verifier for the exact
+    # outcome, correlated result, halt, and settlement. A second outer clock
+    # would add those stages together incorrectly and kill valid late outcomes.
+    if ($Course -eq 'request-completion') {
+        $harnessProcess.WaitForExit()
+        $harnessTimedOut = $false
+    } else {
+        $harnessTimedOut = -not $harnessProcess.WaitForExit($TimeoutMs)
+    }
     if ($harnessTimedOut) {
         Stop-Process -Id $harnessProcess.Id -Force -ErrorAction SilentlyContinue
         if (-not $harnessProcess.WaitForExit(5000)) {
@@ -747,19 +947,81 @@ try {
     $report.harness_evidence = $harnessEvidence
     $attempts = @($harnessEvidence.attempts)
     $attempt = if ($attempts.Count -eq 1) { $attempts[0] } else { $null }
+    if ($Course -eq 'request-completion' -and $VarianceExecutionMode -eq 'recorded-trace') {
+        if (-not (Test-Path -LiteralPath $recordedTraceEvidencePath)) {
+            throw 'Recorded trace provider did not produce evidence.'
+        }
+        $recordedTraceEvidence = Get-Content -LiteralPath $recordedTraceEvidencePath -Raw | ConvertFrom-Json
+        $completeMeasurements = @($attempt.modelMeasurements | Where-Object {
+            [string]$_.modelConfigFingerprint -match '^[a-f0-9]{64}$' -and
+            [string]$_.inputFingerprint -match '^[a-f0-9]{64}$' -and
+            [string]$_.outputFingerprint -match '^[a-f0-9]{64}$' -and
+            [string]$_.modelRouteFingerprint -match '^[a-f0-9]{64}$'
+        })
+        $modelMeasurement = if ($completeMeasurements.Count -gt 0) { $completeMeasurements[-1] } else { $null }
+        if ($null -eq $modelMeasurement) {
+            throw 'Recorded trace provider ran without one complete runtime model measurement.'
+        }
+        $recordedTraceEvidence | Add-Member -NotePropertyName modelConfigFingerprint -NotePropertyValue ([string]$modelMeasurement.modelConfigFingerprint) -Force
+        $recordedTraceEvidence | Add-Member -NotePropertyName modelRouteFingerprint -NotePropertyValue ([string]$modelMeasurement.modelRouteFingerprint) -Force
+        $report.recorded_trace = $recordedTraceEvidence
+    }
     # What counts as complete physical evidence depends on the course. Doorway,
     # corridor and final-waypoint are follow criteria: the deliver course's
     # recipient never moves, so requiring them would reject a delivery that
     # demonstrably happened. The deliver clause is not weaker -- it additionally
     # requires that the item physically changed hands and that the world could
     # have supported the acquisition at all.
-    $physicalEvidenceComplete = if ($Course -eq 'deliver-item') {
+    $physicalEvidenceComplete = if ($Course -eq 'request-completion') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.physicalAcceptance.caseId -eq $VarianceCase -and
+            $attempt.physicalAcceptance.t0Verified -eq $true -and
+            [string]$attempt.physicalAcceptance.t0Fingerprint -match '^[a-f0-9]{64}$' -and
+            $attempt.physicalAcceptance.outcomesVerified -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+            $attempt.physicalAcceptance.preflightMode -eq $PreflightMode -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } elseif ($Course -eq 'interaction-stance-inconclusive') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.terminal.phase -eq 'succeeded' -and
+            $attempt.physicalAcceptance.producerStatus -in @('partial', 'timeout') -and
+            $attempt.physicalAcceptance.producerConclusive -eq $false -and
+            $attempt.physicalAcceptance.helperStatus -eq 'ready' -and
+            $attempt.physicalAcceptance.originalGoalReached -eq $true -and
+            $attempt.physicalAcceptance.pathfinderSettled -eq $true -and
+            $attempt.physicalAcceptance.laterInteractionAttempted -eq $false -and
+            $attempt.physicalAcceptance.inventoryIntact -eq $true -and
+            $attempt.physicalAcceptance.terrainIntact -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true
+        )
+    } elseif ($Course -eq 'route-probe-inconclusive') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.terminal.phase -eq 'failed' -and
+            $attempt.terminal.code -eq 'skill_route_unproven' -and
+            $attempt.terminal.retryable -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+            $attempt.physicalAcceptance.routeProbeConclusive -eq $false -and
+            $attempt.physicalAcceptance.routeProbeStatus -in @('partial', 'timeout') -and
+            $attempt.physicalAcceptance.routeMovementAttempted -eq $false -and
+            $attempt.physicalAcceptance.routeTerrainIntact -eq $true -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } elseif ($Course -eq 'deliver-item' -or $Course -eq 'orchestrate-charcoal') {
         (
             $null -ne $attempt -and
             $attempt.passed -eq $true -and
             $attempt.physicalAcceptance.fixtureVerified -eq $true -and
             $attempt.physicalAcceptance.deliveryVerified -eq $true -and
-            $attempt.physicalAcceptance.deliverySourcePresent -eq $true -and
+            ($Course -ne 'deliver-item' -or $attempt.physicalAcceptance.deliverySourcePresent -eq $true) -and
             $attempt.physicalAcceptance.deliveryGroundPresent -eq $true -and
             $attempt.physicalAcceptance.deliveryDryLandVerified -eq $true -and
             $attempt.stop.stableForTenSeconds -eq $true -and
@@ -792,7 +1054,7 @@ try {
     if ($harnessTimedOut) { throw 'Follow field harness exceeded the scenario timeout.' }
     if ($falseSuccess) { throw 'The follow harness claimed success without complete physical evidence.' }
     if ($harnessExitCode -ne 0 -or $harnessEvidence.passed -ne $true -or -not $physicalEvidenceComplete) {
-        throw "Doorway/corridor follow did not pass: $($report.verdict | ConvertTo-Json -Compress)"
+        throw "Scenario course '$Course' did not pass: $($report.verdict | ConvertTo-Json -Compress)"
     }
 
     $report.status = 'passed'
@@ -809,6 +1071,7 @@ finally {
         api_stop_succeeded = $false
         main_forced = $false
         harness_forced = $false
+        recorded_trace_forced = $false
         managed_java_fallback_kills = @()
         configuration_restored = $false
         properties_restored = $false
@@ -816,6 +1079,7 @@ finally {
         replay_memory_preserved = $false
         replay_world_preserved = $false
         remaining_managed_java = @()
+        remaining_recorded_trace_process = $false
         v2_status = $null
         errors = @()
     }
@@ -829,6 +1093,17 @@ finally {
                 }
             } catch {
                 $cleanup.errors += "harness stop: $($_.Exception.Message)"
+            }
+        }
+        if ($recordedTraceProcess) {
+            try {
+                $recordedTraceProcess.Refresh()
+                if (-not $recordedTraceProcess.HasExited) {
+                    Stop-Process -Id $recordedTraceProcess.Id -Force -ErrorAction Stop
+                    $cleanup.recorded_trace_forced = $true
+                }
+            } catch {
+                $cleanup.errors += "recorded trace provider stop: $($_.Exception.Message)"
             }
         }
         try {
@@ -912,6 +1187,14 @@ finally {
             ($_.Name -in @('java.exe', 'javaw.exe')) -and $_.CommandLine -like ('*' + $managedJar + '*')
         } | ForEach-Object { $_.ProcessId })
         $cleanup.remaining_managed_java = $remainingManaged
+        if ($recordedTraceProcess) {
+            try {
+                $recordedTraceProcess.Refresh()
+                $cleanup.remaining_recorded_trace_process = -not $recordedTraceProcess.HasExited
+            } catch {
+                $cleanup.remaining_recorded_trace_process = $false
+            }
+        }
         $cleanup.v2_status = @(& git -C $repo status --porcelain=v1 --untracked-files=all)
     } catch {
         $cleanup.errors += $_.Exception.Message

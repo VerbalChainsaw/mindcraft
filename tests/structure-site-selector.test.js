@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import minecraftData from 'minecraft-data';
 import Vec3 from 'vec3';
 
+import { getCommand } from '../src/agent/commands/index.js';
 import {
   selectConstructionSites,
   selectOppositeLandmarkLayoutSites,
@@ -331,4 +333,45 @@ test('construction site binding rejects a footprint without a continuous exterio
   assert.equal(selection.sites.some(site => (
     site.origin.x === 0 && site.origin.y === 10 && site.origin.z === 2
   )), false, 'Builder has no scaffold authority, so every exterior service cell must be walkable');
+});
+
+test('construction command reports an unfinished route check without claiming rejection', async () => {
+  const commandRegistry = minecraftData('1.21.11');
+  const bot = {
+    entity: { id: 1, position: new Vec3(0.5, 10, 0.5), isInLava: false },
+    entities: {},
+    registry: commandRegistry,
+    traversalPolicy: 'preserve',
+    inventory: { items: () => [] },
+    game: { dimension: 'overworld' },
+    blockAt(position) {
+      return block(
+        position.y < 10 ? 'stone' : 'air',
+        position.x,
+        position.y,
+        position.z,
+        position.y < 10 ? 'block' : 'empty',
+      );
+    },
+    pathfinder: {
+      tickTimeout: 40,
+      getPathTo() {
+        return { status: 'timeout', path: [] };
+      },
+    },
+  };
+
+  const message = await getCommand('!assignConstructionJob').perform(
+    { bot },
+    'platform',
+    1,
+    1,
+    1,
+    'cobblestone',
+  );
+
+  assert.match(message, /^Construction work order was not accepted:/);
+  assert.match(message, /route checks? .*did not finish|did not finish .*route checks?/i);
+  assert.match(message, /timeout/i);
+  assert.doesNotMatch(message, /invalid|Pathfinder rejected|no .*reachable construction footprint/i);
 });

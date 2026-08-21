@@ -1094,12 +1094,12 @@ function planFromRecipe(bot, context, target, amount, recipe, trail) {
 function planFromSmelting(bot, context, target, amount, input, trail) {
   const inputFailure = ensureItem(bot, context, input, amount, [...trail, target]);
   if (inputFailure) return inputFailure;
+  setLedgerCount(context, input, ledgerCount(context, input) - amount);
   const furnaceFailure = ensurePersistentItem(bot, context, 'furnace', [...trail, `${target}:furnace`]);
   if (furnaceFailure) return furnaceFailure;
   const fuelFailure = reserveFuel(bot, context, amount, [...trail, `${target}:fuel`]);
   if (fuelFailure) return fuelFailure;
 
-  setLedgerCount(context, input, ledgerCount(context, input) - amount);
   const actionFailure = addCapabilityAction(bot, context, 'smelt', {
     input,
     output: target,

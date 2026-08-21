@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, mkdirSync } from 'fs';
 import { Examples } from '../utils/examples.js';
 import { writeJsonAtomicSync } from '../utils/atomic-file.js';
@@ -12,11 +13,52 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createModel, resolveConfiguredModel } from './_model_map.js';
 import { createRoutedModel, FallbackRouter } from './fallback-router.js';
+import { PROVIDER_FAILURE_TEXT } from './provider-failure.js';
 import { buildPromptMemory } from '../agent/runtime/memory-recall.js';
 import { getFullState } from '../agent/library/full_state.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const SENSITIVE_MODEL_CONFIGURATION_KEY = /(?:^|_)(?:api[_-]?key|access[_-]?token|token|secret|password)(?:$|_)/i;
+
+function canonicalMeasurementValue(value, key = '') {
+    if (SENSITIVE_MODEL_CONFIGURATION_KEY.test(key)) return '[redacted]';
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+    if (Array.isArray(value)) return value.map(item => canonicalMeasurementValue(item));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.keys(value)
+            .sort((left, right) => left.localeCompare(right))
+            .map(nestedKey => [nestedKey, canonicalMeasurementValue(value[nestedKey], nestedKey)]));
+    }
+    return String(value);
+}
+
+export function fingerprintModelMeasurement(value) {
+    return createHash('sha256')
+        .update(JSON.stringify(canonicalMeasurementValue(value)))
+        .digest('hex');
+}
+
+export function fingerprintConfiguredConversationModel(profile) {
+    return fingerprintModelMeasurement({
+        api: profile?.api ?? null,
+        model: profile?.model ?? null,
+        params: profile?.params ?? null,
+        url: profile?.url ?? null,
+    });
+}
+
+function selectedConversationModelRouteFingerprint(model) {
+    let active = null;
+    try {
+        active = model?.snapshot?.()?.active ?? model?.lastUsed ?? null;
+    } catch {
+        active = null;
+    }
+    return fingerprintModelMeasurement(active || model?.constructor?.name || 'configured-model');
+}
+
 const ACTION_REQUEST_PATTERN = /\b(?:attack|break|brew|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
 const UNSUPPORTED_CAPABILITY_PATTERN = /^\[UNSUPPORTED\]\s+([^\r\n]{1,220})$/i;
 const GAMEPLAY_OPERATING_RULES = [
@@ -30,6 +72,7 @@ const GAMEPLAY_OPERATING_RULES = [
     'Never claim that a carried item is absent or "did not register" when INVENTORY lists it. A current snapshot cannot prove whether an item is newly received; report only the exact carried and nearby-drop evidence.',
     'For an unfamiliar item or block, use !inspectMinecraft with its name; use !getCraftingPlan when a recipe chain is unclear.',
     'For an acquisition or delivery outcome, prefer one typed !requestItemGoal; its causal planner derives and verifies prerequisites one physical step at a time.',
+    'For a natural-language promise whose final delivered item is charcoal, use exactly one !acceptCharcoalMission(quantity). Choose the exact promised quantity, using 8 as the safe bounded default for “some”; after acceptance the deterministic Mission owns prerequisites, custody, delivery, cleanup, and replanning, so do not sequence its primitive commands yourself.',
     'When one broad player outcome requires you to choose several concrete inventory outputs, compile the complete final inventory floors once with !queueItemPlan. Account for current inventory, use real registry-backed targets, and never invent an umbrella target such as starter_kit. A typed runtime barrier re-verifies the whole promised set after production.',
     'For complex work, compose available primitives: observe, preflight tools/materials/reachability/hazards, act once, verify the result, then adapt.',
     'Use canonical Minecraft names from inspection. Never invent an item, tool requirement, recipe, location, action result, or completed step.',
@@ -325,6 +368,10 @@ export class Prompter {
         // evict the other's copy.
         this.command_docs_cache = new Map();
         this.performance = { conversation: null };
+        // Hash only the configured conversation surface needed to
+        // prove repeated runs used the same route setup. Secret-bearing keys
+        // are redacted before hashing and no prompt or response text is exposed.
+        this.conversation_model_fingerprint = fingerprintConfiguredConversationModel(this.profile);
 
         // for backwards compatibility, move max_tokens to params
         let max_tokens = null;
@@ -663,6 +710,20 @@ export class Prompter {
         const requiresActionCommand = latestMessageRequestsAction(messages);
         let actionCorrection = '';
         let groundingFallback = '';
+        const measurementAttempts = [];
+        this.performance.conversation = {
+            sampledAt: turnStartedAt,
+            attempt: 0,
+            promptBuildMs: null,
+            providerMs: null,
+            totalMs: 0,
+            outcome: 'pending',
+            modelConfigFingerprint: this.conversation_model_fingerprint,
+            inputFingerprint: null,
+            outputFingerprint: null,
+            modelRouteFingerprint: null,
+            attempts: [],
+        };
 
         const maxTurns = this.agent.runtime?.limits?.maxPromptTurns ?? 3;
         for (let i = 0; i < maxTurns; i++) { // retry only within this profile's budget
@@ -679,14 +740,26 @@ export class Prompter {
             if (actionGrounding) prompt += `\n${actionGrounding}`;
             prompt += actionCorrection;
             const promptBuiltAt = Date.now();
+            const inputFingerprint = fingerprintModelMeasurement({ messages, prompt });
             let generation;
             let providerStartedAt = null;
             let providerFinishedAt = null;
+            let measurementRecorded = false;
 
             try {
                 providerStartedAt = Date.now();
                 generation = await this.chat_model.sendRequest(messages, prompt);
                 providerFinishedAt = Date.now();
+                const outputFingerprint = fingerprintModelMeasurement(generation);
+                const modelRouteFingerprint = selectedConversationModelRouteFingerprint(this.chat_model);
+                measurementAttempts.push({
+                    attempt: i + 1,
+                    inputFingerprint,
+                    outputFingerprint,
+                    modelRouteFingerprint,
+                    outcome: 'generated',
+                });
+                measurementRecorded = true;
                 this.performance.conversation = {
                     sampledAt: providerFinishedAt,
                     attempt: i + 1,
@@ -694,6 +767,11 @@ export class Prompter {
                     providerMs: Math.max(0, providerFinishedAt - providerStartedAt),
                     totalMs: Math.max(0, providerFinishedAt - turnStartedAt),
                     outcome: 'generated',
+                    modelConfigFingerprint: this.conversation_model_fingerprint,
+                    inputFingerprint,
+                    outputFingerprint,
+                    modelRouteFingerprint,
+                    attempts: measurementAttempts.map(attempt => ({ ...attempt })),
                 };
                 if (typeof generation !== 'string') {
                     console.error('Error: Generated response is not a string', boundedGenerationLog(generation));
@@ -704,6 +782,19 @@ export class Prompter {
 
             } catch (error) {
                 const failedAt = Date.now();
+                const outcome = providerFinishedAt === null ? 'provider_failed' : 'postprocess_failed';
+                if (measurementRecorded) {
+                    measurementAttempts[measurementAttempts.length - 1].outcome = outcome;
+                } else {
+                    measurementAttempts.push({
+                        attempt: i + 1,
+                        inputFingerprint,
+                        outputFingerprint: null,
+                        modelRouteFingerprint: null,
+                        outcome,
+                    });
+                }
+                const latestMeasurement = measurementAttempts[measurementAttempts.length - 1];
                 this.performance.conversation = {
                     sampledAt: failedAt,
                     attempt: i + 1,
@@ -712,9 +803,20 @@ export class Prompter {
                         ? null
                         : Math.max(0, (providerFinishedAt || failedAt) - providerStartedAt),
                     totalMs: Math.max(0, failedAt - turnStartedAt),
-                    outcome: providerFinishedAt === null ? 'provider_failed' : 'postprocess_failed',
+                    outcome,
+                    modelConfigFingerprint: this.conversation_model_fingerprint,
+                    inputFingerprint,
+                    outputFingerprint: latestMeasurement.outputFingerprint,
+                    modelRouteFingerprint: latestMeasurement.modelRouteFingerprint,
+                    attempts: measurementAttempts.map(attempt => ({ ...attempt })),
                 };
                 console.error('Error during message generation or file writing:', error);
+                // The model router already tried every configured provider
+                // route before surfacing this failure. Re-entering the prompt
+                // loop would repeat the same paid request and can neither fix
+                // authentication/quota nor improve the response. Correctable
+                // generated-answer failures continue to use later prompt turns.
+                if (outcome === 'provider_failed') return PROVIDER_FAILURE_TEXT;
                 continue;
             }
 

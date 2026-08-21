@@ -589,7 +589,20 @@ function normalizeEvidence(evidence) {
     code: boundedText(evidence.code, 80),
     detail: boundedText(evidence.detail, 280),
     actionId: boundedText(evidence.actionId, 96),
+    ...(evidence.inconclusive === true ? { inconclusive: true } : {}),
   });
+}
+
+function actionResultEvidence(result) {
+  const inconclusive = result?.inconclusive === true
+    || result?.evidence?.skill?.inconclusive === true
+    || result?.evidence?.capability?.bindingReport?.inconclusive === true;
+  return {
+    code: result?.code,
+    detail: result?.detail,
+    actionId: result?.actionId,
+    ...(inconclusive ? { inconclusive: true } : {}),
+  };
 }
 
 export function normalizeWorkOrder(raw) {
@@ -748,7 +761,7 @@ export function advanceWorkOrder(order, result, {
     return normalizeWorkOrder({
       ...current,
       phase: nextPhase,
-      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      evidence: actionResultEvidence(result),
       updatedAt: now,
     });
   }
@@ -774,7 +787,7 @@ export function advanceWorkOrder(order, result, {
       return normalizeWorkOrder({
         ...current,
         recoveries: current.recoveries + 1,
-        evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+        evidence: actionResultEvidence(result),
         updatedAt: now,
       });
     }
@@ -802,7 +815,7 @@ export function advanceWorkOrder(order, result, {
       preemptions: 0,
       attempts: 0,
       recoveries: 0,
-      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      evidence: actionResultEvidence(result),
       updatedAt: now,
     });
   }
@@ -851,7 +864,7 @@ export function advanceWorkOrder(order, result, {
         phase: 'recover',
         resumePhase: recoveryResumePhase,
         recoveries: current.recoveries + 1,
-        evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+        evidence: actionResultEvidence(result),
         updatedAt: now,
       });
     }
@@ -913,7 +926,7 @@ export function advanceWorkOrder(order, result, {
           lastFailedTargetActionId: result.actionId,
           ...(failedMethods ? { failedMethods } : {}),
         },
-        evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+        evidence: actionResultEvidence(result),
         updatedAt: now,
       });
     }
@@ -943,7 +956,7 @@ export function advanceWorkOrder(order, result, {
       phase: 'recover',
       resumePhase: recoveryResumePhase,
       checkpoint: prerequisiteCheckpoint,
-      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      evidence: actionResultEvidence(result),
       updatedAt: now,
     });
   }
@@ -961,7 +974,7 @@ export function advanceWorkOrder(order, result, {
         ...failedCheckpoint,
         ...(failedMethods ? { failedMethods } : {}),
       },
-      evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+      evidence: actionResultEvidence(result),
       updatedAt: now,
     });
   }
@@ -969,7 +982,7 @@ export function advanceWorkOrder(order, result, {
     ...current,
     phase: 'failed',
     resumePhase: null,
-    evidence: { code: result.code, detail: result.detail, actionId: result.actionId },
+    evidence: actionResultEvidence(result),
     updatedAt: now,
   });
 }

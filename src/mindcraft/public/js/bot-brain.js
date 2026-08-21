@@ -12,6 +12,7 @@ const LANE_LABEL = Object.freeze({
   basic_survival: 'Survival upkeep',
   comportment_pause: 'Pausing (persona)',
   player_directive: 'Following your directive',
+  player_mission: 'Working your Mission',
   player_goal: 'Working your goal',
   player_job: 'Working your job order',
   role_work: 'Doing its role work',

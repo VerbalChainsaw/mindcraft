@@ -37,6 +37,8 @@ export function recordActionTerminal(evidence) {
 }
 
 const STOP_WAIT_TIMEOUT_MS = 10_000;
+const GRACEFUL_HALT_TIMEOUT_MS = 350;
+const SETTLEMENT_TIMEOUT_MS = 2_000;
 // Escalating stop poll. A cooperative skill checks `interrupt_code` within a
 // few milliseconds, so waiting a flat 300ms before re-testing put a hard floor
 // under every handoff — including an emergency reflex preempting a job. The
@@ -47,6 +49,226 @@ const STOP_POLL_LADDER_MS = Object.freeze([5, 10, 15, 25, 40, 60, 100, 150, 200,
 // on the wire. The fast poll only re-reads `executing`; the interrupt itself is
 // re-issued on this slower beat so a tight poll cannot flood the server.
 const INTERRUPT_REISSUE_MS = 120;
+
+function inferActivitySpecialist(_actionLabel, requestedSpecialist = null) {
+    const requested = String(requestedSpecialist || '').trim().toLowerCase();
+    if (requested === 'pathfinder' || requested === 'collectblock') return requested;
+    return null;
+}
+
+function activeControlState(bot) {
+    return Object.values(bot?.controlState || {}).some(Boolean);
+}
+
+function compactPathProgress(result) {
+    return {
+        status: typeof result?.status === 'string' ? result.status : null,
+        visitedNodes: Number.isFinite(result?.visitedNodes) ? result.visitedNodes : null,
+        generatedNodes: Number.isFinite(result?.generatedNodes) ? result.generatedNodes : null,
+    };
+}
+
+class PathfinderActivityAdapter {
+    constructor(bot, onProgress) {
+        this.bot = bot;
+        this.onProgress = onProgress;
+        this.listeners = [];
+    }
+
+    start() {
+        this.listen('path_update', result => this.onProgress('path_update', compactPathProgress(result)));
+        this.listen('path_reset', reason => this.onProgress('path_reset', { reason: String(reason || 'unknown') }));
+        this.listen('goal_reached', () => this.onProgress('goal_reached', {}));
+    }
+
+    listen(event, listener) {
+        this.bot.on(event, listener);
+        this.listeners.push([event, listener]);
+    }
+
+    requestHalt() {
+        let acknowledged = false;
+        const onGoalUpdated = goal => {
+            if (goal == null) acknowledged = true;
+        };
+        this.bot.on('goal_updated', onGoalUpdated);
+        try {
+            this.bot.pathfinder.setGoal(null);
+        } finally {
+            this.bot.removeListener('goal_updated', onGoalUpdated);
+        }
+        return Promise.resolve({ acknowledged, evidence: acknowledged ? 'goal_updated:null' : 'goal_update_not_observed' });
+    }
+
+    async forceHalt() {
+        try { this.bot.pathfinder.stop(); } catch { /* no active path */ }
+        try { this.bot.pathfinder.setGoal(null); } catch { /* no active goal */ }
+        try { await Promise.resolve(this.bot.stopDigging()); } catch { /* no active dig */ }
+        try { this.bot.clearControlStates(); } catch { /* disconnected body */ }
+        return { acknowledged: this.isSettled(), evidence: 'pathfinder_stop' };
+    }
+
+    isSettled() {
+        const pathfinder = this.bot?.pathfinder;
+        if (
+            typeof pathfinder?.isMoving !== 'function'
+            || typeof pathfinder?.isMining !== 'function'
+            || typeof pathfinder?.isBuilding !== 'function'
+        ) return false;
+        return pathfinder.isMoving() === false
+            && pathfinder.isMining() === false
+            && pathfinder.isBuilding() === false
+            && this.bot.targetDigBlock == null
+            && !activeControlState(this.bot);
+    }
+
+    waitForSettlement(timeoutMs) {
+        if (this.isSettled()) return Promise.resolve({ settled: true, evidence: 'pathfinder_idle' });
+        return new Promise(resolve => {
+            let finished = false;
+            const events = [
+                'path_update',
+                'path_reset',
+                'path_stop',
+                'goal_reached',
+                'goal_updated',
+                'diggingAborted',
+                'diggingCompleted',
+                'physicsTick',
+            ];
+            const cleanup = () => {
+                for (const event of events) this.bot.removeListener(event, check);
+                clearTimeout(timer);
+            };
+            const finish = result => {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve(result);
+            };
+            const check = () => {
+                if (this.isSettled()) finish({ settled: true, evidence: 'pathfinder_idle' });
+            };
+            for (const event of events) this.bot.on(event, check);
+            const timer = setTimeout(
+                () => finish({ settled: false, evidence: 'pathfinder_settlement_timeout' }),
+                timeoutMs,
+            );
+            check();
+        });
+    }
+
+    dispose() {
+        for (const [event, listener] of this.listeners) this.bot.removeListener(event, listener);
+        this.listeners = [];
+    }
+}
+
+class CollectBlockActivityAdapter {
+    constructor(bot, onProgress) {
+        this.bot = bot;
+        this.onProgress = onProgress;
+        this.listeners = [];
+    }
+
+    start() {
+        this.listen('collectBlock_targetFailed', (_target, error) => {
+            this.onProgress('collectBlock_targetFailed', {
+                error: String(error?.message || error || 'unknown').slice(0, 160),
+            });
+        });
+        this.listen('collectBlock_cancelled', generation => {
+            this.onProgress('collectBlock_cancelled', { generation: generation ?? null });
+        });
+        this.listen('collectBlock_finished', generation => {
+            this.onProgress('collectBlock_finished', { generation: generation ?? null });
+        });
+    }
+
+    listen(event, listener) {
+        this.bot.on(event, listener);
+        this.listeners.push([event, listener]);
+    }
+
+    async requestHalt() {
+        let cancelledEvent = false;
+        const onCancelled = () => { cancelledEvent = true; };
+        this.bot.on('collectBlock_cancelled', onCancelled);
+        try {
+            await this.bot.collectBlock.cancelTask();
+        } finally {
+            this.bot.removeListener('collectBlock_cancelled', onCancelled);
+        }
+        const acknowledged = cancelledEvent || this.bot.collectBlock.activeTask == null;
+        return { acknowledged, evidence: cancelledEvent ? 'collectBlock_cancelled' : 'collectBlock_idle' };
+    }
+
+    async forceHalt() {
+        try { this.bot.pathfinder.setGoal(null); } catch { /* no active goal */ }
+        try { this.bot.pathfinder.stop(); } catch { /* no active path */ }
+        try { await Promise.resolve(this.bot.stopDigging()); } catch { /* no active dig */ }
+        try { this.bot.clearControlStates(); } catch { /* disconnected body */ }
+        try { await this.bot.collectBlock.cancelTask(); } catch { /* settlement check remains authoritative */ }
+        return { acknowledged: this.bot.collectBlock.activeTask == null, evidence: 'collectBlock_force_halt' };
+    }
+
+    isSettled() {
+        const pathfinder = this.bot?.pathfinder;
+        if (
+            !this.bot?.collectBlock
+            || typeof pathfinder?.isMoving !== 'function'
+            || typeof pathfinder?.isMining !== 'function'
+            || typeof pathfinder?.isBuilding !== 'function'
+        ) return false;
+        return this.bot.collectBlock.activeTask == null
+            && pathfinder.isMoving() === false
+            && pathfinder.isMining() === false
+            && pathfinder.isBuilding() === false
+            && this.bot.targetDigBlock == null
+            && !activeControlState(this.bot);
+    }
+
+    waitForSettlement(timeoutMs) {
+        if (this.isSettled()) return Promise.resolve({ settled: true, evidence: 'collectBlock_idle' });
+        return new Promise(resolve => {
+            let finished = false;
+            const events = [
+                'collectBlock_cancelled',
+                'collectBlock_finished',
+                'path_update',
+                'path_reset',
+                'path_stop',
+                'diggingAborted',
+                'diggingCompleted',
+                'physicsTick',
+            ];
+            const cleanup = () => {
+                for (const event of events) this.bot.removeListener(event, check);
+                clearTimeout(timer);
+            };
+            const finish = result => {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve(result);
+            };
+            const check = () => {
+                if (this.isSettled()) finish({ settled: true, evidence: 'collectBlock_idle' });
+            };
+            for (const event of events) this.bot.on(event, check);
+            const timer = setTimeout(
+                () => finish({ settled: false, evidence: 'collectBlock_settlement_timeout' }),
+                timeoutMs,
+            );
+            check();
+        });
+    }
+
+    dispose() {
+        for (const [event, listener] of this.listeners) this.bot.removeListener(event, listener);
+        this.listeners = [];
+    }
+}
 
 function stopPollDelayMs(attempt) {
     const index = Math.min(Math.max(0, attempt), STOP_POLL_LADDER_MS.length - 1);
@@ -96,6 +318,7 @@ const REQUEST_ROUTE_ORIGINS = new Set([
     'directive-resume',
     'agenda-director',
     'goal-director',
+    'mission-director',
     'job-director',
     'internal',
 ]);
@@ -130,6 +353,8 @@ function normalizeRequestContext(value) {
             ? Math.max(0, Math.floor(Number(value.requestedAt)))
             : null,
         agendaDisposition: value.agendaDisposition === 'interrupt' ? 'interrupt' : 'append',
+        missionId: boundedRequestText(value.missionId, 96) || null,
+        activityId: boundedRequestText(value.activityId, 128) || null,
     });
 }
 
@@ -203,8 +428,23 @@ function actionAttemptSignature(actionLabel, requestContext = null) {
 }
 
 export class ActionManager {
-    constructor(agent) {
+    constructor(agent, {
+        now = Date.now,
+        stopWaitTimeoutMs = STOP_WAIT_TIMEOUT_MS,
+        gracefulHaltTimeoutMs = GRACEFUL_HALT_TIMEOUT_MS,
+        settlementTimeoutMs = SETTLEMENT_TIMEOUT_MS,
+    } = {}) {
         this.agent = agent;
+        this.now = now;
+        this.stopWaitTimeoutMs = Math.max(1, Math.min(STOP_WAIT_TIMEOUT_MS, Number(stopWaitTimeoutMs) || STOP_WAIT_TIMEOUT_MS));
+        this.gracefulHaltTimeoutMs = Math.max(1, Number(gracefulHaltTimeoutMs) || GRACEFUL_HALT_TIMEOUT_MS);
+        this.settlementTimeoutMs = Math.max(1, Number(settlementTimeoutMs) || SETTLEMENT_TIMEOUT_MS);
+        this.activityWorldRevision = 0;
+        this.currentActivity = null;
+        this.lastActivity = null;
+        this.currentActivityAdapter = null;
+        this.activityHaltPromise = null;
+        this.activityForceHaltPromise = null;
         this.executing = false;
         this.currentActionLabel = '';
         this.currentActionOwner = '';
@@ -217,6 +457,7 @@ export class ActionManager {
         this.resume_name = '';
         this.resume_owner = '';
         this.resume_receipt_mode = 'legacy';
+        this.resume_activity_options = null;
         this.deferredPlayerAction = null;
         this.last_action_time = 0;
         this.currentActionStartedAt = 0;
@@ -228,6 +469,211 @@ export class ActionManager {
         this.stopTimedOutAt = null;
         this.ownerContext = new AsyncLocalStorage();
         this.requestContext = new AsyncLocalStorage();
+    }
+
+    activitySnapshot() {
+        const activity = this.currentActivity || this.lastActivity;
+        if (!activity) return null;
+        return Object.freeze({
+            ...activity,
+            progress: activity.progress ? { ...activity.progress } : null,
+            settlement: activity.settlement ? { ...activity.settlement } : null,
+            terminalResult: activity.terminalResult ? { ...activity.terminalResult } : null,
+        });
+    }
+
+    beginActivity({ actionId, actionLabel, missionId, activityId, specialist, effectiveMovements }) {
+        const selectedSpecialist = inferActivitySpecialist(actionLabel, specialist);
+        const pathfinder = this.agent.bot?.pathfinder;
+        const pathfinderAvailable = typeof pathfinder?.setGoal === 'function'
+            && typeof pathfinder?.isMoving === 'function'
+            && typeof pathfinder?.isMining === 'function'
+            && typeof pathfinder?.isBuilding === 'function';
+        if (selectedSpecialist && !pathfinderAvailable) return null;
+        if (
+            selectedSpecialist === 'collectblock'
+            && typeof this.agent.bot?.collectBlock?.cancelTask !== 'function'
+        ) return null;
+        const record = {
+            missionId: missionId || null,
+            activityId: activityId || actionId,
+            specialist: selectedSpecialist,
+            lifecycle: 'RUNNING',
+            startedAt: this.now(),
+            lastProgressAt: null,
+            cancelRequestedAt: null,
+            cancelAcknowledgedAt: null,
+            forceHaltAt: null,
+            settledAt: null,
+            worldRevisionAtStart: ++this.activityWorldRevision,
+            worldRevisionAtEnd: null,
+            bodyLeaseOwner: actionId,
+            effectiveMovements: effectiveMovements || null,
+            progress: null,
+            settlement: null,
+            terminalResult: null,
+        };
+        this.currentActivity = record;
+        this.currentActivityAdapter = selectedSpecialist === 'pathfinder'
+            ? new PathfinderActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            })
+            : selectedSpecialist === 'collectblock'
+            ? new CollectBlockActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            })
+            : null;
+        this.activityHaltPromise = null;
+        this.activityForceHaltPromise = null;
+        this.currentActivityAdapter?.start?.();
+        return this.activitySnapshot();
+    }
+
+    observeActivityProgress(kind, evidence = {}) {
+        if (!this.currentActivity || this.currentActivity.lifecycle === 'ABORTED_UNSETTLED') return null;
+        this.currentActivity.lastProgressAt = this.now();
+        this.currentActivity.progress = {
+            kind: String(kind || 'progress'),
+            evidence: { ...evidence },
+            worldRevision: ++this.activityWorldRevision,
+        };
+        return this.currentActivity.progress;
+    }
+
+    acknowledgeCancellation(evidence = null) {
+        if (!this.currentActivity || this.currentActivity.cancelAcknowledgedAt !== null) return false;
+        this.currentActivity.cancelAcknowledgedAt = this.now();
+        if (evidence) this.currentActivity.cancelAcknowledgement = String(evidence).slice(0, 160);
+        ++this.activityWorldRevision;
+        return true;
+    }
+
+    requestHalt(reason = 'stop_requested') {
+        if (!this.currentActivity || !this.currentActivityAdapter) {
+            return Promise.resolve({ acknowledged: false, evidence: 'no_specialist_activity' });
+        }
+        if (this.activityHaltPromise) return this.activityHaltPromise;
+        this.currentActivity.lifecycle = 'CANCELING';
+        this.currentActivity.cancelRequestedAt = this.currentActivity.cancelRequestedAt || this.now();
+        this.currentActivity.cancelReason = String(reason).slice(0, 160);
+        ++this.activityWorldRevision;
+        this.activityHaltPromise = Promise.resolve(this.currentActivityAdapter.requestHalt(reason))
+            .then(result => {
+                if (result?.acknowledged === true) this.acknowledgeCancellation(result.evidence);
+                return result;
+            })
+            .catch(error => ({
+                acknowledged: false,
+                evidence: `halt_error:${String(error?.message || error).slice(0, 120)}`,
+            }));
+        return this.activityHaltPromise;
+    }
+
+    forceHalt(reason = 'graceful_halt_expired') {
+        if (!this.currentActivity || !this.currentActivityAdapter) {
+            return Promise.resolve({ acknowledged: false, evidence: 'no_specialist_activity' });
+        }
+        if (this.activityForceHaltPromise) return this.activityForceHaltPromise;
+        this.currentActivity.forceHaltAt = this.currentActivity.forceHaltAt || this.now();
+        this.currentActivity.forceHaltReason = String(reason).slice(0, 160);
+        ++this.activityWorldRevision;
+        this.activityForceHaltPromise = Promise.resolve(this.currentActivityAdapter.forceHalt(reason))
+            .then(result => {
+                if (result?.acknowledged === true) this.acknowledgeCancellation(result.evidence);
+                return result;
+            })
+            .catch(error => ({
+                acknowledged: false,
+                evidence: `force_halt_error:${String(error?.message || error).slice(0, 120)}`,
+            }));
+        return this.activityForceHaltPromise;
+    }
+
+    recordTerminalResult(result) {
+        if (!this.currentActivity) return null;
+        this.currentActivity.terminalResult = { ...result };
+        ++this.activityWorldRevision;
+        return this.currentActivity.terminalResult;
+    }
+
+    markActivityUnsettled(reason, settlement = null) {
+        if (!this.currentActivity) return null;
+        this.currentActivity.lifecycle = 'ABORTED_UNSETTLED';
+        this.currentActivity.settlement = settlement ? { ...settlement } : { settled: false, evidence: reason };
+        this.currentActivity.worldRevisionAtEnd = ++this.activityWorldRevision;
+        this.recordTerminalResult({
+            lifecycle: 'ABORTED_UNSETTLED',
+            reasonClass: 'SETTLEMENT',
+            reasonCode: String(reason || 'settlement_unproven'),
+            retryable: false,
+        });
+        return this.activitySnapshot();
+    }
+
+    async proveSettlement(terminalLifecycle) {
+        if (!this.currentActivity) {
+            return { settled: true, evidence: 'legacy_promise_only' };
+        }
+        if (!this.currentActivityAdapter) {
+            this.currentActivity.lifecycle = terminalLifecycle;
+            this.currentActivity.settledAt = this.now();
+            this.currentActivity.settlement = { settled: true, evidence: 'command_promise_settled' };
+            this.currentActivity.worldRevisionAtEnd = ++this.activityWorldRevision;
+            return this.currentActivity.settlement;
+        }
+        if (this.currentActivity.lifecycle === 'ABORTED_UNSETTLED') {
+            return { settled: false, evidence: 'activity_already_unsettled' };
+        }
+        this.currentActivity.lifecycle = 'SETTLING';
+        ++this.activityWorldRevision;
+        const settlement = await this.currentActivityAdapter.waitForSettlement(this.settlementTimeoutMs);
+        if (
+            settlement?.settled !== true
+            || (this.currentActivity.cancelRequestedAt !== null && this.currentActivity.cancelAcknowledgedAt === null)
+        ) {
+            return {
+                ...settlement,
+                settled: false,
+                activity: this.markActivityUnsettled(
+                    settlement?.evidence || 'halt_not_acknowledged',
+                    settlement,
+                ),
+            };
+        }
+        this.currentActivity.lifecycle = terminalLifecycle;
+        this.currentActivity.settledAt = this.now();
+        this.currentActivity.settlement = { ...settlement };
+        this.currentActivity.worldRevisionAtEnd = ++this.activityWorldRevision;
+        return settlement;
+    }
+
+    releaseBodyLease(actionId, actionOwner) {
+        const activity = this.currentActivity;
+        this.agent.behavior_arbiter?.recordActionRelease?.({
+            actionId,
+            owner: actionOwner,
+            ownerPriority: this.ownerPriority(actionOwner),
+            activityId: activity?.activityId || null,
+            specialist: activity?.specialist || null,
+            worldRevision: activity?.worldRevisionAtEnd || null,
+            releasedAt: this.now(),
+        });
+        try { this.currentActivityAdapter?.dispose(); } catch { /* settled listener cleanup */ }
+        if (activity) this.lastActivity = { ...activity };
+        this.currentActivity = null;
+        this.currentActivityAdapter = null;
+        this.activityHaltPromise = null;
+        this.activityForceHaltPromise = null;
+        this.executing = false;
+        this.currentActionId = '';
+        this.currentActionLabel = '';
+        this.currentActionOwner = '';
+        this.currentActionFn = null;
+        this.currentActionController = null;
+        this.currentReceiptLedger = null;
+        this.currentActionStartedAt = 0;
+        this.stopRequestedAt = null;
+        this.stopTimedOutAt = null;
     }
 
     runWithOwner(owner, operation) {
@@ -368,25 +814,35 @@ export class ActionManager {
 
     // Positional parameters must match `_executeResume`. The zero-argument form
     // resumes whatever resume function is already registered.
-    async resumeAction(actionLabel = null, actionFn = null, timeout = 10, owner = null, receiptMode = 'legacy') {
-        return this._executeResume(actionLabel, actionFn, timeout, owner, receiptMode);
+    async resumeAction(actionLabel = null, actionFn = null, timeout = 10, owner = null, receiptMode = 'legacy', activityOptions = null) {
+        return this._executeResume(actionLabel, actionFn, timeout, owner, receiptMode, activityOptions);
     }
 
-    async runAction(actionLabel, actionFn, { timeout, resume = false, owner, receiptMode = 'legacy' } = {}) {
+    async runAction(actionLabel, actionFn, {
+        timeout,
+        resume = false,
+        owner,
+        receiptMode = 'legacy',
+        missionId = null,
+        activityId = null,
+        specialist = null,
+        effectiveMovements = null,
+    } = {}) {
         const actionOwner = normalizeActionOwner(owner || this.ownerContext.getStore());
         const actionReceiptMode = normalizeReceiptMode(receiptMode);
+        const activityOptions = { missionId, activityId, specialist, effectiveMovements };
         if (
             resume !== true
             && actionOwner === 'player'
             && this.isCriticalReflexAction()
             && this.isOwnerBlocked(actionOwner)
         ) {
-            return this.deferPlayerAction(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode);
+            return this.deferPlayerAction(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode, activityOptions);
         }
         if (resume) {
-            return this._executeResume(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode);
+            return this._executeResume(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode, activityOptions);
         } else {
-            return this._executeAction(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode);
+            return this._executeAction(actionLabel, actionFn, timeout, actionOwner, actionReceiptMode, activityOptions);
         }
     }
 
@@ -402,29 +858,35 @@ export class ActionManager {
                 mirrorEvidence: this.agent.bot.lastActionEvidence,
             });
             try { this.currentActionController?.abort(); } catch { /* already aborted */ }
+            void this.requestHalt('stop_reissued');
+            void this.forceHalt('stop_reissued_after_timeout');
             try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
             return { stopped: false, timedOut: true, requestedAt: this.stopRequestedAt };
         }
 
-        const requestedAt = Date.now();
+        const requestedAt = this.now();
         const boundedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
-            ? Math.min(timeoutMs, STOP_WAIT_TIMEOUT_MS)
-            : STOP_WAIT_TIMEOUT_MS;
+            ? Math.min(timeoutMs, this.stopWaitTimeoutMs)
+            : this.stopWaitTimeoutMs;
         const deadline = requestedAt + boundedTimeoutMs;
         this.stopRequestedAt = requestedAt;
+        void this.requestHalt('stop_requested');
         let attempt = 0;
         let lastInterruptAt = 0;
-        while (this.executing && Date.now() < deadline) {
+        while (this.executing && this.now() < deadline) {
             if (!continueWhile()) {
                 return { stopped: false, timedOut: false, superseded: true, requestedAt };
             }
-            const now = Date.now();
+            const now = this.now();
+            if (now - requestedAt >= this.gracefulHaltTimeoutMs) {
+                void this.forceHalt('graceful_halt_expired');
+            }
             if (attempt === 0 || now - lastInterruptAt >= INTERRUPT_REISSUE_MS) {
                 lastInterruptAt = now;
                 try { this.currentActionController?.abort(); } catch { /* already aborted */ }
                 try { this.agent.requestInterrupt(); } catch { /* bot cleanup is best effort */ }
             }
-            const remaining = deadline - Date.now();
+            const remaining = deadline - this.now();
             if (remaining <= 0) break;
             await new Promise(resolve => setTimeout(resolve, Math.min(stopPollDelayMs(attempt), remaining)));
             attempt += 1;
@@ -439,7 +901,13 @@ export class ActionManager {
                 reason: 'cancelled',
                 mirrorEvidence: this.agent.bot.lastActionEvidence,
             });
-            this.stopTimedOutAt = Date.now();
+            this.stopTimedOutAt = this.now();
+            if (this.currentActivity && this.currentActivity.lifecycle !== 'ABORTED_UNSETTLED') {
+                this.markActivityUnsettled('stop_timeout', {
+                    settled: false,
+                    evidence: 'action_promise_or_specialist_not_settled',
+                });
+            }
             console.warn(`Action "${this.currentActionLabel || 'unknown'}" did not stop within ${boundedTimeoutMs}ms; leaving the bot held.`);
             return { stopped: false, timedOut: true, requestedAt };
         }
@@ -454,16 +922,18 @@ export class ActionManager {
         this.resume_name = null;
         this.resume_owner = '';
         this.resume_receipt_mode = 'legacy';
+        this.resume_activity_options = null;
         this.deferredPlayerAction = null;
     }
 
-    deferPlayerAction(actionLabel, actionFn, timeout = -1, owner = 'player', receiptMode = 'legacy') {
+    deferPlayerAction(actionLabel, actionFn, timeout = -1, owner = 'player', receiptMode = 'legacy', activityOptions = null) {
         this.deferredPlayerAction = Object.freeze({
             actionLabel,
             actionFn,
             timeout,
             owner: normalizeActionOwner(owner),
             receiptMode: normalizeReceiptMode(receiptMode),
+            activityOptions,
             requestContext: this.currentRequestContext(),
         });
         this.agent.behavior_arbiter?.wake?.('deferred_player_action_registered');
@@ -498,13 +968,14 @@ export class ActionManager {
             pending.timeout,
             pending.owner,
             pending.receiptMode,
+            pending.activityOptions,
         );
         return pending.requestContext
             ? this.runWithRequestContext(pending.requestContext, execute)
             : execute();
     }
 
-    async _executeResume(actionLabel = null, actionFn = null, timeout = 10, owner = null, receiptMode = 'legacy') {
+    async _executeResume(actionLabel = null, actionFn = null, timeout = 10, owner = null, receiptMode = 'legacy', activityOptions = null) {
         const new_resume = actionFn != null;
         if (new_resume) { // start new resume
             this.resume_func = actionFn;
@@ -512,6 +983,7 @@ export class ActionManager {
             this.resume_name = actionLabel;
             this.resume_owner = normalizeActionOwner(owner || this.ownerContext.getStore());
             this.resume_receipt_mode = normalizeReceiptMode(receiptMode);
+            this.resume_activity_options = activityOptions;
         }
         // A critical reflex owns the body until it settles, but an explicit
         // resumable player action is still valid work. Register it without
@@ -534,6 +1006,7 @@ export class ActionManager {
                 timeout,
                 this.resume_owner || 'player',
                 this.resume_receipt_mode,
+                this.resume_activity_options,
             );
             if (!res.success && res.result?.retryable === false) {
                 this.cancelResume();
@@ -544,7 +1017,7 @@ export class ActionManager {
         }
     }
 
-    async _executeAction(actionLabel, actionFn, timeout = 10, owner = 'player', receiptMode = 'legacy') {
+    async _executeAction(actionLabel, actionFn, timeout = 10, owner = 'player', receiptMode = 'legacy', activityOptions = null) {
         let TIMEOUT;
         let receiptLedger = null;
         let sealedSkillEvidence = null;
@@ -658,8 +1131,21 @@ export class ActionManager {
             this.currentActionStartedAt = this.last_action_time;
             receiptLedger = createActionReceiptLedger(actionId, { mode: actionReceiptMode });
             this.currentReceiptLedger = receiptLedger;
+            const activity = this.beginActivity({
+                actionId,
+                actionLabel,
+                missionId: activityOptions?.missionId || commandRequest?.missionId || commandRequest?.requestId || null,
+                activityId: activityOptions?.activityId || commandRequest?.activityId || null,
+                specialist: activityOptions?.specialist || null,
+                effectiveMovements: activityOptions?.effectiveMovements || null,
+            });
             this.agent.behavior_arbiter?.recordActionStart?.({
                 actionId,
+                activityId: activity?.activityId || null,
+                missionId: activity?.missionId || null,
+                specialist: activity?.specialist || null,
+                bodyLeaseOwner: activity?.bodyLeaseOwner || actionId,
+                worldRevision: activity?.worldRevisionAtStart || null,
                 owner: actionOwner,
                 ownerPriority: this.ownerPriority(actionOwner),
                 label: actionLabel,
@@ -700,23 +1186,6 @@ export class ActionManager {
             });
             sealedSkillEvidence = sealedReceipt.receipt || sealedSkillEvidence;
 
-            // mark action as finished + cleanup
-            this.agent.behavior_arbiter?.recordActionRelease?.({
-                actionId,
-                owner: actionOwner,
-                ownerPriority: this.ownerPriority(actionOwner),
-                releasedAt: Date.now(),
-            });
-            this.executing = false;
-            this.currentActionId = '';
-            this.currentActionLabel = '';
-            this.currentActionOwner = '';
-            this.currentActionFn = null;
-            this.currentActionController = null;
-            this.currentReceiptLedger = null;
-            this.currentActionStartedAt = 0;
-            this.stopRequestedAt = null;
-            this.stopTimedOutAt = null;
             clearTimeout(TIMEOUT);
 
             // get bot activity summary
@@ -727,12 +1196,6 @@ export class ActionManager {
             // these distinct lets GoalDirector charge the acquisition once and
             // preserve its concrete target for replanning.
             let interrupted = this.agent.bot.interrupt_code && !timedout;
-            this.agent.clearBotLogs();
-
-            // if not interrupted and not generating, emit idle event
-            if (!interrupted) {
-                this.agent.bot.emit('idle');
-            }
 
             // return action status report
             const skillEvidence = actionReceiptMode === 'composed'
@@ -759,13 +1222,53 @@ export class ActionManager {
                     ? skillEvidence.retryable
                     : skillFailed && actionReceiptMode === 'legacy';
             const requestedRetryable = skillRequested && skillEvidence?.retryable === true;
+            const phase = interrupted
+                ? 'interrupted'
+                : timedout || skillFailed ? 'failed' : skillRequested ? 'requested' : 'succeeded';
+            const code = receiptContractFailure
+                ? receiptFailureCode
+                : interrupted ? 'interrupted' : timedout ? 'timeout' : skillFailed ? skillFailureCode : skillSuccessCode;
+            const lifecycle = phase === 'succeeded'
+                ? 'SUCCEEDED'
+                : phase === 'interrupted' ? 'CANCELLED' : 'FAILED';
+            this.recordTerminalResult({
+                lifecycle,
+                reasonClass: interrupted ? 'CANCEL' : timedout ? 'BUDGET' : 'ENGINE',
+                reasonCode: code,
+                retryable: receiptContractFailure
+                    ? false
+                    : interrupted || timedout || skillRetryable || requestedRetryable,
+            });
+            const settlement = await this.proveSettlement(lifecycle);
+            if (settlement.settled !== true) {
+                this.stopTimedOutAt = this.now();
+                const result = createActionResult({
+                    actionId,
+                    label: actionLabel,
+                    phase: 'failed',
+                    code: 'activity_unsettled',
+                    detail: 'The specialist did not prove physical settlement. The body lease remains held until a controlled restart.',
+                    evidence: {
+                        output: output || null,
+                        skill: skillEvidence,
+                        request: commandRequest || null,
+                        activity: this.activitySnapshot(),
+                    },
+                    retryable: false,
+                    startedAt,
+                });
+                this.lastResult = result;
+                this.cancelResume();
+                this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
+                this.agent.recordActionResult?.(result);
+                return { success: false, message: result.detail, interrupted, timedout, unsettled: true, result };
+            }
+            const activityEvidence = this.activitySnapshot();
             const result = createActionResult({
                 actionId,
                 label: actionLabel,
-                phase: interrupted ? 'interrupted' : timedout || skillFailed ? 'failed' : skillRequested ? 'requested' : 'succeeded',
-                code: receiptContractFailure
-                    ? receiptFailureCode
-                    : interrupted ? 'interrupted' : timedout ? 'timeout' : skillFailed ? skillFailureCode : skillSuccessCode,
+                phase,
+                code,
                 detail: output || (interrupted
                     ? 'Action was interrupted.'
                     : skillFailed
@@ -778,12 +1281,16 @@ export class ActionManager {
                     output: output || null,
                     skill: skillEvidence,
                     request: commandRequest || null,
+                    activity: activityEvidence,
                 },
                 retryable: receiptContractFailure
                     ? false
                     : interrupted || timedout || skillRetryable || requestedRetryable,
                 startedAt,
             });
+            this.releaseBodyLease(actionId, actionOwner);
+            this.agent.clearBotLogs();
+            if (!interrupted) this.agent.bot.emit('idle');
             this.lastResult = result;
             this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
             this.agent.recordActionResult?.(result);
@@ -796,37 +1303,56 @@ export class ActionManager {
                 });
                 sealedSkillEvidence = sealedReceipt.receipt || sealedSkillEvidence;
             }
-            if (this.currentActionId === actionId) {
-                this.agent.behavior_arbiter?.recordActionRelease?.({
-                    actionId,
-                    owner: actionOwner,
-                    ownerPriority: this.ownerPriority(actionOwner),
-                    releasedAt: Date.now(),
-                });
-            }
-            this.executing = false;
-            this.currentActionId = '';
-            this.currentActionLabel = '';
-            this.currentActionOwner = '';
-            this.currentActionFn = null;
-            this.currentActionController = null;
-            this.currentReceiptLedger = null;
-            this.currentActionStartedAt = 0;
-            this.stopRequestedAt = null;
-            this.stopTimedOutAt = null;
             clearTimeout(TIMEOUT);
             this.cancelResume();
             const errorDetail = String(err?.stack || err?.message || err).slice(0, MAX_ACTION_ERROR_CHARS);
             console.error('Code execution triggered catch:', errorDetail);
-            await this.stop();
             const errorMessage = String(err?.message || err).slice(0, MAX_ACTION_ERROR_CHARS);
+            const interrupted = Boolean(this.agent.bot.interrupt_code || this.currentActionController?.signal?.aborted);
+
+            if (this.currentActionId === actionId && this.currentActivity) {
+                const halt = await this.requestHalt('specialist_error');
+                if (halt.acknowledged !== true) await this.forceHalt('specialist_error');
+                this.recordTerminalResult({
+                    lifecycle: interrupted ? 'CANCELLED' : 'FAILED',
+                    reasonClass: interrupted ? 'CANCEL' : 'ENGINE',
+                    reasonCode: this.timedout ? 'timeout' : 'runtime_error',
+                    retryable: interrupted || this.timedout,
+                });
+                const settlement = await this.proveSettlement(interrupted ? 'CANCELLED' : 'FAILED');
+                if (settlement.settled !== true) {
+                    this.stopTimedOutAt = this.now();
+                    const result = createActionResult({
+                        actionId,
+                        label: actionLabel,
+                        phase: 'failed',
+                        code: 'activity_unsettled',
+                        detail: 'The specialist failed and did not prove physical settlement. The body lease remains held until a controlled restart.',
+                        evidence: {
+                            skill: actionReceiptMode === 'composed'
+                                ? sealedSkillEvidence
+                                : createLegacyActionReceiptEnvelope(actionId, this.agent.bot.lastActionEvidence),
+                            request: commandRequest || null,
+                            activity: this.activitySnapshot(),
+                        },
+                        retryable: false,
+                        startedAt,
+                    });
+                    this.lastResult = result;
+                    this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
+                    this.agent.recordActionResult?.(result);
+                    return { success: false, message: result.detail, interrupted, timedout: this.timedout, unsettled: true, result, error: err };
+                }
+            }
+
+            const activityEvidence = this.activitySnapshot();
+            if (this.currentActionId === actionId) this.releaseBodyLease(actionId, actionOwner);
 
             let message = this.getBotOutputSummary() +
                 '!!Code threw exception!!\n' +
                 'Error: ' + errorMessage + '\n' +
                 'Stack trace:\n' + errorDetail+'\n';
 
-            let interrupted = this.agent.bot.interrupt_code;
             this.agent.clearBotLogs();
             if (!interrupted) {
                 this.agent.bot.emit('idle');
@@ -842,6 +1368,7 @@ export class ActionManager {
                         ? sealedSkillEvidence
                         : createLegacyActionReceiptEnvelope(actionId, this.agent.bot.lastActionEvidence),
                     request: commandRequest || null,
+                    activity: activityEvidence,
                 },
                 retryable: actionReceiptMode === 'composed'
                     && sealedSkillEvidence?.contract?.valid !== true
@@ -851,7 +1378,7 @@ export class ActionManager {
             this.settleActionAttempt(actionLabel, actionOwner, result, commandRequest);
             this.lastResult = result;
             this.agent.recordActionResult?.(result);
-            return { success: false, message, interrupted, timedout: false, result, error: err };
+            return { success: false, message, interrupted, timedout: this.timedout, result, error: err };
         }
     }
 

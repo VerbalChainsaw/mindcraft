@@ -11,13 +11,11 @@ const UNREACHABLE_ROUTE_STATUSES = new Set([
     'noPath',
     'action_deadline',
     'unreachable',
-    'timeout',
-    'probe_error',
-    'unknown',
     'unsafe_drop_support',
     'no_safe_stance',
     'target_unloaded',
 ]);
+const INCONCLUSIVE_ROUTE_STATUSES = new Set(['timeout', 'probe_error', 'unknown']);
 
 const REQUESTER_AREA_EXTRACTION_RADIUS = 8;
 export const WHOLE_TREE_LOCAL_SCORE_DELTA = 24;
@@ -77,9 +75,10 @@ function rounded(value) {
     return Math.round(value * 100) / 100;
 }
 
-function scoreCandidate(candidate) {
+function scoreCandidate(candidate, { inconclusive = 'strict' } = {}) {
     const routeStatus = String(candidate.routeStatus || 'unknown');
-    const reachable = !UNREACHABLE_ROUTE_STATUSES.has(routeStatus);
+    const reachable = !UNREACHABLE_ROUTE_STATUSES.has(routeStatus)
+        && (inconclusive === 'advisory' || !INCONCLUSIVE_ROUTE_STATUSES.has(routeStatus));
     const routeCost = Math.max(0, finiteOr(candidate.routeCost));
     const distance = Math.max(0, finiteOr(candidate.distance));
     const verticalDelta = Math.max(0, finiteOr(candidate.verticalDelta));
@@ -122,10 +121,10 @@ function coordinate(candidate, axis) {
  * This module deliberately owns no Minecraft state, memory, or scheduling.
  * Callers provide bounded physical observations and retain action ownership.
  */
-export function rankCollectionCandidates(candidates) {
+export function rankCollectionCandidates(candidates, options = {}) {
     return (Array.isArray(candidates) ? candidates : [])
         .map((candidate, originalIndex) => ({
-            ...scoreCandidate(candidate),
+            ...scoreCandidate(candidate, options),
             originalIndex,
         }))
         .sort((left, right) => (

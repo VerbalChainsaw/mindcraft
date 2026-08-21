@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -9,17 +9,34 @@ import { fileURLToPath } from 'node:url';
 import { canonicalJson } from '../../tools/a0/aggregate.mjs';
 import {
   FAMILIES,
+  analyzeVarianceMatrix,
   computeScenarioManifestHash,
+  computeVarianceMatrixHash,
   createExecutionPlan,
   createExecutionResult,
   createScenarioList,
   loadScenarioManifest,
   validateScenarioManifest,
+  validateVarianceMatrix,
 } from '../../tools/scenario-lab.mjs';
 import {
   aggregateFollowFieldObservations,
+  classifyTerminalProviderFailure,
+  createVarianceObservation,
+  latestCompleteModelMeasurement,
   observeFollowFieldRun,
 } from '../../tools/scenario-lab/adapters/follow-field-evidence.mjs';
+import { startRecordedTraceProvider } from '../../tools/scenario-lab/adapters/recorded-trace-provider.mjs';
+import {
+  fingerprintVarianceValue,
+  recordedTraceModelName,
+  requestCompletionCase,
+  REQUEST_COMPLETION_CASES,
+} from '../../tools/scenario-lab/variance-cases.mjs';
+import {
+  createVarianceAcquisitionPlan,
+  selectVariancePlanCells,
+} from '../../tools/scenario-lab/run-variance-matrix.mjs';
 import {
   aggregateStoneRecoveryObservations,
   observeStoneRecoveryRun,
@@ -62,7 +79,287 @@ function readyManifest(manifest) {
   return rehash(ready);
 }
 
-test('the frozen v1 manifest registers four bounded replays and keeps other families unavailable', async () => {
+function declaredVarianceCase() {
+  return {
+    id: '1-give',
+    fixtureFingerprint: 'a'.repeat(64),
+    inputFingerprint: 'b'.repeat(64),
+    recordedTraceFingerprint: 'c'.repeat(64),
+    frozenModelFingerprint: 'd'.repeat(64),
+  };
+}
+
+function varianceMatrix({ trials = [1, 2], alter = () => {} } = {}) {
+  const declaredCase = declaredVarianceCase();
+  const observations = [];
+  for (const trial of trials) {
+    for (const executionMode of ['recorded-trace', 'frozen-model']) {
+      for (const telemetryMode of ['off', 'on']) {
+        for (const preflightMode of ['off', 'on']) {
+          const suffix = `${trial}-${executionMode}-${telemetryMode}-${preflightMode}`;
+          const observation = {
+            runId: `run-${suffix}`,
+            caseId: declaredCase.id,
+            trial,
+            executionMode,
+            telemetryMode,
+            preflightMode,
+            resetId: `reset-${suffix}`,
+            fixtureFingerprint: declaredCase.fixtureFingerprint,
+            inputFingerprint: declaredCase.inputFingerprint,
+            driverFingerprint: executionMode === 'recorded-trace'
+              ? declaredCase.recordedTraceFingerprint
+              : declaredCase.frozenModelFingerprint,
+            modelOutputFingerprint: executionMode === 'frozen-model' ? '0'.repeat(64) : null,
+            modelRouteFingerprint: executionMode === 'frozen-model' ? '6'.repeat(64) : null,
+            decisionFingerprint: executionMode === 'recorded-trace' ? 'e'.repeat(64) : 'f'.repeat(64),
+            preflightFingerprint: preflightMode === 'on' ? '1'.repeat(64) : null,
+            lifecycleFingerprint: telemetryMode === 'on' ? '2'.repeat(64) : null,
+            outcomeFingerprint: '3'.repeat(64),
+            passed: true,
+            settledBefore: true,
+            settledAfter: true,
+            elapsedMs: 1_000,
+          };
+          alter(observation);
+          observations.push(observation);
+        }
+      }
+    }
+  }
+  const matrix = {
+    schemaVersion: 'scenario-lab.variance-matrix.v1',
+    matrixRevision: 'phase-5-test.v1',
+    matrixHash: '0'.repeat(64),
+    candidateCommit: '4'.repeat(40),
+    cases: [declaredCase],
+    observations,
+  };
+  matrix.matrixHash = computeVarianceMatrixHash(matrix);
+  return matrix;
+}
+
+function varianceHarnessReport({
+  telemetryMode = 'on',
+  executionMode = 'frozen-model',
+  identity = 'a',
+  issuedAt = 1_000,
+  selectedSkill = '!givePlayer',
+  terminalCode = 'skill_done',
+  lifecycleCode = terminalCode,
+  passed = true,
+  includeModel = true,
+  recordedTraceHost = '127.0.0.1',
+  metricOffset = 0,
+} = {}) {
+  const varianceCase = declaredVarianceCase();
+  const actionId = `action-${identity}`;
+  const terminal = {
+    actionId,
+    label: 'action:givePlayer',
+    phase: passed ? 'succeeded' : 'failed',
+    code: terminalCode,
+    retryable: !passed,
+    startedAt: issuedAt + 20,
+    finishedAt: issuedAt + 60,
+    evidence: {
+      request: {
+        requestId: `request-${identity}`,
+        routeOrigin: 'model-selected',
+        selectedSkill,
+        args: ['FollowTarget', 'dirt', 1],
+      },
+    },
+  };
+  const trace = {
+    schemaVersion: 1,
+    decisionId: `decision-${identity}`,
+    wallClockTimestamp: issuedAt + 10,
+    activeAction: {
+      actionId,
+      owner: 'player',
+      ownerPriority: 70,
+      label: terminal.label,
+      intent: 'deliver requested item',
+    },
+    correlation: {
+      actionId,
+      requestId: `request-${identity}`,
+      routeOrigin: 'model-selected',
+      selectedSkill,
+      args: ['FollowTarget', 'dirt', 1],
+      outcomeLinked: true,
+    },
+    actionLifecycle: {
+      acquisition: {
+        actionId,
+        owner: 'player',
+        ownerPriority: 70,
+        acquiredAt: issuedAt + 15,
+        startedAt: issuedAt + 20,
+        source: 'linked_action_start',
+      },
+      release: {
+        actionId,
+        owner: 'player',
+        ownerPriority: 70,
+        releasedAt: issuedAt + 60,
+        phase: passed ? 'succeeded' : 'failed',
+        code: lifecycleCode,
+      },
+    },
+    outcome: {
+      actionId,
+      phase: passed ? 'succeeded' : 'failed',
+      code: lifecycleCode,
+      finishedAt: issuedAt + 60,
+      durationMs: 40,
+    },
+  };
+  const stableSample = {
+    sampledAt: issuedAt + 1_000,
+    held: true,
+    idle: true,
+    pathfinding: null,
+    stopTimedOutAt: null,
+  };
+  const modelConfigFingerprint = executionMode === 'recorded-trace'
+    ? '9'.repeat(64)
+    : varianceCase.frozenModelFingerprint;
+  const attempt = {
+    attempt: 1,
+    runId: `attempt-${identity}`,
+    issuedAt,
+    activeAt: issuedAt + 20,
+    commandAck: { success: true, acceptedAt: issuedAt },
+    terminal,
+    stop: {
+      settledAt: issuedAt + 1_000,
+      stableForTenSeconds: true,
+      stableSamples: [stableSample],
+    },
+    performance: {
+      durationMs: 1_000 + metricOffset,
+      botTrajectoryDistance: 7.25 + metricOffset,
+    },
+    physicalAcceptance: {
+      course: 'variance-case',
+      commandCompleted: passed,
+      finalWaypointReached: passed,
+      finalDistanceToTarget: 1.25 + metricOffset,
+      finalPosition: { x: 10 + metricOffset, y: 64, z: 10 },
+      observedAt: issuedAt + 500,
+    },
+    modelMeasurements: includeModel ? [{
+      sampledAt: issuedAt + 30,
+      modelConfigFingerprint,
+      inputFingerprint: varianceCase.inputFingerprint,
+      outputFingerprint: 'e'.repeat(64),
+      modelRouteFingerprint: 'f'.repeat(64),
+      outcome: 'generated',
+      attempt: 1,
+    }] : [],
+    traces: telemetryMode === 'on' ? [trace] : [],
+    results: { [terminal.label]: terminal },
+    passed,
+  };
+  const recordedTraceUrl = `http://${recordedTraceHost}:43123/v1`;
+  return {
+    schema_version: 1,
+    status: passed ? 'passed' : 'failed',
+    fixture_metadata_sha256: varianceCase.fixtureFingerprint,
+    instrumentation: {
+      requested_mode: telemetryMode,
+      decision_trace_enabled: telemetryMode === 'on',
+      observed_decision_trace_present: telemetryMode === 'on',
+      observed_schema_version: telemetryMode === 'on' ? 1 : null,
+      verified: true,
+    },
+    verdict: { passed, duration_ms: 1_000 + metricOffset },
+    cleanup: {
+      configuration_restored: true,
+      properties_restored: true,
+      pre_run_memory_restored: true,
+      remaining_managed_java: [],
+      errors: [],
+    },
+    recorded_trace_profile: executionMode === 'recorded-trace' ? {
+      api: 'openai_compatible',
+      url: recordedTraceUrl,
+    } : null,
+    recorded_trace: executionMode === 'recorded-trace' ? {
+      schemaVersion: 'scenario-lab.recorded-trace-provider.v1',
+      caseId: varianceCase.id,
+      driverFingerprint: varianceCase.recordedTraceFingerprint,
+      expectedResponseFingerprint: 'e'.repeat(64),
+      modelConfigFingerprint,
+      modelRouteFingerprint: 'f'.repeat(64),
+      endpoint: { host: recordedTraceHost, baseUrl: recordedTraceUrl },
+      requests: [{
+        accepted: true,
+        matchedCaseRequest: true,
+        inputFingerprint: varianceCase.inputFingerprint,
+        responseFingerprint: 'e'.repeat(64),
+      }],
+      complete: true,
+    } : null,
+    harness_evidence: {
+      passed,
+      attempts: [attempt],
+      cleanup: {
+        fixtureRestored: true,
+        botHeld: true,
+        targetDisconnected: true,
+        success: true,
+      },
+      fixture: { mobSpawning: { restored: true } },
+    },
+  };
+}
+
+function varianceObservation({
+  executionMode = 'frozen-model',
+  telemetryMode = 'on',
+  preflightMode = 'on',
+  identity = 'a',
+  reportOptions = {},
+  preflightEvidence = preflightMode === 'on' ? [{
+    owner: 'route-consumer',
+    operation: 'safe-round-trip',
+    status: 'proven',
+    code: 'route_found',
+    conclusive: true,
+    retryable: false,
+  }] : null,
+} = {}) {
+  const varianceCase = declaredVarianceCase();
+  const report = varianceHarnessReport({
+    executionMode,
+    telemetryMode,
+    identity,
+    ...reportOptions,
+  });
+  return createVarianceObservation({
+    varianceCase,
+    runId: `run-${identity}`,
+    trial: 1,
+    executionMode,
+    telemetryMode,
+    preflightMode,
+    resetId: `reset-${identity}`,
+    report,
+    observedInputFingerprint: executionMode === 'recorded-trace'
+      ? varianceCase.inputFingerprint
+      : null,
+    observedDriverFingerprint: executionMode === 'recorded-trace'
+      ? varianceCase.recordedTraceFingerprint
+      : null,
+    settledBefore: true,
+    preflightEvidence,
+  });
+}
+
+test('the frozen v1 manifest registers six bounded replays and keeps other families unavailable', async () => {
   const manifest = await loadScenarioManifest();
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
@@ -128,10 +425,9 @@ test('the frozen v1 manifest registers four bounded replays and keeps other fami
   assert.ok(!deliver.expectedEvidence.includes('doorway-crossing-confirmed'));
   assert.ok(!deliver.expectedEvidence.includes('corridor-progress-confirmed'));
 
-  // The orchestration course is the only one that reduces the command surface
-  // and stands the deterministic interceptors down, so it is the only scenario
-  // that can tell whether the LLM orchestrates or merely routes. Its allowlist
-  // lives in the fixture recipe, which is why the recipe hash is pinned.
+  // The orchestration course stands deterministic sentence interceptors down
+  // so the model can accept one Phase 3 Mission. The Mission, not the model or
+  // a reduced test-only command surface, owns later causal Activities.
   const orchestration = manifest.scenarios.find(({ id }) => id === 'orchestration-charcoal');
   assert.equal(orchestration.status, 'not-run');
   assert.equal(orchestration.executor.safe, true);
@@ -148,7 +444,31 @@ test('the frozen v1 manifest registers four bounded replays and keeps other fami
   }
   assert.ok(orchestration.expectedEvidence.includes('item-delivered-to-recipient'));
 
-  const registered = new Set([stone.id, follow.id, obstruction.id, deliver.id, orchestration.id]);
+  // Phase 4 isolates the strict whole-route preflight itself. Both request
+  // forms intentionally carry the same explicit command so neither invocation
+  // can spend provider quota or confound navigation truth with interpretation.
+  const routeProbe = manifest.scenarios.find(({ id }) => id === 'route-probe-inconclusive');
+  assert.ok(routeProbe, 'route-probe-inconclusive must be registered');
+  assert.equal(routeProbe.status, 'not-run');
+  assert.equal(routeProbe.executor.safe, true);
+  assert.equal(routeProbe.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(routeProbe.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(routeProbe.world.fixtureId, deliver.world.fixtureId);
+  assert.equal(routeProbe.world.fixtureHash, deliver.world.fixtureHash);
+  assert.equal(routeProbe.requestForms[0].request, routeProbe.requestForms[1].request);
+  assert.match(routeProbe.requestForms[0].request, /^!goToCoordinates\(/);
+  assert.ok(routeProbe.expectedEvidence.includes('route-probe-inconclusive-confirmed'));
+  assert.ok(routeProbe.expectedEvidence.includes('no-unproven-movement-confirmed'));
+  assert.ok(routeProbe.expectedEvidence.includes('terrain-preserved-confirmed'));
+
+  const registered = new Set([
+    stone.id,
+    follow.id,
+    obstruction.id,
+    deliver.id,
+    orchestration.id,
+    routeProbe.id,
+  ]);
   assert.ok(manifest.scenarios
     .filter(({ id }) => !registered.has(id))
     .every(({ status, executor }) => (
@@ -173,6 +493,10 @@ test('live workers require portable provenance and one managed-runtime lock', as
   assert.match(followWorker, /candidate_blob_checks/);
   assert.match(followWorker, /src\/agent\/player-directives\.js/);
   assert.match(followWorker, /tools\/scenario-lab\/adapters\/follow-field-evidence\.mjs/);
+  assert.match(followWorker, /tools\/scenario-lab\/run-variance-matrix\.mjs/);
+  assert.match(followWorker, /git -C \$repo ls-tree \$ExpectedCandidateCommit -- \$relativePath/);
+  assert.match(followWorker, /candidate_present = \(\$null -ne \$candidateBlob\)/);
+  assert.doesNotMatch(followWorker, /rev-parse "\$\{ExpectedCandidateCommit\}:\$relativePath"/);
   assert.match(followWorker, /"--path=\$relativePath"/);
   assert.match(followRunner, /taskkill\.exe/);
   assert.match(followRunner, /'-InstrumentationMode', plan\.instrumentationMode/);
@@ -188,12 +512,44 @@ test('live workers require portable provenance and one managed-runtime lock', as
   assert.doesNotMatch(followWorker, /Start-Process -FilePath \$nodePath -ArgumentList \$harnessArgs/);
   assert.match(followHarness, /--request-file/);
   assert.match(followHarness, /doorway-corridor/);
+  assert.match(followWorker, /route-probe-inconclusive/);
+  assert.match(followRunner, /route-probe-inconclusive/);
+  assert.match(followHarness, /route-probe-inconclusive/);
   assert.match(followHarness, /target\.chat\(options\.requestMessage\)/);
   assert.match(followHarness, /sendMessage\(options\.requestMessage\)/);
   assert.match(followHarness, /actuatorVelocityIsSettled/);
   assert.match(followHarness, /settled stop anchor/);
   assert.match(followHarness, /settledAt/);
   assert.match(followHarness, /settlingMs/);
+  assert.match(followHarness, /modelMeasurement: state\?\.modelMeasurement\?\.conversation/);
+  assert.match(followHarness, /modelMeasurementKeys: new Set\(\)/);
+  assert.match(followHarness, /modelMeasurements: activeAttempt\.modelMeasurements/);
+  assert.match(followWorker, /\$scenarioProfile\.model = \$configuredConversationModels\[0\]/);
+  assert.match(followWorker, /'--max-prompt-turns'/);
+  assert.match(followHarness, /completionStatus = 'outcome-timeout'/);
+  assert.match(followHarness, /completionStatus = 'provider-failed'/);
+});
+
+test('Scenario Lab stops repeated request forms on terminal provider failures', () => {
+  assert.deepEqual(classifyTerminalProviderFailure('code: credit_balance_exhausted'), {
+    provider: 'openai-api',
+    code: 'credit_balance_exhausted',
+    detail: 'The configured OpenAI API project has no usable credit or spend allowance.',
+  });
+  assert.deepEqual(classifyTerminalProviderFailure('Codex quota or rate limit was reached.'), {
+    provider: 'codex',
+    code: 'codex_quota',
+    detail: 'The logged-in ChatGPT account reached its Codex quota or rate limit.',
+  });
+  assert.deepEqual(
+    classifyTerminalProviderFailure('HTTP 429 rate_limit_exceeded', { configuredProvider: 'openai' }),
+    {
+      provider: 'openai-api',
+      code: 'provider_rate_limit',
+      detail: 'The configured model provider rejected the request because its rate limit was reached.',
+    },
+  );
+  assert.equal(classifyTerminalProviderFailure('ordinary gameplay failure'), null);
 });
 
 test('list ordering and canonical CLI JSON are stable', async () => {
@@ -598,4 +954,703 @@ test('follow-field evidence requires correlated physical completion and quiescen
   assert.equal(instrumentationMismatch.success, false);
   assert.equal(instrumentationMismatch.checks['instrumentation-mode-confirmed'], false);
   assert.ok(instrumentationMismatch.safetyInvariantViolations.includes('declared-instrumentation-mode-required'));
+});
+
+test('route-probe evidence requires an inconclusive terminal without movement or terrain mutation', async () => {
+  const issuedAt = 1000;
+  const start = { x: 1027.5, y: 100, z: 1008.5 };
+  const request = '!goToCoordinates(1038,100,1013,0,true)';
+  const attempt = {
+    attempt: 1,
+    issuedAt,
+    activeAt: issuedAt + 10,
+    commandAck: { success: true },
+    terminal: {
+      actionId: 'action-route-probe',
+      phase: 'failed',
+      code: 'skill_route_unproven',
+      label: 'action:goToCoordinates',
+      detail: 'Pathfinder ended the route probe without a conclusive answer (timeout); no unproven movement was attempted.',
+      retryable: true,
+      startedAt: issuedAt + 10,
+      finishedAt: issuedAt + 5010,
+      evidence: {
+        request: {
+          requestId: 'request-route-probe',
+          routeOrigin: 'explicit-command',
+          selectedSkill: '!goToCoordinates',
+          args: [1038, 100, 1013, 0, true],
+        },
+      },
+    },
+    traces: [],
+    samples: [{ health: 20, position: start, pathfinding: null }],
+    physicalSamples: [{ sampledAt: issuedAt + 20, position: start }],
+    performance: { botTrajectoryDistance: 0, targetTrajectoryDistance: 0 },
+    physicalAcceptance: {
+      course: 'route-probe-inconclusive',
+      fixtureVerified: true,
+      routeProbeStatus: 'timeout',
+      routeProbeConclusive: false,
+      routeMovementAttempted: false,
+      routeStartPosition: start,
+      routeFinalPosition: start,
+      routeTerrainIntact: true,
+    },
+    stop: {
+      quiescenceMs: 100,
+      stableForTenSeconds: true,
+      stableSamples: [{ health: 20, position: start, pathfinding: null }],
+    },
+    passed: true,
+  };
+  const observation = observeFollowFieldRun({
+    request_form: 'direct',
+    instrumentation: {
+      requested_mode: 'off',
+      decision_trace_enabled: false,
+      observed_decision_trace_present: false,
+      observed_schema_version: null,
+      verified: true,
+    },
+    fixture_authorized: true,
+    endpoints_local_only: true,
+    status: 'passed',
+    finished_utc: '2026-08-20T00:00:16.000Z',
+    harness_evidence: {
+      passed: true,
+      finishedAt: issuedAt + 16_000,
+      durationMs: 16_000,
+      attempts: [attempt],
+      fixture: {
+        courseVariant: 'route-probe-inconclusive',
+        mobSpawning: { restored: true },
+      },
+      cleanup: { fixtureRestored: true, botHeld: true, targetDisconnected: true },
+    },
+    verdict: { passed: true, duration_ms: 16_000, external_retry_count: 0, false_success_observed: false },
+    cleanup: {
+      configuration_restored: true,
+      properties_restored: true,
+      pre_run_memory_restored: true,
+      remaining_managed_java: [],
+      errors: [],
+    },
+  }, 180_000, 'off');
+
+  assert.equal(observation.success, true);
+  assert.equal(observation.checks['route-probe-lifecycle'], true);
+  assert.equal(observation.checks['route-probe-inconclusive-confirmed'], true);
+  assert.equal(observation.checks['no-unproven-movement-confirmed'], true);
+  assert.equal(observation.checks['terrain-preserved-confirmed'], true);
+
+  const manifest = await loadScenarioManifest();
+  const plan = createExecutionPlan(manifest, 'route-probe-inconclusive');
+  const aggregate = aggregateFollowFieldObservations(plan, [
+    observation,
+    { ...observation, form: 'natural-language' },
+  ]);
+  const result = createExecutionResult(manifest, 'route-probe-inconclusive', aggregate);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidenceCompleteness, 'complete');
+  assert.equal(result.liveScenarioPassed, true);
+
+  const falseNoPath = structuredClone(attempt);
+  falseNoPath.terminal.code = 'skill_path_not_found';
+  falseNoPath.terminal.detail = 'Pathfinder completed the route search without finding a safe route (noPath).';
+  falseNoPath.physicalAcceptance.routeProbeStatus = 'noPath';
+  falseNoPath.physicalAcceptance.routeProbeConclusive = true;
+  const rejected = observeFollowFieldRun({
+    request_form: 'direct',
+    instrumentation: {
+      requested_mode: 'off',
+      decision_trace_enabled: false,
+      observed_decision_trace_present: false,
+      observed_schema_version: null,
+      verified: true,
+    },
+    fixture_authorized: true,
+    endpoints_local_only: true,
+    status: 'passed',
+    finished_utc: '2026-08-20T00:00:16.000Z',
+    harness_evidence: {
+      passed: true,
+      finishedAt: issuedAt + 16_000,
+      durationMs: 16_000,
+      attempts: [falseNoPath],
+      fixture: {
+        courseVariant: 'route-probe-inconclusive',
+        mobSpawning: { restored: true },
+      },
+      cleanup: { fixtureRestored: true, botHeld: true, targetDisconnected: true },
+    },
+    verdict: { passed: true, duration_ms: 16_000, external_retry_count: 0, false_success_observed: false },
+    cleanup: {
+      configuration_restored: true,
+      properties_restored: true,
+      pre_run_memory_restored: true,
+      remaining_managed_java: [],
+      errors: [],
+    },
+  }, 180_000, 'off');
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.checks['route-probe-inconclusive-confirmed'], false);
+});
+
+test('charcoal Mission evidence requires stable IDs and exact eight-item delivery', async () => {
+  const manifest = await loadScenarioManifest();
+  const plan = createExecutionPlan(manifest, 'orchestration-charcoal');
+  const makeRun = ({ quantity = 8, activityId = 'activity-1' } = {}) => {
+    const issuedAt = 1000;
+    const attempt = {
+      attempt: 1,
+      issuedAt,
+      activeAt: issuedAt + 25,
+      commandAck: { success: true },
+      terminal: {
+        actionId: 'action-deliver-charcoal',
+        phase: 'succeeded',
+        code: 'delivered_exact_item',
+        label: 'action:givePlayer',
+        startedAt: issuedAt + 50,
+        finishedAt: issuedAt + 500,
+        evidence: {
+          request: {
+            requestId: 'request-charcoal',
+            routeOrigin: 'mission-director',
+            selectedSkill: '!givePlayer',
+            args: ['FollowTarget', 'charcoal', quantity],
+            missionId: 'mission-1',
+            activityId,
+          },
+          activity: {
+            missionId: 'mission-1',
+            activityId: 'activity-1',
+            lifecycle: 'SUCCEEDED',
+          },
+        },
+      },
+      traces: [],
+      samples: [{ health: 20 }],
+      physicalAcceptance: {
+        course: 'orchestrate-charcoal',
+        fixtureVerified: true,
+        deliveryVerified: true,
+        deliverySourcePresent: false,
+        deliveryGroundPresent: true,
+        deliveryDryLandVerified: true,
+        deliveryDryLandProbes: Array.from({ length: 4 }, () => ({ verified: true })),
+        deliveryBaseline: 0,
+        deliveryFinal: 8,
+        deliveryObservedAt: issuedAt + 500,
+      },
+      stop: {
+        quiescenceMs: 100,
+        stableForTenSeconds: true,
+        stableSamples: [{ health: 20 }],
+      },
+      passed: true,
+    };
+    return observeFollowFieldRun({
+      request_form: 'natural-language',
+      instrumentation: {
+        requested_mode: plan.instrumentationMode,
+        decision_trace_enabled: false,
+        observed_decision_trace_present: false,
+        observed_schema_version: null,
+        verified: true,
+      },
+      fixture_authorized: true,
+      endpoints_local_only: true,
+      status: 'passed',
+      finished_utc: '2026-08-19T00:00:12.000Z',
+      harness_evidence: {
+        passed: true,
+        finishedAt: issuedAt + 12_000,
+        durationMs: 12_000,
+        attempts: [attempt],
+        fixture: { courseVariant: 'orchestrate-charcoal', mobSpawning: { restored: true } },
+        cleanup: { fixtureRestored: true, botHeld: true, targetDisconnected: true },
+      },
+      verdict: { passed: true, duration_ms: 12_000, external_retry_count: 0, false_success_observed: false },
+      cleanup: {
+        configuration_restored: true,
+        properties_restored: true,
+        pre_run_memory_restored: true,
+        remaining_managed_java: [],
+        errors: [],
+      },
+    }, plan.timeoutMs, plan.instrumentationMode);
+  };
+
+  const exact = makeRun();
+  assert.equal(exact.success, true);
+  assert.equal(exact.checks['request-correlation'], true);
+  assert.equal(exact.checks['goal-action-lifecycle'], true);
+  assert.equal(exact.checks['item-delivered-to-recipient'], true);
+
+  const wrongQuantity = makeRun({ quantity: 1 });
+  assert.equal(wrongQuantity.success, false);
+  assert.equal(wrongQuantity.checks['request-correlation'], false);
+
+  const mismatchedActivity = makeRun({ activityId: 'activity-other' });
+  assert.equal(mismatchedActivity.success, false);
+  assert.equal(mismatchedActivity.checks['request-correlation'], false);
+});
+
+test('follow evidence exposes the latest complete hashed model measurement', () => {
+  const hash = character => character.repeat(64);
+  const measurement = latestCompleteModelMeasurement({
+    issuedAt: 100,
+    modelMeasurements: [
+      {
+        sampledAt: 50,
+        modelConfigFingerprint: hash('a'),
+        inputFingerprint: hash('b'),
+        outputFingerprint: hash('c'),
+        modelRouteFingerprint: hash('d'),
+        outcome: 'generated',
+        attempt: 1,
+      },
+      {
+        sampledAt: 150,
+        modelConfigFingerprint: hash('a'),
+        inputFingerprint: hash('8'),
+        outputFingerprint: hash('c'),
+        modelRouteFingerprint: hash('d'),
+        outcome: 'generated',
+        attempt: 2,
+        attempts: [
+          {
+            attempt: 1,
+            inputFingerprint: hash('b'),
+            outputFingerprint: hash('7'),
+            modelRouteFingerprint: hash('d'),
+            outcome: 'generated',
+          },
+          {
+            attempt: 2,
+            inputFingerprint: hash('8'),
+            outputFingerprint: hash('c'),
+            modelRouteFingerprint: hash('d'),
+            outcome: 'generated',
+          },
+        ],
+        rawPrompt: 'not evidence',
+      },
+      {
+        sampledAt: 160,
+        modelConfigFingerprint: hash('a'),
+        inputFingerprint: hash('b'),
+        outputFingerprint: null,
+        modelRouteFingerprint: hash('d'),
+        outcome: 'provider_failed',
+        attempt: 2,
+      },
+    ],
+  });
+
+  assert.deepEqual(measurement, {
+    modelConfigFingerprint: hash('a'),
+    inputFingerprint: hash('8'),
+    outputFingerprint: hash('c'),
+    modelRouteFingerprint: hash('d'),
+    sampledAt: 150,
+    outcome: 'generated',
+    attempt: 2,
+    initialInputFingerprint: hash('b'),
+    attempts: [
+      {
+        attempt: 1,
+        inputFingerprint: hash('b'),
+        outputFingerprint: hash('7'),
+        modelRouteFingerprint: hash('d'),
+        outcome: 'generated',
+      },
+      {
+        attempt: 2,
+        inputFingerprint: hash('8'),
+        outputFingerprint: hash('c'),
+        modelRouteFingerprint: hash('d'),
+        outcome: 'generated',
+      },
+    ],
+  });
+  assert.equal(latestCompleteModelMeasurement({ modelMeasurements: [] }), null);
+});
+
+test('Phase 5 request-completion cases have stable isolated fixture and recorded-driver contracts', () => {
+  assert.deepEqual(REQUEST_COMPLETION_CASES.map(entry => entry.id), [
+    '1-give',
+    '2-craft-give',
+    '3-chain-give',
+    '4-tool-prep',
+    '5-mine-exact',
+    '6-kit',
+    '7-workshop',
+  ]);
+  for (const varianceCase of REQUEST_COMPLETION_CASES) {
+    assert.equal(requestCompletionCase(varianceCase.id), varianceCase);
+    assert.match(varianceCase.fixtureFingerprint, /^[a-f0-9]{64}$/);
+    assert.match(varianceCase.recordedTraceFingerprint, /^[a-f0-9]{64}$/);
+    assert.match(varianceCase.recordedResponseFingerprint, /^[a-f0-9]{64}$/);
+    assert.ok(Array.isArray(varianceCase.acceptedSegments));
+    assert.equal(varianceCase.expectedT0.caseId, varianceCase.id);
+    assert.match(varianceCase.recordedResponse, /![A-Za-z]/);
+  }
+});
+
+test('Phase 5 acquisition plan covers every isolated axis cell and discloses accepted overlap', () => {
+  const context = {
+    candidateCommit: '4'.repeat(40),
+    workspaceSourceFingerprint: '5'.repeat(64),
+    workspaceSourceFiles: {},
+    fixture: {
+      fixtureId: 'scenario-lab.deliver-item-flat.v1',
+      fixtureHash: '6'.repeat(64),
+      seed: '8140427791654321',
+    },
+    frozenModel: {
+      api: 'openai',
+      model: 'gpt-4.1',
+      maxPromptTurns: 2,
+      routeCount: 1,
+    },
+  };
+  const plan = createVarianceAcquisitionPlan({ trials: 2, context });
+
+  assert.equal(plan.caseCount, 7);
+  assert.equal(plan.totalCells, 112);
+  assert.equal(plan.localRecordedTraceCells, 56);
+  assert.equal(plan.frozenModelCells, 56);
+  assert.equal(plan.maximumConfiguredProviderRequests, 112);
+  assert.equal(new Set(plan.cells.map(cell => cell.runId)).size, plan.totalCells);
+  assert.equal(new Set(plan.cells.map(cell => cell.resetId)).size, plan.totalCells);
+  assert.deepEqual(plan.acceptedSegmentsRepeated, [
+    'Campaign 28',
+    'Campaign 29',
+    'Campaign 70',
+    'Campaign 68',
+    'M2',
+  ]);
+  assert.match(plan.preflightAxis.off, /advisory\/advisory/);
+  assert.match(plan.preflightAxis.on, /strict\/strict/);
+  assert.equal(createVarianceAcquisitionPlan({ trials: 3, context }).totalCells, 168);
+  assert.throws(() => createVarianceAcquisitionPlan({ trials: 1, context }), /one run cannot measure/);
+  assert.equal(
+    selectVariancePlanCells(plan, '1-give-trial-1-recorded-trace-telemetry-off-preflight-off').length,
+    1,
+  );
+  assert.equal(selectVariancePlanCells(plan).length, 112);
+  assert.throws(() => selectVariancePlanCells(plan, 'missing-cell'), /Unknown Phase 5 cell/);
+});
+
+test('recorded trace provider binds one loopback request to the exact case input and response', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'scenario-recorded-trace-'));
+  const readyFile = path.join(directory, 'ready.json');
+  const evidenceFile = path.join(directory, 'evidence.json');
+  const varianceCase = requestCompletionCase('1-give');
+  const { server, evidence } = await startRecordedTraceProvider({ varianceCase, readyFile, evidenceFile });
+  try {
+    const prompt = 'fixed system prompt';
+    const messages = [{ role: 'user', content: `FollowTarget: ${varianceCase.request}` }];
+    const requestBody = {
+      model: recordedTraceModelName(varianceCase),
+      messages: [{ role: 'system', content: prompt }, ...messages],
+    };
+    const response = await fetch(`${evidence.endpoint.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.choices[0].message.content, varianceCase.recordedResponse);
+    const recorded = JSON.parse(await readFile(evidenceFile, 'utf8'));
+    assert.equal(recorded.complete, true);
+    assert.equal(recorded.requests.length, 1);
+    assert.equal(recorded.requests[0].inputFingerprint, fingerprintVarianceValue({ messages, prompt }));
+    assert.equal(recorded.requests[0].responseFingerprint, varianceCase.recordedResponseFingerprint);
+    assert.deepEqual(recorded.requests[0].requestSize, {
+      compatibleBodyUtf8Bytes: Buffer.byteLength(JSON.stringify(requestBody), 'utf8'),
+      systemPromptUtf8Bytes: Buffer.byteLength(prompt, 'utf8'),
+      conversationContentUtf8Bytes: Buffer.byteLength(messages[0].content, 'utf8'),
+      conversationMessageCount: 1,
+      recordedResponseUtf8Bytes: Buffer.byteLength(varianceCase.recordedResponse, 'utf8'),
+    });
+    assert.equal(Object.hasOwn(body, 'usage'), false);
+  } finally {
+    await new Promise(resolvePromise => server.close(resolvePromise));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('variance evidence adapter removes generated identities, times, and noisy metrics from fingerprints', () => {
+  const first = varianceObservation({
+    identity: 'first',
+    reportOptions: { issuedAt: 1_000, metricOffset: 0 },
+  });
+  const second = varianceObservation({
+    identity: 'second',
+    reportOptions: { issuedAt: 20_000, metricOffset: 7 },
+  });
+
+  assert.equal(first.decisionFingerprint, second.decisionFingerprint);
+  assert.equal(first.lifecycleFingerprint, second.lifecycleFingerprint);
+  assert.equal(first.preflightFingerprint, second.preflightFingerprint);
+  assert.equal(first.outcomeFingerprint, second.outcomeFingerprint);
+  assert.notEqual(first.elapsedMs, second.elapsedMs);
+  assert.equal(Object.values(first).some(value => String(value).includes('action-first')), false);
+
+  const matrix = {
+    schemaVersion: 'scenario-lab.variance-matrix.v1',
+    matrixRevision: 'adapter-cell.v1',
+    matrixHash: '0'.repeat(64),
+    candidateCommit: '4'.repeat(40),
+    cases: [declaredVarianceCase()],
+    observations: [first],
+  };
+  matrix.matrixHash = computeVarianceMatrixHash(matrix);
+  assert.deepEqual(validateVarianceMatrix(matrix), []);
+});
+
+test('variance evidence adapter separates decisions, lifecycle, and disabled observer axes', () => {
+  const baseline = varianceObservation({ identity: 'baseline' });
+  const differentDecision = varianceObservation({
+    identity: 'decision',
+    reportOptions: { selectedSkill: '!requestItemGoal' },
+  });
+  const differentLifecycle = varianceObservation({
+    identity: 'lifecycle',
+    reportOptions: { lifecycleCode: 'released_after_recovery' },
+  });
+  const observerOff = varianceObservation({
+    identity: 'observer-off',
+    telemetryMode: 'off',
+    preflightMode: 'off',
+  });
+
+  assert.notEqual(baseline.decisionFingerprint, differentDecision.decisionFingerprint);
+  assert.equal(baseline.outcomeFingerprint, differentDecision.outcomeFingerprint);
+  assert.notEqual(baseline.lifecycleFingerprint, differentLifecycle.lifecycleFingerprint);
+  assert.equal(baseline.outcomeFingerprint, differentLifecycle.outcomeFingerprint);
+  assert.equal(observerOff.lifecycleFingerprint, null);
+  assert.equal(observerOff.preflightFingerprint, null);
+});
+
+test('variance evidence adapter enforces execution drivers and structured preflight evidence', () => {
+  const recorded = varianceObservation({
+    identity: 'recorded',
+    executionMode: 'recorded-trace',
+    telemetryMode: 'off',
+    preflightMode: 'off',
+  });
+  assert.equal(recorded.modelOutputFingerprint, null);
+  assert.equal(recorded.modelRouteFingerprint, null);
+  assert.equal(recorded.driverFingerprint, declaredVarianceCase().recordedTraceFingerprint);
+
+  assert.throws(() => varianceObservation({
+    identity: 'missing-model',
+    reportOptions: { includeModel: false },
+  }), /no complete post-request model measurement/);
+  assert.throws(() => varianceObservation({
+    identity: 'recorded-non-loopback',
+    executionMode: 'recorded-trace',
+    reportOptions: { recordedTraceHost: 'provider.example' },
+  }), /not confined to the declared loopback compatible endpoint/);
+  assert.throws(() => varianceObservation({
+    identity: 'volatile-preflight',
+    preflightEvidence: [{
+      owner: 'route-consumer',
+      operation: 'safe-round-trip',
+      status: 'proven',
+      sampledAt: 123,
+    }],
+  }), /volatile or unknown field sampledAt/);
+});
+
+test('recorded trace evidence ignores an observed pending snapshot but still requires one complete prompt', () => {
+  const varianceCase = declaredVarianceCase();
+  const report = varianceHarnessReport({
+    identity: 'recorded-pending',
+    executionMode: 'recorded-trace',
+    telemetryMode: 'off',
+  });
+  const attempt = report.harness_evidence.attempts[0];
+  const complete = attempt.modelMeasurements[0];
+  attempt.modelMeasurements.unshift({
+    ...complete,
+    sampledAt: complete.sampledAt - 1,
+    outputFingerprint: null,
+    modelRouteFingerprint: null,
+    outcome: 'pending',
+    attempt: 0,
+  });
+
+  const observation = createVarianceObservation({
+    varianceCase,
+    runId: 'run-recorded-pending',
+    trial: 1,
+    executionMode: 'recorded-trace',
+    telemetryMode: 'off',
+    preflightMode: 'off',
+    resetId: 'reset-recorded-pending',
+    report,
+    observedInputFingerprint: varianceCase.inputFingerprint,
+    observedDriverFingerprint: varianceCase.recordedTraceFingerprint,
+    settledBefore: true,
+    preflightEvidence: null,
+  });
+
+  assert.equal(observation.passed, true);
+  assert.equal(observation.driverFingerprint, varianceCase.recordedTraceFingerprint);
+});
+
+test('variance evidence records a settled physical failure instead of discarding it as incomplete', () => {
+  const failed = varianceObservation({
+    identity: 'settled-failure',
+    reportOptions: { passed: false, terminalCode: 'skill_failed' },
+  });
+
+  assert.equal(failed.passed, false);
+  assert.equal(failed.settledBefore, true);
+  assert.equal(failed.settledAfter, true);
+  assert.match(failed.outcomeFingerprint, /^[a-f0-9]{64}$/);
+});
+
+test('variance matrix proves stable repeated cells only after every controlled arm is present', () => {
+  const matrix = varianceMatrix();
+  assert.deepEqual(validateVarianceMatrix(matrix), []);
+
+  const report = analyzeVarianceMatrix(matrix);
+  assert.equal(report.valid, true);
+  assert.equal(report.complete, true);
+  assert.equal(report.verdict, 'stable');
+  assert.equal(report.variableCells.length, 0);
+  assert.equal(report.coverage[0].trialCount, 2);
+  assert.ok(report.signals.every(({ status }) => status === 'not-observed'));
+});
+
+test('variance matrix identifies model sampling only when frozen outputs and decisions vary', () => {
+  const matrix = varianceMatrix({
+    alter(observation) {
+      if (observation.trial !== 2 || observation.executionMode !== 'frozen-model') return;
+      observation.modelOutputFingerprint = '5'.repeat(64);
+      observation.decisionFingerprint = '4'.repeat(64);
+      observation.outcomeFingerprint = '5'.repeat(64);
+      observation.passed = false;
+    },
+  });
+  const report = analyzeVarianceMatrix(matrix);
+  const model = report.signals.find(({ source }) => source === 'model-sampling');
+
+  assert.equal(report.complete, true);
+  assert.equal(report.verdict, 'source-signals-observed');
+  assert.equal(model.status, 'supported');
+  assert.equal(model.evidence.length, 4);
+  assert.equal(report.signals.find(({ source }) => source === 'preflight').status, 'not-observed');
+  assert.equal(report.signals.find(({ source }) => source === 'telemetry-observer-effect').status, 'not-observed');
+});
+
+test('variance matrix separates provider routing changes from same-route model sampling', () => {
+  const matrix = varianceMatrix({
+    alter(observation) {
+      if (observation.trial !== 2 || observation.executionMode !== 'frozen-model') return;
+      observation.modelRouteFingerprint = '5'.repeat(64);
+      observation.modelOutputFingerprint = '5'.repeat(64);
+      observation.decisionFingerprint = '4'.repeat(64);
+      observation.outcomeFingerprint = '5'.repeat(64);
+      observation.passed = false;
+    },
+  });
+  const report = analyzeVarianceMatrix(matrix);
+
+  assert.equal(report.signals.find(({ source }) => source === 'model-routing').status, 'supported');
+  assert.equal(report.signals.find(({ source }) => source === 'model-sampling').status, 'not-observed');
+});
+
+test('variance matrix separates lifecycle changes from fixed decisions and inputs', () => {
+  const matrix = varianceMatrix({
+    alter(observation) {
+      if (observation.trial !== 2) return;
+      observation.outcomeFingerprint = '5'.repeat(64);
+      observation.passed = false;
+      if (observation.telemetryMode === 'on') {
+        observation.lifecycleFingerprint = '5'.repeat(64);
+      }
+    },
+  });
+  const report = analyzeVarianceMatrix(matrix);
+  const lifecycle = report.signals.find(({ source }) => source === 'lifecycle');
+
+  assert.equal(report.complete, true);
+  assert.equal(lifecycle.status, 'supported');
+  assert.equal(lifecycle.evidence.length, 4);
+  assert.equal(report.signals.find(({ source }) => source === 'model-sampling').status, 'not-observed');
+  assert.equal(report.signals.find(({ source }) => source === 'telemetry-observer-effect').status, 'not-observed');
+});
+
+test('variance matrix reports a matched preflight effect without miscalling it random variation', () => {
+  const matrix = varianceMatrix({
+    alter(observation) {
+      if (observation.preflightMode !== 'on') return;
+      observation.outcomeFingerprint = '5'.repeat(64);
+      observation.passed = false;
+    },
+  });
+  const report = analyzeVarianceMatrix(matrix);
+
+  assert.equal(report.complete, true);
+  assert.equal(report.variableCells.length, 0);
+  assert.equal(report.signals.find(({ source }) => source === 'preflight').status, 'supported');
+  assert.equal(report.signals.find(({ source }) => source === 'model-sampling').status, 'not-observed');
+});
+
+test('variance matrix fails closed on dirty t0 or an unsettled activity boundary', () => {
+  const matrix = varianceMatrix();
+  matrix.observations[0].fixtureFingerprint = '5'.repeat(64);
+  matrix.observations[0].settledBefore = false;
+  matrix.observations[1].resetId = matrix.observations[0].resetId;
+  matrix.observations.find(({ executionMode }) => executionMode === 'frozen-model')
+    .modelOutputFingerprint = null;
+  matrix.observations.find(({ telemetryMode }) => telemetryMode === 'on')
+    .lifecycleFingerprint = null;
+  matrix.observations.find(({ preflightMode }) => preflightMode === 'on')
+    .preflightFingerprint = null;
+  matrix.matrixHash = computeVarianceMatrixHash(matrix);
+
+  const diagnostics = validateVarianceMatrix(matrix);
+  assert.ok(diagnostics.some(({ code }) => code === 't0-contamination'));
+  assert.ok(diagnostics.some(({ code }) => code === 'unsettled-boundary'));
+  assert.ok(diagnostics.some(({ code }) => code === 'duplicate-resetId'));
+  assert.ok(diagnostics.filter(({ code }) => code === 'relationship').length >= 3);
+  assert.equal(analyzeVarianceMatrix(matrix).verdict, 'invalid');
+});
+
+test('variance matrix remains incomplete until independent repetitions exist', () => {
+  const report = analyzeVarianceMatrix(varianceMatrix({ trials: [1] }));
+
+  assert.equal(report.valid, true);
+  assert.equal(report.complete, false);
+  assert.equal(report.verdict, 'incomplete');
+  assert.ok(report.diagnostics.some(({ code }) => code === 'independent-comparison-missing'));
+  assert.ok(report.signals.every(({ status }) => status === 'unmeasured'));
+});
+
+test('variance CLI reads one complete matrix and emits a canonical report', async () => {
+  await withTempDirectory(async (directory) => {
+    const input = path.join(directory, 'variance-matrix.json');
+    await writeFile(input, `${canonicalJson(varianceMatrix())}\n`, 'utf8');
+
+    const run = spawnSync(process.execPath, [CLI, 'variance', '--input', input], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(run.stdout);
+    assert.equal(report.schemaVersion, 'scenario-lab.variance-report.v1');
+    assert.equal(report.complete, true);
+    assert.equal(report.verdict, 'stable');
+    assert.equal(run.stdout.trim(), canonicalJson(report));
+  });
 });

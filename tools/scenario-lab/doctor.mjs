@@ -113,10 +113,14 @@ if (!fixtureRoot) {
     record(false, 'deliver fixture', `missing: ${missing.map(f => path.basename(f)).join(', ')}`,
       'This fixture is checked into the repo -- restore it from git. See tools/scenario-lab/FIXTURES.md.');
   } else {
-    const registered = registeredFixtureHash('deliver-item-goal');
+    const registrations = [
+      ['deliver-item-goal', registeredFixtureHash('deliver-item-goal')],
+      ['route-probe-inconclusive', registeredFixtureHash('route-probe-inconclusive')],
+    ];
     const actual = sha256(recipe);
-    if (registered && registered !== actual) {
-      record(false, 'deliver fixture', `recipe hash ${actual} does not match the registered ${registered}`,
+    const mismatches = registrations.filter(([, registered]) => registered && registered !== actual);
+    if (mismatches.length) {
+      record(false, 'deliver fixture', `recipe hash ${actual} does not match: ${mismatches.map(([id, hash]) => `${id}=${hash}`).join(', ')}`,
         'Recompute world.fixtureHash and the manifestHash after editing the recipe. See tools/scenario-lab/FIXTURES.md.');
     } else {
       const surface = JSON.parse(readFileSync(recipe, 'utf8'))?.generation?.surface;
@@ -196,7 +200,13 @@ try {
   // and a trial-bot-memory directory that exist nowhere on this machine.
   // Reporting it as runnable would send the next agent chasing a fixture that
   // cannot be produced.
-  const DRIVEABLE = new Set(['doorway-corridor-follow', 'obstruction-follow', 'deliver-item-goal', 'orchestration-charcoal']);
+  const DRIVEABLE = new Set([
+    'doorway-corridor-follow',
+    'obstruction-follow',
+    'deliver-item-goal',
+    'orchestration-charcoal',
+    'route-probe-inconclusive',
+  ]);
   const notRun = manifest.scenarios.filter(s => s.status === 'not-run').map(s => s.id);
   const runnable = notRun.filter(id => DRIVEABLE.has(id));
   const blocked = notRun.filter(id => !DRIVEABLE.has(id));
@@ -225,7 +235,8 @@ if (failed.length) {
 } else {
   process.stdout.write(
     '\nReady. Run: npm run scenario:follow  |  npm run scenario:obstruction'
-    + '  |  npm run scenario:deliver\n',
+    + '  |  npm run scenario:deliver'
+    + '  |  node tools/scenario-lab/run.mjs route-probe-inconclusive\n',
   );
 }
 process.exitCode = failed.length ? 1 : 0;

@@ -1,16 +1,18 @@
 # Degraded diagnostic continuation contract
 
-**Status:** binding for explicitly designated disposable-world diagnostic campaigns
+**Status:** operational procedure active only when an authorized diagnostic task
+explicitly invokes it; subordinate to `ARCHITECTURE.md` and `AGENTS.md`
 
 **Relationship to the product loop:** additive exception for gathering useful
-downstream evidence; it does not replace the ordinary first-material-blocker
-development loop and never establishes gameplay acceptance.
+downstream evidence; it does not replace the current evidence-first,
+smallest-discriminating-probe approach and never establishes gameplay
+acceptance.
 
 ## Purpose
 
 A broad Minecraft campaign may expose an early settled failure that prevents
 later independent capabilities from running. In an explicitly diagnostic run,
-Codex may preserve that first failure, supply a narrowly controlled prerequisite,
+the authorized diagnostic operator may preserve that first failure, supply a narrowly controlled prerequisite,
 and continue the original campaign to find additional candidate defects without
 claiming that the end-to-end outcome passed.
 
@@ -22,9 +24,10 @@ The rule is:
 ## Authority and architecture
 
 - The original natural player request and its completion predicates remain unchanged.
-- `GoalDirector`, Agenda, the capability planner, `ActionManager`, BehaviorArbiter,
-  Mineflayer, and Paper keep their existing ownership boundaries.
-- `ActionManager` remains the only bot physical-action owner.
+- Current runtime components keep their actual ownership during diagnostics;
+  the target one-body lease and settlement rules are governed by
+  `ARCHITECTURE.md`.
+- This procedure creates no product owner.
 - Diagnostic continuation is external campaign procedure, not a new product
   director, executor, scheduler, recovery engine, or success path.
 - Product code must not be weakened to ignore terminal failures merely to keep
@@ -50,7 +53,9 @@ Continuation is allowed only when all of the following are true:
 
 - movement, digging, collection, window interaction, and plugin work from the
   failed action are confirmed cancelled or settled;
-- `ActionManager` ownership is released or held by the known current action;
+- ownership of the current physical owner (`ActionManager` today,
+  `ActivityExecutive` after migration) is released or held by the known current
+  action;
 - the world state is sufficiently known to interpret later evidence;
 - the bot and nearby players are not in immediate danger;
 - continuing cannot authorize new destruction or broaden the player's request;

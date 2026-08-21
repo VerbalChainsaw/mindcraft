@@ -5,8 +5,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { getModelMeasurementState } from '../../src/agent/library/full_state.js';
 import { FallbackRouter } from '../../src/models/fallback-router.js';
-import { Prompter } from '../../src/models/prompter.js';
+import {
+  Prompter,
+  fingerprintConfiguredConversationModel,
+  fingerprintModelMeasurement,
+} from '../../src/models/prompter.js';
 
 function leafModel(label, counters) {
   return {
@@ -26,6 +31,94 @@ function routerOf(models) {
     log: { warn() {} },
   });
 }
+
+test('model measurement fingerprints are stable, secret-free configuration evidence', () => {
+  const first = fingerprintConfiguredConversationModel({
+    api: 'openai-compatible',
+    model: ['primary', 'secondary'],
+    params: { temperature: 0, api_key: 'secret-a' },
+    url: 'http://localhost:1234/v1',
+  });
+  const reorderedWithDifferentSecret = fingerprintConfiguredConversationModel({
+    url: 'http://localhost:1234/v1',
+    params: { api_key: 'secret-b', temperature: 0 },
+    model: ['primary', 'secondary'],
+    api: 'openai-compatible',
+  });
+  const differentModel = fingerprintConfiguredConversationModel({
+    api: 'openai-compatible',
+    model: ['different'],
+    params: { temperature: 0, api_key: 'secret-a' },
+    url: 'http://localhost:1234/v1',
+  });
+
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(first, reorderedWithDifferentSecret);
+  assert.notEqual(first, differentModel);
+  assert.equal(
+    fingerprintModelMeasurement({ prompt: 'same', messages: [{ role: 'user', content: 'hello' }] }),
+    fingerprintModelMeasurement({ messages: [{ content: 'hello', role: 'user' }], prompt: 'same' }),
+  );
+  assert.notEqual(
+    fingerprintModelMeasurement({ prompt: 'same', messages: [{ role: 'user', content: 'hello' }] }),
+    fingerprintModelMeasurement({ prompt: 'same', messages: [{ role: 'user', content: 'different' }] }),
+  );
+});
+
+test('model measurement state exposes hashes and timing without prompt or response text', () => {
+  const hash = character => character.repeat(64);
+  const projected = getModelMeasurementState({
+    prompter: {
+      performance: {
+        conversation: {
+          sampledAt: 100,
+          attempt: 1,
+          promptBuildMs: 4,
+          providerMs: 20,
+          totalMs: 25,
+          outcome: 'generated',
+          modelConfigFingerprint: hash('a'),
+          inputFingerprint: hash('b'),
+          outputFingerprint: hash('c'),
+          modelRouteFingerprint: hash('d'),
+          rawPrompt: 'must not escape',
+          rawResponse: 'must not escape',
+          attempts: [{
+            attempt: 1,
+            inputFingerprint: hash('b'),
+            outputFingerprint: hash('c'),
+            modelRouteFingerprint: hash('d'),
+            outcome: 'generated',
+            rawResponse: 'must not escape',
+          }],
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(projected, {
+    conversation: {
+      sampledAt: 100,
+      attempt: 1,
+      promptBuildMs: 4,
+      providerMs: 20,
+      totalMs: 25,
+      outcome: 'generated',
+      modelConfigFingerprint: hash('a'),
+      inputFingerprint: hash('b'),
+      outputFingerprint: hash('c'),
+      modelRouteFingerprint: hash('d'),
+      attempts: [{
+        attempt: 1,
+        inputFingerprint: hash('b'),
+        outputFingerprint: hash('c'),
+        modelRouteFingerprint: hash('d'),
+        outcome: 'generated',
+      }],
+    },
+  });
+  assert.equal(JSON.stringify(projected).includes('must not escape'), false);
+});
 
 // A profile naming several providers for one key produces a router. Before the
 // fix `router.cancelPending?.()` was undefined, so Operator Stop reported zero

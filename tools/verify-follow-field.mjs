@@ -8,7 +8,14 @@ import pf from 'mineflayer-pathfinder';
 import { io } from 'socket.io-client';
 import Vec3 from 'vec3';
 
+import { canonicalJson } from './a0/aggregate.mjs';
 import { applyStateUpdate } from '../src/mindcraft/public/js/agent-state-protocol.js';
+import { reachInteractionStance } from '../src/agent/library/skills.js';
+import {
+  fingerprintVarianceValue,
+  requestCompletionCase,
+  REQUEST_COMPLETION_FIXTURE,
+} from './scenario-lab/variance-cases.mjs';
 
 const BOT_START = Object.freeze({ x: 1027.5, y: 100, z: 1008.5 });
 const TARGET_START = Object.freeze({ x: 1029.5, y: 100, z: 1008.5 });
@@ -18,6 +25,30 @@ const WAYPOINTS = Object.freeze([
   Object.freeze({ name: 'west-up-one-block', x: 1029.5, y: 101, z: 1014.5 }),
 ]);
 const COURSE = Object.freeze({ x1: 1026, x2: 1040, y1: 100, y2: 102, z1: 1006, z2: 1016 });
+const ROUTE_PROBE_COURSE = Object.freeze({ ...COURSE, y1: 99, y2: 103 });
+const REQUEST_COMPLETION_COURSE = Object.freeze({ ...COURSE, y1: 91, y2: 103 });
+const ROUTE_PROBE_TARGET = Object.freeze({ x: 1038, y: 100, z: 1013, closeness: 0 });
+const ROUTE_PROBE_CAGE = Object.freeze({
+  x1: 1036,
+  x2: 1040,
+  y1: 99,
+  y2: 103,
+  z1: 1011,
+  z2: 1015,
+  block: 'bedrock',
+});
+const STANCE_COURSE = Object.freeze({ x1: 1026, x2: 1058, y1: 99, y2: 103, z1: 1006, z2: 1038 });
+const STANCE_TARGET = Object.freeze({ x: 1056, y: 100, z: 1008 });
+const STANCE_WALLS = Object.freeze([
+  Object.freeze({ x1: 1026, x2: 1058, y1: 100, y2: 102, z1: 1006, z2: 1006 }),
+  Object.freeze({ x1: 1026, x2: 1058, y1: 100, y2: 102, z1: 1038, z2: 1038 }),
+  Object.freeze({ x1: 1026, x2: 1026, y1: 100, y2: 102, z1: 1006, z2: 1038 }),
+  Object.freeze({ x1: 1058, x2: 1058, y1: 100, y2: 102, z1: 1006, z2: 1038 }),
+  // The only route into the target-side corridor passes the far end of this
+  // separator. The bounded advisory search must explore the chamber; the real
+  // Pathfinder activity then has enough time to take the same physical route.
+  Object.freeze({ x1: 1054, x2: 1054, y1: 100, y2: 102, z1: 1007, z2: 1036 }),
+]);
 const WALL = Object.freeze({ x: 1033, y1: 100, y2: 102, z1: 1006, z2: 1012 });
 const DOORWAY = Object.freeze({ x: 1033, y1: 100, y2: 101, z: 1008 });
 const PLATFORM = Object.freeze({ x1: 1028, x2: 1034, y: 100, z1: 1013, z2: 1015 });
@@ -57,17 +88,15 @@ const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2:
 // deliver-item hands the bot its material: a dirt patch is placed beside it, so
 // the course measures the goal chain and nothing else.
 //
-// orchestrate-charcoal places NOTHING. The bot is told "go get some wood and
-// make me some charcoal" in plain language and must derive the rest -- charcoal
-// needs a furnace, a furnace needs cobblestone, cobblestone needs a pickaxe.
-// That derivation is the measurement, so the window is long and the world is a
-// forest rather than a prepared patch.
+// orchestrate-charcoal places NOTHING. The model interprets the plain-language
+// promise once; the Phase 3 Mission must then derive one causal Activity at a
+// time from current Minecraft state, through exact verified delivery.
 const DELIVER_SPEC = Object.freeze({
   'deliver-item': Object.freeze({ item: 'dirt', quantity: 1, placeSource: true, waitMs: 120_000 }),
   // 20 minutes. The 10-minute window ended with the furnace crafted and the
   // companion gathering logs to smelt -- three steps from done. This chain is
   // eight or nine physical stages, each with real travel and mining in it.
-  'orchestrate-charcoal': Object.freeze({ item: 'charcoal', quantity: 1, placeSource: false, waitMs: 1_200_000 }),
+  'orchestrate-charcoal': Object.freeze({ item: 'charcoal', quantity: 8, placeSource: false, waitMs: 1_200_000 }),
 });
 // Assigned once from the course in run(). Module-level so the existing deliver
 // code paths keep reading one name.
@@ -160,6 +189,9 @@ function parseArgs(argv) {
     requestFile: '',
     requestMessage: '',
     naturalLanguage: false,
+    varianceCase: '',
+    preflightMode: '',
+    maxPromptTurns: null,
     authorized: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -171,6 +203,9 @@ function parseArgs(argv) {
     else if (value === '--mode') options.mode = String(argv[++index] || '');
     else if (value === '--course') options.course = String(argv[++index] || '');
     else if (value === '--request-file') options.requestFile = String(argv[++index] || '');
+    else if (value === '--variance-case') options.varianceCase = String(argv[++index] || '');
+    else if (value === '--preflight-mode') options.preflightMode = String(argv[++index] || '');
+    else if (value === '--max-prompt-turns') options.maxPromptTurns = Number(argv[++index]);
     else if (value === '--natural-language') options.naturalLanguage = true;
     else if (value === '--authorized-active-world') options.authorized = true;
     else throw new Error(`Unknown argument: ${value}`);
@@ -181,8 +216,8 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.attempts) || options.attempts < 1 || options.attempts > 3) {
     throw new Error('Attempts must be an integer from 1 through 3.');
   }
-  if (!['follow', 'stop', 'deliver'].includes(options.mode)) {
-    throw new Error('Mode must be follow, stop, or deliver.');
+  if (!['follow', 'stop', 'deliver', 'route-probe', 'interaction-stance', 'request-completion'].includes(options.mode)) {
+    throw new Error('Mode must be follow, stop, deliver, route-probe, interaction-stance, or request-completion.');
   }
   if (options.mode === 'deliver' && !Object.hasOwn(DELIVER_SPEC, options.course)) {
     throw new Error(`Deliver verification requires one of: ${Object.keys(DELIVER_SPEC).join(', ')}.`);
@@ -193,11 +228,34 @@ function parseArgs(argv) {
   if (Object.hasOwn(DELIVER_SPEC, options.course) && options.mode !== 'deliver') {
     throw new Error(`Course ${options.course} must be measured with --mode deliver, got '${options.mode}'.`);
   }
-  if (!['full', 'doorway-corridor', 'obstruction-follow', ...Object.keys(DELIVER_SPEC)].includes(options.course)) {
-    throw new Error('Course must be full, doorway-corridor, obstruction-follow, deliver-item, or orchestrate-charcoal.');
+  if (!['full', 'doorway-corridor', 'obstruction-follow', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion', ...Object.keys(DELIVER_SPEC)].includes(options.course)) {
+    throw new Error('Course must be full, doorway-corridor, obstruction-follow, route-probe-inconclusive, interaction-stance-inconclusive, request-completion, deliver-item, or orchestrate-charcoal.');
   }
   if (options.mode === 'stop' && options.course !== 'full') {
     throw new Error('Stop verification requires the full course.');
+  }
+  if ((options.mode === 'route-probe') !== (options.course === 'route-probe-inconclusive')) {
+    throw new Error('The route-probe-inconclusive course must be measured with --mode route-probe, and that mode serves no other course.');
+  }
+  if ((options.mode === 'interaction-stance') !== (options.course === 'interaction-stance-inconclusive')) {
+    throw new Error('The interaction-stance-inconclusive course must be measured with --mode interaction-stance, and that mode serves no other course.');
+  }
+  if ((options.mode === 'request-completion') !== (options.course === 'request-completion')) {
+    throw new Error('The request-completion course must be measured with --mode request-completion, and that mode serves no other course.');
+  }
+  if (options.mode === 'request-completion') {
+    requestCompletionCase(options.varianceCase);
+    if (!['off', 'on'].includes(options.preflightMode)) {
+      throw new Error('Request-completion verification requires --preflight-mode off or on.');
+    }
+    if (!Number.isSafeInteger(options.maxPromptTurns) || options.maxPromptTurns < 1) {
+      throw new Error('Request-completion verification requires a positive --max-prompt-turns value from the active profile.');
+    }
+    if (!options.naturalLanguage) {
+      throw new Error('Request-completion verification must originate as controlled player chat.');
+    }
+  } else if (options.varianceCase || options.preflightMode || options.maxPromptTurns !== null) {
+    throw new Error('--variance-case, --preflight-mode, and --max-prompt-turns belong only to request-completion verification.');
   }
   const parsed = new URL(options.url);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('URL must use HTTP or HTTPS.');
@@ -329,6 +387,20 @@ function trajectoryDistance(samples) {
   return travelled;
 }
 
+function inventorySnapshot(bot) {
+  return (bot?.inventory?.items?.() || [])
+    .map(item => ({ name: item.name, count: Number(item.count) || 0, slot: Number(item.slot) }))
+    .sort((left, right) => left.slot - right.slot || left.name.localeCompare(right.name));
+}
+
+function inconclusiveRouteProbeStatus(terminal) {
+  if (terminal?.code !== 'skill_route_unproven') return null;
+  const match = String(terminal?.detail || '').match(
+    /without a conclusive answer \((partial|timeout)\)/i,
+  );
+  return match ? match[1].toLowerCase() : null;
+}
+
 function doorwayContains(position) {
   if (!position) return false;
   return Number(position.x) >= DOORWAY_CAPTURE.x1
@@ -412,6 +484,7 @@ function compactResult(result) {
     label: result.label,
     detail: result.detail,
     target: result.target || null,
+    retryable: result.retryable === true,
     evidence: result.evidence || null,
     durationMs: result.durationMs,
     startedAt: result.startedAt,
@@ -427,12 +500,16 @@ function compactState(state) {
     hunger: state?.gameplay?.hunger ?? null,
     velocity: state?.body?.velocity || null,
     onGround: state?.body?.onGround === true,
+    mainHand: state?.body?.mainHand || null,
+    inventoryCounts: { ...(state?.inventory?.counts || {}) },
     held: state?.action?.held === true,
     idle: state?.action?.isIdle === true,
     pathfinding: state?.action?.pathfinding || null,
     current: state?.action?.current || null,
     stopRequestedAt: state?.action?.stopRequestedAt ?? null,
     stopTimedOutAt: state?.action?.stopTimedOutAt ?? null,
+    preflightPolicy: state?.identity?.runtime?.preflight || null,
+    modelMeasurement: state?.modelMeasurement?.conversation || null,
     companion: state?.companion || null,
     hostiles: (state?.perception?.hostiles || []).map(hostile => ({
       name: hostile?.name || null,
@@ -442,6 +519,59 @@ function compactState(state) {
     })),
     lastResult: compactResult(state?.action?.lastResult),
   };
+}
+
+function normalizedCounts(value) {
+  return Object.fromEntries(
+    Object.entries(value || {})
+      .filter(([, count]) => Number(count) > 0)
+      .map(([name, count]) => [name, Number(count)])
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function fixedPosition(value) {
+  if (!value || ![value.x, value.y, value.z].every(Number.isFinite)) return null;
+  return {
+    x: Number(Number(value.x).toFixed(3)),
+    y: Number(Number(value.y).toFixed(3)),
+    z: Number(Number(value.z).toFixed(3)),
+  };
+}
+
+function latestResult(results) {
+  return [...results.values()].sort((left, right) => (
+    Number(left?.finishedAt || left?.startedAt || 0) - Number(right?.finishedAt || right?.startedAt || 0)
+  )).at(-1) || null;
+}
+
+function stablePreflightResults(value, path = 'action', output = [], seen = new Set()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return output;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => stablePreflightResults(entry, `${path}[${index}]`, output, seen));
+    return output;
+  }
+  const routeShaped = /(?:route|probe|preflight|stance|path)/i.test(path)
+    && typeof value.status === 'string';
+  if (routeShaped) {
+    const stable = {
+      owner: path.split(/[.[\]]/).filter(Boolean).slice(0, 3).join('.'),
+      operation: path,
+      status: value.status,
+      code: typeof value.code === 'string' ? value.code : null,
+      conclusive: typeof value.conclusive === 'boolean'
+        ? value.conclusive
+        : ['success', 'noPath'].includes(value.status) ? true : null,
+      retryable: typeof value.retryable === 'boolean' ? value.retryable : null,
+    };
+    stable.resultFingerprint = fingerprintVarianceValue(stable);
+    output.push(stable);
+  }
+  for (const [key, child] of Object.entries(value)) {
+    stablePreflightResults(child, `${path}.${key}`, output, seen);
+  }
+  return output;
 }
 
 function marker(runId, phase, fact) {
@@ -472,15 +602,15 @@ function blockState(block) {
   return `minecraft:${block.name}${serialized.length ? `[${serialized.join(',')}]` : ''}`;
 }
 
-function compressFixture(entries) {
+function compressFixture(entries, region = COURSE) {
   const byCoordinate = new Map(entries.map(entry => [`${entry.x},${entry.y},${entry.z}`, entry.state]));
   const runs = [];
-  for (let y = COURSE.y1; y <= COURSE.y2; y += 1) {
-    for (let z = COURSE.z1; z <= COURSE.z2; z += 1) {
-      let startX = COURSE.x1;
+  for (let y = region.y1; y <= region.y2; y += 1) {
+    for (let z = region.z1; z <= region.z2; z += 1) {
+      let startX = region.x1;
       let state = byCoordinate.get(`${startX},${y},${z}`);
-      for (let x = COURSE.x1 + 1; x <= COURSE.x2 + 1; x += 1) {
-        const next = x <= COURSE.x2 ? byCoordinate.get(`${x},${y},${z}`) : null;
+      for (let x = region.x1 + 1; x <= region.x2 + 1; x += 1) {
+        const next = x <= region.x2 ? byCoordinate.get(`${x},${y},${z}`) : null;
         if (next === state) continue;
         runs.push({ x1: startX, x2: x - 1, y, z, state });
         startX = x;
@@ -527,6 +657,19 @@ async function run() {
   const deliverCourse = Object.hasOwn(DELIVER_SPEC, options.course);
   const obstructionCourse = options.course === 'obstruction-follow';
   const orchestrationCourse = options.course === 'orchestrate-charcoal';
+  const routeProbeCourse = options.course === 'route-probe-inconclusive';
+  const interactionStanceCourse = options.course === 'interaction-stance-inconclusive';
+  const requestCompletionCourse = options.course === 'request-completion';
+  const varianceCase = requestCompletionCourse ? requestCompletionCase(options.varianceCase) : null;
+  const generatedFlatCourse = options.course === 'deliver-item'
+    || routeProbeCourse
+    || interactionStanceCourse
+    || requestCompletionCourse;
+  const activeCourse = requestCompletionCourse
+    ? REQUEST_COMPLETION_COURSE
+    : interactionStanceCourse
+    ? STANCE_COURSE
+    : routeProbeCourse ? ROUTE_PROBE_COURSE : COURSE;
   if (deliverCourse) {
     const spec = DELIVER_SPEC[options.course];
     DELIVER_ITEM = spec.item;
@@ -534,12 +677,20 @@ async function run() {
     DELIVER_PLACE_SOURCE = spec.placeSource;
     DELIVER_WAIT_MS = spec.waitMs;
   }
-  const activeWaypoints = options.mode === 'stop' || options.course === 'full'
+  const activeWaypoints = routeProbeCourse || interactionStanceCourse
+    ? []
+    : options.mode === 'stop' || options.course === 'full'
     ? WAYPOINTS
     : WAYPOINTS.slice(0, 2);
   const evidence = {
     schemaVersion: 1,
-    scenario: options.mode === 'follow'
+    scenario: requestCompletionCourse
+      ? `phase-5-request-completion-${varianceCase.id}`
+      : interactionStanceCourse
+      ? 'inconclusive-interaction-stance-probe-falls-through-to-real-pathfinder'
+      : routeProbeCourse
+      ? 'inconclusive-whole-route-probe-remains-unproven'
+      : options.mode === 'follow'
       ? (options.course === 'doorway-corridor'
         ? 'follow-controlled-player-through-doorway-corridor'
         : 'follow-controlled-player-through-course')
@@ -556,14 +707,23 @@ async function run() {
       events: [],
     },
     fixture: {
-      course: COURSE,
+      course: activeCourse,
       courseVariant: options.course,
       botStart: BOT_START,
       targetStart: TARGET_START,
       wall: WALL,
       doorway: DOORWAY,
       platform: PLATFORM,
+      routeProbeTarget: routeProbeCourse ? ROUTE_PROBE_TARGET : null,
+      routeProbeCage: routeProbeCourse ? ROUTE_PROBE_CAGE : null,
+      interactionStanceTarget: interactionStanceCourse ? STANCE_TARGET : null,
+      interactionStanceWalls: interactionStanceCourse ? STANCE_WALLS : null,
       waypoints: activeWaypoints,
+      requestCompletion: requestCompletionCourse ? {
+        caseId: varianceCase.id,
+        expectedT0: varianceCase.expectedT0,
+        expectedT0Fingerprint: varianceCase.fixtureFingerprint,
+      } : null,
     },
     startedAt: Date.now(),
     attempts: [],
@@ -667,6 +827,7 @@ async function run() {
     const step = marker(runId, phase, 'STEP');
     const plug = marker(runId, phase, 'PLUG');
     const source = marker(runId, phase, 'SRCE');
+    const routeTarget = marker(runId, phase, 'ROUTE_TARGET');
     await paperCommand(`scoreboard players set ${begin} ${OBJECTIVE} 1`);
     await paperCommand(`data get entity ${options.bot} Pos`);
     await paperCommand(`data get entity ${TARGET_NAME} Pos`);
@@ -674,9 +835,17 @@ async function run() {
     await paperCommand(`execute if block 1033 100 1008 minecraft:air run scoreboard players set ${opening} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set ${step} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} minecraft:${OBSTRUCTION_PLUG_BLOCK} run scoreboard players set ${plug} ${OBJECTIVE} 1`);
+    if (routeProbeCourse) {
+      await paperCommand(
+        `execute if block ${ROUTE_PROBE_TARGET.x} ${ROUTE_PROBE_TARGET.y} ${ROUTE_PROBE_TARGET.z} `
+        + `minecraft:${ROUTE_PROBE_CAGE.block} run scoreboard players set ${routeTarget} ${OBJECTIVE} 1`,
+      );
+    }
     // Did provisioning actually place the acquisition source? A goal that fails
     // to find its material is only meaningful if the material was really there.
-    await paperCommand(`execute if block ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} minecraft:${DELIVER_ITEM} run scoreboard players set ${source} ${OBJECTIVE} 1`);
+    if (DELIVER_PLACE_SOURCE) {
+      await paperCommand(`execute if block ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} minecraft:${DELIVER_ITEM} run scoreboard players set ${source} ${OBJECTIVE} 1`);
+    }
     // Is the world under this course actually dry land, and does it stay dry
     // past the distance acquisition relocates? On the captured follow fixture the
     // answer is no, and every deliver run there died the same way. Measure it
@@ -686,7 +855,7 @@ async function run() {
       ...probe,
       name_marker: marker(runId, phase, `DRY_${probe.name}`),
     }));
-    if (options.course === 'deliver-item') {
+    if (deliverCourse) {
       await paperCommand(`execute if block ${DELIVER_GROUND.x} ${DELIVER_GROUND.y} ${DELIVER_GROUND.z} minecraft:${DELIVER_GROUND.block} run scoreboard players set ${ground} ${OBJECTIVE} 1`);
       for (const probe of dryLand) {
         await paperCommand(`execute if block ${probe.x} ${probe.y} ${probe.z} minecraft:${DELIVER_GROUND.block} run scoreboard players set ${probe.name_marker} ${OBJECTIVE} 1`);
@@ -717,19 +886,59 @@ async function run() {
       dryLandVerified: dryLand.every(probe => markerObserved(window, probe.name_marker)),
       doorwayVerified: markerObserved(window, opening),
       platformVerified: markerObserved(window, step),
+      routeTargetVerified: markerObserved(window, routeTarget),
       lines: window,
     };
   };
 
+  const captureFixtureRuns = () => {
+    const entries = [];
+    for (let y = activeCourse.y1; y <= activeCourse.y2; y += 1) {
+      for (let z = activeCourse.z1; z <= activeCourse.z2; z += 1) {
+        for (let x = activeCourse.x1; x <= activeCourse.x2; x += 1) {
+          const block = target.blockAt(new Vec3(x, y, z));
+          if (!block) throw new Error(`Fixture block ${x},${y},${z} was not loaded.`);
+          if (block.entity) {
+            throw new Error(`Fixture contains block entity ${block.name} at ${x},${y},${z}; refusing mutation.`);
+          }
+          entries.push({ x, y, z, state: blockState(block) });
+        }
+      }
+    }
+    return compressFixture(entries, activeCourse);
+  };
+
   const restoreFixture = async () => {
     if (!baselineRuns) return;
-    await paperCommand(`fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`);
+    // Keep the standing surface continuously present while restoring. The
+    // route course mutates y=99 under its cage; its verified solid baseline is
+    // written back below, while only the body-space/roof layers are cleared.
+    await paperCommand(`fill ${activeCourse.x1} ${activeCourse.y1} ${activeCourse.z1} ${activeCourse.x2} ${activeCourse.y2} ${activeCourse.z2} air`);
     for (const run of baselineRuns) {
       if (run.state === 'minecraft:air') continue;
       await paperCommand(`fill ${run.x1} ${run.y} ${run.z} ${run.x2} ${run.y} ${run.z} ${run.state}`);
     }
-    if (options.course === 'deliver-item') await paperCommand('forceload remove all');
+    if (generatedFlatCourse) await paperCommand('forceload remove all');
     fixtureMutated = false;
+  };
+
+  const interactionStanceFixtureReady = () => {
+    if (!interactionStanceCourse) return true;
+    const wallContains = (wall, x, y, z) => x >= wall.x1 && x <= wall.x2
+      && y >= wall.y1 && y <= wall.y2
+      && z >= wall.z1 && z <= wall.z2;
+    for (let y = STANCE_COURSE.y1; y <= STANCE_COURSE.y2; y += 1) {
+      for (let z = STANCE_COURSE.z1; z <= STANCE_COURSE.z2; z += 1) {
+        for (let x = STANCE_COURSE.x1; x <= STANCE_COURSE.x2; x += 1) {
+          const block = target.blockAt(new Vec3(x, y, z));
+          if (!block) return false;
+          const expectedBedrock = y === STANCE_COURSE.y1
+            || STANCE_WALLS.some(wall => wallContains(wall, x, y, z));
+          if (expectedBedrock ? block.name !== 'bedrock' : block.name !== 'air') return false;
+        }
+      }
+    }
+    return true;
   };
 
   const provisionFixture = async () => {
@@ -740,7 +949,7 @@ async function run() {
       // so that no fill or probe below can land in an unloaded chunk and report a
       // false negative, and the world spawn so a death respawns at the course
       // rather than 1,440 blocks away at the generated world's origin.
-      ...(options.course === 'deliver-item'
+      ...(generatedFlatCourse
         ? [
             `forceload add ${DELIVER_FORCELOAD.x1} ${DELIVER_FORCELOAD.z1} ${DELIVER_FORCELOAD.x2} ${DELIVER_FORCELOAD.z2}`,
             `setworldspawn ${DELIVER_WORLD_SPAWN.x} ${DELIVER_WORLD_SPAWN.y} ${DELIVER_WORLD_SPAWN.z}`,
@@ -764,13 +973,33 @@ async function run() {
       // position" from inside it.
       ...(orchestrationCourse
         ? []
-        : [`fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`]),
+        : interactionStanceCourse
+          ? [`fill ${STANCE_COURSE.x1} ${COURSE.y1} ${STANCE_COURSE.z1} ${STANCE_COURSE.x2} ${STANCE_COURSE.y2} ${STANCE_COURSE.z2} air`]
+          : [`fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`]),
       ...(deliverCourse && DELIVER_PLACE_SOURCE
         ? [
             `fill ${DELIVER_SOURCE.x1} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z1} ${DELIVER_SOURCE.x2} ${DELIVER_SOURCE.y} ${DELIVER_SOURCE.z2} ${DELIVER_ITEM}`,
           ]
         : []),
-      ...(options.course === 'obstruction-follow'
+      ...(requestCompletionCourse
+        ? [
+            `setblock ${REQUEST_COMPLETION_FIXTURE.craftingTable.x} ${REQUEST_COMPLETION_FIXTURE.craftingTable.y} ${REQUEST_COMPLETION_FIXTURE.craftingTable.z} ${REQUEST_COMPLETION_FIXTURE.craftingTable.block}`,
+          ]
+        : []),
+      ...(routeProbeCourse
+        ? [
+            `fill ${ROUTE_PROBE_CAGE.x1} ${ROUTE_PROBE_CAGE.y1} ${ROUTE_PROBE_CAGE.z1} `
+            + `${ROUTE_PROBE_CAGE.x2} ${ROUTE_PROBE_CAGE.y2} ${ROUTE_PROBE_CAGE.z2} ${ROUTE_PROBE_CAGE.block}`,
+          ]
+        : interactionStanceCourse
+        ? [
+            `fill ${STANCE_COURSE.x1} ${STANCE_COURSE.y1} ${STANCE_COURSE.z1} `
+            + `${STANCE_COURSE.x2} ${STANCE_COURSE.y1} ${STANCE_COURSE.z2} bedrock`,
+            ...STANCE_WALLS.map(wall => (
+              `fill ${wall.x1} ${wall.y1} ${wall.z1} ${wall.x2} ${wall.y2} ${wall.z2} bedrock`
+            )),
+          ]
+        : options.course === 'obstruction-follow'
         ? [
             // Full-width wall so the companion cannot simply walk around it,
             // but the doorway starts OPEN: the controlled target moves with
@@ -785,7 +1014,7 @@ async function run() {
             `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} stone_bricks`,
             `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
           ]),
-      ...(orchestrationCourse
+      ...(orchestrationCourse || routeProbeCourse || interactionStanceCourse
         ? []
         : [`fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`]),
       // The acceptance fixture must not be preempted by a mob. Spawning is
@@ -803,6 +1032,13 @@ async function run() {
       // Players are excluded by type, so the companion and controlled target
       // both survive.
       'kill @e[type=!player,x=953,y=70,z=931,dx=160,dy=64,dz=160]',
+      ...(requestCompletionCourse
+        ? [
+            `clear ${options.bot}`,
+            `clear ${TARGET_NAME}`,
+            ...varianceCase.grants.map(({ item, count }) => `give ${options.bot} ${item} ${count}`),
+          ]
+        : []),
       `gamemode survival ${options.bot}`,
       `gamemode survival ${TARGET_NAME}`,
       `tp ${options.bot} ${BOT_START.x} ${BOT_START.y} ${BOT_START.z}`,
@@ -822,6 +1058,26 @@ async function run() {
         : []),
     ];
     for (const command of commands) await paperCommand(command);
+    if (interactionStanceCourse) {
+      await waitFor(
+        interactionStanceFixtureReady,
+        Boolean,
+        'controlled observer receipt of the complete interaction-stance maze',
+        5_000,
+      );
+    }
+    if (routeProbeCourse) {
+      await waitFor(
+        () => target.blockAt(new Vec3(
+          ROUTE_PROBE_TARGET.x,
+          ROUTE_PROBE_TARGET.y,
+          ROUTE_PROBE_TARGET.z,
+        ))?.name || null,
+        name => name === ROUTE_PROBE_CAGE.block,
+        'controlled observer receipt of the protected route-probe target',
+        5_000,
+      );
+    }
     target.pathfinder.stop();
     target.clearControlStates();
     await waitFor(
@@ -874,6 +1130,75 @@ async function run() {
     } catch {
       return null;
     }
+  };
+
+  const targetInventoryCounts = () => {
+    const counts = {};
+    for (const item of target?.inventory?.items?.() || []) {
+      counts[item.name] = (counts[item.name] || 0) + (Number(item.count) || 0);
+    }
+    return normalizedCounts(counts);
+  };
+
+  const droppedItemNames = () => Object.values(target?.entities || {}).flatMap(entity => {
+    try {
+      const item = entity?.getDroppedItem?.();
+      return item?.name ? [item.name] : [];
+    } catch {
+      return [];
+    }
+  }).sort();
+
+  const requestCompletionT0 = () => {
+    const compact = compactState(states[options.bot]);
+    const table = REQUEST_COMPLETION_FIXTURE.craftingTable;
+    const groundX = Math.floor(REQUEST_COMPLETION_FIXTURE.botPosition.x);
+    const groundZ = Math.floor(REQUEST_COMPLETION_FIXTURE.botPosition.z);
+    const observedDrops = droppedItemNames();
+    return {
+      schemaVersion: 'scenario-lab.request-completion-t0.v1',
+      fixture: {
+        ...REQUEST_COMPLETION_FIXTURE,
+        botPosition: fixedPosition(compact.position),
+        recipientPosition: fixedPosition(positionOf(target?.entity)),
+        craftingTable: {
+          ...table,
+          block: target?.blockAt?.(new Vec3(table.x, table.y, table.z))?.name || null,
+        },
+        ground: {
+          ...REQUEST_COMPLETION_FIXTURE.ground,
+          block: target?.blockAt?.(new Vec3(groundX, REQUEST_COMPLETION_FIXTURE.ground.y, groundZ))?.name || null,
+        },
+        droppedItems: observedDrops.length ? observedDrops : 'none',
+      },
+      caseId: varianceCase.id,
+      botInventory: normalizedCounts(compact.inventoryCounts),
+      recipientInventory: targetInventoryCounts(),
+      botHeld: compact.held,
+      botIdle: compact.idle,
+      botPathfinding: Boolean(compact.pathfinding),
+    };
+  };
+
+  const requestCompletionOutcomes = () => {
+    const compact = compactState(states[options.bot]);
+    return varianceCase.outcomes.map(expected => {
+      const held = expected.holder === 'bot'
+        ? Number(compact.inventoryCounts?.[expected.item]) || 0
+        : Number(targetInventoryCounts()[expected.item]) || 0;
+      const equipped = expected.equipped
+        ? compact.mainHand === expected.item
+        : null;
+      return {
+        holder: expected.holder,
+        item: expected.item,
+        requested: expected.count,
+        held,
+        equipped: expected.equipped || null,
+        equippedVerified: equipped,
+        complete: held >= expected.count && (expected.equipped ? equipped === true : true),
+      };
+    });
   };
 
   const driveTarget = async waypoint => {
@@ -1013,6 +1338,13 @@ async function run() {
       const state = states[options.bot];
       if (!activeAttempt || !state) return;
       const compact = compactState(state);
+      if (compact.modelMeasurement) {
+        const measurementKey = JSON.stringify(compact.modelMeasurement);
+        if (!activeAttempt.modelMeasurementKeys.has(measurementKey)) {
+          activeAttempt.modelMeasurementKeys.add(measurementKey);
+          activeAttempt.modelMeasurements.push(structuredClone(compact.modelMeasurement));
+        }
+      }
       if (activeAttempt.samples.at(-1)?.sampledAt !== compact.sampledAt && activeAttempt.samples.length < 400) {
         activeAttempt.samples.push(compact);
       }
@@ -1094,21 +1426,10 @@ async function run() {
     );
     await target.waitForChunksToLoad();
 
-    const baselineEntries = [];
-    for (let y = COURSE.y1; y <= COURSE.y2; y += 1) {
-      for (let z = COURSE.z1; z <= COURSE.z2; z += 1) {
-        for (let x = COURSE.x1; x <= COURSE.x2; x += 1) {
-          const block = target.blockAt(new Vec3(x, y, z));
-          if (!block) throw new Error(`Fixture block ${x},${y},${z} was not loaded.`);
-          if (block.entity) throw new Error(`Fixture contains block entity ${block.name} at ${x},${y},${z}; refusing mutation.`);
-          baselineEntries.push({ x, y, z, state: blockState(block) });
-        }
-      }
-    }
     const unsupportedFloor = [];
     const floorStates = new Map();
-    for (let z = COURSE.z1; z <= COURSE.z2; z += 1) {
-      for (let x = COURSE.x1; x <= COURSE.x2; x += 1) {
+    for (let z = activeCourse.z1; z <= activeCourse.z2; z += 1) {
+      for (let x = activeCourse.x1; x <= activeCourse.x2; x += 1) {
         const block = target.blockAt(new Vec3(x, COURSE.y1 - 1, z));
         if (!block || block.boundingBox !== 'block') unsupportedFloor.push({ x, y: COURSE.y1 - 1, z, name: block?.name || null });
         else floorStates.set(blockState(block), (floorStates.get(blockState(block)) || 0) + 1);
@@ -1117,7 +1438,7 @@ async function run() {
     if (unsupportedFloor.length) {
       throw new Error(`Fixture floor is not continuously supported: ${JSON.stringify(unsupportedFloor.slice(0, 12))}`);
     }
-    baselineRuns = compressFixture(baselineEntries);
+    baselineRuns = captureFixtureRuns();
     evidence.fixture.beforeState = {
       compressedRuns: baselineRuns,
       floorStates: Object.fromEntries(floorStates),
@@ -1167,6 +1488,7 @@ async function run() {
       await provisionFixture();
       const runId = `F${attemptNumber}`;
       const paperBefore = await paperSnapshot(runId, 'BEFORE');
+      const routeFixtureBefore = routeProbeCourse ? captureFixtureRuns() : null;
       activeAttempt = {
         attempt: attemptNumber,
         runId,
@@ -1177,6 +1499,8 @@ async function run() {
         physicalSamples: [],
         targetPathUpdates: [],
         outputs: [],
+        modelMeasurementKeys: new Set(),
+        modelMeasurements: [],
         traceMap: new Map(),
         terminal: null,
         resultsByLabel: new Map(),
@@ -1188,10 +1512,267 @@ async function run() {
         resyncRequests: 0,
         waypoints: [],
         paperBefore,
+        routeFixtureBefore,
       };
+      if (requestCompletionCourse) {
+        const expectedPolicy = options.preflightMode === 'on'
+          ? { collectionRoute: 'strict', interactionStance: 'strict' }
+          : { collectionRoute: 'advisory', interactionStance: 'advisory' };
+        const t0 = await waitFor(
+          requestCompletionT0,
+          observed => (
+            canonicalJson(observed) === canonicalJson(varianceCase.expectedT0)
+            && canonicalJson(compactState(states[options.bot]).preflightPolicy) === canonicalJson(expectedPolicy)
+          ),
+          `${runId} exact request-completion t0 and preflight policy`,
+          15_000,
+        );
+        const t0Fingerprint = fingerprintVarianceValue(t0);
+        if (t0Fingerprint !== varianceCase.fixtureFingerprint) {
+          throw new Error(`${runId} request-completion t0 fingerprint disagrees with the declared case.`);
+        }
+        activeAttempt.t0 = t0;
+        activeAttempt.t0Fingerprint = t0Fingerprint;
+        activeAttempt.preflightPolicy = structuredClone(compactState(states[options.bot]).preflightPolicy);
+        activeAttempt.commandAck = {
+          success: true,
+          source: TARGET_NAME,
+          transport: 'minecraft-player-chat',
+          acceptedAt: activeAttempt.issuedAt,
+        };
+        target.chat(options.requestMessage);
+        activeAttempt.activeAt = Date.now();
+
+        let completionStatus = 'pending';
+        const completionDeadline = Date.now() + varianceCase.timeoutMs;
+        while (completionStatus === 'pending') {
+          const outcomes = requestCompletionOutcomes();
+          if (outcomes.every(outcome => outcome.complete)) {
+            completionStatus = 'outcome-complete';
+            break;
+          }
+          const latestMeasurement = activeAttempt.modelMeasurements.at(-1);
+          if (latestMeasurement?.outcome === 'provider_failed') {
+            completionStatus = 'provider-failed';
+            break;
+          }
+          if (Date.now() >= completionDeadline) {
+            completionStatus = 'outcome-timeout';
+            break;
+          }
+          await delay(POLL_MS);
+        }
+        activeAttempt.completedAt = Date.now();
+        if (completionStatus === 'outcome-complete') {
+          try {
+            await waitFor(
+              () => latestResult(activeAttempt.resultsByLabel),
+              result => result?.phase === 'succeeded',
+              `${runId} correlated successful request-completion result`,
+              15_000,
+            );
+            completionStatus = 'succeeded';
+          } catch {
+            completionStatus = 'result-unconfirmed';
+          }
+        }
+        activeAttempt.terminal = structuredClone(latestResult(activeAttempt.resultsByLabel));
+
+        activeAttempt.stopIssuedAt = Date.now();
+        activeAttempt.stopAck = await sendMessage('!stop');
+        const stopAcceptedAt = Number(activeAttempt.stopAck?.acceptedAt) || activeAttempt.stopIssuedAt;
+        const heldState = await waitForHeld(stopAcceptedAt, 10_000);
+        const heldAt = Number(heldState?._meta?.sampledAt) || Date.now();
+        const settledState = await waitFor(
+          () => states[options.bot] || null,
+          state => {
+            const compact = compactState(state);
+            return compact.sampledAt >= heldAt
+              && compact.held
+              && compact.idle
+              && !compact.pathfinding
+              && compact.stopTimedOutAt === null
+              && actuatorVelocityIsSettled(compact);
+          },
+          `${options.bot} settled request-completion stop anchor`,
+          2_000,
+        );
+        const settledAt = Number(settledState?._meta?.sampledAt) || Date.now();
+        const stopPosition = compactState(settledState).position;
+        const stableSamples = [];
+        const stableStartedAt = Date.now();
+        while (Date.now() - stableStartedAt < 10_000) {
+          stableSamples.push(compactState(states[options.bot]));
+          await delay(250);
+        }
+        const stable = stableSamples.length >= 35 && stableSamples.every(sample => (
+          sample.held
+          && sample.idle
+          && !sample.pathfinding
+          && sample.stopTimedOutAt === null
+          && actuatorVelocityIsQuiescent(sample)
+          && distance(sample.position, stopPosition) <= 0.05
+        ));
+        const finalOutcomes = requestCompletionOutcomes();
+        const results = Object.fromEntries(activeAttempt.resultsByLabel);
+        const policyResult = {
+          owner: 'runtime.preflight',
+          operation: 'inconclusive-route-consumer-policy',
+          status: options.preflightMode === 'on' ? 'strict' : 'advisory',
+          code: `${expectedPolicy.collectionRoute}/${expectedPolicy.interactionStance}`,
+          conclusive: null,
+          retryable: null,
+        };
+        policyResult.resultFingerprint = fingerprintVarianceValue(policyResult);
+        const observedPreflights = stablePreflightResults(results)
+          .sort((left, right) => left.operation.localeCompare(right.operation));
+        const preflightEvidence = options.preflightMode === 'on'
+          ? [policyResult, ...observedPreflights]
+          : null;
+        const traces = [...activeAttempt.traceMap.values()]
+          .sort((left, right) => Number(left.wallClockTimestamp) - Number(right.wallClockTimestamp));
+        const stopQuiescenceMs = Math.max(0, heldAt - stopAcceptedAt);
+        const passed = finalOutcomes.every(outcome => outcome.complete)
+          && completionStatus === 'succeeded'
+          && stable
+          && stopQuiescenceMs <= 2_000
+          && t0Fingerprint === varianceCase.fixtureFingerprint;
+        evidence.attempts.push({
+          attempt: attemptNumber,
+          runId,
+          issuedAt: activeAttempt.issuedAt,
+          activeAt: activeAttempt.activeAt,
+          completedAt: activeAttempt.completedAt,
+          commandAck: activeAttempt.commandAck,
+          terminal: activeAttempt.terminal,
+          stop: {
+            issuedAt: activeAttempt.stopIssuedAt,
+            acceptedAt: stopAcceptedAt,
+            heldAt,
+            quiescenceMs: stopQuiescenceMs,
+            settledAt,
+            settlingMs: Math.max(0, settledAt - heldAt),
+            position: stopPosition,
+            stableForTenSeconds: stable,
+            stableSamples,
+          },
+          performance: {
+            durationMs: Date.now() - activeAttempt.issuedAt,
+            botTrajectoryDistance: trajectoryDistance(activeAttempt.physicalSamples.length >= 2
+              ? activeAttempt.physicalSamples
+              : activeAttempt.samples),
+          },
+          physicalAcceptance: {
+            course: options.course,
+            caseId: varianceCase.id,
+            t0Verified: true,
+            t0Fingerprint,
+            outcomes: finalOutcomes,
+            outcomesVerified: finalOutcomes.every(outcome => outcome.complete),
+            completionStatus,
+            fixtureVerified: true,
+            preflightMode: options.preflightMode,
+            preflightPolicy: activeAttempt.preflightPolicy,
+            maxPromptTurns: options.maxPromptTurns,
+          },
+          t0,
+          samples: activeAttempt.samples,
+          physicalSamples: activeAttempt.physicalSamples,
+          outputs: activeAttempt.outputs,
+          modelMeasurements: activeAttempt.modelMeasurements,
+          traces,
+          preflightEvidence,
+          resultLabels: [...activeAttempt.resultsByLabel.keys()],
+          results,
+          resyncRequests: activeAttempt.resyncRequests,
+          passed,
+        });
+        activeAttempt = null;
+        await restoreFixture();
+        continue;
+      }
+      if (interactionStanceCourse) {
+        const terrainBefore = captureFixtureRuns();
+        const inventoryBefore = inventorySnapshot(target);
+        const startPosition = positionOf(target.entity);
+        const stanceGoal = new pf.goals.GoalBlock(STANCE_TARGET.x, STANCE_TARGET.y, STANCE_TARGET.z);
+        const receipt = await reachInteractionStance(target, {
+          kind: 'physical_verifier',
+          target: { name: 'isolated_stance', ...STANCE_TARGET },
+          goal: stanceGoal,
+          candidates: [STANCE_TARGET],
+          probeTimeoutMs: 100,
+        });
+        const finalPosition = positionOf(target.entity);
+        const paperAfter = await paperSnapshot(runId, 'AFTER');
+        const terrainAfter = captureFixtureRuns();
+        const inventoryAfter = inventorySnapshot(target);
+        const terrainIntact = JSON.stringify(terrainBefore) === JSON.stringify(terrainAfter);
+        const inventoryIntact = JSON.stringify(inventoryBefore) === JSON.stringify(inventoryAfter);
+        const probeInconclusive = ['partial', 'timeout'].includes(receipt?.path?.status);
+        const goalReached = stanceGoal.isEnd(target.entity.position.floored());
+        const pathfinderSettled = !target.pathfinder.isMoving()
+          && !target.pathfinder.isMining()
+          && !target.pathfinder.isBuilding();
+        const targetTravel = trajectoryDistance(activeAttempt.targetSamples);
+        const passed = receipt?.status === 'ready'
+          && probeInconclusive
+          && goalReached
+          && distance(startPosition, finalPosition) > 1
+          && pathfinderSettled
+          && inventoryIntact
+          && terrainIntact;
+        evidence.attempts.push({
+          attempt: attemptNumber,
+          runId,
+          issuedAt: activeAttempt.issuedAt,
+          activeAt: activeAttempt.issuedAt,
+          commandAck: { success: true, source: 'direct-production-helper', provider: false },
+          terminal: { phase: receipt?.status === 'ready' ? 'succeeded' : 'failed', receipt },
+          performance: {
+            durationMs: Date.now() - activeAttempt.issuedAt,
+            controlledTargetTrajectoryDistance: targetTravel,
+          },
+          physicalAcceptance: {
+            course: options.course,
+            producerStatus: receipt?.path?.status || null,
+            producerConclusive: ['success', 'noPath'].includes(receipt?.path?.status),
+            helperStatus: receipt?.status || null,
+            helperFailureStage: receipt?.failureStage || null,
+            originalGoalReached: goalReached,
+            startPosition,
+            finalPosition,
+            pathfinderSettled,
+            laterInteractionAttempted: false,
+            inventoryIntact,
+            terrainIntact,
+            fixtureVerified: terrainIntact,
+          },
+          paper: { before: paperBefore, after: paperAfter },
+          targetSamples: activeAttempt.targetSamples,
+          targetPathUpdates: activeAttempt.targetPathUpdates,
+          passed,
+        });
+        activeAttempt = null;
+        await restoreFixture();
+        continue;
+      }
       if (options.naturalLanguage) {
         target.chat(options.requestMessage);
         activeAttempt.commandAck = { success: true, source: TARGET_NAME, acceptedAt: activeAttempt.issuedAt };
+      } else if (options.course === 'orchestrate-charcoal') {
+        // A Mission promises delivery to its authoritative requester. The
+        // dashboard relay is intentionally authenticated as ADMIN, which is
+        // not a Minecraft player and therefore cannot be the recipient. Keep
+        // this direct form private and deterministic, but originate it from
+        // the controlled fixture player so requester identity is physical.
+        target.whisper(options.bot, options.requestMessage);
+        activeAttempt.commandAck = {
+          success: true,
+          source: TARGET_NAME,
+          transport: 'minecraft-whisper',
+          acceptedAt: activeAttempt.issuedAt,
+        };
       } else {
         activeAttempt.commandAck = await sendMessage(options.requestMessage);
       }
@@ -1206,6 +1787,13 @@ async function run() {
           // fixed follow action. Requiring a specific label here would make the
           // wait a test of the goal's internal command choice.
           if (options.mode === 'deliver') return compact.idle === false;
+          // A strict route probe computes without installing a Pathfinder goal,
+          // so movement ownership is deliberately absent. Its correlated
+          // failed terminal is the observable completion boundary.
+          if (routeProbeCourse) {
+            return activeAttempt.terminal?.label === 'action:goToCoordinates'
+              && activeAttempt.terminal?.phase === 'failed';
+          }
           // Ownership is a physical state: not idle, and actively pathfinding.
           // This used to also require current === 'action:followPlayer'. Under
           // model-first the model picks the command, and four registered
@@ -1219,10 +1807,12 @@ async function run() {
           // and is what the scenario really asserts.
           return compact.idle === false && Boolean(compact.pathfinding);
         },
-        `${runId} active ${options.mode === 'deliver' ? 'goal' : 'follow'} ownership`,
+        `${runId} ${routeProbeCourse ? 'route-probe terminal' : `active ${options.mode === 'deliver' ? 'goal' : 'follow'} ownership`}`,
         options.mode === 'deliver' ? 30_000 : 15_000,
       );
-      activeAttempt.activeAt = Number(activeState?._meta?.sampledAt) || Date.now();
+      activeAttempt.activeAt = routeProbeCourse
+        ? Number(activeAttempt.terminal?.startedAt) || Date.now()
+        : Number(activeState?._meta?.sampledAt) || Date.now();
 
       if (options.mode === 'deliver') {
         // The whole acceptance: the item physically arrives in the recipient's
@@ -1240,7 +1830,16 @@ async function run() {
           DELIVER_WAIT_MS,
         );
         activeAttempt.deliveryObservedAt = Date.now();
-      } else {
+        await waitFor(
+          () => activeAttempt.terminal,
+          terminal => terminal?.phase === 'succeeded'
+            && (orchestrationCourse
+              ? terminal.label === 'action:givePlayer' && terminal.code === 'skill_delivered'
+              : ['action:givePlayer', 'action:requestItemGoal'].includes(terminal.label)),
+          `${runId} correlated successful delivery settlement`,
+          15_000,
+        );
+      } else if (!routeProbeCourse) {
       await driveTarget(activeWaypoints[0]);
       if (options.mode === 'stop') {
         await waitFor(
@@ -1269,7 +1868,13 @@ async function run() {
       }
 
       activeAttempt.stopIssuedAt = Date.now();
-      if (options.naturalLanguage) {
+      if (options.mode === 'deliver' || routeProbeCourse) {
+        // Delivery acceptance is already physical at this point. Establishing
+        // the post-condition hold is harness teardown, not another user request
+        // and not another provider-latency measurement. Natural-language stop
+        // interpretation remains covered by the dedicated stop/follow course.
+        activeAttempt.stopAck = await sendMessage('!stop');
+      } else if (options.naturalLanguage) {
         target.chat('stop');
         activeAttempt.stopAck = { success: true, source: TARGET_NAME, acceptedAt: activeAttempt.stopIssuedAt };
       } else {
@@ -1313,7 +1918,9 @@ async function run() {
         Boolean,
         options.mode === 'deliver'
           ? `${runId} goal terminal result (labels seen: ${[...activeAttempt.resultsByLabel.keys()].join(', ') || 'none'})`
-          : `${runId} interrupted follow terminal result`,
+          : routeProbeCourse
+            ? `${runId} inconclusive route-probe terminal result`
+            : `${runId} interrupted follow terminal result`,
         5_000,
       );
 
@@ -1351,7 +1958,29 @@ async function run() {
       const obstructionDugThrough = obstructionCourse
         ? Boolean(activeAttempt.obstructionSealedAt) && Boolean(paperAfter.doorwayVerified)
         : null;
-      const fixtureVerified = orchestrationCourse
+      const routeFixtureAfter = routeProbeCourse ? captureFixtureRuns() : null;
+      const routeTerrainIntact = routeProbeCourse
+        ? JSON.stringify(activeAttempt.routeFixtureBefore) === JSON.stringify(routeFixtureAfter)
+        : null;
+      const routeProbeStatus = routeProbeCourse
+        ? inconclusiveRouteProbeStatus(activeAttempt.terminal)
+        : null;
+      const routeProbeConclusive = routeProbeCourse
+        ? routeProbeStatus !== null
+          ? false
+          : activeAttempt.terminal?.code === 'skill_path_not_found' ? true : null
+        : null;
+      const routeMovementAttempted = routeProbeCourse
+        ? botTravel > 0.1 || activeAttempt.samples.some(sample => Boolean(sample?.pathfinding))
+        : null;
+      const routePositionStable = routeProbeCourse
+        ? distance(paperBefore.botPosition, paperAfter.botPosition) <= 0.1
+        : null;
+      const fixtureVerified = routeProbeCourse
+        ? paperBefore.routeTargetVerified === true
+          && paperAfter.routeTargetVerified === true
+          && routeTerrainIntact === true
+        : orchestrationCourse
         ? paperBefore.groundVerified === true && paperBefore.dryLandVerified === true
         : deliverCourse
         ? [paperBefore, paperAfter].every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
@@ -1388,8 +2017,31 @@ async function run() {
           && activeAttempt.deliveryFinal !== null
           && activeAttempt.deliveryFinal >= activeAttempt.deliveryBaseline + DELIVER_QUANTITY
         : null;
-      const passed = options.mode === 'deliver'
+      const deliveryTerminalVerified = options.mode === 'deliver'
+        ? activeAttempt.terminal?.phase === 'succeeded'
+          && (orchestrationCourse
+            ? activeAttempt.terminal?.label === 'action:givePlayer'
+              && activeAttempt.terminal?.code === 'skill_delivered'
+            : ['action:givePlayer', 'action:requestItemGoal'].includes(activeAttempt.terminal?.label))
+        : null;
+      const routeProbeVerified = routeProbeCourse
+        ? routeProbeStatus !== null
+          && activeAttempt.terminal?.phase === 'failed'
+          && activeAttempt.terminal?.code === 'skill_route_unproven'
+          && activeAttempt.terminal?.retryable === true
+          && routeMovementAttempted === false
+          && routePositionStable === true
+          && routeTerrainIntact === true
+        : null;
+      const passed = routeProbeCourse
+        ? routeProbeVerified === true
+          && stopQuiescenceMs <= 2_000
+          && stable
+          && distance(paperAfter.botPosition, stopPosition) <= 0.1
+          && fixtureVerified
+        : options.mode === 'deliver'
         ? deliveryVerified === true
+          && deliveryTerminalVerified === true
           && stopQuiescenceMs <= 2_000
           && stable
           && fixtureVerified
@@ -1447,6 +2099,7 @@ async function run() {
           obstructionDugThrough,
           obstructionSealedAt: activeAttempt.obstructionSealedAt || null,
           deliveryVerified,
+          deliveryTerminalVerified,
           deliveryItem: options.mode === 'deliver' ? DELIVER_ITEM : null,
           deliveryQuantity: options.mode === 'deliver' ? DELIVER_QUANTITY : null,
           deliverySourcePresent: paperBefore.sourceVerified,
@@ -1456,6 +2109,12 @@ async function run() {
           deliveryBaseline: activeAttempt.deliveryBaseline,
           deliveryFinal: activeAttempt.deliveryFinal,
           deliveryObservedAt: activeAttempt.deliveryObservedAt,
+          routeProbeStatus,
+          routeProbeConclusive,
+          routeMovementAttempted,
+          routeStartPosition: routeProbeCourse ? paperBefore.botPosition : null,
+          routeFinalPosition: routeProbeCourse ? paperAfter.botPosition : null,
+          routeTerrainIntact,
           twoTurnsCompleted: activeAttempt.waypoints.length === 3,
           oneBlockElevationCompleted: elevated,
           finalDistanceToTarget: distance(paperAfter.botPosition, paperAfter.targetPosition),
@@ -1468,6 +2127,7 @@ async function run() {
         targetSamples: activeAttempt.targetSamples,
         targetPathUpdates: activeAttempt.targetPathUpdates,
         outputs: activeAttempt.outputs,
+        modelMeasurements: activeAttempt.modelMeasurements,
         traces,
         // Every terminal result this request produced, keyed by label. Without
         // this a course whose expected label is wrong looks like a hang rather
@@ -1517,6 +2177,7 @@ async function run() {
         targetSamples: activeAttempt.targetSamples,
         targetPathUpdates: activeAttempt.targetPathUpdates,
         outputs: activeAttempt.outputs,
+        modelMeasurements: activeAttempt.modelMeasurements,
         traces: [...activeAttempt.traceMap.values()]
           .sort((left, right) => Number(left.wallClockTimestamp) - Number(right.wallClockTimestamp)),
         resyncRequests: activeAttempt.resyncRequests,

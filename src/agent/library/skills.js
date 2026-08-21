@@ -277,7 +277,6 @@ const MAX_MINING_PROGRESS_STANCES = 12;
 const MAX_MINING_FALLING_COLUMN = 3;
 const FALLING_BLOCK_SETTLE_MS = 250;
 const MIN_SURFACE_ROUTE_PROGRESS = 2;
-const MAX_SURFACE_ROUTE_LEGS = 8;
 const MAX_SURFACE_CORRIDOR_RISE = 4;
 const SURFACE_CORRIDOR_ROUTE_SLACK = 12;
 const MAX_SURFACE_CORRIDOR_STANCES = 4;
@@ -288,7 +287,6 @@ const SURFACE_EGRESS_PROBE_MS = 500;
 const MAX_LOCAL_WORKSTATION_CANDIDATES = 4;
 const MIN_NATURAL_WORKSTATION_ALCOVE_DEPTH = 8;
 const MINING_STAGING_SCAN_RADIUS = 12;
-const MAX_MINING_STAGING_ATTEMPTS = 2;
 const DEFAULT_MAX_DROP_DOWN = 4;
 const MAX_SURVIVABLE_DROP_DOWN = 12;
 const SAFE_DROP_HEALTH_RESERVE = 10;
@@ -612,16 +610,27 @@ function carriedWindowInventoryCount(window, itemName) {
     return count;
 }
 
-export function selectSmeltingFuelPlan(items, requiredSmelts) {
+export function selectSmeltingFuelPlan(items, requiredSmelts, reservedItems = {}) {
     const required = Math.max(0, Number(requiredSmelts) || 0);
+    const remainingReserved = new Map(
+        Object.entries(reservedItems || {}).map(([name, count]) => [
+            name,
+            Math.max(0, Math.floor(Number(count) || 0)),
+        ]),
+    );
     let remaining = required;
     const entries = [];
     const candidates = (Array.isArray(items) ? items : [])
-        .map(item => ({
-            item,
-            output: mc.getFuelSmeltOutput(item?.name || ''),
-            count: Math.max(0, Math.floor(Number(item?.count) || 0)),
-        }))
+        .map(item => {
+            const carried = Math.max(0, Math.floor(Number(item?.count) || 0));
+            const reserved = Math.min(carried, remainingReserved.get(item?.name) || 0);
+            remainingReserved.set(item?.name, Math.max(0, (remainingReserved.get(item?.name) || 0) - reserved));
+            return {
+                item,
+                output: mc.getFuelSmeltOutput(item?.name || ''),
+                count: carried - reserved,
+            };
+        })
         .filter(candidate => (
             candidate.item
             && Number.isInteger(candidate.item.type)
@@ -1759,6 +1768,7 @@ export function probeSafeNavigationStances(bot, stances, timeoutMs = 2_000, move
         );
         return {
             reachable: result.reachable,
+            conclusive: result.conclusive === true,
             status: result.status,
             pathLength: result.pathLength,
             terminalPosition: result.terminalPosition || null,
@@ -1787,10 +1797,20 @@ export function probeSafeNavigationGoal(bot, goal, timeoutMs = 5_000, movements 
         || (!bot?.pathfinder?.getPathFromTo && !bot?.pathfinder?.getPathTo)
         || !bot?.entity?.position
     ) {
-        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+        return {
+            reachable: false,
+            conclusive: false,
+            status: 'route_probe_unavailable',
+            pathLength: 0,
+        };
     }
     if (navigationGoalSatisfied(bot, goal)) {
-        return { reachable: true, status: 'already_at_goal', pathLength: 0 };
+        return {
+            reachable: true,
+            conclusive: true,
+            status: 'already_at_goal',
+            pathLength: 0,
+        };
     }
     try {
         const result = probeSafeNavigationFrom(
@@ -1802,12 +1822,14 @@ export function probeSafeNavigationGoal(bot, goal, timeoutMs = 5_000, movements 
         );
         return {
             reachable: result.reachable,
+            conclusive: result.conclusive === true,
             status: result.status,
             pathLength: result.pathLength,
         };
     } catch (error) {
         return {
             reachable: false,
+            conclusive: false,
             status: 'route_probe_error',
             pathLength: 0,
             error: String(error?.message || error).slice(0, 160),
@@ -1951,18 +1973,35 @@ export async function reachInteractionStance(bot, {
         pathLength: route.pathLength,
         selectedStance: selected,
     };
-    if (!route.reachable) {
+    const methodRejected = route.conclusive === true && route.status === 'noPath';
+    if (!route.reachable && methodRejected) {
         return interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.PATH_NOT_FOUND, {
             ...routeDetail,
             code: route.status || 'path_not_found',
         });
     }
+    if (
+        !route.reachable
+        && bot?.preflightPolicy?.interactionStance === 'strict'
+    ) {
+        return createInteractionStanceReceipt({
+            ...routeDetail,
+            status: 'failed',
+            code: 'route_unproven',
+        });
+    }
 
-    const executionGoal = new pf.goals.GoalBlock(
-        Math.floor(selected.x),
-        Math.floor(selected.y),
-        Math.floor(selected.z),
-    );
+    // A successful advisory probe gives Pathfinder one exact proven stance. An
+    // inconclusive probe gives no terminal stance at all; execute the original
+    // multi-stance interaction goal so real Pathfinder, rather than the project
+    // probe, decides which legal stance is reachable.
+    const executionGoal = selected
+        ? new pf.goals.GoalBlock(
+            Math.floor(selected.x),
+            Math.floor(selected.y),
+            Math.floor(selected.z),
+        )
+        : goal;
     const reached = await navigateGoal(bot, executionGoal, navigationOptions);
     if (bot.interrupt_code || actionCancellationSignal()?.aborted) {
         return createInteractionStanceReceipt({
@@ -2008,7 +2047,12 @@ function probeSafeNavigationFrom(bot, start, goal, timeoutMs, movements = null) 
         || !start
         || !goal
     ) {
-        return { reachable: false, status: 'route_probe_unavailable', pathLength: 0 };
+        return {
+            reachable: false,
+            conclusive: false,
+            status: 'route_probe_unavailable',
+            pathLength: 0,
+        };
     }
     const boundedTimeoutMs = Math.max(40, Math.min(10_000, Math.floor(Number(timeoutMs) || 500)));
     const deadlineAt = Date.now() + boundedTimeoutMs;
@@ -2041,6 +2085,7 @@ function probeSafeNavigationFrom(bot, start, goal, timeoutMs, movements = null) 
     } catch (error) {
         return {
             reachable: false,
+            conclusive: false,
             status: 'route_probe_error',
             pathLength: 0,
             error: String(error?.message || error).slice(0, 160),
@@ -2092,11 +2137,12 @@ export function probeSafeRoundTripNavigationStances(
 
     const boundedTimeoutMs = Math.max(100, Math.min(5_000, Math.floor(Number(timeoutMs) || 2_000)));
     const deadlineAt = Date.now() + boundedTimeoutMs;
-    const remainingCandidates = candidates.slice(0, 128);
+    const remainingCandidates = candidates.slice();
     let lastInbound = null;
     let lastReturn = null;
     let checked = 0;
-    while (remainingCandidates.length > 0 && checked < 8 && Date.now() < deadlineAt) {
+    let returnProofIncomplete = false;
+    while (remainingCandidates.length > 0 && Date.now() < deadlineAt) {
         const remainingMs = Math.max(40, deadlineAt - Date.now());
         lastInbound = probeSafeNavigationStances(bot, remainingCandidates, remainingMs, movements);
         if (!lastInbound.reachable || !lastInbound.terminalPosition) break;
@@ -2128,6 +2174,9 @@ export function probeSafeRoundTripNavigationStances(
                 roundTripCandidatesChecked: checked,
             };
         }
+        if (lastReturn.conclusive !== true || lastReturn.status !== 'noPath') {
+            returnProofIncomplete = true;
+        }
         const selectedKey = `${selected.x}:${selected.y}:${selected.z}`;
         const index = remainingCandidates.findIndex(position => (
             `${position.x}:${position.y}:${position.z}` === selectedKey
@@ -2136,15 +2185,24 @@ export function probeSafeRoundTripNavigationStances(
         remainingCandidates.splice(index, 1);
     }
 
-    // A round trip is only conclusively impossible when BOTH legs finished and
-    // found nothing. If either probe ran out of budget, this result is "not
-    // proven", and a caller must not turn it into "there is nothing here".
-    const inboundConclusive = lastInbound?.conclusive !== false;
-    const returnConclusive = lastReturn ? lastReturn.conclusive !== false : false;
+    // The method is conclusively unavailable only after every supplied
+    // candidate has been ruled out by completed native searches. A completed
+    // inbound noPath rules out all remaining candidates at once. Any unfinished
+    // inbound or return search keeps the overall result unproven.
+    const remainingInboundRejected = lastInbound?.reachable === false
+        && lastInbound?.conclusive === true
+        && lastInbound?.status === 'noPath';
+    const candidatesExhausted = remainingCandidates.length === 0 || remainingInboundRejected;
+    const conclusive = candidatesExhausted && !returnProofIncomplete;
+    const status = conclusive
+        ? checked > 0 ? 'return_route_unreachable' : lastInbound?.status || 'noPath'
+        : lastInbound?.reachable === false && lastInbound?.conclusive !== true
+            ? lastInbound?.status || 'unknown'
+            : 'return_route_unproven';
     return {
         reachable: false,
-        conclusive: Boolean(lastInbound) && inboundConclusive && returnConclusive,
-        status: lastInbound?.reachable ? 'return_route_unreachable' : lastInbound?.status || 'unknown',
+        conclusive,
+        status,
         pathLength: lastInbound?.pathLength || 0,
         returnStatus: lastReturn?.status || null,
         returnPathLength: lastReturn?.pathLength || 0,
@@ -2761,21 +2819,59 @@ export function assessStableMiningCollectionTarget(bot, block) {
 export function findStableMiningCollectionCandidates(bot, predicate, range, count = MAX_COLLECTION_CANDIDATES) {
     let scanCount = Math.max(count, MAX_COLLECTION_SCAN_CANDIDATES);
     let fallback = [];
+    let supported = [];
     while (true) {
         const scanned = world.getNearestBlocksWhere(bot, predicate, range, scanCount)
             .filter(block => block?.position);
         if (fallback.length === 0) fallback = scanned.slice(0, count);
-        const supported = scanned
-            .filter(block => collectionDropSupport(bot, block.position).safe)
-            .slice(0, count);
-        if (supported.length > 0) return supported;
+        const supportedInScan = scanned
+            .filter(block => collectionDropSupport(bot, block.position).safe);
+        if (supportedInScan.length > 0) supported = supportedInScan;
         if (scanned.length < scanCount || scanCount >= MAX_COLLECTION_SAFE_SCAN_CANDIDATES) break;
         scanCount = Math.min(MAX_COLLECTION_SAFE_SCAN_CANDIDATES, scanCount * 4);
     }
 
+    if (supported.length > 0) {
+        return selectSpatiallyDiverseCollectionCandidates(supported, count);
+    }
     // Preserve truthful failure evidence when every bounded, hydrated target
     // is unsafe. Candidate assessment will attach the exact rejection code.
     return fallback;
+}
+
+export function selectSpatiallyDiverseCollectionCandidates(candidates, count = MAX_COLLECTION_CANDIDATES) {
+    const pool = (Array.isArray(candidates) ? candidates : [])
+        .filter(candidate => candidate?.position);
+    const limit = Math.max(1, Math.floor(Number(count) || MAX_COLLECTION_CANDIDATES));
+    if (pool.length <= limit) return pool;
+
+    // Keep the nearest supported target represented, then use deterministic
+    // farthest-point sampling in the horizontal plane. A uniform underground
+    // layer otherwise contributes twelve adjacent blocks beneath the same tree,
+    // and route assessment never sees the clear ground a few blocks away.
+    const selectedIndexes = new Set([0]);
+    const selected = [pool[0]];
+    while (selected.length < limit) {
+        let bestIndex = -1;
+        let bestSeparation = -1;
+        for (let index = 1; index < pool.length; index += 1) {
+            if (selectedIndexes.has(index)) continue;
+            const position = pool[index].position;
+            const separation = selected.reduce((minimum, candidate) => {
+                const dx = position.x - candidate.position.x;
+                const dz = position.z - candidate.position.z;
+                return Math.min(minimum, (dx * dx) + (dz * dz));
+            }, Infinity);
+            if (separation > bestSeparation) {
+                bestSeparation = separation;
+                bestIndex = index;
+            }
+        }
+        if (bestIndex < 0) break;
+        selectedIndexes.add(bestIndex);
+        selected.push(pool[bestIndex]);
+    }
+    return selected;
 }
 
 function collectionApproachGoal(stances) {
@@ -2796,6 +2892,14 @@ function collectionApproachMovements(bot) {
     // corridor. Letting A* dig here creates a second excavation planner and
     // makes a successful probe meaningless to the actual safety contract.
     return clearedMiningMovements(bot);
+}
+
+export function selectCollectionExecutionOwner(directReach) {
+    // A verified, occupied stance is already the route proof for this exact
+    // target. Sending that target through Collect Block would ask its stricter
+    // independent-support goal to prove a second, different route and can turn
+    // a physically reachable block into a false "No path" result.
+    return directReach === true ? 'bound_target_direct' : 'collectblock';
 }
 
 function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
@@ -3076,7 +3180,8 @@ function selectCollectionCandidate(
         false,
         options,
     );
-    const ranked = rankCollectionCandidates(observations);
+    const rankingOptions = { inconclusive: bot?.preflightPolicy?.collectionRoute };
+    const ranked = rankCollectionCandidates(observations, rankingOptions);
     const selected = ranked.find(candidate => candidate.reachable) || null;
     if (selected) return { selected, ranked, descentFallback: null };
 
@@ -3100,6 +3205,7 @@ function selectCollectionCandidate(
             true,
             options,
         ),
+        rankingOptions,
     );
     const descentSelected = descentRanked.find(candidate => candidate.reachable) || null;
     return {
@@ -5094,6 +5200,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
         const fuelPlan = selectSmeltingFuelPlan(
             bot.inventory.items(),
             Math.max(0, amount - existingFuelCapacity),
+            { [itemName]: amount },
         );
         const availableSmelts = existingFuelCapacity + fuelPlan.availableSmelts;
         let plannedAmount = amount;
@@ -7684,18 +7791,21 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     allowNaturalRouteDigging,
                     requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
                 });
-                const ranked = rankCollectionCandidates(collectionCandidateObservations(
-                    bot,
-                    blocks,
-                    routeMovements,
-                    false,
-                    { stableMiningStance: allowNaturalRouteDigging },
-                ).map(candidate => ({
-                    ...candidate,
-                    routeStatus: candidate.safeStances?.length > 0
-                        ? 'explicit_target'
-                        : candidate.routeStatus,
-                })));
+                const ranked = rankCollectionCandidates(
+                    collectionCandidateObservations(
+                        bot,
+                        blocks,
+                        routeMovements,
+                        false,
+                        { stableMiningStance: allowNaturalRouteDigging },
+                    ).map(candidate => ({
+                        ...candidate,
+                        routeStatus: candidate.safeStances?.length > 0
+                            ? 'explicit_target'
+                            : candidate.routeStatus,
+                    })),
+                    { inconclusive: bot?.preflightPolicy?.collectionRoute },
+                );
                 return {
                     selected: ranked.find(candidate => candidate.reachable) || null,
                     ranked,
@@ -8159,59 +8269,35 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                     // pre-dig state, not from the start of navigation.
                     beforeTargetDropCount = inventoryCountByTypes(bot, expectedDropTypes);
                     priorDropEntityIds = droppedItemEntityIds(bot);
-                    // Target selection and safe-stance proof are ours; moving,
-                    // digging, and collecting the explicit target belong to
-                    // Collect Block. Its movement object is target-scoped
-                    // because the plugin requires canDig=true and mutates it.
-                    bot.collectBlock.movements = targetScopedCollectionMovements(bot, block, {
-                        allowPillars: searchOptions?.allowPillars === true,
-                        // Deterministic access has already opened the legal
-                        // stance. Collect Block owns the explicit target, not
-                        // a second incidental excavation route around it.
-                        allowNaturalRouteDigging: false,
-                        requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
-                    });
-                    try {
+                    const executionOwner = selectCollectionExecutionOwner(directReach);
+                    if (executionOwner === 'bound_target_direct') {
+                        await runBoundedCollectionOperation(
+                            bot,
+                            () => bot.dig(liveTarget),
+                            () => bot.stopDigging(),
+                        );
+                    } else {
+                        // Target selection and safe-stance proof are ours;
+                        // Collect Block owns navigation only when the bot is not
+                        // already at the verified stance. Its movement object is
+                        // target-scoped because the plugin requires canDig=true
+                        // and mutates it.
+                        bot.collectBlock.movements = targetScopedCollectionMovements(bot, block, {
+                            allowPillars: searchOptions?.allowPillars === true,
+                            allowNaturalRouteDigging: false,
+                            requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
+                        });
                         try {
                             await runBoundedCollectionOperation(
                                 bot,
                                 () => bot.collectBlock.collect(block),
                                 () => bot.collectBlock.cancelTask(),
                             );
-                        } catch (routeError) {
-                            // "Deterministic access has already opened the legal
-                            // stance" is an assumption, and when it is wrong this
-                            // is the failure: only the target may be broken, so
-                            // a block under eight layers of dirt has no legal
-                            // approach at all. Measured 2026-08-18 on ordinary
-                            // superflat ground -- the selector scored a success
-                            // route to stone at (1032, 91, 1012) and collectblock
-                            // answered "No path to the goal!" for the same block
-                            // in the same breath. The engine was not wrong; it
-                            // was forbidden to dig the dirt in the way.
-                            //
-                            // A player digs down to the stone. Give the plugin
-                            // that same permission once, for this one target,
-                            // before reporting the block unreachable. The
-                            // no-candidate branch already ends this way; a
-                            // candidate we DID select deserves the same effort.
-                            if (!/no path|timeout/i.test(String(routeError?.message || ''))) throw routeError;
-                            log(bot, `No open approach to ${block.name}; digging down to it.`);
-                            bot.collectBlock.movements = targetScopedCollectionMovements(bot, block, {
-                                allowPillars: true,
-                                allowNaturalRouteDigging: true,
-                                requireReturnableRoute: false,
-                            });
-                            await runBoundedCollectionOperation(
-                                bot,
-                                () => bot.collectBlock.collect(block),
-                                () => bot.collectBlock.cancelTask(),
-                            );
+                        } finally {
+                            const routeMovements = safeMovements(bot);
+                            bot.collectBlock.movements = routeMovements;
+                            bot.pathfinder.setMovements(routeMovements);
                         }
-                    } finally {
-                        const routeMovements = safeMovements(bot);
-                        bot.collectBlock.movements = routeMovements;
-                        bot.pathfinder.setMovements(routeMovements);
                     }
                 } finally {
                     bot.modes.unpause('unstuck');
@@ -15220,12 +15306,8 @@ export function segmentWaypointCandidates(bot, destination, options = {}) {
     return segmentWaypointSelection(bot, destination, options).candidates;
 }
 
-const SEGMENT_JOURNEY_MAX_SEGMENTS = 10;
 const SEGMENT_JOURNEY_MIN_PROGRESS = 2;
-const SEGMENT_JOURNEY_MAX_STALLS = 2;
-const SEGMENT_JOURNEY_MAX_UNPROVEN_CANDIDATES = 2;
 const SEGMENT_JOURNEY_MAX_DETOUR_DEBT = 8;
-const SEGMENT_JOURNEY_MAX_CONSECUTIVE_DETOURS = 3;
 const SEGMENT_JOURNEY_MIN_DETOUR_DISPLACEMENT = 2;
 
 function createWaypointSelectionReceipt(selection, {
@@ -15292,7 +15374,7 @@ function createSegmentJourneyReceipt({
     const detour = progressRelation === 'bounded_obstacle_detour';
     return Object.freeze({
         schemaVersion: 1,
-        index: Math.max(0, Math.min(SEGMENT_JOURNEY_MAX_SEGMENTS - 1, Math.floor(Number(index) || 0))),
+        index: Math.max(0, Math.floor(Number(index) || 0)),
         origin: segmentReceiptPosition(origin),
         waypoint: segmentReceiptPosition(waypoint),
         finalDestination: segmentReceiptPosition(finalDestination, { floor: false }),
@@ -15334,21 +15416,15 @@ function createSegmentJourneyReceipt({
 
 function remainingRoutePlanningTimeMs(options = {}, fallbackTimeoutMs = 5_000) {
     const requestedTimeoutMs = Number(options?.plannedRouteTimeoutMs);
-    let timeoutMs = Math.max(
-        100,
-        Math.min(
-            10_000,
-            Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
-                ? Math.floor(requestedTimeoutMs)
-                : Math.floor(fallbackTimeoutMs),
-        ),
-    );
+    let timeoutMs = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+        ? Math.floor(requestedTimeoutMs)
+        : Math.floor(fallbackTimeoutMs);
     const deadlineAt = Number(options?.planningDeadlineAt);
-    if (!Number.isFinite(deadlineAt)) return timeoutMs;
-    const remainingMs = Math.floor(deadlineAt - Date.now());
-    if (remainingMs < 100) return 0;
-    timeoutMs = Math.min(timeoutMs, remainingMs);
-    return timeoutMs;
+    if (Number.isFinite(deadlineAt)) {
+        timeoutMs = Math.min(timeoutMs, Math.floor(deadlineAt - Date.now()));
+    }
+    timeoutMs = Math.floor(remainingActionTimeMs(timeoutMs));
+    return timeoutMs > 0 ? timeoutMs : 0;
 }
 
 /**
@@ -15366,19 +15442,17 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
     const visited = new Set();
     const initialOrigin = observedSupportedStandingCell(bot);
     if (initialOrigin) visited.add(`${initialOrigin.x}:${initialOrigin.y}:${initialOrigin.z}`);
-    let stalls = 0;
-    let unprovenCandidates = 0;
     const initialRemaining = initialOrigin
         ? journeyDistance(bot.entity.position, initialDestination)
         : Number.POSITIVE_INFINITY;
     let bestRemaining = initialRemaining;
     let progressed = 0;
-    let consecutiveDetours = 0;
-    let detourAnchorBest = null;
+    let routeMethodRejected = false;
+    let routeProofIncomplete = false;
     let blocker = initialOrigin ? null : 'segmented_journey_unsafe_origin';
     let waypointSelection = null;
 
-    for (let index = 0; index < SEGMENT_JOURNEY_MAX_SEGMENTS; index += 1) {
+    for (let index = 0; ; index += 1) {
         if (bot.interrupt_code || actionCancellationSignal()?.aborted) break;
         if (navigationGoalSatisfied(bot, goal)) break;
         const segmentPlanningTimeoutMs = remainingRoutePlanningTimeMs(
@@ -15425,8 +15499,7 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
             detourCandidates += 1;
             if (!detourCandidate) detourCandidate = entry;
         }
-        const detourAllowed = consecutiveDetours < SEGMENT_JOURNEY_MAX_CONSECUTIVE_DETOURS;
-        const candidate = directCandidate || (detourAllowed ? detourCandidate : null);
+        const candidate = directCandidate || detourCandidate;
         const progressRelation = directCandidate
             ? 'decrease_spatial_distance'
             : candidate ? 'bounded_obstacle_detour' : null;
@@ -15438,9 +15511,11 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
             selectedRelation: progressRelation,
         });
         if (!candidate) {
-            blocker = detourCandidate && !detourAllowed
-                ? 'segmented_journey_detour_limit'
-                : 'segmented_journey_no_safe_waypoint';
+            blocker = routeProofIncomplete
+                ? 'segmented_journey_route_unproven'
+                : routeMethodRejected
+                    ? 'segmented_journey_route_unreachable'
+                    : 'segmented_journey_no_safe_waypoint';
             break;
         }
         visited.add(`${candidate.x}:${candidate.y}:${candidate.z}`);
@@ -15470,7 +15545,8 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
                 segmentMovements,
             );
         if (!probe.reachable) {
-            unprovenCandidates += 1;
+            if (probe.conclusive === true) routeMethodRejected = true;
+            else routeProofIncomplete = true;
             segments.push(createSegmentJourneyReceipt({
                 index,
                 origin: segmentOrigin,
@@ -15484,13 +15560,13 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
                 expectedProgress: before - candidate.remaining,
                 progressRelation,
                 bestDistanceBefore: bestRemaining,
-                outcome: 'route_unproven',
+                outcome: probe.conclusive === true ? 'route_unreachable' : 'route_unproven',
             }));
-            blocker = 'segmented_journey_route_unproven';
-            if (unprovenCandidates >= SEGMENT_JOURNEY_MAX_UNPROVEN_CANDIDATES) break;
+            blocker = probe.conclusive === true
+                ? 'segmented_journey_route_unreachable'
+                : 'segmented_journey_route_unproven';
             continue;
         }
-        unprovenCandidates = 0;
         blocker = null;
         const moved = await goToGoal(bot, waypointGoal, {
             ...options,
@@ -15560,6 +15636,8 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
             break;
         }
         visited.add(`${terminal.x}:${terminal.y}:${terminal.z}`);
+        routeMethodRejected = false;
+        routeProofIncomplete = false;
         bestRemaining = Math.min(bestRemaining, after);
         progressed = Number.isFinite(initialRemaining)
             ? Math.max(0, initialRemaining - bestRemaining)
@@ -15568,24 +15646,12 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
         if (navigationGoalSatisfied(bot, goal)) break;
         // Reconciliation: a segment that did not physically shorten the journey
         // is not authority for another one. Elapsed time is never progress.
-        if (progressRelation === 'bounded_obstacle_detour') {
-            if (detourAnchorBest === null) detourAnchorBest = before;
-            consecutiveDetours += 1;
-            if (after <= detourAnchorBest - SEGMENT_JOURNEY_MIN_PROGRESS) {
-                consecutiveDetours = 0;
-                detourAnchorBest = null;
-            }
-            stalls = 0;
-        } else if (progress < SEGMENT_JOURNEY_MIN_PROGRESS) {
-            stalls += 1;
-            if (stalls >= SEGMENT_JOURNEY_MAX_STALLS) {
-                blocker = 'segmented_journey_no_progress';
-                break;
-            }
-        } else {
-            stalls = 0;
-            consecutiveDetours = 0;
-            detourAnchorBest = null;
+        if (
+            progressRelation !== 'bounded_obstacle_detour'
+            && progress < SEGMENT_JOURNEY_MIN_PROGRESS
+        ) {
+            blocker = 'segmented_journey_no_progress';
+            break;
         }
         const directMovements = movementFactory();
         const directPlanningTimeoutMs = remainingRoutePlanningTimeMs(
@@ -15622,10 +15688,6 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
             blocker = 'segmented_final_path_execution_failed';
             break;
         }
-        if (consecutiveDetours >= SEGMENT_JOURNEY_MAX_CONSECUTIVE_DETOURS) {
-            blocker = 'segmented_journey_detour_limit';
-            break;
-        }
     }
 
     const arrived = navigationGoalSatisfied(bot, goal);
@@ -15638,14 +15700,20 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
     return {
         attempted: true,
         arrived,
-        segments: Object.freeze(segments.slice(0, SEGMENT_JOURNEY_MAX_SEGMENTS)),
+        segments: Object.freeze(segments.slice()),
         destination: segmentReceiptPosition(segmentJourneyDestination(goal) || initialDestination, { floor: false }),
         progressed: boundedProgress,
         outcome,
         waypointSelection,
         // Only a journey that physically advanced earns another attempt; an
         // unchanged one would repeat identical planning evidence.
-        retryable: boundedProgress >= SEGMENT_JOURNEY_MIN_PROGRESS && !bot.interrupt_code,
+        retryable: !bot.interrupt_code
+            && actionCancellationSignal()?.aborted !== true
+            && (
+                boundedProgress >= SEGMENT_JOURNEY_MIN_PROGRESS
+                || outcome === 'segmented_journey_route_unproven'
+                || outcome === 'segmented_journey_planning_deadline'
+            ),
         message: boundedProgress >= SEGMENT_JOURNEY_MIN_PROGRESS
             ? `No complete route exists, so I advanced ${boundedProgress} blocks toward the destination in ${segments.length} bounded segment attempt(s) but did not arrive (${outcome.replaceAll('_', ' ')}).`
             : `Pathfinder could not produce a complete safe route (${planning.status}) and bounded segmentation stopped (${outcome.replaceAll('_', ' ')}); no unproven movement was attempted.`,
@@ -15712,6 +15780,8 @@ export async function goToGoal(bot, goal, options = {}) {
         );
         if (
             !planning.reachable
+            && planning.conclusive === true
+            && planning.status === 'noPath'
             && options?.allowLocalRecovery !== false
             && preflightRecovery?.success !== true
         ) {
@@ -15734,13 +15804,13 @@ export async function goToGoal(bot, goal, options = {}) {
             }
         }
         if (!planning.reachable) {
-            // A failed whole-journey proof means this destination is not
-            // reachable in one leg, not that no movement is possible. Under the
-            // approved segmented-navigation contract the journey may proceed as
-            // individually route-proven segments while the exact destination and
-            // obligation are retained. Recursion is disabled inside a segment,
-            // so every executed leg still requires its own complete native route.
-            if (options?.allowSegmentedJourney === true) {
+            const methodRejected = planning.conclusive === true && planning.status === 'noPath';
+            // Only a completed noPath may authorize the alternative segmented
+            // method. An inconclusive whole-route probe remains retryable and
+            // cannot start another execution path. Under the approved segmented-
+            // navigation contract, every executed leg still requires its own
+            // complete native route.
+            if (methodRejected && options?.allowSegmentedJourney === true) {
                 const segmented = await runSegmentedJourney(
                     bot,
                     goal,
@@ -15780,12 +15850,14 @@ export async function goToGoal(bot, goal, options = {}) {
             }
             setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
-                outcome: 'path_not_found',
+                outcome: methodRejected ? 'path_not_found' : 'route_unproven',
                 planning,
                 ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
                 retryable: true,
             });
-            log(bot, `Pathfinder could not produce a complete safe route (${planning.status}); no movement was attempted.`);
+            log(bot, methodRejected
+                ? `Pathfinder completed the route search without finding a safe route (${planning.status}); no movement was attempted.`
+                : `Pathfinder ended the route probe without a conclusive answer (${planning.status}); no unproven movement was attempted.`);
             return false;
         }
     }
@@ -16309,14 +16381,19 @@ function stableMiningStagingCandidates(bot) {
                 }
             }
         }
-        if (candidates.length >= MAX_MINING_STAGING_ATTEMPTS) break;
     }
     return candidates.sort((left, right) => left.distance - right.distance);
 }
 
 async function stageMiningStaircase(bot, targetBlock = null) {
     let current = observedSupportedStandingCell(bot);
-    if (!current) return false;
+    if (!current) {
+        return Object.freeze({
+            success: false,
+            outcome: 'staging_position_unavailable',
+            retryable: true,
+        });
+    }
     const target = targetBlock?.position;
     const horizontalDistance = target
         ? Math.hypot(target.x - current.x, target.z - current.z)
@@ -16341,7 +16418,12 @@ async function stageMiningStaircase(bot, targetBlock = null) {
                     && !isHazardousGameplayBlock(support)
                     && !isLiquidGameplayBlock(support);
             });
-        const route = probeSafeNavigationStances(bot, candidates, 1_200);
+        const route = probeSafeRoundTripNavigationStances(
+            bot,
+            candidates,
+            current,
+            remainingActionTimeMs(1_200),
+        );
         const staging = route.reachable && route.terminalPosition
             ? new Vec3(
                 route.terminalPosition.x,
@@ -16349,7 +16431,17 @@ async function stageMiningStaircase(bot, targetBlock = null) {
                 route.terminalPosition.z,
             )
             : null;
-        if (!staging) return false;
+        if (!staging) {
+            const inconclusive = route.conclusive !== true;
+            return Object.freeze({
+                success: false,
+                outcome: inconclusive ? 'staging_route_unproven' : 'staging_unreachable',
+                routeStatus: route.status,
+                returnRouteStatus: route.returnStatus || null,
+                inconclusive,
+                retryable: inconclusive,
+            });
+        }
         const reached = await goToGoal(
             bot,
             new pf.goals.GoalBlock(staging.x, staging.y, staging.z),
@@ -16360,11 +16452,36 @@ async function stageMiningStaircase(bot, targetBlock = null) {
                 allowLocalRecovery: false,
             },
         );
-        if (bot.interrupt_code || (!reached && !physicallyOccupiesStandingCell(bot, staging))) {
-            return false;
+        const settledAtStaging = Boolean(
+            (reached || physicallyOccupiesStandingCell(bot, staging))
+            && await waitForWorldCondition(
+                bot,
+                () => physicallyOccupiesStandingCell(bot, staging),
+                GROUND_SETTLE_TIMEOUT_MS,
+                25,
+            )
+        );
+        if (bot.interrupt_code || !settledAtStaging) {
+            return Object.freeze({
+                success: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'staging_execution_failed',
+                routeStatus: route.status,
+                returnRouteStatus: route.returnStatus || null,
+                inconclusive: false,
+                retryable: !bot.interrupt_code,
+            });
         }
         current = observedSupportedStandingCell(bot);
-        if (!current) return false;
+        if (!current) {
+            return Object.freeze({
+                success: false,
+                outcome: 'staging_settlement_unverified',
+                routeStatus: route.status,
+                returnRouteStatus: route.returnStatus || null,
+                inconclusive: false,
+                retryable: true,
+            });
+        }
         log(bot, `Walked non-destructively to a surface mining site ${Math.round(horizontalDistance)} blocks nearer the selected ${targetBlock.name}.`);
     }
     if (isStableMiningStagingCell(bot, current)) {
@@ -16374,11 +16491,13 @@ async function stageMiningStaircase(bot, targetBlock = null) {
             GROUND_SETTLE_TIMEOUT_MS,
             25,
         );
-        if (settled) return true;
+        if (settled) {
+            return Object.freeze({ success: true, outcome: 'staging_verified', retryable: false });
+        }
     }
 
     const candidates = stableMiningStagingCandidates(bot);
-    for (const candidate of candidates.slice(0, MAX_MINING_STAGING_ATTEMPTS)) {
+    for (const candidate of candidates) {
         const reached = await goToGoal(
             bot,
             new pf.goals.GoalBlock(
@@ -16408,10 +16527,15 @@ async function stageMiningStaircase(bot, targetBlock = null) {
             && isStableMiningStagingCell(bot, candidate.position)
         ) {
             log(bot, 'Reached stable dry ground before opening the mining staircase.');
-            return true;
+            return Object.freeze({ success: true, outcome: 'staging_verified', retryable: false });
         }
     }
-    return false;
+    return Object.freeze({
+        success: false,
+        outcome: bot.interrupt_code ? 'interrupted' : 'no_stable_staging_cell',
+        inconclusive: false,
+        retryable: !bot.interrupt_code,
+    });
 }
 
 // Depth relocation has no selected ore coordinate to converge on, but it still
@@ -18028,10 +18152,14 @@ async function reachKnownBlockByVoxelCorridor(
     if (bot.entity.position.distanceTo(target) <= 4.5) {
         return { success: true, outcome: 'already_in_range', excavated: 0 };
     }
-    if (!await stageMiningStaircase(bot)) {
+    const staging = await stageMiningStaircase(bot);
+    if (!staging.success) {
         return {
             success: false,
-            outcome: bot.interrupt_code ? 'interrupted' : 'no_stable_staging_cell',
+            outcome: staging.outcome,
+            inconclusive: staging.inconclusive === true,
+            routeStatus: staging.routeStatus || null,
+            returnRouteStatus: staging.returnRouteStatus || null,
         };
     }
     const liveTarget = bot.blockAt(target);
@@ -18255,11 +18383,11 @@ export async function mineSearchTunnel(
         : nearestKnownMiningTarget(bot, requested, excludedTargets);
     if (knownTarget) {
         const staged = await stageMiningStaircase(bot, knownTarget);
-        if (!staged) {
+        if (!staged.success) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
                 targetBound: true,
-                outcome: bot.interrupt_code ? 'interrupted' : 'staging_unreachable',
+                outcome: staged.outcome,
                 target: {
                     name: knownTarget.name,
                     x: knownTarget.position.x,
@@ -18267,8 +18395,11 @@ export async function mineSearchTunnel(
                     z: knownTarget.position.z,
                 },
                 progress: physicalProgress(),
-                routeDigging: true,
-                retryable: !bot.interrupt_code,
+                routeStatus: staged.routeStatus || null,
+                returnRouteStatus: staged.returnRouteStatus || null,
+                routeDigging: false,
+                ...(staged.inconclusive === true ? { inconclusive: true } : {}),
+                retryable: staged.retryable === true,
             });
             log(bot, bot.interrupt_code
                 ? 'Stopped before reaching a stable mining site.'
@@ -18993,13 +19124,30 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
         }
         candidates.sort((left, right) => left.distance - right.distance);
 
-        const openRoute = probeSafeRoundTripNavigationStances(
-            bot,
-            candidates.slice(0, 24),
-            origin,
-            2_000,
-        );
-        if (openRoute.reachable && openRoute.terminalPosition) {
+        const openRoute = candidates.length > 0
+            ? probeSafeRoundTripNavigationStances(
+                bot,
+                candidates,
+                origin,
+                remainingActionTimeMs(2_000),
+            )
+            : null;
+        if (openRoute && !openRoute.reachable && openRoute.conclusive !== true) {
+            setActionEvidence(bot, {
+                kind: 'mining_relocation',
+                outcome: 'open_cave_route_unproven',
+                target,
+                candidates: candidates.length,
+                routeStatus: openRoute.status,
+                returnRouteStatus: openRoute.returnStatus || null,
+                routeDigging: false,
+                inconclusive: true,
+                retryable: true,
+            });
+            log(bot, `The non-destructive cave-route search did not finish for the productive y=${boundedY} band; no excavation was started.`);
+            return false;
+        }
+        if (openRoute?.reachable && openRoute.terminalPosition) {
             const candidate = openRoute.terminalPosition;
             if (await goToPosition(bot, candidate.x, candidate.y, candidate.z, 1)) {
                 if (Math.abs(bot.entity.position.y - boundedY) <= 8) {
@@ -19057,6 +19205,20 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
                 return false;
             }
             origin = observedSupportedStandingCell(bot) || origin;
+            setActionEvidence(bot, {
+                kind: 'mining_relocation',
+                outcome: 'open_route_execution_unfinished',
+                target,
+                candidates: candidates.length,
+                routeStatus: openRoute.status,
+                returnRouteStatus: openRoute.returnStatus || null,
+                observedY: origin.y,
+                routeDigging: false,
+                returnable: true,
+                retryable: true,
+            });
+            log(bot, 'The proven open-cave route did not finish executing; Kevin returned to its exact origin and did not start excavation.');
+            return false;
         }
     }
 
@@ -19127,7 +19289,7 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
         kind: 'mining_relocation',
         outcome: candidates.length > 0 ? 'open_cave_unreachable' : 'no_open_cave_route',
         target,
-        candidates: Math.min(candidates.length, 6),
+        candidates: candidates.length,
         routeDigging: false,
         retryable: true,
     });
@@ -24172,19 +24334,24 @@ function surfaceEgressStances(
                 candidates.push(stance);
             }
         }
-        if (candidates.length >= 32) break;
     }
-    return candidates.slice(0, 32);
+    return candidates;
 }
 
-function occupiedUsableSurfaceStandingCell(
+function occupiedUsableSurfaceObservation(
     bot,
     minY,
     maxY,
     probeSurfaceEgress = probeSafeNavigationStances,
 ) {
     const supported = observedSupportedStandingCell(bot);
-    if (!supported) return null;
+    if (!supported) {
+        return Object.freeze({
+            surface: null,
+            probe: null,
+            inconclusive: false,
+        });
+    }
     // Open sky is not the definition of surface access. A player standing in
     // a ground-level house, under an awning, or beneath a tree canopy is still
     // at the surface when ordinary locomotion has a complete route to nearby
@@ -24194,32 +24361,51 @@ function occupiedUsableSurfaceStandingCell(
     const egress = surfaceEgressStances(bot, supported, minY, maxY, {
         maximumRise: 1,
     });
-    if (egress.length === 0) return null;
+    if (egress.length === 0) {
+        return Object.freeze({
+            surface: null,
+            probe: null,
+            inconclusive: false,
+        });
+    }
     const route = probeSurfaceEgress(bot, egress, SURFACE_EGRESS_PROBE_MS);
-    if (!route?.reachable) return null;
+    const probe = Object.freeze({
+        candidateCount: egress.length,
+        status: String(route?.status || 'route_probe_unavailable'),
+        pathLength: Math.max(0, Math.floor(Number(route?.pathLength) || 0)),
+        conclusive: route?.conclusive === true,
+    });
+    if (!route?.reachable) {
+        return Object.freeze({
+            surface: null,
+            probe,
+            inconclusive: route?.conclusive !== true,
+        });
+    }
     const terminal = route.terminalPosition;
     return Object.freeze({
-        supported,
-        access: Object.freeze({
-            kind: occupiedOpenSurfaceStandingCell(bot)
-                ? 'open_surface_egress'
-                : 'covered_surface_egress',
-            candidateCount: egress.length,
-            pathStatus: String(route.status || 'unknown').slice(0, 64),
-            pathLength: Math.min(
-                4_096,
-                Math.max(0, Math.floor(Number(route.pathLength) || 0)),
-            ),
-            ...(terminal && [terminal.x, terminal.y, terminal.z].every(Number.isFinite)
-                ? {
-                    terminalPosition: Object.freeze({
-                        x: Math.floor(terminal.x),
-                        y: Math.floor(terminal.y),
-                        z: Math.floor(terminal.z),
-                    }),
-                }
-                : {}),
+        surface: Object.freeze({
+            supported,
+            access: Object.freeze({
+                kind: occupiedOpenSurfaceStandingCell(bot)
+                    ? 'open_surface_egress'
+                    : 'covered_surface_egress',
+                candidateCount: egress.length,
+                pathStatus: String(route.status || 'unknown'),
+                pathLength: Math.max(0, Math.floor(Number(route.pathLength) || 0)),
+                ...(terminal && [terminal.x, terminal.y, terminal.z].every(Number.isFinite)
+                    ? {
+                        terminalPosition: Object.freeze({
+                            x: Math.floor(terminal.x),
+                            y: Math.floor(terminal.y),
+                            z: Math.floor(terminal.z),
+                        }),
+                    }
+                    : {}),
+            }),
         }),
+        probe,
+        inconclusive: false,
     });
 }
 
@@ -24409,12 +24595,13 @@ function surfaceArrivalObservation(
     // usable horizontal egress from the occupied stance. If it cannot, bind a
     // genuinely higher surface cell so deterministic recovery keeps climbing.
     const occupiedOpenSurface = occupiedOpenSurfaceStandingCell(bot);
-    const occupiedUsableSurface = occupiedUsableSurfaceStandingCell(
+    const accessObservation = occupiedUsableSurfaceObservation(
         bot,
         minY,
         maxY,
         probeSurfaceEgress,
     );
+    const occupiedUsableSurface = accessObservation.surface;
     const scan = occupiedUsableSurface
         ? { target: supported, diagnostics: null }
         : observed
@@ -24434,6 +24621,8 @@ function surfaceArrivalObservation(
         target,
         scan: scan.diagnostics,
         access: occupiedUsableSurface?.access || null,
+        egressProbe: accessObservation.probe,
+        inconclusive: accessObservation.inconclusive === true,
         arrived: Boolean(observed && supported && occupiedUsableSurface && target),
     };
 }
@@ -24472,9 +24661,37 @@ export async function goToSurface(bot, {
         return true;
     };
 
-    for (let leg = 1; leg <= MAX_SURFACE_ROUTE_LEGS; leg += 1) {
-        if (bot.interrupt_code || remainingActionTimeMs() <= 0) break;
+    const finishEgressUnproven = (arrival, leg, routeDigging = false) => {
+        setActionEvidence(bot, {
+            kind: 'surface_navigation',
+            outcome: 'surface_egress_route_unproven',
+            ...(arrival.target ? {
+                target: { x: arrival.target.x, y: arrival.target.y, z: arrival.target.z },
+            } : {}),
+            observed: arrival.observed ? {
+                x: arrival.observed.x,
+                y: arrival.observed.y,
+                z: arrival.observed.z,
+            } : null,
+            routeStatus: arrival.egressProbe?.status || 'route_probe_unavailable',
+            candidateCount: arrival.egressProbe?.candidateCount || 0,
+            routeDigging,
+            inconclusive: true,
+            legs: leg,
+            verticalProgress: arrival.observed ? arrival.observed.y - origin.y : 0,
+            supported: Boolean(arrival.supported),
+            retryable: true,
+        });
+        log(bot, 'The ordinary surface-egress route search did not finish; no new excavation method was started.');
+        return false;
+    };
+
+    let completedLegs = 0;
+    while (!bot.interrupt_code && remainingActionTimeMs() > 0) {
+        const leg = completedLegs + 1;
+        completedLegs = leg;
         const before = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+        if (before.inconclusive) return finishEgressUnproven(before, leg - 1);
         if (before.arrived) return finishReached(before, leg - 1);
         const target = before.target;
         lastTarget = target || lastTarget;
@@ -24533,6 +24750,7 @@ export async function goToSurface(bot, {
             );
         }
         let arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+        if (arrival.inconclusive) return finishEgressUnproven(arrival, leg);
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg);
         const nativeRise = arrival.observed.y - nativeStart.y;
@@ -24558,7 +24776,7 @@ export async function goToSurface(bot, {
             return false;
         }
         if (!bot.interrupt_code && arrival.supported && nativeRise >= MIN_SURFACE_ROUTE_PROGRESS) {
-            log(bot, `Native Pathfinder advanced ${nativeRise.toFixed(1)} vertical blocks without excavation; rebinding surface leg ${leg}/${MAX_SURFACE_ROUTE_LEGS}.`);
+            log(bot, `Native Pathfinder advanced ${nativeRise.toFixed(1)} vertical blocks without excavation; rebinding after surface leg ${leg}.`);
             continue;
         }
         if (bot.interrupt_code) break;
@@ -24584,6 +24802,7 @@ export async function goToSurface(bot, {
                 ),
             );
             arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+            if (arrival.inconclusive) return finishEgressUnproven(arrival, leg);
             if (
                 !settledStance
                 || !arrival.supported?.equals?.(settledStance)
@@ -24702,6 +24921,7 @@ export async function goToSurface(bot, {
         }
 
         arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+        if (arrival.inconclusive) return finishEgressUnproven(arrival, leg, true);
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg, true);
         const corridorRise = arrival.observed.y - corridorStart.y;
@@ -24717,11 +24937,11 @@ export async function goToSurface(bot, {
             // exact bound cell clear, supported, occupied, and returnable, so
             // continue the same bounded recovery action from that new stance.
             // Arbitrary lateral Pathfinder displacement still does not count.
-            log(bot, `Deterministic excavation occupied ${access.reachedSteps} verified prefix cell${access.reachedSteps === 1 ? '' : 's'}; rebinding surface leg ${leg}/${MAX_SURFACE_ROUTE_LEGS}.`);
+            log(bot, `Deterministic excavation occupied ${access.reachedSteps} verified prefix cell${access.reachedSteps === 1 ? '' : 's'}; rebinding after surface leg ${leg}.`);
             continue;
         }
         if (arrival.supported && corridorRise >= MIN_SURFACE_ROUTE_PROGRESS) {
-            log(bot, `Deterministic excavation advanced ${corridorRise.toFixed(1)} vertical blocks through ${plan.route.length} preflighted cells; rebinding surface leg ${leg}/${MAX_SURFACE_ROUTE_LEGS}.`);
+            log(bot, `Deterministic excavation advanced ${corridorRise.toFixed(1)} vertical blocks through ${plan.route.length} preflighted cells; rebinding after surface leg ${leg}.`);
             continue;
         }
         setActionEvidence(bot, {
@@ -24754,7 +24974,7 @@ export async function goToSurface(bot, {
         outcome: bot.interrupt_code ? 'interrupted' : 'surface_progress_incomplete',
         ...(lastTarget ? { target: { x: lastTarget.x, y: lastTarget.y, z: lastTarget.z } } : {}),
         observed: { x: observed.x, y: observed.y, z: observed.z },
-        legs: MAX_SURFACE_ROUTE_LEGS,
+        legs: completedLegs,
         verticalProgress,
         supported: Boolean(supported),
         ...(verifiedProgress ? {
@@ -24768,7 +24988,7 @@ export async function goToSurface(bot, {
     });
     log(bot, bot.interrupt_code
         ? 'Surface navigation was interrupted before verified arrival.'
-        : `Surface navigation made bounded progress but did not reach a verified surface after ${MAX_SURFACE_ROUTE_LEGS} route legs.`);
+        : `Surface navigation made bounded progress but did not reach a verified surface before its owning deadline after ${completedLegs} route legs.`);
     return false;
 }
 

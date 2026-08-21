@@ -1,145 +1,209 @@
-# Handoff — start here
+# Handoff — next session / forward proof boundary
 
-Written 2026-08-16, after the Scenario Lab was repaired and five engine defects
-were fixed. Read `AGENTS.md` for the working rules and `ARCHITECTURE.md` for the
-design. This page is what you need in the first five minutes.
+**Prepared 2026-08-21. Current tranche state: Phase 5 code and acquisition
+preparation are complete. One isolated recorded-trace cell is `ACCEPTED / CLOSED`;
+the other 111 cells remain `PENDING`. No additional gameplay run is currently
+authorized.**
 
-## Run the scenarios
+`ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
+governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
+`ACCEPTED / CLOSED` ledger. This file names only the current execution boundary.
 
-```bash
-npm run scenario:doctor        # can it run right now, and what is blocking
-npm run scenario:follow        # follow a player on open ground
-npm run scenario:obstruction   # follow through terrain that must be broken
-npm run scenario:deliver       # typed goal: acquire an item and hand it over
-npm run scenario:list          # what exists and why
+## Startup sequence
+
+Read these files completely, in this order:
+
+1. `AGENTS.md`;
+2. `ARCHITECTURE.md`;
+3. `docs/CAMPAIGN-RECORD.md`;
+4. this file.
+
+Do not run Lodestar for project context. Do not search retired planning or handoff
+surfaces to reconstruct an older agenda. After reading the four authorities, the
+successor's first report must preserve these standing decisions:
+
+`[DECISION key=continuity:repo-authorities status=ACCEPTED date=2026-08-20 reason="AGENTS, ARCHITECTURE, CAMPAIGN-RECORD, and HANDOFF are the complete repository continuity path."]`
+
+`[DECISION key=test:accepted-boundaries status=ACCEPTED date=2026-08-20 reason="Saved physical evidence closes all listed campaigns through the Phase 4 inconclusive-route truth contract; focused static evidence also closes the stance-probe result-shape contract."]`
+
+`[DEAD key=test:confidence-reruns date=2026-08-20 reason="Accepted campaign reruns are DEAD; use saved evidence and advance only into a Director-authorized unaccepted boundary." reopen="The Director explicitly authorizes the exact disclosed rerun after materially contradictory evidence."]`
+
+Accepted campaign reruns are **DEAD**; do not propose, use, or restore them as the
+default proof strategy. Use saved evidence and move forward into one genuinely
+unaccepted capability after the Director names it.
+
+## State inherited from this session
+
+- Continuity cleanup is complete. Lodestar project context is muted and
+  non-authoritative while its replacement is built.
+- The canonical repository continuity surfaces are only `AGENTS.md`,
+  `ARCHITECTURE.md`, `docs/CAMPAIGN-RECORD.md`, and this handoff.
+- Retired parallel surfaces were removed: `.codeplan/`, `handoffs/`, the four
+  `docs/ENGINE-*.md` dossiers, and the two `docs/REVIEW-*.md` packets. Do not
+  recreate them or use history under `docs/archive/` as a work order.
+- The accepted validation evidence remains in place. The cleanup did not launch
+  Minecraft, call a provider, mutate Paper or world state, rerun gameplay, change
+  dependencies, commit, or push.
+
+`[SUPERSEDED key=continuity:parallel-surfaces by=continuity:repo-authorities date=2026-08-20 reason="The four canonical repository authorities replace standalone session handoffs, codeplan records, engine dossiers, and review packets."]`
+
+Parallel continuity surfaces are **SUPERSEDED**; do not propose, use, or restore
+them. Use the four canonical repository authorities because they now carry the
+complete current contract without a competing agenda.
+
+## Closed and frozen
+
+| Boundary | State |
+|---|---|
+| Phases 1–2 lifecycle, Pathfinder/CollectBlock adapters, halt acknowledgement, settlement, and ownership quarantine | `ACCEPTED / CLOSED` |
+| Typed item delivery, doorway follow, obstruction follow, exact-item chains, interruption/resumption, Stop/Hold, critical eating, moving-player identity, clarification, placement, and vehicle outcomes listed in the campaign record | `ACCEPTED / CLOSED` |
+| Phase 3 exact eight-charcoal Mission, including direct and natural-language forms | `ACCEPTED / CLOSED` |
+| Phase 4 `probeSafeNavigationGoal` -> `goToGoal` inconclusive-route truth contract | `ACCEPTED / CLOSED` |
+| Phase 4 `probeSafeNavigationStances` result-shape truth contract (static only) | `ACCEPTED / CLOSED` |
+| Phase 5 `1-give`, trial 1, recorded trace, telemetry off, advisory preflight | `ACCEPTED / CLOSED` |
+| Repeating any closed campaign merely for confidence | `DEAD` |
+
+The accepted Phase 3 result is:
+
+`validation-output/orchestration-charcoal-2026-08-19T08-49-44-151/orchestration-charcoal.result.v1.json`
+
+It completed two of two planned invocations with complete evidence and no retries,
+missing evidence, missing fields, blockers, timeouts, deaths, conflicts, unsafe
+state, or safety-invariant violations. Use it; do not rerun it.
+
+The accepted Phase 4 result is:
+
+`validation-output/route-probe-inconclusive-2026-08-20T20-59-54-989/route-probe-inconclusive.result.v1.json`
+
+It completed two of two explicit-command transports with complete evidence and no
+provider call, retry, missing evidence, missing field, timeout at the scenario
+boundary, death, conflict, unsafe state, or safety-invariant violation. Both
+internal route searches ended `timeout`; Kevin classified each as retryable
+`skill_route_unproven` with `conclusive: false`, travelled zero blocks, left the
+course intact, settled under Hold, and restored the fixture/runtime with no
+managed Java remaining. Use it; do not rerun it.
+
+## Current tranche
+
+**State: Phase 4 source review and the Phase 5 acquisition path are complete.
+Phase 5 has one valid recorded-trace observation; the other 111 cells remain
+`PENDING` and no additional physical run is authorized.**
+
+### Phase 4 completed source boundary
+
+- Round-trip, construction, cave/ore, segmented-journey, mining relocation and
+  staging, and surface-egress consumers now reject only completed conclusive
+  `noPath` results. An unfinished route search stays retryable and cannot authorize
+  construction or terrain mutation.
+- Candidate and journey count cutoffs without an owning boundary were removed.
+  Existing deadlines, cancellation, physical progress, and exhaustive finite
+  candidate sets own termination.
+- Focused files pass segmented navigation `48/48`, critical runtime `27/27`,
+  mining geometry `19/19`, and the explorer/work-order route contracts including
+  the 129th-candidate route case. This is source-level evidence; difficult physical
+  terrain remains the separate Phase 6 boundary.
+
+### Phase 5 progress
+
+- The historical `3/7 -> 5/7 -> different 5/7 -> 4/7` totals came from the seven
+  fixed cases still declared in `tools/probe-request-completion.mjs`.
+- That old harness reused one Kevin process, conversation history, and mutable
+  world; its `!stop` acknowledgement proved message relay, not physical settlement.
+  It captured no model, lifecycle, preflight, or t0 fingerprints. Those totals
+  prove variation occurred but cannot identify its cause.
+- `tools/scenario-lab.mjs variance --input <matrix.json>` now validates and
+  compares recorded-trace/frozen-model, lifecycle-telemetry off/on, and preflight
+  off/on observations. It rejects t0/input/driver drift, reused reset IDs, missing
+  fingerprints, and unsettled boundaries.
+- Model evidence now records hashes of the configured model surface, exact
+  initial clean-t0 prompt/history input, selected provider route, and returned
+  output. Prompt and response contents are not exposed. Scenario Lab preserves
+  each changed model measurement independently of compact movement-sample
+  retention.
+- `tools/scenario-lab/run-variance-matrix.mjs` defines and can resume the complete
+  minimum matrix: seven cases x two trials x recorded/frozen x telemetry off/on x
+  preflight advisory/strict = 112 isolated cells. It reuses valid cells and rejects
+  source drift rather than repeating prior valid work. An exact cell selector can
+  acquire one new boundary without silently authorizing the remaining matrix.
+- The recorded arm uses a one-response loopback OpenAI-compatible provider while
+  preserving the production prompt and command path. It retains fingerprints and
+  non-sensitive UTF-8 size measurements, not prompt text or fabricated token
+  usage, so the first physical smoke can support the paid-run cost estimate. The
+  frozen arm pins one `openai / gpt-4.1` route and cannot use the fixture's
+  fallback model.
+- Expected product failures are physically stopped and settled, then retained as
+  valid `passed: false` observations. Broken setup, transport, evidence, or cleanup
+  remains incomplete and cannot enter the matrix.
+- Terminal provider failure now stops after the already-exhausted route instead
+  of spending Kevin's second prompt turn. Generated-answer correction still owns
+  the configured second turn.
+- Scenario Lab validation and tests pass `35/35`; adjacent provider/model
+  lifecycle tests pass `16/16`; syntax, PowerShell parsing, focused ESLint, veto,
+  wiring, silent-failure, readiness, and machine-readable plan/error checks pass.
+- The first physical acquisition exposed two evidence-path defects before a valid
+  result existed: regression provenance aborted on a required source file absent
+  from the candidate commit, then the conversation loop requested more model work
+  after a new typed goal already owned the physical request. The owning mechanisms
+  now represent an absent candidate blob without aborting regression mode and stop
+  a model command loop only after a newly accepted durable typed goal.
+- `validation-output/phase5-variance-20260821-v3` contains one valid observation:
+  `1-give`, trial 1, recorded trace, telemetry off, advisory preflight. Kevin
+  physically delivered exactly four of eight starting oak logs to `FollowTarget`.
+  One provider request matched runtime input/output fingerprints; settlement,
+  Hold, fixture/runtime restoration, player disconnect, and process cleanup all
+  passed. The acquisition state is partial (`1/112`) and has no matrix verdict.
+
+## Next authorization boundary
+
+The next operation should be the frozen-model form of the same isolated cell, not
+the broad matrix:
+
+```powershell
+npm run scenario:variance -- run --output-dir validation-output/phase5-variance-20260821-v3 --cell 1-give-trial-1-frozen-model-telemetry-off-preflight-off --authorized-phase5-matrix
 ```
 
-No human is needed in the world. A second bot profile plays the player.
+This exact cell is the unaccepted frozen-model arm for `1-give`, trial 1,
+telemetry off, and advisory/advisory preflight. It repeats the now-closed physical
+four-log handoff but is the narrowest probe that can measure the real pinned
+`openai / gpt-4.1` route; the saved local-provider result cannot answer that
+provider/model question. Expect roughly 2-5 minutes. The recorded request was
+30,408 UTF-8 bytes; at the verified GPT-4.1 rates of $2/M input tokens and $8/M
+output tokens, one short response should cost roughly cents, with a possible
+second generated-answer correction request. It requires explicit per-run Director
+authorization after this disclosure.
 
-**Run `scenario:doctor` before diagnosing any failure.** Busy ports, a leftover
-runtime lock, a damaged fixture and this worktree's WSL gitdir all produce errors
-that read like product defects and are not. Each one cost a debugging cycle.
+If that cell passes, retain it in the same resumable output directory and seek a
+separate authorization for the next untested boundary. The complete minimum
+matrix remains 112 cells with accepted overlap in Campaigns 28, 29, 70, 68, and
+M2. Plan roughly 8-12 hours; the configured outcome windows alone total 6.13
+hours before per-cell startup and cleanup. Fifty-six cells use only the local
+recorded provider. Fifty-six cells use the single configured `openai / gpt-4.1`
+API-project route, with up to 112 paid requests when generated answers consume
+both configured prompt turns; terminal provider failure stops after one request.
+ChatGPT subscription access does not establish API-project billing or quota.
+Before any paid or accepted-overlap run, disclose its exact cells, duration, and
+current API pricing/cost estimate and obtain separate explicit authorization. On
+any authentication, quota, billing, rate-limit, or routing failure, stop
+immediately, report the exact provider/error, and do not retry or switch providers.
 
-**Allow ~3 minutes per scenario** (measured 172s). Do not set a shorter timeout
-and do not conclude a run has hung. `elapsedMs` in the result file is the
-measured window, not the command duration.
+## Scope preserved by the closed tranche
 
-## Things that will mislead you
+- no charcoal, doorway, obstruction, delivery, Stop/Hold, or lifecycle confidence
+  rerun;
+- no broad campaign, full certification course, or accepted-segment traversal;
+- no provider call or inventory change; game/Paper/world mutation was confined to
+  the authorized isolated generated fixture and was completely restored;
+- no accepted interaction-stance, route-probe, charcoal, doorway, obstruction,
+  delivery, or other gameplay rerun; no real Phase 5 matrix observation, Phase 6
+  terrain campaign, or Phase 7 specialist implementation;
+- no dependency change, provider repair, parallel plan, session handoff, or new test
+  framework.
 
-**`scenario:follow` cannot catch a movement regression.** It passes with or
-without digging — proven by reverting `canDig` and re-running. Use
-`scenario:obstruction` after touching movement, pathfinding, follow, or
-`safeMovements`.
+## Workspace and continuity
 
-**Read the aggregate verdict, not the per-invocation flag.** A scenario can
-report `passed` on each invocation while the aggregate is `failed` on missing
-evidence. This caught two overclaims in one session.
-
-**A timeout is not a missing route.** `timeout`, `no_deterministic_recovery` and
-`action_deadline` are inconclusive; `noPath` is evidence. Conflating them is what
-made the companion call visible resources unreachable.
-
-**Three tests fail on clean HEAD.** Verified against a detached checkout and
-listed in `tests/BASELINE.md`. Expected: behavior 192/194, control-plane 289/290.
-Do not blame your own change for those.
-
-**`node --check` is not a correctness check.** It passed over an undefined
-constant, a `const` reassignment, and two missing `let` declarations in one
-session. Import the module — that catches all of them.
-
-**Do not remove the Operator Hold from the harness.** `verify-follow-field.mjs`
-waits for held actuator quiescence before measuring. Removing it was tried; the
-harness simply times out.
-
-## Open work, in order
-
-1. **Ship the reorder.** `llm_sequencing` on by default, full command surface
-   available to the model. Evidence on 2026-08-17: a regex table in
-   `player-directives.js` answered plain language before any model was consulted,
-   and when the model WAS consulted it composed primitives and asked for guidance
-   on its own. See ARCHITECTURE.md "Step 4 REVISED". Immediate blocker is the
-   Operator Hold retaining the body after a model-issued command.
-2. **Then judge the lanes on evidence**, one at a time, once the model is
-   demonstrably choosing well. No bulk deletion is required to get the product
-   working, which is the opposite of what this file said yesterday.
-
-Superseded, kept so it is not re-derived:
-
-3. **A scenario for a multi-step agenda request.** This is now the only thing
-   gating Step 4. `agenda-director` is 2,153 lines with no live coverage.
-   Copy the deliver course: it cost a generated world recipe and ~200 lines,
-   no new framework. Read the generated-fixture section of
-   `tools/scenario-lab/FIXTURES.md` first.
-2. **Then the lane collapse** (`ARCHITECTURE.md` Step 4). Still gated, and now
-   on exactly one missing scenario rather than two. Deleting `agenda-director`
-   with nothing exercising a multi-step request would be blind in the same way
-   follow-only coverage was.
-
-The typed-goal half of that gate closed on 2026-08-17 — see below.
-
-## Standing rules worth repeating
-
-- **Fix the leaf.** The retired instruction to "repair the highest proven shared
-  seam" is what produced 33,000 lines of runtime abstraction.
-- **Unknown is not permission**, and its mirror: an inconclusive result is not a
-  negative one. Both directions have caused real defects here.
-- **Do not record a pass in `scenarios.v1.json`.** The runner requires
-  `status: 'not-run'`; writing `passed` makes a scenario permanently unrunnable.
-  The outcome belongs in the result file.
-- **Verify the check could have failed.** Four things passed for the wrong
-  reason in one session, including a test asserting against an empty object.
-
-## What changed on 2026-08-17
-
-**The typed-goal course passes.** `npm run scenario:deliver` exits 0 on HEAD:
-both request forms, `FollowTarget` 0 -> 1 dirt, zero safety violations, no
-deaths. It is the first scenario that exercises `goal-director` rather than
-`!followPlayer`.
-
-The blocker was never the harness. It was the world: the follow fixture is an
-island, so acquisition relocated 32 blocks into open ocean and drowned. The
-previous conclusion — recorded in three docs — was that this needed a
-hand-authored dry-land world. It did not. Paper generates one from
-`server.properties`, so the fixture is a **superflat layer recipe checked into
-the repo**, not a captured `.zip`:
-
-- `tools/scenario-lab/fixtures/deliver-item-flat-v1/` — text, diffable, cannot
-  rot the way `stone-recovery`'s missing `trial-world.zip` did, and needs no
-  machine-local path.
-- 164 layers put the top solid block at y=99, so the standing surface is y=100
-  — exactly where the existing course constants already were. **No coordinate
-  changes.** Get that arithmetic wrong and the course floats.
-- `scenario:doctor` checks the recipe hash against the manifest, so an edited
-  recipe fails at the door rather than deep inside the worker.
-
-**Two harness assumptions were follow-shaped and had to be branched**, not
-loosened: the terminal-result listener only ever accepted `action:followPlayer`
-(the deliver course ends on `action:givePlayer`), and the worker's false-success
-guard required `doorwayCrossed` / `corridorCompleted` / `finalWaypointReached`
-— follow criteria the deliver recipient can never satisfy because it does not
-move. The deliver branch is strictly stronger: it also requires that the item
-physically changed hands.
-
-**The fixture premise is measured, not assumed.** Four dry-land probes at 40
-blocks — past the 32-block relocation — plus a ground probe under the course,
-all required by `fixtureVerified`. Verified discriminating by replaying the
-2026-08-16 island runs through the current evidence adapter:
-`dry-land-fixture-confirmed` and `item-delivered-to-recipient` are absent there
-and present on the generated fixture.
-
-## What changed on 2026-08-16
-
-Five gameplay defects, each confirmed against live evidence from the bot:
-
-| Defect | Effect in play |
-|---|---|
-| `canDig = false` on all locomotion | could not break a dirt block to reach the player |
-| Unbounded material-change blockers | stood still after a failed follow until the world changed |
-| Nine independently-timed state stores | resumed work from a state that never existed |
-| Persona pause above `player_directive` | dawdled ahead of an explicit instruction |
-| 75ms route-probe budget, timeout read as unreachable | called visible resources unreachable and walked away |
-| Goal resumed after death from any distance | marched cross-country to a recipient it could not reach |
-
-And the harness itself: six blockers repaired, a second course that actually
-catches movement regressions, `scenario:doctor`, and failure paths that now
-record the fixture they observed.
+Lodestar project context is muted and non-authoritative while its replacement is
+built. Startup reads the four authorities above directly. The worktree contains
+uncommitted Director-owned forward work; do not infer that every dirty path belongs
+to this handoff. Preserve all current source and validation evidence. Do not reset,
+stash, clean, checkout, revert, commit, push, launch the game, or mutate
+runtime/world state without explicit authority.

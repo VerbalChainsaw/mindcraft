@@ -12,6 +12,7 @@ import {
 } from '../../scenario-lab.mjs';
 import {
   aggregateFollowFieldObservations,
+  classifyTerminalProviderFailure,
   observeFollowFieldRun,
 } from './follow-field-evidence.mjs';
 
@@ -24,6 +25,7 @@ const SCENARIO_COURSE = Object.freeze({
   'obstruction-follow': 'obstruction-follow',
   'deliver-item-goal': 'deliver-item',
   'orchestration-charcoal': 'orchestrate-charcoal',
+  'route-probe-inconclusive': 'route-probe-inconclusive',
 });
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(SCRIPT_DIRECTORY, 'follow-field-worker.ps1');
@@ -64,8 +66,11 @@ function terminateProcessTree(child) {
 
 function spawnBounded(command, args, { cwd, timeoutMs }) {
   return new Promise((resolvePromise) => {
+    const workerEnvironment = { ...process.env };
+    delete workerEnvironment.PSModulePath;
     const child = spawn(command, args, {
       cwd,
+      env: workerEnvironment,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -98,6 +103,17 @@ function spawnBounded(command, args, { cwd, timeoutMs }) {
 
 async function readJson(filename) {
   return JSON.parse(await readFile(filename, 'utf8'));
+}
+
+async function terminalProviderFailure(invocationDirectory) {
+  const logs = await Promise.all(['stack-stdout.log', 'stack-stderr.log'].map(async (name) => {
+    try {
+      return await readFile(path.join(invocationDirectory, name), 'utf8');
+    } catch {
+      return '';
+    }
+  }));
+  return classifyTerminalProviderFailure(logs.join('\n'));
 }
 
 async function executeInvocation({
@@ -184,8 +200,13 @@ async function executeInvocation({
       'error=' + String(processResult.error),
     ].join('; ');
   }
+  const providerFailure = await terminalProviderFailure(invocationDirectory);
+  if (providerFailure) {
+    report.provider_failure = providerFailure;
+    report.error = `Terminal provider failure (${providerFailure.code}): ${providerFailure.detail}`;
+  }
   const observation = observeFollowFieldRun(report, plan.timeoutMs, plan.instrumentationMode);
-  return { invocation, processResult, report, observation };
+  return { invocation, processResult, report, observation, providerFailure };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -231,6 +252,7 @@ async function main(argv = process.argv.slice(2)) {
       course,
     });
     executions.push(execution);
+    if (execution.providerFailure) break;
     if (execution.observation.safetyInvariantViolations.includes('runtime-restoration-required')) break;
   }
 
@@ -254,11 +276,12 @@ async function main(argv = process.argv.slice(2)) {
       planHash: plan.planHash,
       instrumentationMode: plan.instrumentationMode,
       resultStatus: result.status,
-      invocations: executions.map(({ invocation, processResult, observation: item }) => ({
+      invocations: executions.map(({ invocation, processResult, observation: item, providerFailure }) => ({
         invocationId: invocation.invocationId,
         form: invocation.form,
         processExitCode: processResult.exitCode,
         processTimedOut: processResult.timedOut,
+        providerFailure,
         observation: item,
       })),
     })}\n`,

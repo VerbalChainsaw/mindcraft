@@ -253,6 +253,8 @@ function actionRequestTelemetry(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
   const requestId = text(request.requestId).slice(0, 80);
   if (!requestId) return null;
+  const missionId = text(request.missionId).slice(0, 96);
+  const activityId = text(request.activityId).slice(0, 128);
   return {
     requestId,
     routeOrigin: text(request.routeOrigin).slice(0, 40) || 'internal',
@@ -265,7 +267,19 @@ function actionRequestTelemetry(request) {
         if (typeof argument === 'string') return text(argument).slice(0, 120);
         return null;
       }),
+    ...(missionId ? { missionId } : {}),
+    ...(activityId ? { activityId } : {}),
   };
+}
+
+function actionActivityTelemetry(activity, request) {
+  if (!activity || typeof activity !== 'object' || Array.isArray(activity)) return null;
+  if (!request?.missionId || !request?.activityId) return null;
+  const missionId = text(activity.missionId).slice(0, 96);
+  const activityId = text(activity.activityId).slice(0, 128);
+  const lifecycle = text(activity.lifecycle).slice(0, 40);
+  if (!missionId || !activityId || !lifecycle) return null;
+  return { missionId, activityId, lifecycle };
 }
 
 export function actionResultToTelemetry(result) {
@@ -278,6 +292,7 @@ export function actionResultToTelemetry(result) {
   );
   const receipt = actionReceiptTelemetry(result.evidence?.skill);
   const request = actionRequestTelemetry(result.evidence?.request);
+  const activity = actionActivityTelemetry(result.evidence?.activity, request);
   return {
     actionId: typeof result.actionId === 'string' ? result.actionId.slice(0, 80) : null,
     phase,
@@ -295,6 +310,6 @@ export function actionResultToTelemetry(result) {
     ...(receipt ? { receipt } : {}),
     // Projected as `evidence.request` so a live observer can correlate an
     // action to its originating request without the decision trace.
-    ...(request ? { evidence: { request } } : {}),
+    ...(request ? { evidence: { request, ...(activity ? { activity } : {}) } } : {}),
   };
 }

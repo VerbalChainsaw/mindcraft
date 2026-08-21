@@ -221,11 +221,13 @@ function executeBoundCommand(binding, {
   executeCommand,
   owner = 'player',
   routeOrigin = 'internal',
+  missionId = null,
+  activityId = null,
 } = {}) {
   if (!agent || typeof executeCommand !== 'function') {
     throw new TypeError('Capability execution requires the active agent and deterministic command executor.');
   }
-  return executeCommand(agent, binding.command, { owner, routeOrigin });
+  return executeCommand(agent, binding.command, { owner, routeOrigin, missionId, activityId });
 }
 
 const DEFINITIONS = new Map();
@@ -334,7 +336,7 @@ function bindNearbyCave(context, args) {
       : 0);
   const route = probeSafeRoundTripNavigationStances(
     bot,
-    candidates.slice(0, 128),
+    candidates,
     args.home,
     2_000,
   );
@@ -366,11 +368,17 @@ function bindNearbyCave(context, args) {
       });
     }
   }
+  const routeInconclusive = candidates.length > 0 && route.conclusive === false;
   return immutable({
     ok: false,
     code: 'source_not_found',
+    inconclusive: routeInconclusive,
+    routeStatus: route.status,
+    returnRouteStatus: route.returnStatus || null,
     detail: candidates.length > 0
-      ? route.status === 'return_route_unreachable'
+      ? routeInconclusive
+        ? `Observed ${candidates.length} safe cave stance(s), but the round-trip route search did not finish (${route.status || 'unknown'}).`
+        : route.status === 'return_route_unreachable'
         ? 'Observed cave stances had no verified non-destructive route back to home.'
         : 'Observed cave stances had no non-destructive native route.'
       : 'No safe untried cave stance was observed in the bounded region.',
@@ -1690,6 +1698,9 @@ function bindingReport(binding) {
     ok: binding.ok === true,
     code: binding.code || (binding.ok === true ? 'binding_satisfied' : CAPABILITY_OUTCOME_CODES.BINDING),
     detail: binding.detail || (binding.ok === true ? 'Capability binding is satisfied.' : 'Capability binding failed.'),
+    ...(binding.inconclusive === true ? { inconclusive: true } : {}),
+    ...(binding.routeStatus ? { routeStatus: binding.routeStatus } : {}),
+    ...(binding.returnRouteStatus ? { returnRouteStatus: binding.returnRouteStatus } : {}),
   });
 }
 
@@ -1705,6 +1716,7 @@ function capabilityFailure(code, detail, {
     code,
     detail: String(detail || '').slice(0, 360),
     retryable,
+    ...(binding?.inconclusive === true ? { inconclusive: true } : {}),
     ...(binding?.target ? { target: immutable(binding.target) } : {}),
     evidence: immutable({
       capability: {
@@ -1860,6 +1872,8 @@ export async function executeCapabilityAction(capability, {
   owner = 'player',
   routeOrigin = 'internal',
   signal = null,
+  missionId = null,
+  activityId = null,
 } = {}) {
   const definition = getCapabilityDefinition(capability?.id);
   if (!definition) {
@@ -1906,6 +1920,8 @@ export async function executeCapabilityAction(capability, {
       owner,
       routeOrigin,
       signal,
+      missionId,
+      activityId,
     });
     const after = captureCapabilitySnapshot(agent?.bot);
     const executorResult = agent?.last_action_result;

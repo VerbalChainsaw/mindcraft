@@ -1,20 +1,23 @@
 # Minecraft Companion V2 — Technical Debt Map
 
-> **Reconciliation note, 2026-08-17.** Kept as a register, not as instruction. Two
-> things in it are stale: the coordination note naming a single repository writer no
-> longer holds, and the line anchors drifted before the 2026-08-16 reset. Since that
-> reset, most of the debt recorded here is addressed by deletion rather than repair —
-> see `ARCHITECTURE.md` Steps 4–6. Check a record against `ARCHITECTURE.md` before
-> scheduling it.
+> **Reconciliation note, 2026-08-18.** Kept as a register, not as instruction. The
+> register contains historical owner names, line anchors, priorities, and remedies
+> from before the 2026-08-16 reset. They are evidence, not current instructions, and
+> must be reverified against current source and `ARCHITECTURE.md` before scheduling.
+> Since that reset, most of the debt recorded here is addressed by deletion rather
+> than repair — see current phases and deletion gates in `ARCHITECTURE.md`.
 
 
 **Purpose:** Maintain a living, evidence-based register of technical debt without turning maintenance into a competing architecture program.
 
-**Last reconciled:** 2026-08-10, branch `recovery/iron-pickaxe-20260803`, source checkpoint `8e58d0b` (reliability tranche: TD-LIFE-001, TD-ACT-001, TD-PROMPT-002, TD-PROV-001, TD-JOB-001) plus a model-lifecycle tranche closing TD-MODEL-001's plumbing and opening TD-MODEL-002.
+**Register contents last broadly reconciled:** 2026-08-10, branch `recovery/iron-pickaxe-20260803`, source checkpoint `8e58d0b` (reliability tranche: TD-LIFE-001, TD-ACT-001, TD-PROMPT-002, TD-PROV-001, TD-JOB-001) plus a model-lifecycle tranche closing TD-MODEL-001's plumbing and opening TD-MODEL-002.
 
-**Anchor drift note (2026-08-10):** `src/agent/library/skills.js` is now 19,829 lines, not the 13,682 recorded under TD-PHY-001. Line anchors in records last touched on 2026-08-04/06 should be re-verified before use; the anchors cited in the reliability-tranche records below were re-verified on 2026-08-10.
+**Anchor drift note (2026-08-10):** At the 2026-08-10 snapshot, `src/agent/library/skills.js` was 19,829 lines, not the 13,682 recorded under TD-PHY-001. All anchors from that period are historical and must be reverified. Line anchors in records last touched on 2026-08-04/06 should be re-verified before use; the anchors cited in the reliability-tranche records below were re-verified on 2026-08-10.
 
-**Coordination note:** Codex remains the sole repository writer and Minecraft runtime owner. This file does not authorize touching active source/runtime work or interrupting the current gameplay checkpoint.
+**Coordination note:** This register grants no writer or runtime authority. Follow
+the current user task, AgentLink/work-presence evidence, AGENTS dirty-work
+protection, and the canonical tranche. It does not authorize source or runtime
+mutation.
 
 ## How to use this map
 
@@ -633,13 +636,15 @@ These records are deliberately retained to prevent recurrence of stale recommend
 | ND-TEST-001 | Rejected as mandate | A single all-up globbed `npm test` is not inherently superior. Named focused/broad/soak lanes are intentional; TD-TEST-001 concerns membership drift, not test-count maximization. |
 | ND-CI-001 | Rejected | File-size thresholds, architecture-growth budgets, and new structural CI governance are not justified by a current gameplay failure. Add a structural guard only for a repeatedly violated, mechanically checkable invariant. |
 
-## Sequencing rule
+## Historical activation guidance
 
-1. Finish and preserve the current physical gameplay checkpoint first.
+This list records dependency and activation relationships from the debt register; it does not order current work. The current user task, the phases and gates in `ARCHITECTURE.md`, and the tranche named in `docs/HANDOFF.md` govern.
+
+1. Do not let debt work interrupt an active authorized player-outcome tranche unless it is a demonstrated correctness/safety blocker within that tranche.
 2. Let the next real player outcome activate TD-CAP-001/TD-CAP-002 and, where necessary, a bounded portion of TD-PHY-001.
 3. Complete TD-DEP-001 only through the already-approved owned-runtime migration gates; never mix dependency ownership changes casually into a gameplay repair.
-4. Schedule small reliability repairs such as TD-PROV-001, TD-MODEL-001, TD-PROMPT-002, TD-LIFE-001, TD-ACT-001, TD-HIST-001, TD-JOB-001, or TD-SWARM-001 as coherent maintenance tranches; do not mix them into unrelated gameplay commits.
+4. If a small reliability repair such as TD-PROV-001, TD-MODEL-001, TD-PROMPT-002, TD-LIFE-001, TD-ACT-001, TD-HIST-001, TD-JOB-001, or TD-SWARM-001 is taken on, keep it a coherent maintenance tranche; do not mix it into unrelated gameplay commits.
 5. Measure before acting on TD-IO-001, TD-PROMPT-001, TD-MEM-001, or TD-ARB-001. **TD-IO-001 and TD-MEM-001 were measured on 2026-08-10 and both failed their activation gates; they are now P3 and must not be re-promoted without new measurement on the target hardware.** TD-PROMPT-001 and TD-ARB-001 remain unmeasured.
 6. Leave P3 cleanup alone unless it is already inside the active change surface.
 
-This map tracks liabilities. The playable companion roadmap remains authoritative for what gets built next.
+This map tracks liabilities. `ARCHITECTURE.md` determines implementation order; `docs/HANDOFF.md` names the exact active tranche. Nothing in this register authorizes work by itself.

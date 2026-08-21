@@ -66,6 +66,7 @@ const LANE_TICK_MS = Object.freeze({
   bounded_recovery: 150,
   basic_survival: 180,
   player_directive: 220,
+  player_mission: 225,
   player_goal: 240,
   player_job: 240,
   role_work: 280,
@@ -955,6 +956,9 @@ export class BehaviorArbiter {
             ? this.select('player_job', 'player_job_action_active', 'An explicit resumable job owns ActionManager.', true, perception)
             : this.select('role_work', 'role_action_active', 'Existing non-command role work owns ActionManager.', true, perception);
     }
+    if (action.owner === 'player' && this.agent.charcoal_mission?.hasActiveMission?.()) {
+      return this.select('player_mission', 'player_mission_action_active', 'A charcoal Mission Activity owns ActionManager.', true, perception);
+    }
     if (action.owner === 'player' && this.agent.goal_director?.activeGoal) {
       return this.select('player_goal', 'player_goal_action_active', 'A typed player goal subgoal owns ActionManager.', true, perception);
     }
@@ -1246,6 +1250,38 @@ export class BehaviorArbiter {
       // objective movement failure window before it takes control.
       selected = await this.evaluateModeBand('bounded_recovery', RECOVERY_MODES, perception);
       if (selected) return selected;
+
+      // A model-interpreted Mission is durable in memory across conversation
+      // turns, but it never owns a second executor. It proposes at most one
+      // causal Activity here and that Activity acquires the existing
+      // ActionManager lease. Critical survival and bounded recovery have
+      // already had first refusal; ordinary survival and optional work remain
+      // below the accepted player promise.
+      const mission = this.agent.charcoal_mission;
+      if (mission?.hasActiveMission?.()) {
+        this.traceRecorder.startLane('player_mission');
+        try {
+          mission.update();
+        } catch (error) {
+          return this.select('player_mission', 'player_mission_update_failed', `Charcoal Mission failed safely: ${boundedText(error?.message || error)}`, true, perception);
+        }
+        if (mission.ownsBodyLane?.()) {
+          return this.select(
+            'player_mission',
+            mission.status?.code || 'player_mission_selected',
+            mission.status?.detail || 'The current charcoal Mission retained the tick.',
+            true,
+            perception,
+          );
+        }
+        this.traceRecorder.finishLane('player_mission', {
+          status: 'observed',
+          reasonCode: mission.status?.code || 'player_mission_shadow_observed',
+        });
+      } else {
+        this.traceRecorder.startLane('player_mission');
+        this.traceRecorder.finishLane('player_mission', { status: 'ineligible', reasonCode: 'no_player_mission' });
+      }
 
       // A persona hesitation is for work the companion chose to do. It must
       // never sit in front of the player: this lane is evaluated above

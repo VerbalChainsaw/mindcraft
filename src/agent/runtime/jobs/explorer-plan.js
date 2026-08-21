@@ -748,7 +748,11 @@ export function nextScoutStep(order, snapshot = {}) {
     .sort((left, right) => Number(right === 'animal') - Number(left === 'animal'))
     .find(finding => !scoutFindingRecorded(checkpoint, finding));
   if (missingFinding) {
-    if (order.phase === 'recover' && order.evidence?.code === 'source_not_found') {
+    if (
+      order.phase === 'recover'
+      && order.evidence?.code === 'source_not_found'
+      && order.evidence?.inconclusive !== true
+    ) {
       return scoutSearchRelocationStep(order);
     }
     return scoutObservationStep(order, missingFinding);
@@ -898,7 +902,11 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
         }
         return executionStep({ ...order, phase: 'execute' }, snapshot, planItem);
       }
-      if (checkpoint.caveLit && order.evidence?.code === 'resource_not_found') {
+      if (
+        checkpoint.caveLit
+        && order.evidence?.code === 'resource_not_found'
+        && order.evidence?.inconclusive !== true
+      ) {
         // The selected cave was physically reached and lit but yielded no
         // exposed ore. Preserve that failed region, clear only the cave
         // selection, and let the ordinary survey/search path bind a different
@@ -912,7 +920,11 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
           },
         };
       }
-      if (!checkpoint.caveLit && order.evidence?.code === 'source_not_found') {
+      if (
+        !checkpoint.caveLit
+        && order.evidence?.code === 'source_not_found'
+        && order.evidence?.inconclusive !== true
+      ) {
         const partial = bestEffortDelivery(order, snapshot);
         if (partial) return partial;
         return caveSearchRelocationStep(order, snapshot);

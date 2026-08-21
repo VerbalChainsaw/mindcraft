@@ -45,6 +45,7 @@ import { PlayerMemory } from './runtime/player-memory.js';
 import { KnowledgeStore } from './runtime/knowledge-store.js';
 import { ProgressionDirector } from './runtime/progression-director.js';
 import { AgendaDirector } from './runtime/agenda-director.js';
+import { CharcoalMissionController } from './runtime/charcoal-mission.js';
 import { RuleEngine } from './runtime/rule-engine.js';
 import { BehaviorArbiter } from './runtime/behavior-arbiter.js';
 import { BehaviorFlightRecorder, isTelemetryBookmarkMessage } from './runtime/behavior-flight-recorder.js';
@@ -68,6 +69,7 @@ const HOLD_SAFE_COMMANDS = new Set([
     '!squadRadio',
     '!cancelJob',
     '!cancelGoal',
+    '!cancelMission',
     '!clearAgenda',
     '!rememberHere',
     '!forgetRememberedPlace',
@@ -126,6 +128,21 @@ export function correlatedPersistentJobSubmissionAccepted({
         && submission?.submittedOrderId
         && submission.submittedOrderId === submission.activeOrderId
         && submission.activeOrderId === activeOrder?.id
+    );
+}
+
+export function correlatedPersistentGoalAssignmentAccepted({
+    commandName,
+    previousGoalIds = [],
+    activeGoal,
+    lastGoal,
+} = {}) {
+    const currentGoal = activeGoal || lastGoal;
+    const previousIds = new Set(previousGoalIds.filter(Boolean));
+    return Boolean(
+        commandAssignsPersistentGoal(commandName)
+        && currentGoal?.id
+        && !previousIds.has(currentGoal.id)
     );
 }
 
@@ -322,6 +339,16 @@ export class Agent {
         this._playerPositionLookupGeneration = 0;
         this._requestPlayerPosition = requestPlayerPosition;
         this.pending_player_clarification = null;
+        // The player request currently being worked, held on the agent rather
+        // than inside one handleMessage call. Measured 2026-08-18 on the
+        // charcoal course: twenty-eight commands across FOUR handleMessage
+        // invocations. Everything that knew what the player asked for lived in
+        // the first one, so from the second onward nothing in the process could
+        // still name the request -- which is how a run smelted the charcoal and
+        // then wandered off to collect logs and craft an axe.
+        this.open_player_request = null;
+        this.commands_since_request_reminder = 0;
+        this.request_reminders_sent = 0;
 
         const nameCheck = validateNameFormat(settings?.profile?.name);
         if (!nameCheck.success) {
@@ -421,6 +448,7 @@ export class Agent {
         // receives the bot. A plain string keeps LLM-reachable objects free of
         // any agent reference.
         this.bot.traversalPolicy = this.runtime?.traversal || 'preserve';
+        this.bot.preflightPolicy = this.runtime.preflight;
         this.companion_context = new CompanionContext(this, {
             onReappeared: () => this.behavior_arbiter?.requestDirectiveResume?.(),
             directiveState: this.companion_directive_state,
@@ -436,6 +464,9 @@ export class Agent {
         this.environment_observer = new EnvironmentObserver(this);
         this.progression_director = new ProgressionDirector(this);
         this.agenda_director = new AgendaDirector(this);
+        this.charcoal_mission = new CharcoalMissionController(this, {
+            mode: settings.charcoal_mission_mode || 'active',
+        });
         const rememberedPlayerGoal = this.goal_director.activeGoal || this.goal_director.lastGoal;
         const rememberedPlayer = rememberedPlayerGoal?.destination?.kind === 'player'
             ? rememberedPlayerGoal.destination.player
@@ -853,10 +884,19 @@ export class Agent {
         this.actions?.cancelResume?.();
         if (!preserveDurableWork) {
             this.goal_director?.cancel?.(this.operator_hold_reason);
+            this.charcoal_mission?.cancel?.(this.operator_hold_reason);
         }
         if (/operator stop/i.test(this.operator_hold_reason)) {
             if (!preserveDurableWork) this.job_director?.cancel?.(this.operator_hold_reason);
             this.prompter?.cancelPendingModelGeneration?.();
+            // Stop means stand down, so the open request stops being open. It is
+            // cleared here rather than on any hold: a clarification hold or a
+            // compilation hold is a pause inside the work, not the end of it,
+            // and forgetting the request there would be the same amnesia this
+            // field exists to fix. Nothing here releases a hold.
+            this.open_player_request = null;
+            this.commands_since_request_reminder = 0;
+            this.request_reminders_sent = 0;
         }
         this.self_prompter?.stop(false);
         this.requestInterrupt();
@@ -1310,6 +1350,9 @@ export class Agent {
                         }
                     }
                     if (commandTakesManualAutonomy(user_command_name)) {
+                        if (!['!acceptCharcoalMission', '!cancelMission'].includes(user_command_name)) {
+                            this.charcoal_mission?.cancel?.('Superseded by a later direct player command.');
+                        }
                         this.actions.cancelResume();
                         this.goal_director?.releaseProtectedCompletion?.('Released by a later direct player command.');
                         if (!assignsTypedGoal) {
@@ -1551,6 +1594,9 @@ export class Agent {
                     }
                 }
                 if (directiveCommand && commandTakesManualAutonomy(directiveCommand)) {
+                    if (!['!acceptCharcoalMission', '!cancelMission'].includes(directiveCommand)) {
+                        this.charcoal_mission?.cancel?.('Superseded by a later deterministic player order.');
+                    }
                     this.actions.cancelResume();
                     this.goal_director?.releaseProtectedCompletion?.('Released by a later deterministic player order.');
                     if (!assignsTypedGoal) {
@@ -1650,14 +1696,20 @@ export class Agent {
         // that executes, so one nudge is available per stall rather than one per
         // request. See the conversation-response branch below.
         let stallNudged = false;
-        // Commands run since the player was last quoted back. The stall nudge
-        // only fires when the model STOPS, and a model can miss a request
-        // without ever stopping: on 2026-08-18 it smelted the four charcoal it
-        // was asked for and then spent the rest of the window collecting more
-        // logs, crafting planks and making a wooden axe. Busy is not the same as
-        // on-task, so the reminder also lands on a count.
-        let commandsSinceReminder = 0;
-        let driftReminders = 0;
+        // A fresh player request with action authority becomes THE open request,
+        // replacing whatever came before it and resetting the reminder budget.
+        // Held on the agent because a request outlives the call that received
+        // it: the reminders below fired twice across twenty-eight commands
+        // precisely because the counters, and the request text itself, died
+        // with the first invocation.
+        if (!self_prompt && !from_other_bot && playerSpeechAuthority === 'action_eligible') {
+            const requestText = String(message || '').trim();
+            if (requestText && requestText !== this.open_player_request?.message) {
+                this.open_player_request = { source, message: requestText, at: Date.now() };
+                this.commands_since_request_reminder = 0;
+                this.request_reminders_sent = 0;
+            }
+        }
         try {
             for (let i=0; i<max_responses; i++) {
                 if (checkInterrupt()) {
@@ -1748,6 +1800,9 @@ export class Agent {
                         }
                     }
                     if (commandTakesManualAutonomy(command_name)) {
+                        if (!['!acceptCharcoalMission', '!cancelMission'].includes(command_name)) {
+                            this.charcoal_mission?.cancel?.('Superseded by later player-authorized model work.');
+                        }
                         this.actions.cancelResume();
                         this.goal_director?.releaseProtectedCompletion?.('Released by later player-authorized model work.');
                         if (!assignsTypedGoal) {
@@ -1799,6 +1854,10 @@ export class Agent {
                 const previousAgendaPlanSubmissionGeneration = Number(
                     this.last_agenda_plan_submission?.generation,
                 ) || 0;
+                const previousGoalIds = [
+                    this.goal_director?.activeGoal?.id,
+                    this.goal_director?.lastGoal?.id,
+                ].filter(Boolean);
                 const commandOwner = self_prompt || source === 'system' ? 'autonomy' : 'player';
                 let execute_res = await executeCommand(this, res, {
                     owner: commandOwner,
@@ -1817,25 +1876,46 @@ export class Agent {
 
                 if (execute_res)
                     this.history.add('system', execute_res);
+                if (command_name === '!acceptCharcoalMission' && this.charcoal_mission?.hasActiveMission?.()) {
+                    this.history.save();
+                    break;
+                }
+                if (correlatedPersistentGoalAssignmentAccepted({
+                    commandName: command_name,
+                    previousGoalIds,
+                    activeGoal: this.goal_director?.activeGoal,
+                    lastGoal: this.goal_director?.lastGoal,
+                })) {
+                    // GoalDirector now owns the durable physical work and its
+                    // terminal player handoff. Asking the model for another
+                    // command here creates a second owner for the same request.
+                    this.history.save();
+                    break;
+                }
                 // Quote the player back every few commands while their request
                 // is still open. Bounded, because a reminder that never stops
                 // is just noise, and silent after the request is satisfied --
                 // the model ends the loop by answering without a command, and
                 // the stall nudge covers that.
-                commandsSinceReminder += 1;
+                // Counted on the agent, not on this call, so a chain spread over
+                // several invocations is still measured as one piece of work.
+                // Fires regardless of what started THIS invocation -- an action
+                // result or a system nudge does not mean the player's request
+                // stopped being the job.
+                this.commands_since_request_reminder += 1;
+                const openRequest = this.open_player_request;
                 if (
                     this.llm_sequencing
-                    && !self_prompt
-                    && playerSpeechAuthority === 'action_eligible'
+                    && openRequest
                     && !this.isOperatorHeld()
-                    && commandsSinceReminder >= COMMANDS_BETWEEN_REQUEST_REMINDERS
-                    && driftReminders < MAX_REQUEST_REMINDERS
+                    && this.commands_since_request_reminder >= COMMANDS_BETWEEN_REQUEST_REMINDERS
+                    && this.request_reminders_sent < MAX_REQUEST_REMINDERS
                 ) {
-                    commandsSinceReminder = 0;
-                    driftReminders += 1;
+                    this.commands_since_request_reminder = 0;
+                    this.request_reminders_sent += 1;
                     await this.history.add(
                         'system',
-                        `Still open, in ${source}'s own words: "${String(message || '').slice(0, 300)}".`
+                        `Still open, in ${openRequest.source}'s own words: "${openRequest.message.slice(0, 300)}".`
                         + ' If you already have what was asked for, hand it over now and say so.'
                         + ' If a step remains, do that step. Gathering more than the request needs is not the request.',
                     );
@@ -1984,7 +2064,8 @@ export class Agent {
                             // for the wrong thing, and it happened because the
                             // nudge described the request instead of repeating
                             // it. The words the player used are the standard.
-                            `This is what ${source} asked for: "${String(message || '').slice(0, 300)}".`
+                            `This is what ${this.open_player_request?.source || source} asked for:`
+                            + ` "${String(this.open_player_request?.message || message || '').slice(0, 300)}".`
                             + ' It is not finished and nothing is running.'
                             + ' If a step remains, issue the next command now.'
                             + ' If you are blocked, name exactly what is missing.'

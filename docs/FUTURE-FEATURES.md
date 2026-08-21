@@ -9,8 +9,8 @@ line named MASTER-PROJECT-PLAN.md, PLAYER-COMPLETENESS-ROADMAP.md and the
 shared contract spine; all three are archived under `docs/archive/`.)
 
 This list is intentionally incomplete. Add ideas when they improve the fantasy
-of a trustworthy, capable Minecraft companion; promote them into the master
-plan only when the Director chooses them for active work.
+of a trustworthy, capable Minecraft companion; promote them into
+`ARCHITECTURE.md` only when the Director authorizes an active tranche.
 
 ## Product direction
 
@@ -28,8 +28,11 @@ All future behavior still obeys the existing foundations:
   ownership, Stop, cancellation, or verified gameplay contracts.
 - Useful maintenance should be calm and bounded, not an excuse for the bot to
   reshape a player's world without permission.
-- New experiences should reuse the existing companion brain, deterministic
-  skills, ActionManager, durable goals/jobs, and mature Mineflayer mechanics.
+- New experiences should integrate through the Mission, causal planning,
+  ActivityExecutive, and specialist boundaries as those phases land, while
+  reusing verified Mineflayer mechanics and preserving the currently accepted
+  behavior. This describes where future experiences should plug in; it does
+  not imply those phases are already implemented.
 
 ## FF-001 — Decoration and lived-in spaces
 

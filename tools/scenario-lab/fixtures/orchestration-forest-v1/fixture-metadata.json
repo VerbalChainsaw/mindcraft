@@ -4,17 +4,16 @@
   "fixture_version": 1,
   "kind": "generated",
   "why": [
-    "This fixture exists to test one claim: that an LLM can orchestrate primitives",
-    "against Minecraft's geometry, rather than route a sentence to a pre-written",
-    "procedure. 152 commands are registered and 98 describe themselves as",
-    "multi-step. If the bot only passes with those available, it is a router.",
+    "This fixture exists to test the Phase 3 charcoal Mission vertical slice:",
+    "the model interprets one player promise, then a stable in-memory Mission",
+    "derives one causal Activity at a time from observed Minecraft state.",
     "",
-    "The task is 'go get some wood and make me some charcoal'. Charcoal needs a",
+    "The task is 'go get some wood and make me some charcoal', normalized to an",
+    "exact promise of 8 charcoal delivered to the authoritative requester. Charcoal needs a",
     "furnace; a furnace needs 8 cobblestone; cobblestone needs a pickaxe; a pickaxe",
-    "needs planks and sticks. Nothing tells the bot that chain. Deriving it IS the",
-    "test, which is why allowed_commands below excludes every command that would",
-    "make a sequencing decision in JavaScript -- especially !prepareWoodenTool,",
-    "which performs the exact dependency step being measured.",
+    "needs planks and sticks. The existing prerequisite planner discovers that",
+    "chain incrementally; the Mission must not create a second executor or a",
+    "parallel voxel plan.",
     "",
     "Forest biome with features enabled, so real trees generate on flat ground.",
     "Stone sits in the layer stack for cobblestone. Surface is y=100 like the",
@@ -60,17 +59,23 @@
     }
   },
   "orchestration": {
-    "principle": "mechanics are allowed, sequencing is not",
+    "principle": "model interpretation once; Mission-owned causal Activities thereafter",
     "deliberately_excluded": {
-      "!requestItemGoal": "goal-director runs the whole acquire-and-deliver chain",
-      "!assignMiningJob / !assignHarvestJob / !assign*Job": "persistent quotas with tool preparation and delivery built in",
-      "!addToAgenda / agenda commands": "sequencing lane; the LLM must hold the sequence",
-      "!prepareWoodenTool": "survival-bootstraps the tool dependency -- the exact reasoning step under test",
-      "!collectWood": "resolves 'wood' to any log type; the bot should name the block it wants",
-      "!newAction": "writes JavaScript. A pass would prove code generation, not orchestration. Already blocked unless allow_insecure_coding."
+      "!requestItemGoal": "GoalDirector is an alternate owner; Phase 3 must use the charcoal Mission",
+      "!assignMiningJob / !assignHarvestJob / !assign*Job": "jobs are alternate durable owners outside this tranche",
+      "!addToAgenda / agenda commands": "agenda is an alternate sequencing owner outside this tranche",
+      "!newAction": "dynamic JavaScript is an alternate implementation path and remains blocked unless allow_insecure_coding"
     },
     "llm_sequencing": true,
-    "why_llm_sequencing": "Blocking commands is not enough. A live run on 2026-08-17 showed the request never reached the model: dispatchPlayerAgenda parsed 'wood and charcoal' as a chain, queued 'harvest 32 logs, then get 1 additional charcoal', and returned handled before command selection. The deterministic lane gets first refusal, which is exactly what ARCHITECTURE.md says is wrong with the hierarchy. This flag stands those interceptors down so the model actually chooses.",
+    "charcoal_mission_mode": "active",
+    "text_provider": {
+      "api": "codex",
+      "model": "gpt-5.6-luna",
+      "authentication": "chatgpt",
+      "reasoning_effort": "low"
+    },
+    "why_charcoal_mission_mode": "Phase 3 comparison arm: the model interprets the promise once, then the charcoal-only in-memory Mission planner owns causal Activities and exact delivery through the existing executor.",
+    "why_llm_sequencing": "The flag stands deterministic sentence interceptors down so the model can interpret the promise and accept exactly one charcoal Mission. It does not authorize the model to drive later physical steps.",
     "prior_allowed_commands": [
       "!stats",
       "!inventory",
@@ -91,10 +96,12 @@
       "!givePlayer",
       "!digDown"
     ],
-    "why_full_surface": "The primitives-only run did its job: refused a composite, the model composed !collectBlocks instead, and asked when it could not reach the log. That question is answered. What matters now is the configuration the bot should actually ship with -- the model deciding, with every command available to it, jobs included. A composite is a tool the model may choose, not a script that pre-empts it. An empty allowlist means no restriction."
+    "why_full_surface": "An empty allowlist preserves the normal command surface. Ownership is enforced by the Mission lane and model-only acceptance boundary, not by constructing a reduced test-only command set."
   },
   "profile": {
     "filename": "scenario-profile.json",
-    "autonomy": "command"
+    "autonomy": "command",
+    "sha256": "f1492c7a0b523e7793ee1faacaae2dd0896eaf0c1c022146f1d960c63f1168d8",
+    "why_provider": "The physical Phase 3 test uses the repository's text-only Codex adapter and the locally authenticated ChatGPT account. API-key variables are stripped from the provider child process so an unrelated exhausted API project cannot intercept the run."
   }
 }

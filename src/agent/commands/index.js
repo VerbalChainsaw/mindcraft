@@ -12,6 +12,7 @@ const COMMAND_REQUEST_ROUTE_ORIGINS = new Set([
     'directive-resume',
     'agenda-director',
     'goal-director',
+    'mission-director',
     'job-director',
     'internal',
 ]);
@@ -45,6 +46,8 @@ export function createCommandRequestContext({
     args = [],
     requestedAt = Date.now(),
     agendaDisposition = 'append',
+    missionId = null,
+    activityId = null,
 } = {}) {
     const normalizedArgs = Object.freeze((Array.isArray(args) ? args : [])
         .slice(0, MAX_COMMAND_REQUEST_ARGS)
@@ -57,6 +60,8 @@ export function createCommandRequestContext({
         args: normalizedArgs,
         requestedAt: Number.isFinite(timestamp) && timestamp >= 0 ? Math.floor(timestamp) : Date.now(),
         agendaDisposition: agendaDisposition === 'interrupt' ? 'interrupt' : 'append',
+        missionId: boundedRequestText(missionId, 96) || null,
+        activityId: boundedRequestText(activityId, 128) || null,
     });
 }
 
@@ -74,8 +79,8 @@ export function getCommand(name) {
 // model documentation cannot drift apart. First match wins; anything unmatched
 // lands in Other, which is visible enough that a new command gets noticed.
 const COMMAND_CATEGORIES = Object.freeze([
-    Object.freeze({ category: 'Control', pattern: /^!(stop|stfu|restart|clearChat|stay|setMode|setPersona|endGoal|cancelJob|cancelGoal|goal|newAction)$/ }),
-    Object.freeze({ category: 'Plan', pattern: /^!(addToAgenda|queueItemPlan|showAgenda|clearAgenda|skipAgendaItem|requestItemGoal|assign\w*Job)$/ }),
+    Object.freeze({ category: 'Control', pattern: /^!(stop|stfu|restart|clearChat|stay|setMode|setPersona|endGoal|cancelJob|cancelGoal|cancelMission|goal|newAction)$/ }),
+    Object.freeze({ category: 'Plan', pattern: /^!(acceptCharcoalMission|addToAgenda|queueItemPlan|showAgenda|clearAgenda|skipAgendaItem|requestItemGoal|assign\w*Job)$/ }),
     Object.freeze({ category: 'Movement', pattern: /^!(goTo\w*|follow\w*|moveAway|come|stay|searchFor\w*|completeExplorationRoute|goToSurface|goToMiningDepth|dismount|mountEntity|rideToCoordinates)$/ }),
     Object.freeze({ category: 'Combat', pattern: /^!(attack\w*|resolveTacticalCombat|guardPlayer|defend)$/ }),
     Object.freeze({ category: 'Gathering', pattern: /^!(collect\w*|pickup\w*|fish|prepare\w*|breakBlock|digDown)$/ }),
@@ -375,6 +380,8 @@ export async function executeCommand(agent, message, {
     owner = 'player',
     routeOrigin = 'internal',
     agendaDisposition = 'append',
+    missionId = null,
+    activityId = null,
 } = {}) {
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
@@ -394,6 +401,8 @@ export async function executeCommand(agent, message, {
                 selectedSkill: parsed.commandName,
                 args: parsed.args,
                 agendaDisposition,
+                missionId,
+                activityId,
             });
             const perform = () => command.perform(agent, ...parsed.args);
             const performWithRequestContext = typeof agent.actions?.runWithRequestContext === 'function'
@@ -429,6 +438,7 @@ const NON_AUTONOMY_COMMANDS = new Set([
     '!showAgenda', '!clearAgenda', '!skipAgendaItem', '!addToAgenda', '!queueItemPlan',
     // Goal lifecycle is owned by goal selection, not by the action loop.
     '!goal', '!endGoal', '!cancelJob', '!cancelGoal',
+    '!acceptCharcoalMission', '!cancelMission',
     // A conversation is not something autonomy starts with itself.
     '!startConversation', '!endConversation', '!help',
     // Only ever correct as a reply to a person.

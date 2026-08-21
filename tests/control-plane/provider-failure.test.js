@@ -121,3 +121,12 @@ test('Given the known divergent adapters, when their failure paths are read, the
         );
     }
 });
+
+test('Given the model router exhausted its route, when conversation handles the failure, then it does not spend another prompt turn', () => {
+    const text = readFileSync(path.join(MODELS_DIR, 'prompter.js'), 'utf8');
+    assert.match(
+        text,
+        /if \(outcome === 'provider_failed'\) return PROVIDER_FAILURE_TEXT;/,
+        'provider failure must return immediately; later turns are only for correcting generated answers',
+    );
+});

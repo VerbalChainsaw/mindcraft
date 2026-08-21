@@ -10,8 +10,10 @@ import {
     breakBlockAt,
     continuousFollowLiveness,
     goToGoal,
+    goToMiningDepth,
     goToPlayer,
     goToPosition,
+    mineSearchTunnel,
     followPlayer,
     localNavigationEgressPlan,
     observeFollowDestinationProgress,
@@ -72,7 +74,13 @@ function routeTarget(goal) {
         : null;
 }
 
-function nativeJourneyBot({ reverseRoute = true, loseSupportAfterMove = false } = {}) {
+function nativeJourneyBot({
+    reverseRoute = true,
+    loseSupportAfterMove = false,
+    finalDestinationX = 50,
+    directRouteFromX = 19,
+    candidateRouteStatus = 'success',
+} = {}) {
     const gotoTargets = [];
     const routeCalls = [];
     const executionPolicies = [];
@@ -110,9 +118,29 @@ function nativeJourneyBot({ reverseRoute = true, loseSupportAfterMove = false } 
                     target: target?.clone() || null,
                     timeout: options?.timeout ?? null,
                 });
-                const isLongFinalRoute = target?.x === 50 && start.x < 19;
-                const isRejectedReverse = !reverseRoute && target?.x <= 1 && start.x >= 5;
-                const status = isLongFinalRoute || isRejectedReverse ? 'noPath' : 'success';
+                const isFinalDestination = target?.x === finalDestinationX
+                    && target?.y === 70
+                    && target?.z === 0;
+                const isLongFinalRoute = isFinalDestination && start.x < directRouteFromX;
+                const current = bot.entity.position.floored();
+                const isForwardCandidate = !isFinalDestination
+                    && Math.floor(start.x) === current.x
+                    && Math.floor(start.y) === current.y
+                    && Math.floor(start.z) === current.z;
+                const isRejectedReverse = !reverseRoute
+                    && target?.x === current.x
+                    && target?.y === current.y
+                    && target?.z === current.z
+                    && (
+                        start.x !== current.x
+                        || start.y !== current.y
+                        || start.z !== current.z
+                    );
+                const status = isLongFinalRoute || isRejectedReverse
+                    ? 'noPath'
+                    : isForwardCandidate
+                        ? candidateRouteStatus
+                        : 'success';
                 return (function * nativeRoute() {
                     yield {
                         result: {
@@ -144,6 +172,147 @@ function nativeJourneyBot({ reverseRoute = true, loseSupportAfterMove = false } 
         },
     };
     return { bot, executionPolicies, gotoTargets, routeCalls };
+}
+
+function miningRelocationProbeBot(routeStatus = 'timeout') {
+    const routeCalls = [];
+    const gotoTargets = [];
+    const dug = [];
+    const supportLevels = new Set([69, 73, 76, 79, 82]);
+    const bot = {
+        version: '1.21.11',
+        registry: mcData,
+        interrupt_code: false,
+        output: '',
+        health: 20,
+        controlState: {},
+        game: { dimension: 'overworld', minY: -64, height: 384 },
+        entities: {},
+        inventory: { slots: [] },
+        entity: {
+            position: new Vec3(0.5, 70, 0.5),
+            width: 0.6,
+            height: 1.8,
+            isInWater: false,
+        },
+        modes: { isOn: () => false },
+        pathfinder: {
+            thinkTimeout: 500,
+            tickTimeout: 40,
+            setMovements() {},
+            setGoal() {},
+            getPathFromTo(movements, start, goal, options) {
+                const target = routeTarget(goal);
+                routeCalls.push({
+                    start: start.clone(),
+                    target: target?.clone() || null,
+                    timeout: options?.timeout ?? null,
+                });
+                return (function * routeProbe() {
+                    yield {
+                        result: {
+                            status: routeStatus,
+                            path: routeStatus === 'success' && target ? [target.clone()] : [],
+                        },
+                    };
+                }());
+            },
+            goto(goal) {
+                const target = routeTarget(goal);
+                gotoTargets.push(target?.clone() || null);
+                return Promise.resolve();
+            },
+        },
+        on() {},
+        off() {},
+        removeListener() {},
+        clearControlStates() {},
+        blockAt(position) {
+            const name = supportLevels.has(Math.floor(position.y)) ? 'stone' : 'air';
+            const block = new Block(mcData.blocksByName[name].id, 0, 0);
+            block.position = position.clone();
+            return block;
+        },
+        dig(block) {
+            dug.push(block.position.clone());
+            return Promise.resolve();
+        },
+    };
+    return { bot, dug, gotoTargets, routeCalls };
+}
+
+function miningStagingProbeBot(routeStatus = 'timeout') {
+    const routeCalls = [];
+    const gotoTargets = [];
+    const targetPosition = new Vec3(20, 70, 0);
+    const bot = {
+        version: '1.21.11',
+        registry: mcData,
+        interrupt_code: false,
+        output: '',
+        health: 20,
+        controlState: {},
+        game: { dimension: 'overworld', minY: -64, height: 384 },
+        entities: {},
+        inventory: { slots: [] },
+        entity: {
+            position: new Vec3(0.5, 70, 0.5),
+            width: 0.6,
+            height: 1.8,
+            isInWater: false,
+        },
+        modes: { isOn: () => false },
+        pathfinder: {
+            thinkTimeout: 500,
+            tickTimeout: 40,
+            setMovements() {},
+            setGoal() {},
+            getPathFromTo(movements, start, goal, options) {
+                const target = routeTarget(goal);
+                routeCalls.push({
+                    start: start.clone(),
+                    target: target?.clone() || null,
+                    timeout: options?.timeout ?? null,
+                });
+                return (function * routeProbe() {
+                    yield {
+                        result: {
+                            status: routeStatus,
+                            path: routeStatus === 'success' && target ? [target.clone()] : [],
+                        },
+                    };
+                }());
+            },
+            goto(goal) {
+                const target = routeTarget(goal);
+                gotoTargets.push(target?.clone() || null);
+                return Promise.resolve();
+            },
+        },
+        on() {},
+        off() {},
+        removeListener() {},
+        clearControlStates() {},
+        blockAt(position) {
+            const x = Math.floor(position.x);
+            const y = Math.floor(position.y);
+            const z = Math.floor(position.z);
+            const name = x === targetPosition.x && y === targetPosition.y && z === targetPosition.z
+                ? 'iron_ore'
+                : y === 69
+                    ? 'stone'
+                    : 'air';
+            const block = new Block(mcData.blocksByName[name].id, 0, 0);
+            block.position = position.clone();
+            return block;
+        },
+    };
+    return {
+        bot,
+        gotoTargets,
+        routeCalls,
+        target: bot.blockAt(targetPosition),
+    };
 }
 
 function enclosedNavigationBot({
@@ -630,6 +799,25 @@ test('a failed long proof converges through complete native segments and preserv
     assert.equal(executionPolicies[0], segmentPolicy);
 });
 
+test('a progressing segmented journey is not refused after ten proven legs', async () => {
+    const { bot, gotoTargets } = nativeJourneyBot({
+        finalDestinationX: 250,
+        directRouteFromX: 219,
+    });
+
+    const arrived = await goToPosition(bot, 250, 70, 0, 2, {
+        allowSegmentedJourney: true,
+    });
+
+    assert.equal(arrived, true);
+    assert.equal(gotoTargets.at(-1)?.x, 250);
+    assert.ok(bot.lastActionEvidence.segments.length > 10);
+    assert.deepEqual(
+        bot.lastActionEvidence.segments.map(receipt => receipt.index),
+        bot.lastActionEvidence.segments.map((_, index) => index),
+    );
+});
+
 test('a native-proven bounded detour can clear an obstacle before exact arrival', async () => {
     const { bot, executionPolicies, gotoTargets, routeCalls } = detourJourneyBot();
 
@@ -888,6 +1076,49 @@ test('an exhausted absolute planning budget starts no additional native route se
     assert.equal(bot.lastActionEvidence.retryable, true);
 });
 
+test('planned navigation reports an inconclusive probe without claiming path not found', async () => {
+    const { bot, gotoTargets } = nativeJourneyBot();
+    let routeProbes = 0;
+    bot.pathfinder.getPathFromTo = () => (function * timedOutRoute() {
+        routeProbes += 1;
+        yield { result: { status: 'timeout', path: [new Vec3(1, 70, 0)] } };
+    }());
+
+    const arrived = await goToGoal(bot, new pf.goals.GoalBlock(10, 70, 0), {
+        requirePlannedRoute: true,
+        allowLocalRecovery: false,
+        allowSegmentedJourney: true,
+    });
+
+    assert.equal(arrived, false);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(routeProbes, 1);
+    assert.equal(bot.lastActionEvidence.outcome, 'route_unproven');
+    assert.equal(bot.lastActionEvidence.planning.status, 'timeout');
+    assert.equal(bot.lastActionEvidence.planning.conclusive, false);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+    assert.doesNotMatch(bot.output, /path not found|unreachable/i);
+});
+
+test('planned navigation keeps completed noPath terminal', async () => {
+    const { bot, gotoTargets } = nativeJourneyBot();
+    bot.pathfinder.getPathFromTo = () => (function * missingRoute() {
+        yield { result: { status: 'noPath', path: [] } };
+    }());
+
+    const arrived = await goToGoal(bot, new pf.goals.GoalBlock(10, 70, 0), {
+        requirePlannedRoute: true,
+        allowLocalRecovery: false,
+    });
+
+    assert.equal(arrived, false);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'path_not_found');
+    assert.equal(bot.lastActionEvidence.planning.status, 'noPath');
+    assert.equal(bot.lastActionEvidence.planning.conclusive, true);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
 test('composed player pursuit retains nested navigation receipts beside its terminal arrival', async () => {
     const { bot, gotoTargets } = nativeJourneyBot();
     const player = {
@@ -1060,14 +1291,113 @@ test('segmentation never executes a waypoint without a native reverse proof', as
 
     assert.equal(arrived, false);
     assert.equal(gotoTargets.length, 0);
-    assert.equal(bot.lastActionEvidence.outcome, 'segmented_journey_route_unproven');
+    assert.equal(bot.lastActionEvidence.outcome, 'segmented_journey_route_unreachable');
     assert.equal(bot.lastActionEvidence.retryable, false);
-    assert.equal(bot.lastActionEvidence.segments.length, 2);
+    assert.ok(bot.lastActionEvidence.segments.length > 2);
+    assert.ok(bot.lastActionEvidence.segments.every(receipt => (
+        receipt.executed === false
+        && receipt.outcome === 'route_unreachable'
+        && receipt.nativeRoute.returnStatus === 'noPath'
+    )));
+});
+
+test('unfinished segment route checks remain retryable after every candidate is examined', async () => {
+    const { bot, gotoTargets } = nativeJourneyBot({ candidateRouteStatus: 'timeout' });
+
+    const arrived = await goToPosition(bot, 50, 70, 0, 2, {
+        allowSegmentedJourney: true,
+        plannedRouteTimeoutMs: 1,
+    });
+
+    assert.equal(arrived, false);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'segmented_journey_route_unproven');
+    assert.equal(bot.lastActionEvidence.retryable, true);
+    assert.ok(bot.lastActionEvidence.segments.length > 2);
     assert.ok(bot.lastActionEvidence.segments.every(receipt => (
         receipt.executed === false
         && receipt.outcome === 'route_unproven'
-        && receipt.nativeRoute.returnStatus === 'noPath'
+        && receipt.nativeRoute.status === 'timeout'
     )));
+});
+
+test('mining relocation keeps an unfinished open-route search retryable', async () => {
+    const { bot, dug, gotoTargets, routeCalls } = miningRelocationProbeBot('timeout');
+
+    const reached = await goToMiningDepth(bot, 77, 16);
+
+    assert.equal(reached, false);
+    assert.ok(routeCalls.length > 0);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(dug.length, 0);
+    assert.equal(bot.lastActionEvidence.kind, 'mining_relocation');
+    assert.equal(bot.lastActionEvidence.outcome, 'open_cave_route_unproven');
+    assert.equal(bot.lastActionEvidence.inconclusive, true);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
+test('mining relocation keeps completed open-route rejection conclusive', async () => {
+    const { bot, dug, gotoTargets } = miningRelocationProbeBot('noPath');
+
+    const reached = await goToMiningDepth(bot, 77, 16);
+
+    assert.equal(reached, false);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(dug.length, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'open_cave_unreachable');
+    assert.notEqual(bot.lastActionEvidence.inconclusive, true);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
+test('mining relocation does not excavate when a proven open route fails to execute', async () => {
+    const { bot, dug, gotoTargets } = miningRelocationProbeBot('success');
+
+    const reached = await goToMiningDepth(bot, 77, 16);
+
+    assert.equal(reached, false);
+    assert.ok(gotoTargets.length > 0);
+    assert.equal(dug.length, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'open_route_execution_unfinished');
+    assert.equal(bot.lastActionEvidence.returnable, true);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
+test('mining staging does not call an unfinished surface route unreachable', async () => {
+    const { bot, gotoTargets, routeCalls, target } = miningStagingProbeBot('timeout');
+
+    const reached = await mineSearchTunnel(bot, 'iron_ore', 12, target);
+
+    assert.equal(reached, false);
+    assert.ok(routeCalls.length > 0);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(bot.lastActionEvidence.kind, 'mining_search');
+    assert.equal(bot.lastActionEvidence.outcome, 'staging_route_unproven');
+    assert.equal(bot.lastActionEvidence.inconclusive, true);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
+test('mining staging keeps completed round-trip rejection conclusive', async () => {
+    const { bot, gotoTargets, target } = miningStagingProbeBot('noPath');
+
+    const reached = await mineSearchTunnel(bot, 'iron_ore', 12, target);
+
+    assert.equal(reached, false);
+    assert.equal(gotoTargets.length, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'staging_unreachable');
+    assert.notEqual(bot.lastActionEvidence.inconclusive, true);
+    assert.equal(bot.lastActionEvidence.retryable, false);
+});
+
+test('mining staging requires physical settlement after a proven round trip', async () => {
+    const { bot, gotoTargets, target } = miningStagingProbeBot('success');
+
+    const reached = await mineSearchTunnel(bot, 'iron_ore', 12, target);
+
+    assert.equal(reached, false);
+    assert.ok(gotoTargets.length > 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'staging_execution_failed');
+    assert.equal(bot.lastActionEvidence.inconclusive, undefined);
+    assert.equal(bot.lastActionEvidence.retryable, true);
 });
 
 test('observed support loss after execution blocks every later segment', async () => {
@@ -1218,7 +1548,7 @@ test('death recovery never treats a log below overhead drops as disposable acces
     assert.equal(bot.lastActionEvidence.overheadAccess.rejectedColumns.non_leaf_obstruction, 1);
 });
 
-test('death recovery does not redispatch an unchanged unproven segment', async () => {
+test('death recovery does not redispatch a conclusively unreachable segment', async () => {
     const { bot, gotoTargets } = nativeJourneyBot({ reverseRoute: false });
 
     const recovered = await recoverDeathItems(bot, {
@@ -1233,5 +1563,5 @@ test('death recovery does not redispatch an unchanged unproven segment', async (
     assert.equal(bot.lastActionEvidence.outcome, 'death_position_unreachable');
     assert.equal(bot.lastActionEvidence.retryable, false);
     assert.equal(bot.lastActionEvidence.navigation.retryable, false);
-    assert.equal(bot.lastActionEvidence.navigation.outcome, 'segmented_journey_route_unproven');
+    assert.equal(bot.lastActionEvidence.navigation.outcome, 'segmented_journey_route_unreachable');
 });

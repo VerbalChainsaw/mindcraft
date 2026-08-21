@@ -204,6 +204,58 @@ test('surface recovery recognizes covered ground-level access from a complete na
     assert.equal(bot.lastActionEvidence.legs, 0);
 });
 
+test('surface recovery does not excavate after an unfinished native egress proof', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes: [], position });
+    };
+    put(4, 68, -3, 'spruce_planks');
+    put(4, 71, -3, 'spruce_planks');
+    put(10, 68, -3, 'grass_block');
+    const bot = {
+        interrupt_code: false,
+        entity: {
+            position: new Vec3(4.5, 69, -2.5),
+            width: 0.6,
+            height: 1.8,
+        },
+        game: { minY: -64, height: 384 },
+        blockAt(position) {
+            return blocks.get(key(position.floored())) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+        output: '',
+    };
+    let navigationCalls = 0;
+
+    const reached = await goToSurface(bot, {
+        async navigateGoal() {
+            navigationCalls += 1;
+            return false;
+        },
+        probeSurfaceEgress() {
+            return {
+                reachable: false,
+                conclusive: false,
+                status: 'timeout',
+                pathLength: 0,
+            };
+        },
+    });
+
+    assert.equal(reached, false);
+    assert.equal(navigationCalls, 0);
+    assert.equal(bot.lastActionEvidence.outcome, 'surface_egress_route_unproven');
+    assert.equal(bot.lastActionEvidence.inconclusive, true);
+    assert.equal(bot.lastActionEvidence.routeDigging, false);
+    assert.equal(bot.lastActionEvidence.retryable, true);
+});
+
 test('surface recovery accepts an occupied open stance with a complete native ground-egress proof', async () => {
     const blocks = new Map();
     const put = (x, y, z, name, boundingBox, shapes) => {

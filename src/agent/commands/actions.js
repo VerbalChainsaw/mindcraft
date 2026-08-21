@@ -405,7 +405,7 @@ async function runCollectionAction(agent, operation) {
     return actionValue === true && receipt.accepted === true && receipt.valid === true;
 }
 
-function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = null, receiptMode = 'legacy') {
+function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = null, receiptMode = 'legacy', specialist = null) {
     let actionLabel = null;  // Will be set on first use
     
     const wrappedAction = async function (agent, ...args) {
@@ -424,6 +424,7 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
             timeout: actionTimeout,
             resume,
             receiptMode,
+            specialist,
         });
         if (code_return.interrupted && !code_return.timedout)
             return;
@@ -431,7 +432,7 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
             return actionResultToMessage(code_return.result);
         }
         return code_return.message || (code_return.result ? actionResultToMessage(code_return.result) : undefined);
-    }
+    };
     // Direct player/dashboard use of a world skill is an explicit ownership
     // change. Agent.handleMessage reads this metadata before it starts the
     // action, so an older autonomous goal cannot wake up and compete with it.
@@ -442,6 +443,22 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
 
     return wrappedAction;
 }
+
+async function acceptCharcoalMission(agent, quantity = 8) {
+    const request = agent.actions?.currentRequestContext?.() || null;
+    if (request?.routeOrigin !== 'model-selected') {
+        return 'Mission not accepted: !acceptCharcoalMission is a model-only interpretation command for natural-language player promises.';
+    }
+    const openRequest = agent.open_player_request;
+    const requester = openRequest?.source || agent.last_sender || '';
+    const result = await agent.charcoal_mission?.accept?.({
+        requester,
+        quantity,
+        sourceMessage: openRequest?.message || '',
+    });
+    return result?.detail || 'Mission not accepted: the charcoal Mission controller is unavailable.';
+}
+acceptCharcoalMission.manualAutonomyTakeover = true;
 
 export function updateCompanionDirectiveFromAction(agent, directive, playerName) {
     // A bounded approach may be used as one leg of survival, goal, job, or
@@ -608,10 +625,27 @@ function bindSafeConstructionOrder(agent, order, origin) {
     const selected = probed.find(candidate => candidate.routes.every(route => route.reachable));
     const site = selected?.site;
     if (!site) {
+        const methodRejected = route => (
+            route?.reachable !== true
+            && route?.conclusive === true
+            && route?.status === 'noPath'
+        );
+        const unproven = probed.filter(candidate => (
+            candidate.routes.some(route => route?.reachable !== true)
+            && candidate.routes.every(route => !methodRejected(route))
+        ));
+        if (unproven.length > 0) {
+            const statuses = [...new Set(unproven
+                .flatMap(candidate => candidate.routes)
+                .filter(route => route?.reachable !== true)
+                .map(route => route?.status || 'unknown'))];
+            throw new TypeError(
+                `Native Pathfinder route checks did not finish for ${unproven.length} geometrically safe construction candidate(s) (${statuses.join(', ')}). No construction site was bound; retry the request.`,
+            );
+        }
         const routeSummary = probed.length > 0
-            ? ` Native Pathfinder rejected ${probed.length} geometrically safe candidate(s): ${probed
-                .flatMap(candidate => candidate.routes.map(route => route.status))
-                .slice(0, 4)
+            ? ` Native Pathfinder completed route checks and rejected ${probed.length} geometrically safe candidate(s): ${[...new Set(probed
+                .flatMap(candidate => candidate.routes.map(route => route.status || 'unknown')))]
                 .join(', ')}.`
             : '';
         throw new TypeError(
@@ -925,7 +959,7 @@ export const actionsList = [
             });
         }, true, -1, (agent, player_name) => {
             updateCompanionDirectiveFromAction(agent, 'follow', player_name);
-        }, 'composed')
+        }, 'composed', 'pathfinder')
     },
     {
         name: '!followPlayerUntilNearBlock',
@@ -1455,7 +1489,7 @@ export const actionsList = [
                     preferredPosition: agent.goal_director?.collectionPreferredTarget?.(type),
                 },
             );
-        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES, null, 'legacy', 'collectblock')
     },
     {
         name: '!pickupUsefulItems',
@@ -1869,7 +1903,7 @@ export const actionsList = [
                 const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
-                return `Functional shelter work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+                return `Functional shelter work order was not accepted: ${String(error?.message || error).slice(0, 180)}.`;
             }
         }),
     },
@@ -1936,7 +1970,7 @@ export const actionsList = [
                 const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
-                return `Construction work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+                return `Construction work order was not accepted: ${String(error?.message || error).slice(0, 180)}.`;
             }
         }),
     },
@@ -1968,7 +2002,7 @@ export const actionsList = [
                 const order = bindSafeConstructionOrder(agent, provisional, position);
                 return submitRememberedStructure(agent, order);
             } catch (error) {
-                return `Structure work order is invalid: ${String(error?.message || error).slice(0, 180)}.`;
+                return `Structure work order was not accepted: ${String(error?.message || error).slice(0, 180)}.`;
             }
         }),
     },
@@ -2219,6 +2253,24 @@ export const actionsList = [
             return agent.goal_director?.cancel?.('Cancelled by player.')
                 ? 'Active typed gameplay goal cancelled.'
                 : 'There is no active typed gameplay goal to cancel.';
+        },
+    },
+    {
+        name: '!acceptCharcoalMission',
+        description: 'MODEL-ONLY: interpret a natural-language promise to make and deliver charcoal as one current in-memory Mission. Choose the exact promised quantity; use 8 as the safe bounded default when the player says only “some”. The deterministic Mission planner owns every prerequisite and next Activity after acceptance.',
+        params: {
+            'quantity': { type: 'int', description: 'Exact charcoal quantity promised to the requester, 1-64; default 8 for an unspecified bounded amount.', domain: [1, 64, '[]'], optional: true },
+        },
+        perform: acceptCharcoalMission,
+    },
+    {
+        name: '!cancelMission',
+        description: 'Cancel the current in-memory charcoal Mission without changing unrelated durable goals or jobs.',
+        params: {},
+        perform: function (agent) {
+            return agent.charcoal_mission?.cancel?.('Cancelled by player.')
+                ? 'Active charcoal Mission cancelled.'
+                : 'There is no active charcoal Mission to cancel.';
         },
     },
     {

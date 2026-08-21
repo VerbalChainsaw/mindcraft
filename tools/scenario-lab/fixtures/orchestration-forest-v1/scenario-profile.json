@@ -1,49 +1,35 @@
 {
     "name":  "MindcraftBot",
-    "model":  [
-                  {
-                      "api":  "openai",
-                      "model":  "gpt-4.1",
-                      "params":  {
-                                     "timeout":  12
-                                 }
-                  },
-                  {
-                      "api":  "openai",
-                      "model":  "gpt-4.1-mini",
-                      "params":  {
-                                     "timeout":  10
-                                 }
-                  }
-              ],
+    "model":  {
+                  "api":  "codex",
+                  "model":  "gpt-5.6-luna",
+                  "params":  {
+                                 "timeout":  45,
+                                 "reasoning_effort":  "low"
+                             }
+              },
     "reasoning_model":  {
-                            "api":  "openai",
-                            "model":  "gpt-5",
+                            "api":  "codex",
+                            "model":  "gpt-5.6-luna",
                             "params":  {
-                                           "timeout":  25
+                                           "timeout":  45,
+                                           "reasoning_effort":  "low"
                                        }
                         },
-    "autonomy_model":  [
-                           {
-                               "api":  "openai",
-                               "model":  "gpt-4.1",
-                               "params":  {
-                                              "timeout":  12
-                                          }
-                           },
-                           {
-                               "api":  "openai",
-                               "model":  "gpt-4.1-mini",
-                               "params":  {
-                                              "timeout":  10
-                                          }
-                           }
-                       ],
+    "autonomy_model":  {
+                           "api":  "codex",
+                           "model":  "gpt-5.6-luna",
+                           "params":  {
+                                          "timeout":  45,
+                                          "reasoning_effort":  "low"
+                                      }
+                       },
     "memory_model":  {
-                         "api":  "openai",
-                         "model":  "gpt-4.1-mini",
+                         "api":  "codex",
+                         "model":  "gpt-5.6-luna",
                          "params":  {
-                                        "timeout":  15
+                                        "timeout":  45,
+                                        "reasoning_effort":  "low"
                                     }
                      },
     "cooldown":  350,
