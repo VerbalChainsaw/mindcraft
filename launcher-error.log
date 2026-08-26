@@ -1,0 +1,81 @@
+[companion] Standing directive was not restored: Discarded persisted companion directive: 4898 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 4900 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Code execution timed out after 2.8333333333333335 minutes. Attempting force stop.
+LLM described or answered an action request without a command. Trying again...
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+Kevin received new message while generating, discarding old response.
+no response
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin received new message while generating, discarding old response.
+no response
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin received new message while generating, discarding old response.
+no response
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin received new message while generating, discarding old response.
+no response
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Kevin received new message while generating, discarding old response.
+no response
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Error during message generation or file writing: CodexProviderError: Codex app-server did not answer turn/start within 45 seconds.
+    at Timeout._onTimeout (file:///C:/Users/zerop/Development/minecraft-companion-brain-v2/src/models/codex.js:511:24)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  code: 'TIMEOUT'
+}
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Error during message generation or file writing: CodexProviderError: Codex app-server did not answer thread/start within 45 seconds.
+    at Timeout._onTimeout (file:///C:/Users/zerop/Development/minecraft-companion-brain-v2/src/models/codex.js:511:24)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  code: 'TIMEOUT'
+}
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+Error during message generation or file writing: CodexProviderError: Codex app-server did not answer thread/start within 45 seconds.
+    at Timeout._onTimeout (file:///C:/Users/zerop/Development/minecraft-companion-brain-v2/src/models/codex.js:511:24)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  code: 'TIMEOUT'
+}
+Error during message generation or file writing: CodexProviderError: Codex app-server did not answer thread/start within 45 seconds.
+    at Timeout._onTimeout (file:///C:/Users/zerop/Development/minecraft-companion-brain-v2/src/models/codex.js:511:24)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  code: 'TIMEOUT'
+}
+Error during message generation or file writing: CodexProviderError: Codex app-server did not answer thread/start within 45 seconds.
+    at Timeout._onTimeout (file:///C:/Users/zerop/Development/minecraft-companion-brain-v2/src/models/codex.js:511:24)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7) {
+  code: 'TIMEOUT'
+}
+[companion] Standing directive was not restored: Discarded persisted companion directive: 76 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+LLM described or answered an action request without a command. Trying again...
+LLM described or answered an action request without a command. Trying again...
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 85 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready

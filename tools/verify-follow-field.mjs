@@ -24,7 +24,23 @@ const WAYPOINTS = Object.freeze([
   Object.freeze({ name: 'south-after-first-turn', x: 1038.5, y: 100, z: 1014.5 }),
   Object.freeze({ name: 'west-up-one-block', x: 1029.5, y: 101, z: 1014.5 }),
 ]);
+const PLAYER_ROUTE_TARGET = WAYPOINTS[0];
+// Mirrors goToPlayer's established one-block terrain settlement envelope. The
+// course requires the final continuous body position, not merely Pathfinder's
+// integer standing-cell completion.
+const PLAYER_ROUTE_REQUESTED_DISTANCE = 3;
+const PLAYER_ROUTE_TERRAIN_ENVELOPE = 1;
+const PLAYER_ROUTE_ACCEPTANCE_DISTANCE = PLAYER_ROUTE_REQUESTED_DISTANCE
+  + PLAYER_ROUTE_TERRAIN_ENVELOPE;
 const COURSE = Object.freeze({ x1: 1026, x2: 1040, y1: 100, y2: 102, z1: 1006, z2: 1016 });
+const PLAYER_ROUTE_BLOCKED_COURSE = Object.freeze({ ...COURSE, y1: 95, y2: 105 });
+const PLAYER_ROUTE_BLOCKED_CAGE = Object.freeze({ x1: 1029, x2: 1040, y1: 95, y2: 105, z1: 1006, z2: 1016 });
+const PLAYER_ROUTE_BLOCKED_TARGET = Object.freeze({ x: 1034.5, y: 100, z: 1011.5 });
+// The target is centered six blocks from the nearest legal outside stance.
+// A quarter-block observation allowance covers server/body settlement without
+// admitting any cell beyond that geometry-owned nearest face.
+const PLAYER_ROUTE_BLOCKED_NEAREST_DISTANCE = 6;
+const PLAYER_ROUTE_BLOCKED_OBSERVATION_ALLOWANCE = 0.25;
 const ROUTE_PROBE_COURSE = Object.freeze({ ...COURSE, y1: 99, y2: 103 });
 const REQUEST_COMPLETION_COURSE = Object.freeze({ ...COURSE, y1: 91, y2: 103 });
 const ROUTE_PROBE_TARGET = Object.freeze({ x: 1038, y: 100, z: 1013, closeness: 0 });
@@ -37,6 +53,50 @@ const ROUTE_PROBE_CAGE = Object.freeze({
   z2: 1015,
   block: 'bedrock',
 });
+// Phase 6 first physical terrain course. Kevin begins at the bottom of a
+// four-block water column and receives an ordinary !goToCoordinates request
+// for dry ground on the east bank. The generated flat fixture supplies the
+// substrate; this programmatic basin is captured and restored by the same
+// mechanism as the established Scenario Lab courses.
+const TERRAIN_SWIM_COURSE = Object.freeze({ x1: 1025, x2: 1041, y1: 95, y2: 102, z1: 1004, z2: 1013 });
+const TERRAIN_SWIM_START = Object.freeze({ x: 1029.5, y: 96, z: 1008.5 });
+const TERRAIN_SWIM_GOAL = Object.freeze({ x: 1038, y: 100, z: 1008, closeness: 0 });
+const TERRAIN_SWIM_BASIN = Object.freeze({ x1: 1027, x2: 1032, y1: 95, y2: 99, z1: 1006, z2: 1011 });
+const TERRAIN_SWIM_WATER = Object.freeze({ x1: 1028, x2: 1031, y1: 96, y2: 99, z1: 1007, z2: 1010 });
+const TERRAIN_SWIM_OBSERVER = Object.freeze({
+  x: TERRAIN_SWIM_GOAL.x + 2.5,
+  y: TERRAIN_SWIM_GOAL.y,
+  z: TERRAIN_SWIM_GOAL.z + 4.5,
+});
+// Phase 6 composed terrain course. One bedrock-sided corridor forces the real
+// package Pathfinder to use every destructive/building locomotion mechanism in
+// sequence. The fixture grants ordinary player supplies; no helper teleports,
+// topology planner, or per-segment command advances the body.
+const TERRAIN_CHAIN_COURSE = Object.freeze({ x1: 1025, x2: 1054, y1: 94, y2: 110, z1: 1007, z2: 1009 });
+const TERRAIN_CHAIN_START = Object.freeze({ x: 1027.5, y: 100, z: 1008.5 });
+const TERRAIN_CHAIN_GOAL = Object.freeze({ x: 1052, y: 107, z: 1008, closeness: 0 });
+const TERRAIN_CHAIN_OBSERVER = Object.freeze({ x: 1052.5, y: 100, z: 1012.5 });
+const TERRAIN_CHAIN_DIG = Object.freeze([
+  Object.freeze({ x: 1031, y: 100, z: 1008 }),
+  Object.freeze({ x: 1031, y: 101, z: 1008 }),
+]);
+const TERRAIN_CHAIN_PARKOUR_GAP = Object.freeze({ x1: 1034, x2: 1035, y: 99, z: 1008 });
+const TERRAIN_CHAIN_BRIDGE = Object.freeze({ x1: 1038, x2: 1041, y: 99, z: 1008 });
+const TERRAIN_CHAIN_TOWER = Object.freeze({ x: 1043, y1: 100, y2: 101, z: 1008 });
+const TERRAIN_CHAIN_STAIR_BREAKS = Object.freeze([
+  Object.freeze({ x: 1044, y: 105, z: 1008 }),
+  Object.freeze({ x: 1045, y: 104, z: 1008 }),
+  Object.freeze({ x: 1045, y: 105, z: 1008 }),
+  Object.freeze({ x: 1045, y: 106, z: 1008 }),
+  Object.freeze({ x: 1046, y: 105, z: 1008 }),
+  Object.freeze({ x: 1046, y: 106, z: 1008 }),
+  Object.freeze({ x: 1046, y: 107, z: 1008 }),
+  Object.freeze({ x: 1047, y: 106, z: 1008 }),
+  Object.freeze({ x: 1047, y: 107, z: 1008 }),
+]);
+const TERRAIN_CHAIN_DESCENT = Object.freeze({ fromY: 106, toY: 103, landingX: 1048 });
+const TERRAIN_CHAIN_WATER = Object.freeze({ x: 1050, y1: 103, y2: 106, z: 1008 });
+const TERRAIN_CHAIN_SCAFFOLD = Object.freeze({ item: 'dirt', count: 12 });
 const STANCE_COURSE = Object.freeze({ x1: 1026, x2: 1058, y1: 99, y2: 103, z1: 1006, z2: 1038 });
 const STANCE_TARGET = Object.freeze({ x: 1056, y: 100, z: 1008 });
 const STANCE_WALLS = Object.freeze([
@@ -72,6 +132,7 @@ const DOORWAY_CAPTURE = Object.freeze({
 const OBSTRUCTION_WALL = Object.freeze({ x: 1033, y1: 100, y2: 102, z1: 1006, z2: 1016 });
 const OBSTRUCTION_PLUG = Object.freeze({ x: 1033, y1: 100, y2: 101, z: 1008 });
 const OBSTRUCTION_PLUG_BLOCK = 'dirt';
+const FINITE_BREAK_COST_PLUG_BLOCK = 'oak_log';
 
 // Deliver course. Exercises the typed-goal path (goal-director) rather than the
 // follow skill: the companion must acquire an item and physically hand it to
@@ -192,6 +253,7 @@ function parseArgs(argv) {
     varianceCase: '',
     preflightMode: '',
     maxPromptTurns: null,
+    operationTimeoutMs: null,
     authorized: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -206,6 +268,7 @@ function parseArgs(argv) {
     else if (value === '--variance-case') options.varianceCase = String(argv[++index] || '');
     else if (value === '--preflight-mode') options.preflightMode = String(argv[++index] || '');
     else if (value === '--max-prompt-turns') options.maxPromptTurns = Number(argv[++index]);
+    else if (value === '--operation-timeout-ms') options.operationTimeoutMs = Number(argv[++index]);
     else if (value === '--natural-language') options.naturalLanguage = true;
     else if (value === '--authorized-active-world') options.authorized = true;
     else throw new Error(`Unknown argument: ${value}`);
@@ -216,8 +279,11 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.attempts) || options.attempts < 1 || options.attempts > 3) {
     throw new Error('Attempts must be an integer from 1 through 3.');
   }
-  if (!['follow', 'stop', 'deliver', 'route-probe', 'interaction-stance', 'request-completion'].includes(options.mode)) {
-    throw new Error('Mode must be follow, stop, deliver, route-probe, interaction-stance, or request-completion.');
+  if (!Number.isInteger(options.operationTimeoutMs) || options.operationTimeoutMs < 1_000) {
+    throw new Error('--operation-timeout-ms must carry the worker-owned scenario timeout.');
+  }
+  if (!['follow', 'stop', 'deliver', 'player-route', 'route-probe', 'interaction-stance', 'request-completion', 'terrain'].includes(options.mode)) {
+    throw new Error('Mode must be follow, stop, deliver, player-route, route-probe, interaction-stance, request-completion, or terrain.');
   }
   if (options.mode === 'deliver' && !Object.hasOwn(DELIVER_SPEC, options.course)) {
     throw new Error(`Deliver verification requires one of: ${Object.keys(DELIVER_SPEC).join(', ')}.`);
@@ -228,8 +294,8 @@ function parseArgs(argv) {
   if (Object.hasOwn(DELIVER_SPEC, options.course) && options.mode !== 'deliver') {
     throw new Error(`Course ${options.course} must be measured with --mode deliver, got '${options.mode}'.`);
   }
-  if (!['full', 'doorway-corridor', 'obstruction-follow', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion', ...Object.keys(DELIVER_SPEC)].includes(options.course)) {
-    throw new Error('Course must be full, doorway-corridor, obstruction-follow, route-probe-inconclusive, interaction-stance-inconclusive, request-completion, deliver-item, or orchestrate-charcoal.');
+  if (!['full', 'doorway-corridor', 'obstruction-follow', 'player-route-obstruction', 'pathfinding-finite-break-cost', 'player-route-best-reachable', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion', 'terrain-swim-exit', 'terrain-workaround-chain', ...Object.keys(DELIVER_SPEC)].includes(options.course)) {
+    throw new Error('Course must be full, doorway-corridor, obstruction-follow, player-route-obstruction, pathfinding-finite-break-cost, player-route-best-reachable, route-probe-inconclusive, interaction-stance-inconclusive, request-completion, terrain-swim-exit, terrain-workaround-chain, deliver-item, or orchestrate-charcoal.');
   }
   if (options.mode === 'stop' && options.course !== 'full') {
     throw new Error('Stop verification requires the full course.');
@@ -242,6 +308,12 @@ function parseArgs(argv) {
   }
   if ((options.mode === 'request-completion') !== (options.course === 'request-completion')) {
     throw new Error('The request-completion course must be measured with --mode request-completion, and that mode serves no other course.');
+  }
+  if ((options.mode === 'terrain') !== ['terrain-swim-exit', 'terrain-workaround-chain'].includes(options.course)) {
+    throw new Error('Terrain courses must be measured with --mode terrain, and that mode serves no other course.');
+  }
+  if ((options.mode === 'player-route') !== ['player-route-obstruction', 'pathfinding-finite-break-cost', 'player-route-best-reachable'].includes(options.course)) {
+    throw new Error('Player-route courses must be measured with --mode player-route, and that mode serves no other course.');
   }
   if (options.mode === 'request-completion') {
     requestCompletionCase(options.varianceCase);
@@ -387,6 +459,46 @@ function trajectoryDistance(samples) {
   return travelled;
 }
 
+function verticalAscentObserved(samples, startY, minimumRise) {
+  let lowObserved = false;
+  for (const sample of Array.isArray(samples) ? samples : []) {
+    const y = Number(sample?.position?.y);
+    if (!Number.isFinite(y)) continue;
+    if (y <= startY + 0.35) lowObserved = true;
+    if (lowObserved && y >= startY + minimumRise) return true;
+  }
+  return false;
+}
+
+function orderedTerrainChainCheckpoints(samples) {
+  const observations = Array.isArray(samples) ? samples : [];
+  const definitions = [
+    ['dig_exit', position => position.x >= 1032.25 && position.y >= 99.5],
+    ['parkour_landing', position => position.x >= 1036.2 && position.y >= 99.5],
+    ['bridge_exit', position => position.x >= 1042.2 && position.y >= 99.5],
+    ['tower_top', position => position.x >= 1042.5 && position.x <= 1044.5 && position.y >= 102.75],
+    ['stair_top', position => position.x >= 1046.5 && position.y >= 105.65],
+    ['descent_landing', position => position.x >= 1047.5 && position.x <= 1049.25 && position.y <= 103.4],
+    ['swim_surface', position => Math.floor(position.x) === TERRAIN_CHAIN_WATER.x
+      && position.y >= TERRAIN_CHAIN_WATER.y2 + 0.45],
+    ['dry_goal', position => position.x >= 1051.5 && position.y >= 106.8],
+  ];
+  const checkpoints = [];
+  let cursor = 0;
+  for (const [name, predicate] of definitions) {
+    const relativeIndex = observations.slice(cursor).findIndex(sample => {
+      const position = sample?.position;
+      return [position?.x, position?.y, position?.z].every(Number.isFinite)
+        && predicate(position);
+    });
+    if (relativeIndex < 0) return { complete: false, checkpoints, missing: name };
+    const index = cursor + relativeIndex;
+    checkpoints.push({ name, index, ...observations[index] });
+    cursor = index + 1;
+  }
+  return { complete: true, checkpoints, missing: null };
+}
+
 function inventorySnapshot(bot) {
   return (bot?.inventory?.items?.() || [])
     .map(item => ({ name: item.name, count: Number(item.count) || 0, slot: Number(item.slot) }))
@@ -508,6 +620,7 @@ function compactState(state) {
     current: state?.action?.current || null,
     stopRequestedAt: state?.action?.stopRequestedAt ?? null,
     stopTimedOutAt: state?.action?.stopTimedOutAt ?? null,
+    traversalPolicy: state?.identity?.runtime?.traversal || null,
     preflightPolicy: state?.identity?.runtime?.preflight || null,
     modelMeasurement: state?.modelMeasurement?.conversation || null,
     companion: state?.companion || null,
@@ -655,21 +768,52 @@ async function run() {
   // see them. node --check does not catch that; the run does, at the worst
   // possible moment.
   const deliverCourse = Object.hasOwn(DELIVER_SPEC, options.course);
-  const obstructionCourse = options.course === 'obstruction-follow';
+  const obstructionFollowCourse = options.course === 'obstruction-follow';
+  const playerRouteObstructionCourse = options.course === 'player-route-obstruction';
+  const finiteBreakCostCourse = options.course === 'pathfinding-finite-break-cost';
+  const playerRouteBreakCourse = playerRouteObstructionCourse || finiteBreakCostCourse;
+  const playerRouteBestCourse = options.course === 'player-route-best-reachable';
+  const playerRouteCourse = playerRouteBreakCourse || playerRouteBestCourse;
+  const obstructionCourse = obstructionFollowCourse || playerRouteBreakCourse;
+  const obstructionPlugBlock = finiteBreakCostCourse
+    ? FINITE_BREAK_COST_PLUG_BLOCK
+    : OBSTRUCTION_PLUG_BLOCK;
   const orchestrationCourse = options.course === 'orchestrate-charcoal';
   const routeProbeCourse = options.course === 'route-probe-inconclusive';
   const interactionStanceCourse = options.course === 'interaction-stance-inconclusive';
   const requestCompletionCourse = options.course === 'request-completion';
+  const terrainSwimCourse = options.course === 'terrain-swim-exit';
+  const terrainChainCourse = options.course === 'terrain-workaround-chain';
   const varianceCase = requestCompletionCourse ? requestCompletionCase(options.varianceCase) : null;
   const generatedFlatCourse = options.course === 'deliver-item'
     || routeProbeCourse
     || interactionStanceCourse
-    || requestCompletionCourse;
+    || requestCompletionCourse
+    || terrainSwimCourse
+    || terrainChainCourse;
   const activeCourse = requestCompletionCourse
     ? REQUEST_COMPLETION_COURSE
     : interactionStanceCourse
     ? STANCE_COURSE
-    : routeProbeCourse ? ROUTE_PROBE_COURSE : COURSE;
+    : routeProbeCourse
+    ? ROUTE_PROBE_COURSE
+    : terrainSwimCourse
+    ? TERRAIN_SWIM_COURSE
+    : terrainChainCourse
+    ? TERRAIN_CHAIN_COURSE
+    : playerRouteBestCourse ? PLAYER_ROUTE_BLOCKED_COURSE : COURSE;
+  const botStart = terrainSwimCourse
+    ? TERRAIN_SWIM_START
+    : terrainChainCourse
+    ? TERRAIN_CHAIN_START
+    : BOT_START;
+  const targetStart = terrainSwimCourse
+    ? TERRAIN_SWIM_OBSERVER
+    : terrainChainCourse
+    ? TERRAIN_CHAIN_OBSERVER
+    : playerRouteBestCourse
+    ? PLAYER_ROUTE_BLOCKED_TARGET
+    : playerRouteBreakCourse ? PLAYER_ROUTE_TARGET : TARGET_START;
   if (deliverCourse) {
     const spec = DELIVER_SPEC[options.course];
     DELIVER_ITEM = spec.item;
@@ -677,7 +821,7 @@ async function run() {
     DELIVER_PLACE_SOURCE = spec.placeSource;
     DELIVER_WAIT_MS = spec.waitMs;
   }
-  const activeWaypoints = routeProbeCourse || interactionStanceCourse
+  const activeWaypoints = routeProbeCourse || interactionStanceCourse || terrainSwimCourse || terrainChainCourse || playerRouteCourse
     ? []
     : options.mode === 'stop' || options.course === 'full'
     ? WAYPOINTS
@@ -686,6 +830,16 @@ async function run() {
     schemaVersion: 1,
     scenario: requestCompletionCourse
       ? `phase-5-request-completion-${varianceCase.id}`
+      : terrainSwimCourse
+      ? 'phase-6-native-swim-exit-to-dry-bank'
+      : terrainChainCourse
+      ? 'phase-6-composed-terrain-workaround-chain'
+      : finiteBreakCostCourse
+      ? 'reach-stationary-player-through-expensive-finite-break'
+      : playerRouteCourse
+      ? (playerRouteBestCourse
+        ? 'advance-to-best-available-position-outside-unbreakable-enclosure'
+        : 'reach-stationary-player-through-breakable-obstruction')
       : interactionStanceCourse
       ? 'inconclusive-interaction-stance-probe-falls-through-to-real-pathfinder'
       : routeProbeCourse
@@ -709,13 +863,31 @@ async function run() {
     fixture: {
       course: activeCourse,
       courseVariant: options.course,
-      botStart: BOT_START,
-      targetStart: TARGET_START,
+      botStart,
+      targetStart,
       wall: WALL,
       doorway: DOORWAY,
       platform: PLATFORM,
       routeProbeTarget: routeProbeCourse ? ROUTE_PROBE_TARGET : null,
       routeProbeCage: routeProbeCourse ? ROUTE_PROBE_CAGE : null,
+      terrainSwim: terrainSwimCourse ? {
+        start: TERRAIN_SWIM_START,
+        goal: TERRAIN_SWIM_GOAL,
+        basin: TERRAIN_SWIM_BASIN,
+        water: TERRAIN_SWIM_WATER,
+      } : null,
+      terrainChain: terrainChainCourse ? {
+        start: TERRAIN_CHAIN_START,
+        goal: TERRAIN_CHAIN_GOAL,
+        dig: TERRAIN_CHAIN_DIG,
+        parkourGap: TERRAIN_CHAIN_PARKOUR_GAP,
+        bridge: TERRAIN_CHAIN_BRIDGE,
+        tower: TERRAIN_CHAIN_TOWER,
+        stairBreaks: TERRAIN_CHAIN_STAIR_BREAKS,
+        descent: TERRAIN_CHAIN_DESCENT,
+        water: TERRAIN_CHAIN_WATER,
+        scaffold: TERRAIN_CHAIN_SCAFFOLD,
+      } : null,
       interactionStanceTarget: interactionStanceCourse ? STANCE_TARGET : null,
       interactionStanceWalls: interactionStanceCourse ? STANCE_WALLS : null,
       waypoints: activeWaypoints,
@@ -828,17 +1000,51 @@ async function run() {
     const plug = marker(runId, phase, 'PLUG');
     const source = marker(runId, phase, 'SRCE');
     const routeTarget = marker(runId, phase, 'ROUTE_TARGET');
+    const swimBottom = marker(runId, phase, 'SWIM_BOTTOM');
+    const swimSurface = marker(runId, phase, 'SWIM_SURFACE');
+    const swimBank = marker(runId, phase, 'SWIM_BANK');
+    const blockedWest = marker(runId, phase, 'BLOCKED_WEST');
+    const blockedFloor = marker(runId, phase, 'BLOCKED_FLOOR');
+    const blockedRoof = marker(runId, phase, 'BLOCKED_ROOF');
     await paperCommand(`scoreboard players set ${begin} ${OBJECTIVE} 1`);
     await paperCommand(`data get entity ${options.bot} Pos`);
     await paperCommand(`data get entity ${TARGET_NAME} Pos`);
     await paperCommand(`execute if block 1033 100 1007 minecraft:stone_bricks run scoreboard players set ${wall} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block 1033 100 1008 minecraft:air run scoreboard players set ${opening} ${OBJECTIVE} 1`);
     await paperCommand(`execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set ${step} ${OBJECTIVE} 1`);
-    await paperCommand(`execute if block ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} minecraft:${OBSTRUCTION_PLUG_BLOCK} run scoreboard players set ${plug} ${OBJECTIVE} 1`);
+    await paperCommand(`execute if block ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} minecraft:${obstructionPlugBlock} run scoreboard players set ${plug} ${OBJECTIVE} 1`);
     if (routeProbeCourse) {
       await paperCommand(
         `execute if block ${ROUTE_PROBE_TARGET.x} ${ROUTE_PROBE_TARGET.y} ${ROUTE_PROBE_TARGET.z} `
         + `minecraft:${ROUTE_PROBE_CAGE.block} run scoreboard players set ${routeTarget} ${OBJECTIVE} 1`,
+      );
+    }
+    if (terrainSwimCourse) {
+      await paperCommand(
+        `execute if block ${Math.floor(TERRAIN_SWIM_START.x)} ${Math.floor(TERRAIN_SWIM_START.y)} ${Math.floor(TERRAIN_SWIM_START.z)} `
+        + `minecraft:water run scoreboard players set ${swimBottom} ${OBJECTIVE} 1`,
+      );
+      await paperCommand(
+        `execute if block ${Math.floor(TERRAIN_SWIM_START.x)} ${TERRAIN_SWIM_WATER.y2} ${Math.floor(TERRAIN_SWIM_START.z)} `
+        + `minecraft:water run scoreboard players set ${swimSurface} ${OBJECTIVE} 1`,
+      );
+      await paperCommand(
+        `execute if block ${TERRAIN_SWIM_GOAL.x} ${TERRAIN_SWIM_GOAL.y - 1} ${TERRAIN_SWIM_GOAL.z} `
+        + `minecraft:grass_block run scoreboard players set ${swimBank} ${OBJECTIVE} 1`,
+      );
+    }
+    if (playerRouteBestCourse) {
+      await paperCommand(
+        `execute if block ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${Math.floor(targetStart.y)} ${Math.floor(targetStart.z)} `
+        + `minecraft:bedrock run scoreboard players set ${blockedWest} ${OBJECTIVE} 1`,
+      );
+      await paperCommand(
+        `execute if block ${Math.floor(targetStart.x)} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${Math.floor(targetStart.z)} `
+        + `minecraft:bedrock run scoreboard players set ${blockedFloor} ${OBJECTIVE} 1`,
+      );
+      await paperCommand(
+        `execute if block ${Math.floor(targetStart.x)} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${Math.floor(targetStart.z)} `
+        + `minecraft:bedrock run scoreboard players set ${blockedRoof} ${OBJECTIVE} 1`,
       );
     }
     // Did provisioning actually place the acquisition source? A goal that fails
@@ -887,6 +1093,11 @@ async function run() {
       doorwayVerified: markerObserved(window, opening),
       platformVerified: markerObserved(window, step),
       routeTargetVerified: markerObserved(window, routeTarget),
+      swimWaterColumnVerified: markerObserved(window, swimBottom) && markerObserved(window, swimSurface),
+      swimBankVerified: markerObserved(window, swimBank),
+      blockedCageVerified: markerObserved(window, blockedWest)
+        && markerObserved(window, blockedFloor)
+        && markerObserved(window, blockedRoof),
       lines: window,
     };
   };
@@ -941,6 +1152,59 @@ async function run() {
     return true;
   };
 
+  const terrainChainSnapshot = () => {
+    const nameAt = ({ x, y, z }) => target.blockAt(new Vec3(x, y, z))?.name || null;
+    const line = (x1, x2, y, z) => Array.from(
+      { length: x2 - x1 + 1 },
+      (_, offset) => ({ x: x1 + offset, y, z }),
+    );
+    const column = (x, y1, y2, z) => Array.from(
+      { length: y2 - y1 + 1 },
+      (_, offset) => ({ x, y: y1 + offset, z }),
+    );
+    return {
+      dig: TERRAIN_CHAIN_DIG.map(nameAt),
+      parkourGap: line(
+        TERRAIN_CHAIN_PARKOUR_GAP.x1,
+        TERRAIN_CHAIN_PARKOUR_GAP.x2,
+        TERRAIN_CHAIN_PARKOUR_GAP.y,
+        TERRAIN_CHAIN_PARKOUR_GAP.z,
+      ).map(nameAt),
+      bridge: line(
+        TERRAIN_CHAIN_BRIDGE.x1,
+        TERRAIN_CHAIN_BRIDGE.x2,
+        TERRAIN_CHAIN_BRIDGE.y,
+        TERRAIN_CHAIN_BRIDGE.z,
+      ).map(nameAt),
+      tower: column(
+        TERRAIN_CHAIN_TOWER.x,
+        TERRAIN_CHAIN_TOWER.y1,
+        TERRAIN_CHAIN_TOWER.y2,
+        TERRAIN_CHAIN_TOWER.z,
+      ).map(nameAt),
+      stairBreaks: TERRAIN_CHAIN_STAIR_BREAKS.map(nameAt),
+      water: column(
+        TERRAIN_CHAIN_WATER.x,
+        TERRAIN_CHAIN_WATER.y1,
+        TERRAIN_CHAIN_WATER.y2,
+        TERRAIN_CHAIN_WATER.z,
+      ).map(nameAt),
+      bank: nameAt({ x: TERRAIN_CHAIN_GOAL.x, y: TERRAIN_CHAIN_GOAL.y - 1, z: TERRAIN_CHAIN_GOAL.z }),
+    };
+  };
+
+  const terrainChainFixtureReady = () => {
+    if (!terrainChainCourse) return true;
+    const snapshot = terrainChainSnapshot();
+    return snapshot.dig.every(name => name === 'stone')
+      && snapshot.parkourGap.every(name => name === 'air')
+      && snapshot.bridge.every(name => name === 'air')
+      && snapshot.tower.every(name => name === 'air')
+      && snapshot.stairBreaks.every(name => name === 'stone')
+      && snapshot.water.every(name => name === 'water')
+      && snapshot.bank === 'grass_block';
+  };
+
   const provisionFixture = async () => {
     await restoreFixture();
     fixtureMutated = true;
@@ -973,6 +1237,10 @@ async function run() {
       // position" from inside it.
       ...(orchestrationCourse
         ? []
+        : terrainSwimCourse
+          ? [`fill ${TERRAIN_SWIM_COURSE.x1} ${TERRAIN_SWIM_COURSE.y1} ${TERRAIN_SWIM_COURSE.z1} ${TERRAIN_SWIM_COURSE.x2} ${TERRAIN_SWIM_COURSE.y2} ${TERRAIN_SWIM_COURSE.z2} air`]
+        : terrainChainCourse
+          ? [`fill ${TERRAIN_CHAIN_COURSE.x1} ${TERRAIN_CHAIN_COURSE.y1} ${TERRAIN_CHAIN_COURSE.z1} ${TERRAIN_CHAIN_COURSE.x2} ${TERRAIN_CHAIN_COURSE.y2} ${TERRAIN_CHAIN_COURSE.z2} air`]
         : interactionStanceCourse
           ? [`fill ${STANCE_COURSE.x1} ${COURSE.y1} ${STANCE_COURSE.z1} ${STANCE_COURSE.x2} ${STANCE_COURSE.y2} ${STANCE_COURSE.z2} air`]
           : [`fill ${COURSE.x1} ${COURSE.y1} ${COURSE.z1} ${COURSE.x2} ${COURSE.y2} ${COURSE.z2} air`]),
@@ -999,7 +1267,115 @@ async function run() {
               `fill ${wall.x1} ${wall.y1} ${wall.z1} ${wall.x2} ${wall.y2} ${wall.z2} bedrock`
             )),
           ]
-        : options.course === 'obstruction-follow'
+        : terrainSwimCourse
+        ? [
+            `fill ${TERRAIN_SWIM_COURSE.x1} ${TERRAIN_SWIM_COURSE.y1} ${TERRAIN_SWIM_COURSE.z1} `
+            + `${TERRAIN_SWIM_COURSE.x2} ${TERRAIN_SWIM_GOAL.y - 2} ${TERRAIN_SWIM_COURSE.z2} dirt`,
+            `fill ${TERRAIN_SWIM_COURSE.x1} ${TERRAIN_SWIM_GOAL.y - 1} ${TERRAIN_SWIM_COURSE.z1} `
+            + `${TERRAIN_SWIM_COURSE.x2} ${TERRAIN_SWIM_GOAL.y - 1} ${TERRAIN_SWIM_COURSE.z2} grass_block`,
+            `fill ${TERRAIN_SWIM_BASIN.x1} ${TERRAIN_SWIM_BASIN.y1} ${TERRAIN_SWIM_BASIN.z1} `
+            + `${TERRAIN_SWIM_BASIN.x2} ${TERRAIN_SWIM_BASIN.y2} ${TERRAIN_SWIM_BASIN.z2} stone`,
+            `fill ${TERRAIN_SWIM_WATER.x1} ${TERRAIN_SWIM_WATER.y1} ${TERRAIN_SWIM_WATER.z1} `
+            + `${TERRAIN_SWIM_WATER.x2} ${TERRAIN_SWIM_WATER.y2} ${TERRAIN_SWIM_WATER.z2} water`,
+          ]
+        : terrainChainCourse
+        ? [
+            // The course is a single-cell-wide physical corridor. Bedrock owns
+            // the boundary; every mutable cell inside is ordinary terrain.
+            `fill ${TERRAIN_CHAIN_COURSE.x1} ${TERRAIN_CHAIN_COURSE.y1} ${TERRAIN_CHAIN_COURSE.z1} `
+            + `${TERRAIN_CHAIN_COURSE.x2} ${TERRAIN_CHAIN_COURSE.y1} ${TERRAIN_CHAIN_COURSE.z2} bedrock`,
+            `fill ${TERRAIN_CHAIN_COURSE.x1} ${TERRAIN_CHAIN_COURSE.y1 + 1} ${TERRAIN_CHAIN_COURSE.z1} `
+            + `${TERRAIN_CHAIN_COURSE.x2} ${TERRAIN_CHAIN_COURSE.y2} ${TERRAIN_CHAIN_COURSE.z1} bedrock`,
+            `fill ${TERRAIN_CHAIN_COURSE.x1} ${TERRAIN_CHAIN_COURSE.y1 + 1} ${TERRAIN_CHAIN_COURSE.z2} `
+            + `${TERRAIN_CHAIN_COURSE.x2} ${TERRAIN_CHAIN_COURSE.y2} ${TERRAIN_CHAIN_COURSE.z2} bedrock`,
+            `fill ${TERRAIN_CHAIN_COURSE.x1} ${TERRAIN_CHAIN_COURSE.y1 + 1} ${TERRAIN_CHAIN_COURSE.z1} `
+            + `${TERRAIN_CHAIN_COURSE.x1} ${TERRAIN_CHAIN_COURSE.y2} ${TERRAIN_CHAIN_COURSE.z2} bedrock`,
+            `fill ${TERRAIN_CHAIN_COURSE.x2} ${TERRAIN_CHAIN_COURSE.y1 + 1} ${TERRAIN_CHAIN_COURSE.z1} `
+            + `${TERRAIN_CHAIN_COURSE.x2} ${TERRAIN_CHAIN_COURSE.y2} ${TERRAIN_CHAIN_COURSE.z2} bedrock`,
+
+            // Dig-through, then a two-cell gap whose cheapest and only
+            // non-mutating crossing is the native three-block parkour edge.
+            'fill 1026 99 1008 1033 99 1008 smooth_stone',
+            'fill 1026 102 1008 1031 102 1008 bedrock',
+            'fill 1031 100 1008 1031 101 1008 stone',
+            'fill 1036 99 1008 1037 99 1008 smooth_stone',
+            // Full movement and parkour clearance remains below this roof,
+            // but no pre-shaft cell can pillar above the stair tunnel.
+            'fill 1026 104 1008 1042 104 1008 bedrock',
+
+            // The following four-cell gap is longer than the executable
+            // parkour edge and therefore consumes a horizontal dirt bridge.
+            'fill 1042 99 1008 1043 99 1008 smooth_stone',
+
+            // A capped shaft has one exit three blocks above the corridor.
+            // Its bedrock boundary reaches the course floor so the bridge pit
+            // cannot become a lower bypass around the tower and stair tunnel.
+            // The only forward route is the package-owned 1x1 tower edge.
+            'fill 1044 95 1008 1044 102 1008 bedrock',
+            'fill 1042 105 1008 1043 105 1008 bedrock',
+
+            // Three rising stone columns form a real stair tunnel. The sloped
+            // bedrock roof makes repeated vertical pillaring a dead end while
+            // leaving each forward/up excavation edge executable.
+            'setblock 1044 105 1008 stone',
+            'setblock 1044 106 1008 bedrock',
+            'fill 1045 103 1008 1045 106 1008 stone',
+            'setblock 1045 103 1008 bedrock',
+            'setblock 1045 107 1008 bedrock',
+            'fill 1046 104 1008 1046 107 1008 stone',
+            'setblock 1046 104 1008 bedrock',
+            'setblock 1046 108 1008 bedrock',
+            'fill 1047 105 1008 1047 107 1008 stone',
+            'setblock 1047 105 1008 bedrock',
+            'setblock 1047 109 1008 bedrock',
+
+            // A three-block native drop lands directly beside the bottom of a
+            // contained four-block water column. Its two-block-high lower
+            // entrance admits the body without letting the upper source flow
+            // west into the stair blocks. Swimming to its air node is the only
+            // connection to the elevated dry bank and final goal.
+            'setblock 1048 102 1008 stone',
+            'setblock 1049 102 1008 stone',
+            'setblock 1050 102 1008 stone',
+            'fill 1049 105 1008 1049 106 1008 bedrock',
+            `fill ${TERRAIN_CHAIN_WATER.x} ${TERRAIN_CHAIN_WATER.y1} ${TERRAIN_CHAIN_WATER.z} `
+            + `${TERRAIN_CHAIN_WATER.x} ${TERRAIN_CHAIN_WATER.y2} ${TERRAIN_CHAIN_WATER.z} water`,
+            'fill 1051 106 1008 1053 106 1008 grass_block',
+          ]
+        : playerRouteBestCourse
+        ? [
+            // A sealed bedrock shell makes exact arrival physically impossible
+            // from every face. Clearing Kevin's inventory removes scaffolding
+            // as a fixture variable; the measured contract is consumption of
+            // Pathfinder's best available native route, not item acquisition.
+            `clear ${options.bot}`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} air`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} bedrock`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} bedrock`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} bedrock`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} bedrock`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z1} bedrock`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1} ${PLAYER_ROUTE_BLOCKED_CAGE.y1} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2} ${PLAYER_ROUTE_BLOCKED_CAGE.y2} ${PLAYER_ROUTE_BLOCKED_CAGE.z2} bedrock`,
+            `fill ${PLAYER_ROUTE_BLOCKED_CAGE.x1 + 1} ${Math.floor(targetStart.y) - 1} ${PLAYER_ROUTE_BLOCKED_CAGE.z1 + 1} `
+            + `${PLAYER_ROUTE_BLOCKED_CAGE.x2 - 1} ${Math.floor(targetStart.y) - 1} ${PLAYER_ROUTE_BLOCKED_CAGE.z2 - 1} smooth_stone`,
+          ]
+        : playerRouteBreakCourse
+        ? [
+            // The requester is already east of the wall. The doorway begins
+            // sealed, so a successful finite goToPlayer must break the plug;
+            // there is no moving-target timing dependency in this course.
+            `fill ${OBSTRUCTION_WALL.x} ${OBSTRUCTION_WALL.y1} ${OBSTRUCTION_WALL.z1} ${OBSTRUCTION_WALL.x} ${OBSTRUCTION_WALL.y2} ${OBSTRUCTION_WALL.z2} stone_bricks`,
+            ...(finiteBreakCostCourse ? [`clear ${options.bot}`] : []),
+            `fill ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y1} ${OBSTRUCTION_PLUG.z} ${OBSTRUCTION_PLUG.x} ${OBSTRUCTION_PLUG.y2} ${OBSTRUCTION_PLUG.z} ${obstructionPlugBlock}`,
+          ]
+        : obstructionFollowCourse
         ? [
             // Full-width wall so the companion cannot simply walk around it,
             // but the doorway starts OPEN: the controlled target moves with
@@ -1014,7 +1390,7 @@ async function run() {
             `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} stone_bricks`,
             `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
           ]),
-      ...(orchestrationCourse || routeProbeCourse || interactionStanceCourse
+      ...(orchestrationCourse || routeProbeCourse || interactionStanceCourse || terrainSwimCourse || terrainChainCourse || playerRouteBestCourse
         ? []
         : [`fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`]),
       // The acceptance fixture must not be preempted by a mob. Spawning is
@@ -1039,10 +1415,24 @@ async function run() {
             ...varianceCase.grants.map(({ item, count }) => `give ${options.bot} ${item} ${count}`),
           ]
         : []),
+      ...(terrainSwimCourse
+        ? [
+            `clear ${options.bot}`,
+            `effect give ${options.bot} minecraft:water_breathing 60 0 true`,
+          ]
+        : []),
+      ...(terrainChainCourse
+        ? [
+            `clear ${options.bot}`,
+            `give ${options.bot} minecraft:${TERRAIN_CHAIN_SCAFFOLD.item} ${TERRAIN_CHAIN_SCAFFOLD.count}`,
+            `give ${options.bot} minecraft:iron_pickaxe 1`,
+            `effect give ${options.bot} minecraft:water_breathing 60 0 true`,
+          ]
+        : []),
       `gamemode survival ${options.bot}`,
       `gamemode survival ${TARGET_NAME}`,
-      `tp ${options.bot} ${BOT_START.x} ${BOT_START.y} ${BOT_START.z}`,
-      `tp ${TARGET_NAME} ${TARGET_START.x} ${TARGET_START.y} ${TARGET_START.z}`,
+      `tp ${options.bot} ${botStart.x} ${botStart.y} ${botStart.z}`,
+      `tp ${TARGET_NAME} ${targetStart.x} ${targetStart.y} ${targetStart.z}`,
       `effect give ${options.bot} minecraft:instant_health 1 4 true`,
       `effect give ${options.bot} minecraft:saturation 180 1 true`,
       `effect give ${TARGET_NAME} minecraft:instant_health 1 4 true`,
@@ -1078,11 +1468,19 @@ async function run() {
         5_000,
       );
     }
+    if (terrainChainCourse) {
+      await waitFor(
+        terrainChainFixtureReady,
+        Boolean,
+        'controlled observer receipt of the complete terrain workaround corridor',
+        5_000,
+      );
+    }
     target.pathfinder.stop();
     target.clearControlStates();
     await waitFor(
       () => positionOf(target.entity),
-      position => distance(position, TARGET_START) <= 0.3,
+      position => distance(position, targetStart) <= 0.3,
       `${TARGET_NAME} reset position`,
       15_000,
     );
@@ -1096,7 +1494,18 @@ async function run() {
           && compact.health >= 19
           && compact.hunger >= 19
           && compact.hostiles.length === 0
-          && distance(compact.position, BOT_START) <= 0.3;
+          && (!finiteBreakCostCourse
+            || Object.values(compact.inventoryCounts || {}).every(count => Number(count) === 0))
+          && (!terrainSwimCourse || (
+            compact.traversalPolicy === 'full'
+            && Object.values(compact.inventoryCounts || {}).every(count => Number(count) === 0)
+          ))
+          && (!terrainChainCourse || (
+            compact.traversalPolicy === 'full'
+            && Number(compact.inventoryCounts?.[TERRAIN_CHAIN_SCAFFOLD.item]) === TERRAIN_CHAIN_SCAFFOLD.count
+            && Number(compact.inventoryCounts?.iron_pickaxe) === 1
+          ))
+          && distance(compact.position, botStart) <= 0.3;
       },
       `${options.bot} verified follow fixture reset`,
       15_000,
@@ -1323,7 +1732,7 @@ async function run() {
     evidence.fixture.difficulty = {
       previous: previousDifficulty,
       duringFixture: difficultyDuring.value,
-      restored: false,
+      restored: !difficultyMutated,
     };
 
     socket = await connectDashboard(options.url);
@@ -1417,10 +1826,10 @@ async function run() {
     await paperCommand(`scoreboard objectives remove ${OBJECTIVE}`);
     await paperCommand(`scoreboard objectives add ${OBJECTIVE} dummy`);
     target = await createControlledTarget(evidence.controlledTarget.events);
-    await paperCommand(`tp ${TARGET_NAME} ${TARGET_START.x} ${TARGET_START.y} ${TARGET_START.z}`);
+    await paperCommand(`tp ${TARGET_NAME} ${targetStart.x} ${targetStart.y} ${targetStart.z}`);
     await waitFor(
       () => positionOf(target.entity),
-      position => distance(position, TARGET_START) <= 0.3,
+      position => distance(position, targetStart) <= 0.3,
       `${TARGET_NAME} initial fixture position`,
       15_000,
     );
@@ -1460,7 +1869,7 @@ async function run() {
       // through -- which is precisely what a companion with canDig disabled
       // cannot do, and what it reported as `noPath` against a real player.
       if (
-        options.course === 'obstruction-follow'
+        obstructionFollowCourse
         && !activeAttempt.obstructionSealedAt
         && Number(positionOf(target.entity)?.x) > OBSTRUCTION_WALL.x + 1
       ) {
@@ -1489,6 +1898,17 @@ async function run() {
       const runId = `F${attemptNumber}`;
       const paperBefore = await paperSnapshot(runId, 'BEFORE');
       const routeFixtureBefore = routeProbeCourse ? captureFixtureRuns() : null;
+      const terrainFixtureBefore = terrainSwimCourse ? captureFixtureRuns() : null;
+      const blockedFixtureBefore = playerRouteBestCourse ? captureFixtureRuns() : null;
+      const terrainStateBefore = terrainSwimCourse
+        ? compactState(states[options.bot])
+        : null;
+      const terrainChainStateBefore = terrainChainCourse
+        ? compactState(states[options.bot])
+        : null;
+      const finiteBreakStateBefore = finiteBreakCostCourse
+        ? compactState(states[options.bot])
+        : null;
       activeAttempt = {
         attempt: attemptNumber,
         runId,
@@ -1513,6 +1933,14 @@ async function run() {
         waypoints: [],
         paperBefore,
         routeFixtureBefore,
+        terrainFixtureBefore,
+        blockedFixtureBefore,
+        terrainInventoryBefore: terrainStateBefore?.inventoryCounts || null,
+        terrainTraversalPolicy: terrainStateBefore?.traversalPolicy || null,
+        terrainChainBefore: terrainChainCourse ? terrainChainSnapshot() : null,
+        terrainChainInventoryBefore: terrainChainStateBefore?.inventoryCounts || null,
+        terrainChainTraversalPolicy: terrainChainStateBefore?.traversalPolicy || null,
+        finiteBreakInventoryBefore: finiteBreakStateBefore?.inventoryCounts || null,
       };
       if (requestCompletionCourse) {
         const expectedPolicy = options.preflightMode === 'on'
@@ -1794,6 +2222,18 @@ async function run() {
             return activeAttempt.terminal?.label === 'action:goToCoordinates'
               && activeAttempt.terminal?.phase === 'failed';
           }
+          if (terrainSwimCourse && activeAttempt.terminal?.label === 'action:goToCoordinates') {
+            return activeAttempt.terminal?.phase === 'succeeded';
+          }
+          if (terrainChainCourse && activeAttempt.terminal?.label === 'action:goToCoordinates') {
+            return ['succeeded', 'failed', 'interrupted'].includes(activeAttempt.terminal?.phase);
+          }
+          if (playerRouteBestCourse && activeAttempt.terminal?.label === 'action:goToPlayer') {
+            return activeAttempt.terminal?.phase === 'failed';
+          }
+          if (playerRouteBreakCourse && activeAttempt.terminal?.label === 'action:goToPlayer') {
+            return activeAttempt.terminal?.phase === 'succeeded';
+          }
           // Ownership is a physical state: not idle, and actively pathfinding.
           // This used to also require current === 'action:followPlayer'. Under
           // model-first the model picks the command, and four registered
@@ -1807,10 +2247,10 @@ async function run() {
           // and is what the scenario really asserts.
           return compact.idle === false && Boolean(compact.pathfinding);
         },
-        `${runId} ${routeProbeCourse ? 'route-probe terminal' : `active ${options.mode === 'deliver' ? 'goal' : 'follow'} ownership`}`,
+        `${runId} ${routeProbeCourse ? 'route-probe terminal' : `active ${options.mode === 'deliver' ? 'goal' : options.mode === 'terrain' ? 'terrain movement' : 'follow'} ownership`}`,
         options.mode === 'deliver' ? 30_000 : 15_000,
       );
-      activeAttempt.activeAt = routeProbeCourse
+      activeAttempt.activeAt = routeProbeCourse || terrainSwimCourse || terrainChainCourse || playerRouteCourse
         ? Number(activeAttempt.terminal?.startedAt) || Date.now()
         : Number(activeState?._meta?.sampledAt) || Date.now();
 
@@ -1839,6 +2279,75 @@ async function run() {
           `${runId} correlated successful delivery settlement`,
           15_000,
         );
+      } else if (terrainSwimCourse) {
+        await waitFor(
+          () => activeAttempt.terminal,
+          terminal => terminal?.label === 'action:goToCoordinates'
+            && terminal?.phase === 'succeeded'
+            && terminal?.code === 'skill_arrived',
+          `${runId} successful terrain swim settlement`,
+          30_000,
+        );
+        await waitFor(
+          () => compactState(states[options.bot]),
+          state => distance(state.position, TERRAIN_SWIM_GOAL) <= 1
+            && Number(state.position?.y) >= TERRAIN_SWIM_GOAL.y - 0.1,
+          `${runId} dry-bank arrival`,
+          5_000,
+        );
+      } else if (terrainChainCourse) {
+        const terminal = await waitFor(
+          () => activeAttempt.terminal,
+          terminal => terminal?.label === 'action:goToCoordinates'
+            && ['succeeded', 'failed', 'interrupted'].includes(terminal?.phase),
+          `${runId} composed terrain terminal result`,
+          options.operationTimeoutMs,
+        );
+        if (terminal.phase !== 'succeeded' || terminal.code !== 'skill_arrived') {
+          throw new Error(`${runId} composed terrain action failed: ${JSON.stringify(terminal)}`);
+        }
+        await waitFor(
+          () => compactState(states[options.bot]),
+          state => distance(state.position, TERRAIN_CHAIN_GOAL) <= 1
+            && Number(state.position?.y) >= TERRAIN_CHAIN_GOAL.y - 0.1,
+          `${runId} composed terrain dry-goal arrival`,
+          5_000,
+        );
+      } else if (playerRouteBestCourse) {
+        await waitFor(
+          () => activeAttempt.terminal,
+          terminal => terminal?.label === 'action:goToPlayer'
+            && terminal?.phase === 'failed'
+            && ['skill_closest_reachable', 'skill_closest_explored'].includes(terminal?.code),
+          `${runId} honest best-available player-route settlement`,
+          30_000,
+        );
+        await waitFor(
+          () => compactState(states[options.bot]),
+          state => {
+            const observedDistance = distance(state.position, positionOf(target.entity));
+            return observedDistance > PLAYER_ROUTE_ACCEPTANCE_DISTANCE
+              && observedDistance <= PLAYER_ROUTE_BLOCKED_NEAREST_DISTANCE
+                + PLAYER_ROUTE_BLOCKED_OBSERVATION_ALLOWANCE;
+          },
+          `${runId} physical convergence at the sealed enclosure`,
+          5_000,
+        );
+      } else if (playerRouteBreakCourse) {
+        await waitFor(
+          () => activeAttempt.terminal,
+          terminal => terminal?.label === 'action:goToPlayer'
+            && terminal?.phase === 'succeeded'
+            && terminal?.code === 'skill_arrived',
+          `${runId} successful player-route settlement`,
+          30_000,
+        );
+        await waitFor(
+          () => compactState(states[options.bot]),
+          state => distance(state.position, positionOf(target.entity)) <= PLAYER_ROUTE_ACCEPTANCE_DISTANCE,
+          `${runId} physical arrival at stationary player`,
+          5_000,
+        );
       } else if (!routeProbeCourse) {
       await driveTarget(activeWaypoints[0]);
       if (options.mode === 'stop') {
@@ -1846,7 +2355,7 @@ async function run() {
           () => activeAttempt.samples,
           // Physical progress under any request-owned action, not one name.
           samples => samples.some(sample => (
-            distance(sample.position, BOT_START) >= 4
+            distance(sample.position, botStart) >= 4
             && typeof sample.current === 'string'
             && sample.current.startsWith('action:')
           )),
@@ -1868,7 +2377,7 @@ async function run() {
       }
 
       activeAttempt.stopIssuedAt = Date.now();
-      if (options.mode === 'deliver' || routeProbeCourse) {
+      if (options.mode === 'deliver' || routeProbeCourse || terrainSwimCourse || terrainChainCourse || playerRouteCourse) {
         // Delivery acceptance is already physical at this point. Establishing
         // the post-condition hold is harness teardown, not another user request
         // and not another provider-latency measurement. Natural-language stop
@@ -1918,6 +2427,12 @@ async function run() {
         Boolean,
         options.mode === 'deliver'
           ? `${runId} goal terminal result (labels seen: ${[...activeAttempt.resultsByLabel.keys()].join(', ') || 'none'})`
+          : terrainSwimCourse
+            ? `${runId} terrain movement terminal result`
+          : terrainChainCourse
+            ? `${runId} composed terrain movement terminal result`
+          : playerRouteCourse
+            ? `${runId} player-route terminal result`
           : routeProbeCourse
             ? `${runId} inconclusive route-probe terminal result`
             : `${runId} interrupted follow terminal result`,
@@ -1936,7 +2451,7 @@ async function run() {
       const doorwayCrossed = Boolean(doorwayObservation);
       const elevated = physicalBotSamples.some(sample => Number(sample.position?.y) >= 100.8);
       const timeToFirstProgressMs = (() => {
-        const sample = physicalBotSamples.find(entry => distance(entry.position, BOT_START) >= 0.4);
+        const sample = physicalBotSamples.find(entry => distance(entry.position, botStart) >= 0.4);
         return sample ? Number(sample.sampledAt ?? sample.at) - activeAttempt.issuedAt : null;
       })();
       const stable = stableSamples.length >= 35 && stableSamples.every(sample => {
@@ -1952,15 +2467,179 @@ async function run() {
       // design and only becomes true once the companion breaks through. That
       // transition -- plugged before, open after -- IS the proof, so it
       // replaces the static doorway check rather than failing it.
-      // Sealed behind the target, then open again at the end = the companion
-      // broke through. `plugVerified` at paperBefore is intentionally false
-      // here: the doorway starts open so the target can path east.
-      const obstructionDugThrough = obstructionCourse
+      // Follow seals the doorway after the target crosses. Player-route begins
+      // with it sealed because the requester is already on the far side. Both
+      // variants require the same final physical fact: the opening is now air.
+      const obstructionDugThrough = obstructionFollowCourse
         ? Boolean(activeAttempt.obstructionSealedAt) && Boolean(paperAfter.doorwayVerified)
+        : playerRouteBreakCourse
+        ? Boolean(paperBefore.plugVerified) && Boolean(paperAfter.doorwayVerified)
+        : null;
+      const playerRoutePathfinderObserved = playerRouteCourse
+        ? activeAttempt.samples.some(sample => Boolean(sample?.pathfinding))
+        : null;
+      const playerRouteTerminalVerified = playerRouteBreakCourse
+        ? activeAttempt.terminal?.label === 'action:goToPlayer'
+          && activeAttempt.terminal?.phase === 'succeeded'
+          && activeAttempt.terminal?.code === 'skill_arrived'
+          && activeAttempt.terminal?.retryable === false
+        : null;
+      const playerRouteBestTerminalVerified = playerRouteBestCourse
+        ? activeAttempt.terminal?.label === 'action:goToPlayer'
+          && activeAttempt.terminal?.phase === 'failed'
+          && ['skill_closest_reachable', 'skill_closest_explored'].includes(activeAttempt.terminal?.code)
+          && activeAttempt.terminal?.retryable === true
+        : null;
+      const playerRouteFinalDistance = playerRouteCourse
+        ? distance(paperAfter.botPosition, paperAfter.targetPosition)
+        : null;
+      const playerRouteArrivalVerified = playerRouteBreakCourse
+        ? playerRouteTerminalVerified === true
+          && obstructionDugThrough === true
+          && doorwayCrossed
+          && Number.isFinite(botTravel)
+          && botTravel >= 7
+          && Number.isFinite(targetTravel)
+          && targetTravel <= 0.3
+          && Number.isFinite(playerRouteFinalDistance)
+          && playerRouteFinalDistance <= PLAYER_ROUTE_ACCEPTANCE_DISTANCE
+        : null;
+      const finiteBreakCostVerified = finiteBreakCostCourse
+        ? playerRouteArrivalVerified === true
+          && paperBefore.plugVerified === true
+          && Object.values(activeAttempt.finiteBreakInventoryBefore || {})
+            .every(count => Number(count) === 0)
+        : null;
+      const blockedFixtureAfter = playerRouteBestCourse ? captureFixtureRuns() : null;
+      const blockedTerrainIntact = playerRouteBestCourse
+        ? JSON.stringify(activeAttempt.blockedFixtureBefore) === JSON.stringify(blockedFixtureAfter)
+        : null;
+      const unbreakableObstructionPreserved = playerRouteBestCourse
+        ? paperBefore.blockedCageVerified === true
+          && paperAfter.blockedCageVerified === true
+          && blockedTerrainIntact === true
+        : null;
+      const playerRouteBestPositionVerified = playerRouteBestCourse
+        ? playerRouteBestTerminalVerified === true
+          && Number.isFinite(botTravel)
+          && botTravel > 0
+          && Number.isFinite(targetTravel)
+          && targetTravel <= 0.3
+          && Number.isFinite(playerRouteFinalDistance)
+          && playerRouteFinalDistance > PLAYER_ROUTE_ACCEPTANCE_DISTANCE
+          && playerRouteFinalDistance <= PLAYER_ROUTE_BLOCKED_NEAREST_DISTANCE
+            + PLAYER_ROUTE_BLOCKED_OBSERVATION_ALLOWANCE
         : null;
       const routeFixtureAfter = routeProbeCourse ? captureFixtureRuns() : null;
       const routeTerrainIntact = routeProbeCourse
         ? JSON.stringify(activeAttempt.routeFixtureBefore) === JSON.stringify(routeFixtureAfter)
+        : null;
+      const terrainFixtureAfter = terrainSwimCourse ? captureFixtureRuns() : null;
+      const terrainIntact = terrainSwimCourse
+        ? JSON.stringify(activeAttempt.terrainFixtureBefore) === JSON.stringify(terrainFixtureAfter)
+        : null;
+      const terrainInventoryAfter = terrainSwimCourse
+        ? compactState(states[options.bot]).inventoryCounts
+        : null;
+      const terrainScaffoldAccountingVerified = terrainSwimCourse
+        ? JSON.stringify(activeAttempt.terrainInventoryBefore) === JSON.stringify(terrainInventoryAfter)
+          && Object.values(terrainInventoryAfter || {}).every(count => Number(count) === 0)
+        : null;
+      const terrainTrajectory = terrainSwimCourse
+        ? [{ sampledAt: activeAttempt.issuedAt - 1, position: paperBefore.botPosition }, ...physicalBotSamples]
+        : [];
+      const terrainStartSubmerged = terrainSwimCourse
+        ? paperBefore.swimWaterColumnVerified === true
+          && Number(paperBefore.botPosition?.y) <= TERRAIN_SWIM_START.y + 0.35
+        : null;
+      const terrainAscentObserved = terrainSwimCourse
+        ? verticalAscentObserved(terrainTrajectory, TERRAIN_SWIM_START.y, 3)
+        : null;
+      const terrainDrySettlement = terrainSwimCourse
+        ? paperAfter.swimBankVerified === true
+          && distance(paperAfter.botPosition, TERRAIN_SWIM_GOAL) <= 1
+          && Number(paperAfter.botPosition?.y) >= TERRAIN_SWIM_GOAL.y - 0.1
+        : null;
+      const terrainPathfinderObserved = terrainSwimCourse
+        ? activeAttempt.samples.some(sample => Boolean(sample?.pathfinding))
+        : null;
+      const terrainTerminalVerified = terrainSwimCourse
+        ? activeAttempt.terminal?.label === 'action:goToCoordinates'
+          && activeAttempt.terminal?.phase === 'succeeded'
+          && activeAttempt.terminal?.code === 'skill_arrived'
+        : null;
+      const terrainChainAfter = terrainChainCourse ? terrainChainSnapshot() : null;
+      const terrainChainInventoryAfter = terrainChainCourse
+        ? compactState(states[options.bot]).inventoryCounts
+        : null;
+      const terrainChainTrajectory = terrainChainCourse
+        ? [{ sampledAt: activeAttempt.issuedAt - 1, position: paperBefore.botPosition }, ...physicalBotSamples]
+        : [];
+      const terrainChainCheckpoints = terrainChainCourse
+        ? orderedTerrainChainCheckpoints(terrainChainTrajectory)
+        : null;
+      const terrainChainDigVerified = terrainChainCourse
+        ? activeAttempt.terrainChainBefore?.dig?.every(name => name === 'stone')
+          && terrainChainAfter?.dig?.every(name => name === 'air')
+        : null;
+      const terrainChainParkourVerified = terrainChainCourse
+        ? activeAttempt.terrainChainBefore?.parkourGap?.every(name => name === 'air')
+          && terrainChainAfter?.parkourGap?.every(name => name === 'air')
+          && terrainChainCheckpoints?.checkpoints?.some(entry => entry.name === 'parkour_landing')
+        : null;
+      const terrainChainBridgeVerified = terrainChainCourse
+        ? activeAttempt.terrainChainBefore?.bridge?.every(name => name === 'air')
+          && terrainChainAfter?.bridge?.some(name => name === TERRAIN_CHAIN_SCAFFOLD.item)
+        : null;
+      const terrainChainTowerVerified = terrainChainCourse
+        ? activeAttempt.terrainChainBefore?.tower?.every(name => name === 'air')
+          && terrainChainAfter?.tower?.every(name => name === TERRAIN_CHAIN_SCAFFOLD.item)
+        : null;
+      const terrainChainStairTunnelVerified = terrainChainCourse
+        ? activeAttempt.terrainChainBefore?.stairBreaks?.every(name => name === 'stone')
+          && terrainChainAfter?.stairBreaks?.every(name => name === 'air')
+        : null;
+      const terrainChainDescentVerified = terrainChainCourse
+        ? terrainChainCheckpoints?.checkpoints?.some(entry => entry.name === 'descent_landing')
+        : null;
+      const terrainChainSwimExitVerified = terrainChainCourse
+        ? terrainChainAfter?.water?.every(name => name === 'water')
+          && terrainChainAfter?.bank === 'grass_block'
+          && terrainChainCheckpoints?.checkpoints?.some(entry => entry.name === 'swim_surface')
+          && distance(paperAfter.botPosition, TERRAIN_CHAIN_GOAL) <= 1
+          && Number(paperAfter.botPosition?.y) >= TERRAIN_CHAIN_GOAL.y - 0.1
+        : null;
+      const terrainChainPlacedBlocks = terrainChainCourse
+        ? (terrainChainAfter?.bridge || []).filter(name => name === TERRAIN_CHAIN_SCAFFOLD.item).length
+          + (terrainChainAfter?.tower || []).filter(name => name === TERRAIN_CHAIN_SCAFFOLD.item).length
+        : null;
+      const terrainChainScaffoldAccountingVerified = terrainChainCourse
+        ? Number(activeAttempt.terrainChainInventoryBefore?.[TERRAIN_CHAIN_SCAFFOLD.item])
+            - Number(terrainChainInventoryAfter?.[TERRAIN_CHAIN_SCAFFOLD.item] || 0)
+            === terrainChainPlacedBlocks
+          && terrainChainPlacedBlocks
+            === (terrainChainAfter?.bridge || []).filter(name => name === TERRAIN_CHAIN_SCAFFOLD.item).length
+              + (TERRAIN_CHAIN_TOWER.y2 - TERRAIN_CHAIN_TOWER.y1 + 1)
+          && Number(terrainChainInventoryAfter?.iron_pickaxe) === 1
+        : null;
+      const terrainChainPathfinderObserved = terrainChainCourse
+        ? activeAttempt.samples.some(sample => Boolean(sample?.pathfinding))
+        : null;
+      const terrainChainTerminalVerified = terrainChainCourse
+        ? activeAttempt.terminal?.label === 'action:goToCoordinates'
+          && activeAttempt.terminal?.phase === 'succeeded'
+          && activeAttempt.terminal?.code === 'skill_arrived'
+        : null;
+      const terrainChainFixtureVerified = terrainChainCourse
+        ? terrainChainDigVerified === true
+          && terrainChainParkourVerified === true
+          && terrainChainBridgeVerified === true
+          && terrainChainTowerVerified === true
+          && terrainChainStairTunnelVerified === true
+          && terrainChainDescentVerified === true
+          && terrainChainSwimExitVerified === true
+          && terrainChainScaffoldAccountingVerified === true
+          && terrainChainCheckpoints?.complete === true
         : null;
       const routeProbeStatus = routeProbeCourse
         ? inconclusiveRouteProbeStatus(activeAttempt.terminal)
@@ -1980,6 +2659,14 @@ async function run() {
         ? paperBefore.routeTargetVerified === true
           && paperAfter.routeTargetVerified === true
           && routeTerrainIntact === true
+        : terrainSwimCourse
+        ? [paperBefore, paperAfter].every(snapshot => (
+            snapshot.swimWaterColumnVerified === true
+            && snapshot.swimBankVerified === true
+          ))
+          && terrainIntact === true
+        : terrainChainCourse
+        ? terrainChainFixtureVerified === true
         : orchestrationCourse
         ? paperBefore.groundVerified === true && paperBefore.dryLandVerified === true
         : deliverCourse
@@ -1992,6 +2679,8 @@ async function run() {
           && paperBefore.groundVerified === true
           && paperBefore.dryLandVerified === true
           && (DELIVER_PLACE_SOURCE ? paperBefore.sourceVerified === true : true)
+        : playerRouteBestCourse
+        ? unbreakableObstructionPreserved === true
         : obstructionCourse
         ? [paperBefore, ...activeAttempt.waypoints.map(entry => entry.paper), paperAfter]
             .every(snapshot => snapshot.wallVerified && snapshot.platformVerified)
@@ -2003,7 +2692,11 @@ async function run() {
         : activeAttempt.waypoints.length === WAYPOINTS.length;
       const finalWaypoint = activeWaypoints.at(-1);
       const corridorCompleted = activeAttempt.waypoints.length >= 2;
-      const finalWaypointReached = distance(paperAfter.botPosition, finalWaypoint) <= 4.5;
+      const finalWaypointReached = playerRouteBestCourse
+        ? playerRouteBestPositionVerified
+        : playerRouteBreakCourse
+        ? playerRouteArrivalVerified
+        : distance(paperAfter.botPosition, finalWaypoint) <= 4.5;
       const stopQuiescenceMs = Math.max(0, heldAt - stopAcceptedAt);
       const settlingMs = Math.max(0, settledAt - heldAt);
       // Delivery acceptance is deliberately narrow: the recipient physically
@@ -2035,6 +2728,43 @@ async function run() {
         : null;
       const passed = routeProbeCourse
         ? routeProbeVerified === true
+          && stopQuiescenceMs <= 2_000
+          && stable
+          && distance(paperAfter.botPosition, stopPosition) <= 0.1
+          && fixtureVerified
+        : terrainSwimCourse
+        ? terrainStartSubmerged === true
+          && terrainAscentObserved === true
+          && terrainDrySettlement === true
+          && terrainPathfinderObserved === true
+          && activeAttempt.terrainTraversalPolicy === 'full'
+          && terrainTerminalVerified === true
+          && terrainScaffoldAccountingVerified === true
+          && stopQuiescenceMs <= 2_000
+          && stable
+          && distance(paperAfter.botPosition, stopPosition) <= 0.1
+          && fixtureVerified
+        : terrainChainCourse
+        ? terrainChainPathfinderObserved === true
+          && activeAttempt.terrainChainTraversalPolicy === 'full'
+          && terrainChainTerminalVerified === true
+          && terrainChainFixtureVerified === true
+          && stopQuiescenceMs <= 2_000
+          && stable
+          && distance(paperAfter.botPosition, stopPosition) <= 0.1
+          && fixtureVerified
+        : playerRouteBestCourse
+        ? playerRoutePathfinderObserved === true
+          && playerRouteBestPositionVerified === true
+          && unbreakableObstructionPreserved === true
+          && stopQuiescenceMs <= 2_000
+          && stable
+          && distance(paperAfter.botPosition, stopPosition) <= 0.1
+          && fixtureVerified
+        : playerRouteBreakCourse
+        ? playerRoutePathfinderObserved === true
+          && playerRouteArrivalVerified === true
+          && (!finiteBreakCostCourse || finiteBreakCostVerified === true)
           && stopQuiescenceMs <= 2_000
           && stable
           && distance(paperAfter.botPosition, stopPosition) <= 0.1
@@ -2098,6 +2828,15 @@ async function run() {
           finalWaypointReached,
           obstructionDugThrough,
           obstructionSealedAt: activeAttempt.obstructionSealedAt || null,
+          playerRoutePathfinderObserved,
+          playerRouteTerminalVerified,
+          playerRouteArrivalVerified,
+          finiteBreakCostVerified,
+          finiteBreakInventoryBefore: activeAttempt.finiteBreakInventoryBefore,
+          playerRouteBestTerminalVerified,
+          playerRouteBestPositionVerified,
+          unbreakableObstructionPreserved,
+          blockedTerrainIntact,
           deliveryVerified,
           deliveryTerminalVerified,
           deliveryItem: options.mode === 'deliver' ? DELIVER_ITEM : null,
@@ -2115,6 +2854,37 @@ async function run() {
           routeStartPosition: routeProbeCourse ? paperBefore.botPosition : null,
           routeFinalPosition: routeProbeCourse ? paperAfter.botPosition : null,
           routeTerrainIntact,
+          terrainStartSubmerged,
+          terrainAscentObserved,
+          terrainDrySettlement,
+          terrainPathfinderObserved,
+          terrainTraversalPolicy: activeAttempt.terrainTraversalPolicy,
+          terrainTerminalVerified,
+          terrainIntact,
+          terrainScaffoldAccountingVerified,
+          terrainInventoryBefore: activeAttempt.terrainInventoryBefore,
+          terrainInventoryAfter,
+          terrainStartPosition: terrainSwimCourse ? paperBefore.botPosition : null,
+          terrainFinalPosition: terrainSwimCourse ? paperAfter.botPosition : null,
+          terrainChainDigVerified,
+          terrainChainParkourVerified,
+          terrainChainBridgeVerified,
+          terrainChainTowerVerified,
+          terrainChainStairTunnelVerified,
+          terrainChainDescentVerified,
+          terrainChainSwimExitVerified,
+          terrainChainScaffoldAccountingVerified,
+          terrainChainPathfinderObserved,
+          terrainChainTraversalPolicy: activeAttempt.terrainChainTraversalPolicy,
+          terrainChainTerminalVerified,
+          terrainChainFixtureVerified,
+          terrainChainCheckpoints,
+          terrainChainBefore: activeAttempt.terrainChainBefore,
+          terrainChainAfter,
+          terrainChainInventoryBefore: activeAttempt.terrainChainInventoryBefore,
+          terrainChainInventoryAfter,
+          terrainChainStartPosition: terrainChainCourse ? paperBefore.botPosition : null,
+          terrainChainFinalPosition: terrainChainCourse ? paperAfter.botPosition : null,
           twoTurnsCompleted: activeAttempt.waypoints.length === 3,
           oneBlockElevationCompleted: elevated,
           finalDistanceToTarget: distance(paperAfter.botPosition, paperAfter.targetPosition),

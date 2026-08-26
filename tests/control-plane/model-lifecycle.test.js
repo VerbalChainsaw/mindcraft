@@ -153,9 +153,10 @@ test('Given a router whose child is itself a router, when leaves are collected, 
   assert.deepEqual(leaves, ['inner-only', 'shared']);
 });
 
-// The real shape from profiles/local-quickstart.json: `model` is an array (so
-// chat_model is a router) and each specialist is chained to the chat model by
-// withChatBackstop, making the chat leaves reachable through five routes.
+// Multi-provider profiles can route chat through several leaves while each
+// specialist is chained to the chat model by withChatBackstop. Kevin's current
+// profile uses one Codex/Luna leaf, but legacy and user-selected profiles still
+// require de-duplicated cleanup across nested routes.
 test('Given specialists chained to a routed chat model, when the agent stops, then every provider is cancelled exactly once', () => {
   // Given
   const counters = newCounters();

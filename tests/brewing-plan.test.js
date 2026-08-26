@@ -129,6 +129,24 @@ test('appearance praise remains conversation while imperative look remains actio
   ]), true);
 });
 
+test('spoken status requests accept one commandless answer while compound physical orders stay enforced', () => {
+  assert.equal(latestMessageRequestsAction([
+    {
+      role: 'user',
+      content: 'ADMIN: Confirm you are online by saying DeepSeek Flash online. Do not move or start a task.',
+    },
+  ]), false);
+  assert.equal(latestMessageRequestsAction([
+    { role: 'user', content: 'ADMIN: Say "follow me". Do not move.' },
+  ]), false);
+  assert.equal(latestMessageRequestsAction([
+    { role: 'user', content: 'ADMIN: Confirm you are ready, then follow me.' },
+  ]), true);
+  assert.equal(latestMessageRequestsAction([
+    { role: 'user', content: 'ADMIN: Follow me.' },
+  ]), true);
+});
+
 test('a typed clarification is one concise commandless question, not an action-evasion channel', () => {
   assert.equal(
     clarificationQuestionFromGeneration('[CLARIFY] Which chest should I use—the oak chest or the barrel?'),

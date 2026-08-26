@@ -23,9 +23,13 @@ const ADAPTER_ID = 'follow-field-live-replay-v1';
 const SCENARIO_COURSE = Object.freeze({
   'doorway-corridor-follow': 'doorway-corridor',
   'obstruction-follow': 'obstruction-follow',
+  'player-route-obstruction': 'player-route-obstruction',
+  'pathfinding-finite-break-cost': 'pathfinding-finite-break-cost',
+  'player-route-best-reachable': 'player-route-best-reachable',
   'deliver-item-goal': 'deliver-item',
   'orchestration-charcoal': 'orchestrate-charcoal',
   'route-probe-inconclusive': 'route-probe-inconclusive',
+  'terrain-swim-exit': 'terrain-swim-exit',
 });
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const WORKER = path.join(SCRIPT_DIRECTORY, 'follow-field-worker.ps1');

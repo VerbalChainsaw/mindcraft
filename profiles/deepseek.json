@@ -1,7 +1,11 @@
 {
     "name": "deepseek",
 
-    "model": "deepseek-chat",
-
-    "embedding": "deepseek"
+    "model": {
+        "api": "deepseek",
+        "model": "deepseek-v4-flash",
+        "params": {
+            "thinking": { "type": "disabled" }
+        }
+    }
 }

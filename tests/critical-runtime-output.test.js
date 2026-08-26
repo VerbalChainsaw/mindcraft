@@ -531,7 +531,7 @@ test('player navigation rejects the bot itself as a target instead of reporting 
   assert.match(bot.output, /identifies this bot, not the requesting player/);
 });
 
-test('player navigation plans against its verified one-block settlement envelope', async () => {
+test('player navigation refines a native goal cell that settles outside the physical arrival envelope', async () => {
   const registry = minecraftData('1.21.11');
   const dad = {
     id: 2,
@@ -539,15 +539,21 @@ test('player navigation plans against its verified one-block settlement envelope
     username: 'DadPlayer',
     position: new Vec3(0.5, 69, 0.5),
   };
-  const terminalNode = new Vec3(1, 66, 0);
-  const terminalPosition = new Vec3(1.5, 66, 0.5);
-  let planned = false;
+  const boundaryNode = new Vec3(0, 65, 0);
+  const boundaryPosition = new Vec3(0, 65, 0.5);
+  const refinedNode = new Vec3(0, 66, 0);
+  const refinedPosition = new Vec3(0.5, 66, 0.5);
+  let planningProbes = 0;
+  let nativeRoutes = 0;
+  let goalMatchedSettlementEnvelope = false;
+  let refinementMatchedRequestedDistance = false;
+  let nativeMovements = null;
   const bot = new EventEmitter();
   Object.assign(bot, {
     username: 'IronSuiteProof',
     output: '',
     registry,
-    traversalPolicy: 'preserve',
+    traversalPolicy: 'full',
     interrupt_code: false,
     players: { DadPlayer: { username: 'DadPlayer', entity: dad } },
     entities: { 2: dad },
@@ -569,33 +575,246 @@ test('player navigation plans against its verified one-block settlement envelope
   });
   bot.pathfinder = {
     tickTimeout: 40,
-    getPathFromTo(_movements, _start, goal) {
-      planned = goal.isEnd(terminalNode);
-      return (function * plannedRoute() {
+    getPathFromTo() {
+      planningProbes += 1;
+      return (function * inconclusiveWholeRouteProbe() {
         yield {
           result: {
-            status: planned ? 'success' : 'noPath',
-            path: planned ? [terminalNode.clone()] : [],
+            status: 'timeout',
+            path: [terminalNode.clone()],
           },
         };
       }());
     },
-    setMovements() {},
+    setMovements(movements) { nativeMovements = movements; },
     setGoal() {},
     getLastStuckState: () => null,
-    goto() {
-      bot.entity.position = terminalPosition.clone();
+    goto(goal) {
+      nativeRoutes += 1;
+      if (nativeRoutes === 1) {
+        goalMatchedSettlementEnvelope = goal.isEnd(boundaryNode);
+        bot.entity.position = boundaryPosition.clone();
+      } else {
+        refinementMatchedRequestedDistance = goal.isEnd(refinedNode);
+        bot.entity.position = refinedPosition.clone();
+      }
       return Promise.resolve();
     },
   };
 
   const reached = await goToPlayer(bot, 'DadPlayer', 3);
 
-  assert.equal(planned, true);
+  assert.equal(planningProbes, 0, 'ordinary player travel must not require an atomic whole-route preflight');
+  assert.equal(nativeRoutes, 2, 'native Pathfinder must refine a physically loose terminal cell');
+  assert.equal(goalMatchedSettlementEnvelope, true);
+  assert.equal(refinementMatchedRequestedDistance, true);
+  assert.equal(nativeMovements.canDig, true);
+  assert.equal(nativeMovements.canPlaceBlocks, true);
+  assert.equal(nativeMovements.allow1by1towers, true);
+  assert.equal(nativeMovements.allowParkour, true);
   assert.equal(reached, true);
   assert.equal(bot.lastActionEvidence.outcome, 'arrived');
-  assert.ok(bot.lastActionEvidence.distance > 3);
-  assert.ok(bot.lastActionEvidence.distance <= 4);
+  assert.equal(bot.lastActionEvidence.distance, 3);
+});
+
+test('player navigation walks the native best reachable path when the exact arrival goal is blocked', async () => {
+  const registry = minecraftData('1.21.11');
+  const dad = {
+    id: 2,
+    type: 'player',
+    username: 'DadPlayer',
+    position: new Vec3(10.5, 66, 0.5),
+  };
+  const bestNode = new Vec3(5, 66, 0);
+  const bestPosition = new Vec3(5.5, 66, 0.5);
+  let nativeRoutes = 0;
+  let bestEffortMatched = false;
+  const bot = new EventEmitter();
+  Object.assign(bot, {
+    username: 'IronSuiteProof',
+    output: '',
+    registry,
+    traversalPolicy: 'full',
+    interrupt_code: false,
+    players: { DadPlayer: { username: 'DadPlayer', entity: dad } },
+    entities: { 2: dad },
+    modes: { isOn: () => false },
+    inventory: { items: () => [] },
+    entity: {
+      position: new Vec3(0.5, 66, 0.5),
+      isInLava: false,
+      isInWater: false,
+      onGround: true,
+      effects: {},
+    },
+    blockAt(position) {
+      return position.y <= 65
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    clearControlStates() {},
+  });
+  bot.pathfinder = {
+    tickTimeout: 40,
+    getPathFromTo() {
+      return (function * completedNoPathProbe() {
+        yield { result: { status: 'noPath', path: [] } };
+      }());
+    },
+    setMovements() {},
+    setGoal() {},
+    getLastStuckState: () => null,
+    goto(goal) {
+      nativeRoutes += 1;
+      if (nativeRoutes === 1) {
+        bot.emit('path_update', {
+          status: 'noPath',
+          cost: 5,
+          path: [new Vec3(1, 66, 0), bestNode.clone()],
+        });
+        const error = new Error('No path to the goal!');
+        error.name = 'NoPath';
+        return Promise.reject(error);
+      }
+      bestEffortMatched = goal.isEnd(bestNode);
+      bot.entity.position = bestPosition.clone();
+      return Promise.resolve();
+    },
+  };
+
+  const reached = await goToPlayer(bot, 'DadPlayer', 3);
+
+  assert.equal(nativeRoutes, 2, 'the native best endpoint must be executed after exact noPath');
+  assert.equal(bestEffortMatched, true);
+  assert.equal(reached, false, 'closest reachable progress must not claim exact arrival');
+  assert.equal(bot.lastActionEvidence.outcome, 'closest_reachable');
+  assert.equal(bot.lastActionEvidence.distance, 5);
+  assert.match(bot.output, /closest reachable position/i);
+});
+
+test('player navigation reports its current stance when it is already the native best reachable endpoint', async () => {
+  const registry = minecraftData('1.21.11');
+  const dad = {
+    id: 2,
+    type: 'player',
+    username: 'DadPlayer',
+    position: new Vec3(10.5, 66, 0.5),
+  };
+  const currentNode = new Vec3(0, 66, 0);
+  let nativeRoutes = 0;
+  const bot = new EventEmitter();
+  Object.assign(bot, {
+    username: 'IronSuiteProof',
+    output: '',
+    registry,
+    traversalPolicy: 'full',
+    interrupt_code: false,
+    players: { DadPlayer: { username: 'DadPlayer', entity: dad } },
+    entities: { 2: dad },
+    modes: { isOn: () => false },
+    inventory: { items: () => [] },
+    entity: {
+      position: new Vec3(0.5, 66, 0.5),
+      isInLava: false,
+      isInWater: false,
+      onGround: true,
+      effects: {},
+    },
+    blockAt(position) {
+      return position.y <= 65
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    clearControlStates() {},
+  });
+  bot.pathfinder = {
+    tickTimeout: 40,
+    getPathFromTo() {
+      return (function * completedNoPathProbe() {
+        yield { result: { status: 'noPath', path: [] } };
+      }());
+    },
+    setMovements() {},
+    setGoal() {},
+    getLastStuckState: () => null,
+    goto() {
+      nativeRoutes += 1;
+      bot.emit('path_update', {
+        status: 'noPath',
+        cost: 0,
+        path: [currentNode.clone()],
+      });
+      const error = new Error('No path to the goal!');
+      error.name = 'NoPath';
+      return Promise.reject(error);
+    },
+  };
+
+  const reached = await goToPlayer(bot, 'DadPlayer', 3);
+
+  assert.equal(nativeRoutes, 1, 'the current best endpoint must not be routed twice');
+  assert.equal(reached, false, 'the current closest stance must not claim exact arrival');
+  assert.equal(bot.lastActionEvidence.outcome, 'closest_reachable');
+  assert.equal(bot.lastActionEvidence.distance, 10);
+  assert.match(bot.output, /closest reachable position/i);
+});
+
+test('player navigation preserves a physically converged timeout frontier as closest explored', async () => {
+  const registry = minecraftData('1.21.11');
+  const dad = {
+    id: 2,
+    type: 'player',
+    username: 'DadPlayer',
+    position: new Vec3(10.5, 66, 0.5),
+  };
+  let nativeRoutes = 0;
+  const bot = new EventEmitter();
+  Object.assign(bot, {
+    username: 'IronSuiteProof',
+    output: '',
+    registry,
+    traversalPolicy: 'full',
+    interrupt_code: false,
+    players: { DadPlayer: { username: 'DadPlayer', entity: dad } },
+    entities: { 2: dad },
+    modes: { isOn: () => false },
+    inventory: { items: () => [] },
+    entity: {
+      position: new Vec3(0.5, 66, 0.5),
+      isInLava: false,
+      isInWater: false,
+      onGround: true,
+      effects: {},
+    },
+    blockAt(position) {
+      return position.y <= 65
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    clearControlStates() {},
+  });
+  bot.pathfinder = {
+    tickTimeout: 40,
+    setMovements() {},
+    setGoal() {},
+    getLastStuckState: () => null,
+    goto() {
+      nativeRoutes += 1;
+      bot.entity.position = new Vec3(5.5, 66, 0.5);
+      bot.emit('path_update', { status: 'timeout', cost: 5, path: [] });
+      const error = new Error('Took too long to decide path to goal!');
+      error.name = 'Timeout';
+      return Promise.reject(error);
+    },
+  };
+
+  const reached = await goToPlayer(bot, 'DadPlayer', 3);
+
+  assert.equal(nativeRoutes, 1, 'physical convergence must not trigger a duplicate region route');
+  assert.equal(reached, false, 'an unfinished search must not claim exact arrival');
+  assert.equal(bot.lastActionEvidence.outcome, 'closest_explored');
+  assert.equal(bot.lastActionEvidence.distance, 5);
+  assert.match(bot.output, /closest explored position/i);
 });
 
 test('Follow remains active when the player is dry but the nearby bot stance is still water', () => {

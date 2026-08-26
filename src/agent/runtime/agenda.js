@@ -67,7 +67,7 @@ const CONSTRUCTION_SITE_KINDS = new Set(['remembered_place', 'remembered_farm', 
 const CONSTRUCTION_SITE_RELATIONS = new Set(['beside', 'near', 'around']);
 const CONSTRUCTION_LAYOUT_ARRANGEMENTS = new Set(['opposite_sides']);
 const CONSTRUCTION_LAYOUT_ORIENTATIONS = new Set(['inward']);
-const SCOUT_FINDINGS = new Set(['cave', 'animal']);
+const SCOUT_FINDINGS = new Set(['cave', 'animal', 'village']);
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
@@ -796,6 +796,30 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
   if (scoutGuideFinding && !scoutFindings.includes(scoutGuideFinding)) {
     throw new TypeError('A scout guide target must belong to its requested findings.');
   }
+  const scoutSearchLimit = kind === 'scout' && raw.searchLimit != null
+    ? Math.floor(Number(raw.searchLimit))
+    : null;
+  if (
+    kind === 'scout'
+    && scoutSearchLimit !== null
+    && (!Number.isSafeInteger(scoutSearchLimit) || scoutSearchLimit < 1)
+  ) throw new TypeError('A scout search limit must be a positive finite block distance.');
+  const rawRememberedFinding = kind === 'scout' ? raw.rememberedFinding : null;
+  const scoutRememberedFinding = rawRememberedFinding
+    && scoutFindings.includes(canonical(rawRememberedFinding.finding))
+    && [rawRememberedFinding.x, rawRememberedFinding.y, rawRememberedFinding.z].every(Number.isFinite)
+    && canonical(rawRememberedFinding.dimension) === homeDimension
+    ? Object.freeze({
+        finding: canonical(rawRememberedFinding.finding),
+        x: Math.floor(rawRememberedFinding.x),
+        y: Math.floor(rawRememberedFinding.y),
+        z: Math.floor(rawRememberedFinding.z),
+        dimension: homeDimension,
+      })
+    : null;
+  if (kind === 'scout' && rawRememberedFinding != null && !scoutRememberedFinding) {
+    throw new TypeError('A remembered scout finding needs one exact saved point in the scout home dimension.');
+  }
   const reconciliationTarget = kind === 'inventory_checklist'
     ? canonical(raw.reconciliationTarget)
     : '';
@@ -832,6 +856,8 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
     ...(requiredOutputs.length > 0 ? { requiredOutputs } : {}),
     ...(scoutFindings.length > 0 ? { findings: scoutFindings } : {}),
     ...(scoutGuideFinding ? { guideFinding: scoutGuideFinding } : {}),
+    ...(scoutSearchLimit !== null ? { searchLimit: scoutSearchLimit } : {}),
+    ...(scoutRememberedFinding ? { rememberedFinding: scoutRememberedFinding } : {}),
     completion,
     recipient: spec.needsRecipient ? recipient : '',
     requester,

@@ -1091,10 +1091,6 @@ export class Agent {
     async dispatchPlayerAgenda(source, canonicalPlayer, message, requesterPosition = null, {
         historyMessage = message,
     } = {}) {
-        // Step 6: with LLM sequencing on, deterministic decomposition does not
-        // get first refusal. Returning false sends the line down to the model
-        // path instead of queueing a plan the model never saw.
-        if (this.llm_sequencing) return false;
         const director = this.agenda_director;
         if (!director?.addMany || !director?.validateMany) return false;
         const plan = parsePlayerAgenda(canonicalPlayer || source, message, {
@@ -1106,6 +1102,12 @@ export class Agent {
             companion: this.companion_context?.snapshot?.() || null,
         });
         if (!plan) return false;
+        // The scout entry is already the package owner for the complete
+        // observe -> remember -> return -> guide promise. Sending that owned
+        // contract back through free-form model command selection lets the
+        // provider split it into unrelated searches and stale coordinates.
+        // Other requests retain the configured model-first sequencing path.
+        if (this.llm_sequencing && plan.owner !== 'scout') return false;
         if (plan.rejection) {
             await this.history.add(source, historyMessage);
             await this.history.add(this.name, plan.rejection);

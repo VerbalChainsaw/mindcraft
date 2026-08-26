@@ -16,6 +16,10 @@ import { createRoutedModel, FallbackRouter } from './fallback-router.js';
 import { PROVIDER_FAILURE_TEXT } from './provider-failure.js';
 import { buildPromptMemory } from '../agent/runtime/memory-recall.js';
 import { getFullState } from '../agent/library/full_state.js';
+import {
+    classifyPlayerSpeechAuthority,
+    PLAYER_PHYSICAL_ACTION_PATTERN,
+} from '../agent/player-speech-authority.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,7 +63,6 @@ function selectedConversationModelRouteFingerprint(model) {
     return fingerprintModelMeasurement(active || model?.constructor?.name || 'configured-model');
 }
 
-const ACTION_REQUEST_PATTERN = /\b(?:attack|break|brew|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
 const UNSUPPORTED_CAPABILITY_PATTERN = /^\[UNSUPPORTED\]\s+([^\r\n]{1,220})$/i;
 const GAMEPLAY_OPERATING_RULES = [
     'GAMEPLAY OPERATING RULES:',
@@ -287,6 +290,7 @@ export function latestMessageRequestsAction(messages) {
     const latest = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
     if (!latest?.content) return false;
     const content = latest.content.replace(/^[^:]{1,64}:\s*/, '').trim();
+    if (classifyPlayerSpeechAuthority(content) !== 'action_eligible') return false;
     if (/^(?:how|what|where|when|why)\b/i.test(content)) return false;
     // Subject-led appearance statements use "look" as a linking verb, not an
     // instruction to aim the bot's camera. Treating praise such as "You look
@@ -305,7 +309,7 @@ export function latestMessageRequestsAction(messages) {
         );
         if (hasActionOutcome) return false;
     }
-    return ACTION_REQUEST_PATTERN.test(content);
+    return PLAYER_PHYSICAL_ACTION_PATTERN.test(content);
 }
 
 export function clarificationQuestionFromGeneration(generation) {
@@ -460,9 +464,10 @@ export class Prompter {
         if (embedding_model_profile) {
             this.embedding_model = createModel(embedding_model_profile);
         }
-        else if (chat_model_profile.api === 'codex') {
-            // Codex OAuth is chat-only. Keep the existing complete lexical
-            // example and skill-doc ranking rather than attempting embeddings.
+        else if (chat_model_profile.api === 'codex' || chat_model_profile.api === 'deepseek') {
+            // Codex OAuth and DeepSeek's current API are chat-only. Keep the
+            // existing complete lexical example and skill-doc ranking rather
+            // than constructing an adapter whose embed() contract must fail.
             this.embedding_model = null;
         }
         else {

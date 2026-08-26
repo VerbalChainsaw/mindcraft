@@ -187,8 +187,8 @@ try {
   const head = execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   record(true, 'git provenance', `HEAD ${head.slice(0, 12)}`);
 } catch {
-  record(true, 'git provenance', 'plain git fails here (WSL gitdir); workers resolve it themselves',
-    null);
+  record(false, 'git provenance', 'the current host cannot resolve this worktree',
+    'Repair the linked-worktree metadata for the current host before running Scenario Lab.');
 }
 
 // --- manifest ----------------------------------------------------------------
@@ -203,6 +203,9 @@ try {
   const DRIVEABLE = new Set([
     'doorway-corridor-follow',
     'obstruction-follow',
+    'player-route-obstruction',
+    'pathfinding-finite-break-cost',
+    'player-route-best-reachable',
     'deliver-item-goal',
     'orchestration-charcoal',
     'route-probe-inconclusive',
@@ -235,6 +238,8 @@ if (failed.length) {
 } else {
   process.stdout.write(
     '\nReady. Run: npm run scenario:follow  |  npm run scenario:obstruction'
+    + '  |  npm run scenario:player-route'
+    + '  |  npm run scenario:player-route-best'
     + '  |  npm run scenario:deliver'
     + '  |  node tools/scenario-lab/run.mjs route-probe-inconclusive\n',
   );

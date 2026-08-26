@@ -1013,6 +1013,29 @@ export const actionsList = [
         })
     },
     {
+        name: '!guidePlayerToCoordinates',
+        description: 'Lead a physically present player to exact coordinates, pausing when they fall behind and completing only when both arrive.',
+        params: {
+            'player_name': { type: 'string', description: 'Name of the player Kevin should guide.' },
+            'x': { type: 'float', description: 'Destination x coordinate.', domain: [-Infinity, Infinity] },
+            'y': { type: 'float', description: 'Destination y coordinate.', domain: [-64, 320] },
+            'z': { type: 'float', description: 'Destination z coordinate.', domain: [-Infinity, Infinity] },
+            'closeness': { type: 'float', description: 'Kevin destination distance.', domain: [0, Infinity] },
+            'leash_distance': { type: 'float', description: 'Separation at which Kevin pauses for the player.', domain: [4, Infinity] },
+        },
+        perform: runAsAction(async (agent, player_name, x, y, z, closeness, leash_distance) => {
+            return await skills.guidePlayerToPosition(
+                agent.bot,
+                player_name,
+                x,
+                y,
+                z,
+                closeness,
+                leash_distance,
+            );
+        }, false, -1, null, 'composed', 'pathfinder'),
+    },
+    {
         name: '!mountEntity',
         description: 'Approach and mount the nearest observed rideable entity. Use an exact entity type such as oak_boat, horse, camel, pig, or strider, or a family: boat, minecart, or mount.',
         params: {
@@ -1334,7 +1357,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, item_name, num) => {
             return await skills.putInChest(agent.bot, item_name, num);
-        })
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!putInChestAt',
@@ -1349,7 +1372,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, item_name, num, x, y, z, dimension = '') => {
             return await skills.putInChestAt(agent.bot, item_name, num, x, y, z, dimension);
-        })
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!storeInventoryPlanAt',
@@ -1363,7 +1386,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, encodedPlan, x, y, z, dimension = '') => {
             return await skills.storeInventoryPlanAt(agent.bot, encodedPlan, x, y, z, dimension);
-        }),
+        }, false, -1, null, 'legacy', 'container'),
     },
     {
         name: '!putFamilyInChestAt',
@@ -1388,7 +1411,7 @@ export const actionsList = [
                 dimension,
                 baseline_manifest,
             );
-        })
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!depositInventoryOverflowAt',
@@ -1411,7 +1434,7 @@ export const actionsList = [
                 y,
                 z,
             );
-        })
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!takeFromChest',
@@ -1422,7 +1445,28 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, item_name, num) => {
             return await skills.takeFromChest(agent.bot, item_name, num);
-        })
+        }, false, -1, null, 'legacy', 'container')
+    },
+    {
+        name: '!takeFromChestAt',
+        description: 'Navigate to one exact assigned chest or barrel and withdraw a verified quantity from that container only.',
+        params: {
+            'item_name': { type: 'ItemName', description: 'The item to withdraw.' },
+            'num': { type: 'int', description: 'The number of items to withdraw.', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'x': { type: 'float', description: 'Assigned container x coordinate.' },
+            'y': { type: 'float', description: 'Assigned container y coordinate.' },
+            'z': { type: 'float', description: 'Assigned container z coordinate.' },
+            'dimension': { type: 'string', description: 'Optional assigned dimension; a mismatch is rejected before opening a container.', optional: true, default: '' },
+        },
+        perform: runAsAction(async (agent, item_name, num, x, y, z, dimension = '') => {
+            const currentDimension = canonicalDimension(agent.bot?.game?.dimension);
+            const assignedDimension = canonicalDimension(dimension);
+            if (assignedDimension && assignedDimension !== currentDimension) {
+                skills.log(agent.bot, `The assigned withdrawal is in ${assignedDimension}, not ${currentDimension || 'the current dimension'}.`);
+                return false;
+            }
+            return await skills.takeFromChest(agent.bot, item_name, num, { x, y, z });
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!viewChest',
@@ -1430,7 +1474,7 @@ export const actionsList = [
         params: { },
         perform: runAsAction(async (agent) => {
             return await skills.viewChest(agent.bot);
-        })
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!viewChestAt',
@@ -1443,7 +1487,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, x, y, z, dimension) => {
             return await skills.viewChest(agent.bot, { x, y, z, dimension });
-        })
+        }, false, -1, null, 'legacy', 'container')
     },
     {
         name: '!discard',

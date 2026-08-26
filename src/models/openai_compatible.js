@@ -25,6 +25,9 @@ export class OpenAICompatible {
     constructor(model_name, url, params, {
         readKey = getKey,
         createClient = (config) => new OpenAIApi(config),
+        defaultApiKeyEnv = DEFAULT_OPENAI_COMPATIBLE_API_KEY_ENV,
+        validateApiKeyEnv = isValidOpenAICompatibleApiKeyEnv,
+        providerName = 'openai_compatible',
     } = {}) {
         if (typeof url !== 'string' || url.trim().length === 0) {
             throw new Error('openai_compatible requires an explicit non-empty URL.');
@@ -34,9 +37,9 @@ export class OpenAICompatible {
             : {};
         const apiKeyEnv = Object.hasOwn(requestParams, 'api_key_env')
             ? requestParams.api_key_env
-            : DEFAULT_OPENAI_COMPATIBLE_API_KEY_ENV;
-        if (!isValidOpenAICompatibleApiKeyEnv(apiKeyEnv)) {
-            throw new Error('Invalid openai_compatible api_key_env.');
+            : defaultApiKeyEnv;
+        if (!validateApiKeyEnv(apiKeyEnv)) {
+            throw new Error(`Invalid ${providerName} api_key_env.`);
         }
         delete requestParams.api_key_env;
 
@@ -52,6 +55,7 @@ export class OpenAICompatible {
         this.model_name = model_name;
         this.params = bodyParams;
         this.apiKeyEnv = apiKeyEnv;
+        this.providerName = providerName;
         const config = {
             baseURL: url.trim(),
             apiKey: readKey(apiKeyEnv),
@@ -94,7 +98,7 @@ export class OpenAICompatible {
         let res = null;
         const controller = this._pending.begin();
         try {
-            console.log('Awaiting openai_compatible api response...');
+            console.log(`Awaiting ${this.providerName} api response...`);
             let completion = await this.openai.chat.completions.create(pack, { signal: controller.signal });
             if (completion.choices[0].finish_reason === 'length')
                 throw new Error('Context length exceeded');
@@ -112,7 +116,7 @@ export class OpenAICompatible {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = recordProviderFailure('openai_compatible', err);
+                res = recordProviderFailure(this.providerName, err);
             }
         } finally {
             this._pending.end(controller);

@@ -127,7 +127,7 @@ test('a model command presented as a question remains an unexecuted proposal', a
     },
     prompter: {
       promptConvo: () => Promise.resolve(
-        'I cannot grant admin. Should I collect that coal instead? !collectBlocksInRange("coal_ore", 2, 64)',
+        'I cannot grant admin. Should I attack that player instead? !attackPlayer("TargetPlayer")',
       ),
     },
   };
@@ -141,7 +141,7 @@ test('a model command presented as a question remains an unexecuted proposal', a
 
   assert.equal(usedCommand, false);
   assert.equal(harness.operator_hold, true);
-  assert.deepEqual(responses, ['I cannot grant admin. Should I collect that coal instead?']);
+  assert.deepEqual(responses, ['I cannot grant admin. Should I attack that player instead?']);
   assert.match(history.at(-1).content, /presented as a proposal awaiting player confirmation/);
 
   responses.length = 0;
@@ -160,6 +160,149 @@ test('a model command presented as a question remains an unexecuted proposal', a
   assert.equal(harness.operator_hold, true);
   assert.deepEqual(responses, ['I cannot grant admin. I will collect coal instead.']);
   assert.match(history.at(-1).content, /did not grant the bot physical-action authority/);
+});
+
+test('model-selected player routes remain retryable without response-loop blockers', async () => {
+  const responses = [];
+  const history = [];
+  const prompts = [
+    'Coming to you. !come("phixxation")',
+    'Trying the safest route again. !goToPlayer("phixxation", 3, false)',
+    'Trying again. !come("phixxation")',
+    'Trying one more time. !come("phixxation")',
+  ];
+  let promptCalls = 0;
+  let actionCalls = 0;
+  const botPosition = { x: 161.5, y: 83, z: -384.5 };
+  const playerPosition = { x: -924, y: 60, z: 1038 };
+  const harness = {
+    name: 'Kevin',
+    runtime: { role: 'companion' },
+    bot: {
+      entity: { position: botPosition },
+      game: { dimension: 'overworld' },
+      modes: { flushBehaviorLog: () => '' },
+      players: {
+        phixxation: {
+          username: 'phixxation',
+          entity: { position: playerPosition },
+        },
+      },
+    },
+    llm_sequencing: true,
+    shut_up: false,
+    operator_hold: false,
+    operator_hold_generation: 0,
+    open_player_request: null,
+    commands_since_request_reminder: 0,
+    request_reminders_sent: 0,
+    last_action_result: null,
+    checkTaskDone: () => Promise.resolve(),
+    dispatchPlayerAgenda: () => Promise.resolve(false),
+    isOperatorHeld: () => false,
+    claimFreshPlayerActionAuthority: () => ({ ready: true, detail: '' }),
+    routeResponse(_source, message) { responses.push(message); },
+    recordPlayerOrder() {},
+    companion_context: {
+      observeChat: () => ({ canonical: 'phixxation', entity: { position: playerPosition } }),
+      setDirective() {},
+      snapshot: () => ({
+        canonicalUsername: 'phixxation',
+        entityEpoch: 1,
+        position: playerPosition,
+        dimension: 'overworld',
+        presence: 'present',
+      }),
+    },
+    behavior_arbiter: {
+      directiveObservation: () => ({
+        position: playerPosition,
+        dimension: 'overworld',
+        targetSignature: 'phixxation:1',
+        worldSignature: 'non_liquid:air,air,air|body:grass_block,air,air',
+      }),
+    },
+    charcoal_mission: { cancel() {} },
+    goal_director: {
+      activeGoal: null,
+      lastGoal: null,
+      releaseProtectedCompletion() {},
+      cancel() {},
+    },
+    role_director: { deferForManualCommand() {} },
+    self_prompter: {
+      interruptForManualCommand() {},
+      handleUserPromptedCmd() {},
+      shouldInterrupt: () => false,
+      isActive: () => false,
+    },
+    actions: {
+      currentActionOwner: null,
+      cancelResume() {},
+      runWithRequestContext(_context, operation) { return operation(); },
+      runWithOwner(owner, operation) {
+        this.currentActionOwner = owner;
+        return operation();
+      },
+      runAction(label) {
+        actionCalls += 1;
+        const result = {
+          actionId: `route-${actionCalls}`,
+          label,
+          phase: 'failed',
+          code: 'skill_route_unproven',
+          detail: 'Pathfinder ended the route probe without a conclusive answer (timeout); no unproven movement was attempted.',
+          target: { name: 'phixxation' },
+          evidence: { skill: { kind: 'movement', outcome: 'route_unproven', retryable: true } },
+          retryable: true,
+        };
+        harness.last_action_result = result;
+        return Promise.resolve({ success: false, message: result.detail, result });
+      },
+    },
+    history: {
+      add(name, content) {
+        history.push({ name, content });
+        return Promise.resolve();
+      },
+      save() {},
+      getHistory: () => history,
+    },
+    prompter: {
+      promptConvo() {
+        const response = prompts[promptCalls] || prompts.at(-1);
+        promptCalls += 1;
+        return Promise.resolve(response);
+      },
+    },
+  };
+
+  const usedCommand = await Agent.prototype.handleMessage.call(
+    harness,
+    'phixxation',
+    'KEVIN THIS IS BULLSHIT GET OVER HERE',
+    prompts.length,
+  );
+
+  assert.equal(usedCommand, true);
+  assert.equal(actionCalls, 4, 'every selected route attempt must reach the physical action boundary');
+  assert.equal(promptCalls, 4);
+  assert.equal(
+    history.some(entry => /No command was executed/i.test(entry.content)),
+    false,
+    'the response loop must not manufacture a route blocker',
+  );
+  assert.equal(Object.hasOwn(harness, 'model_route_material_change_blockers'), false);
+
+  harness.prompter.promptConvo = () => Promise.resolve('Trying the original route again. !come("phixxation")');
+  const laterRetry = await Agent.prototype.handleMessage.call(
+    harness,
+    'phixxation',
+    'Try the first route again.',
+    1,
+  );
+  assert.equal(laterRetry, true);
+  assert.equal(actionCalls, 5, 'a later identical route remains executable without waiting for world change');
 });
 
 test('short companion replies remain one normalized unprefixed message', () => {

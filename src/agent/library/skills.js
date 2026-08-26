@@ -1651,6 +1651,25 @@ function dryRouteMovements(bot) {
     return configureDryRouteMovements(safeMovements(bot), bot);
 }
 
+// A guide route is a promise about what the player can follow, not merely what
+// Kevin can survive. Keep ordinary walking, doors, swimming, and one-block
+// elevation changes. Digging opens a corridor the player can use after Kevin;
+// pillaring, block placement, parkour, and multi-block drops create Kevin-only
+// edges that can leave the player stranded behind him.
+export function guidedRouteMovements(bot) {
+    const movements = safeMovements(bot);
+    movements.canDig = true;
+    movements.canPlaceBlocks = false;
+    movements.allow1by1towers = false;
+    movements.allowParkour = false;
+    movements.maxDropDown = Math.min(
+        Number(movements.maxDropDown) || DEFAULT_MAX_DROP_DOWN,
+        1,
+    );
+    movements.infiniteLiquidDropdownDistance = false;
+    return movements;
+}
+
 /**
  * Combat pursuit is a temporary safety reflex, not permission to consume a
  * one-way traversal edge. Keep mineflayer-pvp and Pathfinder in full control
@@ -14864,6 +14883,23 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
     });
     return {
         stalled,
+        snapshot() {
+            const current = bot.entity?.position?.clone?.() || lastPosition.clone();
+            const currentMetric = navigationGoalMetric(goal, current);
+            const observedBestMetric = Number.isFinite(currentMetric)
+                && (!Number.isFinite(bestMetric) || currentMetric < bestMetric)
+                ? currentMetric
+                : bestMetric;
+            return {
+                startedAt,
+                startPosition,
+                lastPosition: current,
+                startMetric,
+                bestMetric: observedBestMetric,
+                lastMetric: currentMetric,
+                stalledMs: Date.now() - lastProgressAt,
+            };
+        },
         stop() {
             if (interval) clearInterval(interval);
             interval = null;
@@ -14881,8 +14917,31 @@ function stopNavigationGoal(bot) {
     }
 }
 
+function nativeBestAvailableEndpoint(result) {
+    if (
+        !['noPath', 'timeout'].includes(result?.status)
+        || !Array.isArray(result.path)
+        || result.path.length === 0
+    ) {
+        return null;
+    }
+    const terminal = result.path.at(-1);
+    if (![terminal?.x, terminal?.y, terminal?.z].every(Number.isFinite)) return null;
+    return {
+        x: Math.floor(terminal.x),
+        y: Math.floor(terminal.y),
+        z: Math.floor(terminal.z),
+        pathLength: result.path.length,
+        cost: Number.isFinite(result.cost) ? result.cost : null,
+        searchStatus: result.status,
+    };
+}
+
 async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS) {
     const progressWatchdog = startNavigationProgressWatchdog(bot, goal, stallTimeoutMs);
+    let lastPathUpdate = null;
+    const rememberPathUpdate = result => { lastPathUpdate = result; };
+    bot.on('path_update', rememberPathUpdate);
     bot.pathfinder.setMovements(movements);
     const navigation = Promise.resolve()
         .then(() => bot.pathfinder.goto(goal))
@@ -14892,6 +14951,11 @@ async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIG
         );
     try {
         const outcome = await Promise.race([navigation, progressWatchdog.stalled]);
+        const bestReachable = nativeBestAvailableEndpoint(lastPathUpdate);
+        if (bestReachable) outcome.bestReachable = bestReachable;
+        if (['noPath', 'timeout'].includes(lastPathUpdate?.status)) {
+            outcome.searchStatus = lastPathUpdate.status;
+        }
         const pathfinderState = bot.pathfinder.getLastStuckState?.();
         if (pathfinderState) outcome.pathfinder = pathfinderState;
         if (['stalled', 'rejected'].includes(outcome.state)) {
@@ -14909,8 +14973,10 @@ async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIG
                 25,
             );
         }
+        Object.assign(outcome, progressWatchdog.snapshot());
         return outcome;
     } finally {
+        bot.removeListener('path_update', rememberPathUpdate);
         progressWatchdog.stop();
     }
 }
@@ -15019,59 +15085,78 @@ async function attemptShallowWaterExit(bot, {
     const ordered = [...stable, ...candidates.filter(candidate => !stable.includes(candidate))]
         .slice(0, 4);
     let lastOutcome = null;
-    for (const candidate of ordered) {
-        const localRemainingMs = Number.isFinite(deadlineAt)
-            ? Math.max(0, deadlineAt - Date.now())
-            : Number.POSITIVE_INFINITY;
-        if (bot.interrupt_code || remainingActionTimeMs() <= 0 || localRemainingMs <= 0) break;
-        const goal = new pf.goals.GoalBlock(
-            candidate.position.x,
-            candidate.position.y,
-            candidate.position.z,
-        );
-        try {
-            lastOutcome = await runNavigationAttempt(
-                bot,
-                goal,
-                safeMovements(bot),
-                Math.min(
-                    attemptTimeoutMs,
-                    remainingActionTimeMs(attemptTimeoutMs),
-                    localRemainingMs,
-                ),
-            );
-        } catch (error) {
-            if (bot.interrupt_code) break;
-            lastOutcome = { state: 'rejected', error };
-        }
-        const position = bot.entity?.position?.floored?.();
-        const currentFeet = position ? bot.blockAt(position) : null;
-        const support = position ? bot.blockAt(position.offset(0, -1, 0)) : null;
-        const exited = lastOutcome?.state === 'resolved'
-            && !isLiquidGameplayBlock(currentFeet)
-            && isTraversableShoreSupport(support);
-        if (exited) {
-            return {
-                success: true,
-                strategy: 'pathfinder_shore_exit',
-                outcome: isSafeGameplaySupport(support) ? 'stable_shore_reached' : 'shore_reached',
-                target: {
-                    x: candidate.position.x,
-                    y: candidate.position.y,
-                    z: candidate.position.z,
-                    support: support.name,
-                },
-                distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
-            };
-        }
-    }
-    return {
-        success: false,
-        strategy: 'pathfinder_shore_exit',
-        outcome: candidates.length > 0 ? 'shore_unreached' : 'no_safe_shore',
-        candidates: candidates.length,
-        pathOutcome: navigationOutcomeName(lastOutcome, bot),
+    let surfaceAscentActive = false;
+    const maintainSurfaceAscent = () => {
+        surfaceAscentActive = syncFollowSurfaceAscent(bot, {
+            // A surfaced body is briefly neither in water nor supported while
+            // crossing the bank collision edge. Releasing ascent in that frame
+            // drops it back into the same water cell. Keep the shared ascent
+            // input active until the body physically occupies dry support.
+            botInLiquid: !Boolean(observedSupportedStandingCell(bot)),
+            playerDryAndSupported: ordered.length > 0,
+            active: surfaceAscentActive,
+        });
     };
+    maintainSurfaceAscent();
+    const surfaceAscentInterval = setInterval(maintainSurfaceAscent, FOLLOW_SAMPLE_MS);
+    try {
+        for (const candidate of ordered) {
+            const localRemainingMs = Number.isFinite(deadlineAt)
+                ? Math.max(0, deadlineAt - Date.now())
+                : Number.POSITIVE_INFINITY;
+            if (bot.interrupt_code || remainingActionTimeMs() <= 0 || localRemainingMs <= 0) break;
+            const goal = new pf.goals.GoalBlock(
+                candidate.position.x,
+                candidate.position.y,
+                candidate.position.z,
+            );
+            try {
+                lastOutcome = await runNavigationAttempt(
+                    bot,
+                    goal,
+                    safeMovements(bot),
+                    Math.min(
+                        attemptTimeoutMs,
+                        remainingActionTimeMs(attemptTimeoutMs),
+                        localRemainingMs,
+                    ),
+                );
+            } catch (error) {
+                if (bot.interrupt_code) break;
+                lastOutcome = { state: 'rejected', error };
+            }
+            const position = bot.entity?.position?.floored?.();
+            const currentFeet = position ? bot.blockAt(position) : null;
+            const support = position ? bot.blockAt(position.offset(0, -1, 0)) : null;
+            const exited = lastOutcome?.state === 'resolved'
+                && !isLiquidGameplayBlock(currentFeet)
+                && isTraversableShoreSupport(support);
+            if (exited) {
+                return {
+                    success: true,
+                    strategy: 'pathfinder_shore_exit',
+                    outcome: isSafeGameplaySupport(support) ? 'stable_shore_reached' : 'shore_reached',
+                    target: {
+                        x: candidate.position.x,
+                        y: candidate.position.y,
+                        z: candidate.position.z,
+                        support: support.name,
+                    },
+                    distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
+                };
+            }
+        }
+        return {
+            success: false,
+            strategy: 'pathfinder_shore_exit',
+            outcome: candidates.length > 0 ? 'shore_unreached' : 'no_safe_shore',
+            candidates: candidates.length,
+            pathOutcome: navigationOutcomeName(lastOutcome, bot),
+        };
+    } finally {
+        clearInterval(surfaceAscentInterval);
+        syncFollowSurfaceAscent(bot, { active: surfaceAscentActive });
+    }
 }
 
 export async function attemptLocalNavigationEscape(bot) {
@@ -15961,6 +16046,95 @@ export async function goToGoal(bot, goal, options = {}) {
             log(bot, `Navigation made ${recoveryAction} ${recoveryAttempts}/${MAX_NAVIGATION_RECOVERY_ATTEMPTS} and is retrying the route.`);
             outcome = await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
             if (aborted()) return false;
+        }
+        if (
+            options?.allowBestReachable === true
+            && outcome.state === 'rejected'
+            && ['unreachable', 'path_timeout'].includes(pathfinderErrorOutcome(outcome.error, false))
+            && outcome.bestReachable
+        ) {
+            const endpoint = outcome.bestReachable;
+            const endpointGoal = new pf.goals.GoalBlock(endpoint.x, endpoint.y, endpoint.z);
+            const alreadyAtEndpoint = navigationGoalSatisfied(bot, endpointGoal);
+            const start = bot.entity.position.clone();
+            let endpointReached = alreadyAtEndpoint;
+            if (!alreadyAtEndpoint) {
+                log(bot, `The exact goal is blocked; following Pathfinder's closest reachable route to ${endpoint.x}, ${endpoint.y}, ${endpoint.z}.`);
+                const closestOutcome = await runNavigationAttempt(
+                    bot,
+                    endpointGoal,
+                    movementFactory(),
+                    navigationStallTimeoutMs,
+                );
+                if (aborted()) return false;
+                endpointReached = closestOutcome.state === 'resolved'
+                    && navigationGoalSatisfied(bot, endpointGoal);
+            }
+            if (endpointReached) {
+                const finalPosition = bot.entity.position.clone();
+                const progressed = finalPosition.distanceTo(start);
+                const closestOutcomeName = endpoint.searchStatus === 'noPath'
+                    ? 'closest_reachable'
+                    : 'closest_explored';
+                setNavigationActionEvidence(bot, options, {
+                    kind: 'movement',
+                    outcome: closestOutcomeName,
+                    requestedGoalSatisfied: false,
+                    bestReachable: endpoint,
+                    progress: {
+                        distance: Math.round(progressed * 100) / 100,
+                        startPosition: { x: start.x, y: start.y, z: start.z },
+                        lastPosition: { x: finalPosition.x, y: finalPosition.y, z: finalPosition.z },
+                    },
+                    ...(recovery ? { recovery } : {}),
+                    retryable: true,
+                });
+                log(bot, endpoint.searchStatus === 'noPath'
+                    ? 'Reached the closest position Pathfinder can currently access without claiming the blocked goal was completed.'
+                    : 'Reached Pathfinder\'s closest explored position without claiming that the unfinished search proved the goal unreachable.');
+                return false;
+            }
+        }
+        if (
+            options?.allowBestReachable === true
+            && Number.isFinite(outcome.startMetric)
+            && Number.isFinite(outcome.lastMetric)
+            && outcome.lastMetric < outcome.startMetric
+            && (
+                outcome.state === 'stalled'
+                || (
+                    outcome.state === 'rejected'
+                    && ['unreachable', 'path_timeout'].includes(pathfinderErrorOutcome(outcome.error, false))
+                    && ['noPath', 'timeout'].includes(outcome.searchStatus)
+                )
+            )
+        ) {
+            const closestOutcomeName = outcome.searchStatus === 'noPath'
+                ? 'closest_reachable'
+                : 'closest_explored';
+            const current = bot.entity.position.clone();
+            setNavigationActionEvidence(bot, options, {
+                kind: 'movement',
+                outcome: closestOutcomeName,
+                requestedGoalSatisfied: false,
+                bestReachable: {
+                    x: Math.floor(current.x),
+                    y: Math.floor(current.y),
+                    z: Math.floor(current.z),
+                    pathLength: 0,
+                    cost: null,
+                    searchStatus: outcome.searchStatus || outcome.state,
+                },
+                progress: navigationProgressEvidence(outcome),
+                ...(recovery ? { recovery } : {}),
+                retryable: true,
+            });
+            log(bot, outcome.searchStatus === 'noPath'
+                ? 'Pathfinder exhausted the exact search after physically converging to the closest reachable stance.'
+                : outcome.searchStatus === 'timeout'
+                    ? 'Pathfinder exhausted its search time after physically converging to its closest explored stance.'
+                    : 'Pathfinder settled after physically converging to its closest explored stance.');
+            return false;
         }
         if (outcome.state === 'stalled') {
             const target = navigationTarget(goal);
@@ -19300,6 +19474,8 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
 export async function goToPosition(bot, x, y, z, min_distance=2, {
     dryOnly = false,
     allowSegmentedJourney = false,
+    allowBestReachable = false,
+    movementFactory = null,
 } = {}) {
     /**
      * Navigate to the given position.
@@ -19364,14 +19540,22 @@ export async function goToPosition(bot, x, y, z, min_distance=2, {
                 }
             }
         }
+        const selectedMovements = typeof movementFactory === 'function'
+            ? movementFactory
+            : () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot);
         const routed = await goToGoal(
             bot,
             new pf.goals.GoalNear(x, y, z, requestedDistance),
-            (dryOnly || allowSegmentedJourney)
+            (dryOnly || allowSegmentedJourney || allowBestReachable || typeof movementFactory === 'function')
                 ? {
-                    movements: () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot),
-                    requirePlannedRoute: true,
+                    movements: selectedMovements,
+                    // Long travel is progressive. When the caller accepts a
+                    // closest explored endpoint, let Pathfinder execute its
+                    // current frontier instead of requiring a complete route
+                    // across terrain that has not loaded yet.
+                    requirePlannedRoute: allowBestReachable !== true,
                     allowSegmentedJourney: allowSegmentedJourney === true,
+                    allowBestReachable: allowBestReachable === true,
                     allowHealthBoundedDescent: false,
                     allowLocalRecovery: false,
                 }
@@ -19431,6 +19615,202 @@ export async function goToPosition(bot, x, y, z, min_distance=2, {
     } finally {
         clearInterval(progressInterval);
     }
+}
+
+export async function guidePlayerToPosition(
+    bot,
+    username,
+    x,
+    y,
+    z,
+    minDistance=2,
+    leashDistance=12,
+) {
+    const target = { x, y, z };
+    const requestedDistance = Math.max(0, Number(minDistance) || 0);
+    const leash = Math.max(4, Number(leashDistance) || 12);
+    const resumeDistance = Math.max(3, leash * 0.65);
+    const playerArrivalDistance = requestedDistance + 4;
+    const publishTerminal = evidence => setActionTerminalEvidence(bot, evidence);
+    const fail = (outcome, detail, extras = {}) => {
+        publishTerminal({
+            kind: 'guided_movement',
+            outcome,
+            target,
+            player: username,
+            ...extras,
+            retryable: outcome !== 'interrupted',
+        });
+        log(bot, detail);
+        return false;
+    };
+
+    if (![x, y, z].every(Number.isFinite)) {
+        return fail('invalid_target', `Cannot guide ${username}: the destination coordinates are invalid.`);
+    }
+    if (bot.username === username) {
+        return fail('invalid_self_target', 'Kevin cannot guide himself as the player companion.');
+    }
+
+    let resolution = resolvePhysicalPlayer(bot, username);
+    if (!resolution.entity?.position) {
+        return fail('waiting_for_player', `Cannot begin guiding ${username} until the player is physically beside Kevin.`);
+    }
+    const canonicalUsername = resolution.canonical || username;
+    let waitingAnnounced = false;
+
+    const waitForCatchup = async requiredDistance => {
+        const visitedPlayerCells = new Set();
+        let bestSeparation = Number.POSITIVE_INFINITY;
+        let lastPlayerProgressAt = Date.now();
+        while (!bot.interrupt_code) {
+            resolution = resolvePhysicalPlayer(bot, canonicalUsername);
+            const player = resolution.entity;
+            if (!player?.position) return { ready: false, outcome: 'lost_player' };
+            const separation = bot.entity.position.distanceTo(player.position);
+            if (separation <= requiredDistance) {
+                if (waitingAnnounced) log(bot, `${canonicalUsername} caught up; continuing toward the saved destination.`);
+                waitingAnnounced = false;
+                return { ready: true, player, separation };
+            }
+            const cell = player.position.floored();
+            const cellKey = `${cell.x}:${cell.y}:${cell.z}`;
+            const novelCell = !visitedPlayerCells.has(cellKey);
+            visitedPlayerCells.add(cellKey);
+            const converged = separation <= bestSeparation - NAVIGATION_GOAL_PROGRESS_DELTA;
+            if (novelCell || converged) {
+                bestSeparation = Math.min(bestSeparation, separation);
+                lastPlayerProgressAt = Date.now();
+            }
+            if (!waitingAnnounced) {
+                waitingAnnounced = true;
+                log(bot, `Waiting for ${canonicalUsername} to catch up before continuing the guide route.`);
+            }
+            if (Date.now() - lastPlayerProgressAt < NAVIGATION_STALL_TIMEOUT_MS) {
+                await interruptibleDelay(bot, FOLLOW_SAMPLE_MS);
+                continue;
+            }
+            log(bot, `${canonicalUsername} stopped making physical progress; returning to rejoin them.`);
+            const rejoined = await goToPlayer(bot, canonicalUsername, 3, {
+                receiptRelationship: 'navigation',
+            });
+            if (!rejoined) {
+                return {
+                    ready: false,
+                    outcome: bot.interrupt_code ? 'interrupted' : 'player_rejoin_failed',
+                };
+            }
+        }
+        return { ready: false, outcome: 'interrupted' };
+    };
+
+    while (!bot.interrupt_code) {
+        const catchup = await waitForCatchup(waitingAnnounced ? resumeDistance : leash);
+        if (!catchup.ready) {
+            return fail(
+                catchup.outcome,
+                catchup.outcome === 'interrupted'
+                    ? `Stopped guiding ${canonicalUsername}.`
+                    : catchup.outcome === 'lost_player'
+                      ? `${canonicalUsername} left loaded Minecraft state during the guide route.`
+                      : `Could not return to ${canonicalUsername} to resume the guide route.`,
+            );
+        }
+
+        let pauseReason = null;
+        let observedSeparation = catchup.separation;
+        const monitor = setInterval(() => {
+            if (pauseReason || bot.interrupt_code) return;
+            const observed = resolvePhysicalPlayer(bot, canonicalUsername).entity;
+            if (!observed?.position) {
+                pauseReason = 'lost_player';
+            } else {
+                observedSeparation = bot.entity.position.distanceTo(observed.position);
+                if (observedSeparation > leash) pauseReason = 'player_lagging';
+            }
+            if (pauseReason) bot.pathfinder?.stop?.();
+        }, FOLLOW_SAMPLE_MS);
+
+        const legStart = bot.entity.position.clone();
+        const legStartDistance = legStart.distanceTo(new Vec3(x, y, z));
+        let reached = false;
+        try {
+            reached = await goToPosition(bot, x, y, z, requestedDistance, {
+                allowSegmentedJourney: true,
+                allowBestReachable: true,
+                movementFactory: () => guidedRouteMovements(bot),
+            });
+        } finally {
+            clearInterval(monitor);
+        }
+
+        if (pauseReason === 'player_lagging' && !bot.interrupt_code) {
+            waitingAnnounced = true;
+            log(bot, `${canonicalUsername} is ${observedSeparation.toFixed(1)} blocks behind; pausing the guide route.`);
+            continue;
+        }
+        if (pauseReason === 'lost_player') {
+            return fail('lost_player', `${canonicalUsername} left loaded Minecraft state during the guide route.`);
+        }
+        if (!reached) {
+            const navigation = bot.lastActionEvidence?.kind === 'movement'
+                ? bot.lastActionEvidence
+                : null;
+            const legEnd = bot.entity.position.clone();
+            const legEndDistance = legEnd.distanceTo(new Vec3(x, y, z));
+            const changedCell = !legEnd.floored().equals(legStart.floored());
+            if (
+                !bot.interrupt_code
+                && ['closest_reachable', 'closest_explored'].includes(navigation?.outcome)
+                && changedCell
+                && legEndDistance < legStartDistance
+            ) {
+                log(bot, `Advanced ${Math.round((legStartDistance - legEndDistance) * 10) / 10} blocks toward the saved destination; chaining the next player-traversable route frontier.`);
+                continue;
+            }
+            return fail(
+                bot.interrupt_code ? 'interrupted' : navigation?.outcome || 'destination_unreachable',
+                bot.interrupt_code
+                    ? `Stopped guiding ${canonicalUsername}.`
+                    : `Could not continue the verified route to ${x}, ${y}, ${z}.`,
+                navigation ? { navigation } : {},
+            );
+        }
+        break;
+    }
+
+    if (bot.interrupt_code) return fail('interrupted', `Stopped guiding ${canonicalUsername}.`);
+
+    while (!bot.interrupt_code) {
+        resolution = resolvePhysicalPlayer(bot, canonicalUsername);
+        const player = resolution.entity;
+        if (!player?.position) {
+            return fail('lost_player', `${canonicalUsername} left loaded Minecraft state before arriving.`);
+        }
+        const playerDistance = player.position.distanceTo(new Vec3(x, y, z));
+        const separation = bot.entity.position.distanceTo(player.position);
+        if (playerDistance <= playerArrivalDistance) {
+            const botDistance = bot.entity.position.distanceTo(new Vec3(x, y, z));
+            publishTerminal({
+                kind: 'guided_movement',
+                outcome: 'arrived_together',
+                target,
+                player: canonicalUsername,
+                botDistance,
+                playerDistance,
+                separation,
+                retryable: false,
+            });
+            log(bot, `${canonicalUsername} and Kevin reached the saved destination together.`);
+            return true;
+        }
+        if (!waitingAnnounced) {
+            waitingAnnounced = true;
+            log(bot, `Waiting at the destination for ${canonicalUsername} to finish the guide route.`);
+        }
+        await interruptibleDelay(bot, FOLLOW_SAMPLE_MS);
+    }
+    return fail('interrupted', `Stopped guiding ${canonicalUsername}.`);
 }
 
 export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64) {
@@ -20021,6 +20401,7 @@ export async function rideToPosition(bot, x, y, z, minDistance=2) {
 export async function goToPlayer(bot, username, distance=3, {
     locatePlayerPosition = null,
     dryOnly = false,
+    receiptRelationship = null,
 } = {}) {
     /**
      * Navigate to the given player.
@@ -20034,7 +20415,9 @@ export async function goToPlayer(bot, username, distance=3, {
     const composedReceipts = currentActionExecutionContext()?.receiptMode === 'composed';
     const publishTerminal = evidence => (
         composedReceipts
-            ? setActionTerminalEvidence(bot, evidence)
+            ? receiptRelationship
+                ? setActionChildEvidence(bot, receiptRelationship, evidence)
+                : setActionTerminalEvidence(bot, evidence)
             : (setActionEvidence(bot, evidence), { accepted: true, snapshot: bot.lastActionEvidence })
     );
     let lastNavigationReceipt = null;
@@ -20100,11 +20483,15 @@ export async function goToPlayer(bot, username, distance=3, {
             const previousNavigation = bot.lastActionEvidence;
             const reachedRegion = regionGoal.isEnd(bot.entity.position.floored()) || await goToGoal(bot, regionGoal, {
                 movements: () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot),
-                requirePlannedRoute: true,
-                allowSegmentedJourney: true,
-                segmentProofPolicy: 'safe_frontier',
+                // Player travel is incremental, not an atomic transaction. The
+                // owned Pathfinder walks capability-aware partial paths while
+                // its A* search continues as new terrain loads. Requiring a
+                // complete route here turns an ordinary long-distance timeout
+                // into zero movement and prevents walking, jumping, digging,
+                // or scaffolding edges from ever executing.
                 allowHealthBoundedDescent: false,
                 allowLocalRecovery: true,
+                allowBestReachable: true,
                 ...navigationReceiptOptions('managed_player_region'),
             });
             rememberFreshNavigation('managed_player_region', previousNavigation);
@@ -20167,18 +20554,21 @@ export async function goToPlayer(bot, username, distance=3, {
     // action's physical completion contract.
     const arrivalDistance = distance + 1;
     const goal = new pf.goals.GoalFollow(player, arrivalDistance);
+    const isSettledAtPlayer = observedDistance => (
+        Number.isFinite(observedDistance)
+        && observedDistance <= arrivalDistance
+    );
 
     const initialEvidence = bot.lastActionEvidence;
     let reached = await goToGoal(bot, goal, {
         ...(dryOnly ? { movements: () => dryRouteMovements(bot) } : {}),
-        requirePlannedRoute: true,
-        // Player pursuit is the case the approved segmented-navigation contract
-        // names first. A missing whole-journey proof means this player is not
-        // reachable in one leg, not that the companion should stand still.
-        allowSegmentedJourney: true,
-        segmentProofPolicy: 'safe_frontier',
+        // GoalFollow is ordinary incremental travel. Native goto() owns its
+        // partial A* frontier and executes the best currently known route with
+        // the effective Movements profile instead of waiting for a complete
+        // whole-journey proof.
         allowHealthBoundedDescent: false,
         allowLocalRecovery: true,
+        allowBestReachable: true,
         ...navigationReceiptOptions('live_player_pursuit'),
     });
     rememberFreshNavigation('live_player_pursuit', initialEvidence);
@@ -20188,7 +20578,7 @@ export async function goToPlayer(bot, username, distance=3, {
         const settledDistance = player?.position
             ? bot.entity.position.distanceTo(player.position)
             : Number.POSITIVE_INFINITY;
-        if (settledDistance <= arrivalDistance) {
+        if (isSettledAtPlayer(settledDistance)) {
             reached = true;
             log(bot, `Minecraft already shows ${username} within ${settledDistance.toFixed(1)} blocks despite Pathfinder's late failure.`);
         }
@@ -20220,6 +20610,7 @@ export async function goToPlayer(bot, username, distance=3, {
                 movements: () => safeMovements(bot),
                 allowHealthBoundedDescent: false,
                 allowLocalRecovery: true,
+                allowBestReachable: true,
                 ...navigationReceiptOptions('verified_region_fallback'),
             });
             rememberFreshNavigation('verified_region_fallback', fallbackEvidence);
@@ -20231,19 +20622,42 @@ export async function goToPlayer(bot, username, distance=3, {
         const settledDistance = player?.position
             ? bot.entity.position.distanceTo(player.position)
             : Number.POSITIVE_INFINITY;
-        if (settledDistance <= arrivalDistance) {
+        if (isSettledAtPlayer(settledDistance)) {
             reached = true;
             log(bot, `Minecraft confirmed ${username} within ${settledDistance.toFixed(1)} blocks after the fallback settled.`);
         }
     }
     if (!reached) {
-        if (composedReceipts) {
+        resolution = resolvePhysicalPlayer(bot, username);
+        target = playerTargetEvidence(resolution);
+        player = resolution.entity;
+        const navigationOutcome = composedReceipts
+            ? lastNavigationReceipt?.outcome
+            : navigation?.outcome;
+        const actualDistance = player?.position
+            ? bot.entity.position.distanceTo(player.position)
+            : Number.POSITIVE_INFINITY;
+        if (!bot.interrupt_code && ['closest_reachable', 'closest_explored'].includes(navigationOutcome)) {
+            publishTerminal({
+                kind: 'movement',
+                outcome: navigationOutcome,
+                target,
+                ...(Number.isFinite(actualDistance) ? { distance: actualDistance } : {}),
+                ...(navigation ? { navigation } : {}),
+                ...stagedNavigationEvidence(),
+                retryable: true,
+            });
+            log(bot, Number.isFinite(actualDistance)
+                ? `Reached the ${navigationOutcome === 'closest_reachable' ? 'closest reachable' : 'closest explored'} position to ${username}; the remaining obstruction leaves ${actualDistance.toFixed(1)} blocks between us.`
+                : `Reached the ${navigationOutcome === 'closest_reachable' ? 'closest reachable' : 'closest explored'} position toward ${username}, but the player is no longer visible.`);
+        } else if (composedReceipts) {
             publishTerminal({
                 kind: 'movement',
                 outcome: bot.interrupt_code
                     ? 'interrupted'
-                    : lastNavigationReceipt?.outcome || 'goal_not_reached',
+                    : navigationOutcome || 'goal_not_reached',
                 target,
+                ...(Number.isFinite(actualDistance) ? { distance: actualDistance } : {}),
                 retryable: !bot.interrupt_code && lastNavigationReceipt?.retryable === true,
             });
         }
@@ -20264,8 +20678,42 @@ export async function goToPlayer(bot, username, distance=3, {
         log(bot, `${username} is no longer visible after navigation.`);
         return false;
     }
-    const actualDistance = bot.entity.position.distanceTo(player.position);
-    if (actualDistance > arrivalDistance) {
+    let actualDistance = bot.entity.position.distanceTo(player.position);
+    if (!isSettledAtPlayer(actualDistance) && !bot.interrupt_code) {
+        // GoalFollow evaluates integer standing cells. On open ground the bot
+        // can stop inside an accepted cell while its continuous body remains
+        // outside this action's physical arrival envelope. Preserve the wider
+        // goal that admits valid terrace stances, then ask the same native
+        // Pathfinder for the requested-distance goal only when the observed
+        // body position proves that refinement is necessary.
+        log(bot, `Refining the final approach to ${username}; the first legal stance settled ${actualDistance.toFixed(2)} blocks away.`);
+        const refinementEvidence = bot.lastActionEvidence;
+        await goToGoal(bot, new pf.goals.GoalFollow(player, distance), {
+            ...(dryOnly ? { movements: () => dryRouteMovements(bot) } : {}),
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: true,
+            allowBestReachable: true,
+            ...navigationReceiptOptions('player_arrival_refinement'),
+        });
+        rememberFreshNavigation('player_arrival_refinement', refinementEvidence);
+        resolution = resolvePhysicalPlayer(bot, username);
+        target = playerTargetEvidence(resolution);
+        player = resolution.entity;
+        if (!player) {
+            publishTerminal({
+                kind: 'movement',
+                outcome: 'lost_target',
+                target,
+                ...(navigation ? { navigation } : {}),
+                ...stagedNavigationEvidence(),
+                retryable: false,
+            });
+            log(bot, `${username} is no longer visible after the final approach.`);
+            return false;
+        }
+        actualDistance = bot.entity.position.distanceTo(player.position);
+    }
+    if (!isSettledAtPlayer(actualDistance)) {
         publishTerminal({
             kind: 'movement',
             outcome: 'too_far',

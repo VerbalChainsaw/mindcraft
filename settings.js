@@ -1,3 +1,5 @@
+import { LOCAL_QUICKSTART_PROFILE } from './src/mindcraft/local-quickstart.js';
+
 const settings = {
     "minecraft_version": "auto", // or specific version like "1.21.6"
     "host": "127.0.0.1", // or "localhost", "your.ip.address.here"
@@ -10,7 +12,7 @@ const settings = {
     
     "base_profile": "assistant", // survival, assistant, creative, or god_mode
     "profiles": [
-        "./andy.json",
+        LOCAL_QUICKSTART_PROFILE,
         // "./profiles/gpt.json",
         // "./profiles/claude.json",
         // "./profiles/gemini.json",

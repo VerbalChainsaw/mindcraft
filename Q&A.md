@@ -134,3 +134,142 @@ Director's hand-entered overrides are authoritative.
   Stop the matrix immediately on provider authentication, quota, billing,
   rate-limit, or routing failure; do not retry or switch providers without new
   approval.
+- **Provider correction:** Q-006 supersedes the `openai / gpt-4.1` and paid-API
+  portions of this disclosure.
+- **Corrected Luna authorization (2026-08-21, Director):**
+  > "Corrected luna is fully authorized, skip the ceremony."
+- **Current operational interpretation:** The complete corrected
+  `codex / gpt-5.6-luna` matrix through ChatGPT OAuth is explicitly authorized.
+  No additional disclosure or authorization ceremony is required before starting
+  it. This authorization does not answer the separate Q-007 swim-exit question.
+
+---
+
+## Q-006 — Which provider and model should Kevin use going forward?
+
+- **Asked/corrected by the Director:** 2026-08-21
+- **Director's answer:**
+  > "We need to be using Luna going forward, for everything"
+- **Verified environment:** `codex login status` reports `Logged in using
+  ChatGPT`. Kevin's native `codex` provider uses that OAuth session and strips
+  API-key credentials from the provider child process.
+- **Operational interpretation:** Every Kevin model role—conversation, reasoning,
+  autonomy, memory, and frozen-model testing—uses
+  `codex/gpt-5.6-luna` through ChatGPT OAuth. API-key OpenAI routes are not a
+  fallback and must not be restored for Kevin. Ordinary startup selects the Kevin
+  profile through the shared profile-path constant. Explicitly provider-specific
+  sample profiles remain available only when the Director intentionally selects
+  them.
+
+---
+
+## Q-007 — Run the controlled Phase 6 swim-exit course once?
+
+- **Asked:** 2026-08-21
+- **Disclosed command:** `npm run scenario:terrain-swim`
+- **Disclosed boundary:** Two isolated explicit-command transports, approximately
+  6–8 minutes, no model provider, no API or subscription usage, and $0 service
+  cost. The swim-exit course is new; final `!stop` traverses the accepted Operator
+  Stop/Hold boundary.
+- **Answer (2026-08-21, Director):** YES.
+- **Expanded authorization (2026-08-21, Director):**
+  > "You can run as many controlled runs as you want as long as they're making
+  > material progress on untested mechanics"
+- **Operational interpretation:** Controlled physical runs may continue without
+  another per-run question while each run is the smallest discriminating probe
+  that can change a mechanic owner, repair, player-visible composition verdict,
+  or significant risk. This applies to old and new mechanics; saved evidence
+  remains valid and reassurance-only repetition remains out of scope.
+
+---
+
+## Q-008 — Do we need a new multi-stage movement orchestrator or scheduler?
+
+- **Asked by the Director:** 2026-08-21
+- **Question:**
+  > "Do we need to formulate a better multi-stage orchistrator/scheduler/engine
+  > to pull peices together and organize the movement into controllable streams?"
+- **Accepted recommendation:** Do not create a second engine from current
+  evidence. Strengthen the existing request -> Mission -> Activity -> specialist
+  adapter -> ActionManager -> physical action -> settlement/checkpoint pipeline.
+  Operator, critical-survival, Mission, and background work are logical priority
+  streams; only one stream may physically own Kevin through ActionManager at a
+  time.
+- **Director acknowledgement:**
+  > "Okay, update the handoffs file, update Q&A, update your NEEDS.md if you need
+  > too and prepare to hand this off to a new sesion"
+- **Operational interpretation:** Phase 6 and Phase 7 classify failures by their
+  actual owner. Reconsider scheduling architecture only if direct evidence across
+  independent specialists shows the current Mission/Activity contract cannot
+  represent necessary dependencies, interruption, settlement, partial effects,
+  or resumption. No new orchestration implementation is authorized by this entry.
+
+---
+
+## Q-009 — How should confidence-run depth be chosen?
+
+- **Directed by the Director:** 2026-08-21
+- **Answer:** Use the architecture-owned evidence-saturation rubric, not a fixed
+  repetition count and not a new confidence engine.
+- **Operational interpretation:** Reuse saved evidence for unchanged owners;
+  directly probe new or changed mechanics; verify each material repair; compose
+  relevant old and new mechanics into the current ordinary-language player
+  outcome; classify every failure; and stop when all acceptance dimensions are
+  supported and another run cannot change the verdict, owner, repair, or
+  significant risk.
+- **Product criterion:** Gabriel Jr. states what he wants in ordinary language;
+  Kevin understands the promise, executes a coherent multi-step plan, survives
+  interruption or change, and truthfully finishes or explains what remains.
+- **Architecture constraint:** Finish the bounded variance question, prove missing
+  movement mechanisms, add real specialist adapters, then collapse legacy
+  directors and lanes as evidence permits. Do not build another engine or a
+  verifier framework detached from that outcome.
+
+---
+
+## Q-010 — Has the configured DeepSeek API key been replaced?
+
+- **Asked:** 2026-08-21
+- **Director direction:** Wire Kevin to DeepSeek V4 Flash.
+- **Implemented:** The native `deepseek` adapter and Kevin's four model roles now
+  select `deepseek-v4-flash`. Chat, autonomy, and memory use non-thinking mode;
+  the reasoning specialist uses thinking mode with supported `high` effort.
+- **Blocking evidence:** The one disclosed paid smoke request reached the official
+  DeepSeek endpoint and returned HTTP `401 Authentication Fails` with code
+  `invalid_request_error` in 399 ms. No retry or provider fallback occurred.
+- **Answer (2026-08-21, Director):** The valid credential is in DSH / the
+  DeepSeek harness.
+- **Verified resolution:** The distinct `DEEPSEEK_API_KEY` from
+  `C:\Users\zerop\.dsh\.credentials.yaml` replaced only the rejected Minecraft
+  key; every other credential fingerprint remained unchanged. A bounded
+  `deepseek-v4-flash` request authenticated and returned a normal completion in
+  2.2 seconds.
+- **Activation:** Kevin alone restarted through the existing control plane at
+  20:20 America/Chicago while Paper PID 33360 and the current world stayed live.
+  The generated runtime profile names `deepseek/deepseek-v4-flash` for all four
+  roles. At 20:21:14 Kevin said `DeepSeek Flash online. No movement or tasks
+  started.` in the Java world.
+- **State:** **ANSWERED / ACCEPTED.**
+
+---
+
+## Q-011 — Stop the live Kevin/Paper runtime for the corrected Luna matrix?
+
+- **Asked:** 2026-08-21
+- **Question:**
+  > May I stop the intentionally live Kevin/Paper runtime so the already
+  > authorized isolated Phase 5 Luna matrix can acquire ports 8081 and 25579?
+- **Observed runtime:** Node PID `31012` runs `main.js` from this repository and
+  owns MindServer port `8081`; its Java child PID `33360` runs the managed Paper
+  server for the current world and owns port `25579`.
+- **Why blocking:** Scenario Lab correctly refuses to start while either port is
+  occupied. Stopping this runtime would disconnect live Kevin and stop the
+  current Paper world, which is a material external-state change not silently
+  inferred from the separate authorization to run an isolated matrix.
+- **Independent work completed:** The matrix's Windows/WSL Git-provenance defect
+  is repaired. Its read-only plan now resolves source `00aa2bb0...`, fingerprint
+  `d4a8cf54...`, `112` isolated cells, `codex/gpt-5.6-luna`, ChatGPT subscription
+  billing, and at most `112` configured provider requests. Scenario Lab validation
+  and tests pass `37/37`; focused lint is clean.
+- **State:** **OPEN — explicit Director answer required before stopping either
+  process or launching the matrix.**

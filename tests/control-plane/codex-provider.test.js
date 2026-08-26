@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import test from 'node:test';
 
 import { buildHealthStatus } from '../../src/mindcraft/health-status.js';
 import { describeModelProvider } from '../../src/models/_model_map.js';
-import { CODEX_MODEL, Codex } from '../../src/models/codex.js';
+import { CODEX_MODEL, Codex, resolveCodexCommand } from '../../src/models/codex.js';
 
 let nextPid = 40_000;
 
@@ -36,6 +39,34 @@ function terminateFake(child) {
   }
   return Promise.resolve({ success: true, pid: child.pid });
 }
+
+test('Codex Windows resolution ignores stale npm packages that have no PATH shim', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-resolution-'));
+  const decoy = path.join(root, 'decoy');
+  const installed = path.join(root, 'installed');
+  const relativeEntry = path.join('node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  try {
+    await Promise.all([
+      mkdir(path.dirname(path.join(decoy, relativeEntry)), { recursive: true }),
+      mkdir(path.dirname(path.join(installed, relativeEntry)), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(decoy, relativeEntry), 'stale'),
+      writeFile(path.join(installed, relativeEntry), 'current'),
+      writeFile(path.join(installed, 'codex.cmd'), '@echo off'),
+    ]);
+
+    assert.deepEqual(resolveCodexCommand({
+      platform: 'win32',
+      env: { PATH: `${decoy}${path.delimiter}${installed}` },
+    }), {
+      command: process.execPath,
+      prefixArgs: [path.join(installed, relativeEntry)],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function appServerHarness({ leaveTurnPending = false } = {}) {
   const requests = [];

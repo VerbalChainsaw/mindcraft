@@ -623,6 +623,27 @@ function outcomeTarget(outcome) {
 }
 
 function scoutObservationStep(order, finding) {
+  if (finding === 'village') {
+    return createCapabilityRequest('observe_village', {
+      home: order.target,
+      range: order.constraints?.maxDistance,
+      searchLimit: order.checkpoint?.scoutSearchLimit ?? null,
+    }, {
+      nextPhase: 'execute',
+      code: 'scout_village',
+      target: { name: 'village' },
+      keepAnchor: true,
+      checkpointOnSuccess: outcome => {
+        const target = outcomeTarget(outcome);
+        return target ? {
+          ...order.checkpoint,
+          scoutVillageX: target.x,
+          scoutVillageY: target.y,
+          scoutVillageZ: target.z,
+        } : null;
+      },
+    });
+  }
   if (finding === 'animal') {
     return createCapabilityRequest('observe_useful_animal', {
       home: order.target,
@@ -667,28 +688,43 @@ function scoutObservationStep(order, finding) {
 }
 
 function scoutFindingRecorded(checkpoint, finding) {
-  const prefix = finding === 'animal' ? 'scoutAnimal' : 'scoutCave';
+  const prefix = finding === 'animal'
+    ? 'scoutAnimal'
+    : finding === 'village'
+      ? 'scoutVillage'
+      : 'scoutCave';
   return ['X', 'Y', 'Z'].every(axis => Number.isFinite(checkpoint?.[`${prefix}${axis}`]));
 }
 
 function scoutSearchRelocationStep(order) {
   const completed = Math.max(0, Number(order.checkpoint?.scoutSearchRelocations) || 0);
-  if (completed >= CAVE_SEARCH_DIRECTIONS.length) {
+  if (!Number.isSafeInteger(completed) || completed >= Number.MAX_SAFE_INTEGER) {
     return {
       terminal: true,
-      code: 'scout_region_exhausted',
-      detail: 'No requested finding had a safe verified observation after the bounded radial scout route.',
+      code: 'scout_search_index_exhausted',
+      detail: 'The scout route exhausted JavaScript safe-integer addressing for further search regions.',
       retryable: false,
     };
   }
-  const [directionX, directionZ] = CAVE_SEARCH_DIRECTIONS[completed];
-  const directionLength = Math.hypot(directionX, directionZ);
-  const radius = Math.min(
-    CAVE_SEARCH_RELOCATION_DISTANCE,
-    Math.max(16, Number(order.constraints?.maxDistance) || 64),
-  );
-  const x = Math.round(order.target.x + ((radius * directionX) / directionLength));
-  const z = Math.round(order.target.z + ((radius * directionZ) / directionLength));
+  // A golden-angle spiral expands without a retry ceiling while keeping each
+  // newly loaded observation region overlapping its neighbors. Radius grows
+  // with sqrt(n), so the sampled area grows in proportion to work performed.
+  const ordinal = completed + 1;
+  const observationRadius = Math.max(16, Number(order.constraints?.maxDistance) || 64);
+  const stride = observationRadius / 2;
+  const radius = stride * Math.sqrt(ordinal);
+  const searchLimit = Number(order.checkpoint?.scoutSearchLimit);
+  if (Number.isFinite(searchLimit) && radius > searchLimit) {
+    return {
+      terminal: true,
+      code: 'scout_player_radius_exhausted',
+      detail: `No requested finding was verified within the player-specified ${searchLimit}-block search radius.`,
+      retryable: false,
+    };
+  }
+  const angle = completed * Math.PI * (3 - Math.sqrt(5));
+  const x = Math.round(order.target.x + (radius * Math.cos(angle)));
+  const z = Math.round(order.target.z + (radius * Math.sin(angle)));
   return createCapabilityRequest('relocate_search_region', {
     x,
     y: order.target.y,
@@ -702,10 +738,10 @@ function scoutSearchRelocationStep(order) {
     target: { name: 'scout_search_region', x, y: order.target.y, z },
     keepAnchor: true,
     recoveryAction: true,
-    // Mark the region attempted before movement begins. A blocked waypoint is
-    // still evidence that this approach is unsuitable; retrying it unchanged
-    // would spend the entire recovery budget on one identical signature.
-    checkpoint: {
+    // A region is searched only after movement physically reaches it. Survival
+    // preemption may interrupt the route at any intermediate point; advancing
+    // here before verified arrival would leave permanent holes in the spiral.
+    checkpointOnSuccess: {
       ...order.checkpoint,
       scoutSearchRelocations: completed + 1,
     },
@@ -748,13 +784,11 @@ export function nextScoutStep(order, snapshot = {}) {
     .sort((left, right) => Number(right === 'animal') - Number(left === 'animal'))
     .find(finding => !scoutFindingRecorded(checkpoint, finding));
   if (missingFinding) {
-    if (
-      order.phase === 'recover'
-      && order.evidence?.code === 'source_not_found'
-      && order.evidence?.inconclusive !== true
-    ) {
-      return scoutSearchRelocationStep(order);
-    }
+    // Any failed observation or interrupted relocation means this search
+    // region remains unresolved. Rebind the same waypoint until navigation
+    // physically verifies it; do not re-observe an intermediate fight/flee
+    // position or consume the productive attempt budget there.
+    if (order.phase === 'recover') return scoutSearchRelocationStep(order);
     return scoutObservationStep(order, missingFinding);
   }
 
@@ -775,12 +809,18 @@ export function nextScoutStep(order, snapshot = {}) {
 
   const guideFinding = checkpoint.scoutGuideFinding;
   if (guideFinding && checkpoint.scoutGuideComplete !== true) {
-    const prefix = guideFinding === 'animal' ? 'scoutAnimal' : 'scoutCave';
-    return createCapabilityRequest('navigate_exact', {
+    const prefix = guideFinding === 'animal'
+      ? 'scoutAnimal'
+      : guideFinding === 'village'
+        ? 'scoutVillage'
+        : 'scoutCave';
+    return createCapabilityRequest('guide_player_exact', {
+      player: order.requester,
       x: checkpoint[`${prefix}X`],
       y: checkpoint[`${prefix}Y`],
       z: checkpoint[`${prefix}Z`],
       closeness: 2,
+      leashDistance: 12,
       dimension: checkpoint.homeDimension,
     }, {
       nextPhase: 'verify',

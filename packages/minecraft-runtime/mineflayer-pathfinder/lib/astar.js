@@ -48,7 +48,8 @@ class AStar {
     this.openDataMap.set(startNode.data.hash, startNode)
     this.bestNode = startNode
 
-    this.maxCost = searchRadius < 0 ? -1 : startNode.h + searchRadius
+    this.start = { x: start.x, y: start.y, z: start.z }
+    this.searchRadiusSquared = searchRadius < 0 ? -1 : searchRadius * searchRadius
     this.visitedChunks = new Set()
   }
 
@@ -87,12 +88,17 @@ class AStar {
         if (this.closedDataSet.has(neighborData.hash)) {
           continue // skip closed neighbors
         }
+        if (this.searchRadiusSquared >= 0) {
+          const dx = neighborData.x - this.start.x
+          const dy = neighborData.y - this.start.y
+          const dz = neighborData.z - this.start.z
+          if ((dx * dx) + (dy * dy) + (dz * dz) > this.searchRadiusSquared) continue
+        }
         const gFromThisNode = node.g + neighborData.cost
         let neighborNode = this.openDataMap.get(neighborData.hash)
         let update = false
 
         const heuristic = this.goal.heuristic(neighborData)
-        if (this.maxCost > 0 && gFromThisNode + heuristic > this.maxCost) continue
 
         if (neighborNode === undefined) {
           // add neighbor to the open set

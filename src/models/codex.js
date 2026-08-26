@@ -13,6 +13,11 @@ const MIN_TIMEOUT_SECONDS = 10;
 const MAX_TIMEOUT_SECONDS = 180;
 const STARTUP_TIMEOUT_MS = 15_000;
 const INTERRUPT_GRACE_MS = 1_500;
+// Windows can retain a just-terminated app-server's working-directory handle
+// briefly after process exit. This settlement window is owned by provider
+// disposal: exceeding it means isolated runtime cleanup is not trustworthy.
+const TEMP_CLEANUP_SETTLEMENT_MS = 2_000;
+const TEMP_CLEANUP_RETRY_MS = 100;
 const SECRET_ENV_NAMES = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN'];
 const TEXT_ONLY_INSTRUCTIONS = [
     'You are a text-only response model embedded in a Minecraft companion.',
@@ -103,7 +108,7 @@ function protocolUnsupported(error) {
         .test(String(error?.message || ''));
 }
 
-function resolveCodexCommand({ platform = process.platform, env = process.env } = {}) {
+export function resolveCodexCommand({ platform = process.platform, env = process.env } = {}) {
     if (platform !== 'win32') return { command: 'codex', prefixArgs: [] };
 
     const pathEntries = String(env.PATH || env.Path || '')
@@ -116,9 +121,13 @@ function resolveCodexCommand({ platform = process.platform, env = process.env } 
 
         // npm's Windows codex shim is a .cmd/.ps1 file, which cannot be launched
         // directly without a shell. Launch its JavaScript entry point with the
-        // current Node executable instead.
+        // current Node executable instead. Require the actual PATH shim: an
+        // unrelated directory can contain a stale node_modules package without
+        // exposing it as the `codex` command.
         const npmEntryPoint = path.join(entry, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-        if (existsSync(npmEntryPoint)) {
+        const npmShimExists = existsSync(path.join(entry, 'codex.cmd'))
+            || existsSync(path.join(entry, 'codex.ps1'));
+        if (npmShimExists && existsSync(npmEntryPoint)) {
             return { command: process.execPath, prefixArgs: [npmEntryPoint] };
         }
     }
@@ -850,7 +859,12 @@ export class Codex {
             await this._stopAppServer();
             await this._drainPromise?.catch?.(() => undefined);
             if (this._tempDir) {
-                await rm(this._tempDir, { recursive: true, force: true });
+                await rm(this._tempDir, {
+                    recursive: true,
+                    force: true,
+                    maxRetries: Math.ceil(TEMP_CLEANUP_SETTLEMENT_MS / TEMP_CLEANUP_RETRY_MS),
+                    retryDelay: TEMP_CLEANUP_RETRY_MS,
+                });
                 this._tempDir = null;
             }
         })();

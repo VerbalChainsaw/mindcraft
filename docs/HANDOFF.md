@@ -1,9 +1,18 @@
 # Handoff — next session / forward proof boundary
 
-**Prepared 2026-08-21. Current tranche state: Phase 5 code and acquisition
-preparation are complete. One isolated recorded-trace cell is `ACCEPTED / CLOSED`.
-The Director authorized the complete 112-cell matrix in an isolated frozen-source
-subagent runtime while Phase 6 source work proceeds separately.**
+**Prepared 2026-08-25. Current tranche state: the Phase 7 Container specialist is
+`ACTIVE` with its first major player-valued action complete. Kevin deposited six
+oak logs in the exact village chest at `(796,67,-774)`, returned, later recovered
+two from that same chest after working around an unreachable first interaction
+stance, returned with custody intact, and durably saved `village_supply_cache`.
+Paper ended with four logs in the chest, eight on Kevin, and zero on the controlled
+player. The autonomous village expedition, player-directed route convergence, and
+Phase 6 workaround chain remain `ACCEPTED / CLOSED`. Other Phase 7 specialists and
+Container interruption during an open window remain unimplemented. The separately
+authorized corrected Luna matrix has not started. Runtime cleanup is complete:
+the controlled player and Kevin disconnected, Paper stopped after saving the world,
+the launcher exited, ports 8080, 8081, and 25579 are free, and the temporary driver
+was removed.**
 
 `ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
 governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
@@ -26,11 +35,47 @@ successor's first report must preserve these standing decisions:
 
 `[DECISION key=test:accepted-boundaries status=ACCEPTED date=2026-08-20 reason="Saved physical evidence closes all listed campaigns through the Phase 4 inconclusive-route truth contract; focused static evidence also closes the stance-probe result-shape contract."]`
 
-`[DEAD key=test:confidence-reruns date=2026-08-20 reason="Accepted campaign reruns are DEAD; use saved evidence and advance only into a Director-authorized unaccepted boundary." reopen="The Director explicitly authorizes the exact disclosed rerun after materially contradictory evidence."]`
+`[DECISION key=model:kevin-provider status=ACCEPTED date=2026-08-21 reason="The Director selected deepseek/deepseek-v4-flash for every live Kevin model role; the DSH credential authenticated, the bot-only restart completed, and Kevin confirmed the route in the unchanged world."]`
 
-Accepted campaign reruns are **DEAD**; do not propose, use, or restore them as the
-default proof strategy. Use saved evidence and move forward into one genuinely
-unaccepted capability after the Director names it.
+`[SUPERSEDED key=model:kevin-openai-api by=model:kevin-provider date=2026-08-21 reason="The authenticated native DeepSeek V4 Flash route replaces generic OpenAI API routing for live Kevin."]`
+
+API-key OpenAI routing for Kevin is **SUPERSEDED**; do not propose, use, or
+restore it. Use the native `deepseek/deepseek-v4-flash` route for live
+conversation, reasoning, autonomy, and memory. The corrected Luna matrix remains
+a separate saved test plan and has not started.
+
+`[DECISION key=orchestration:single-physical-owner status=ACCEPTED date=2026-08-21 reason="The proven Mission -> Activity -> specialist adapter -> ActionManager path organizes logical priority streams while one settled owner controls Kevin's body; no second movement engine is justified."]`
+
+`[SUPERSEDED key=orchestration:parallel-movement-engine by=orchestration:single-physical-owner date=2026-08-21 reason="One ActionManager-owned physical stream replaces competing movement schedulers; logical work remains prioritized above that single actuator boundary."]`
+
+A parallel physical movement engine is **SUPERSEDED**; do not propose, use, or
+restore it without contradictory physical evidence. Use logical priority streams
+feeding the existing Mission, Activity, specialist-adapter, and ActionManager
+pipeline, with one active physical owner and verified settlement before handoff.
+
+`[DECISION key=test:evidence-saturation status=ACCEPTED date=2026-08-21 reason="Confidence depth follows material uncertainty, direct physical and composed outcomes, and observed failure classes; it never follows a fixed run count."]`
+
+`[DECISION key=test:phase6-terrain-chain status=ACCEPTED date=2026-08-25 reason="One uninterrupted real Pathfinder action physically composed dig, parkour, bridge, tower, stair excavation, controlled descent, swim exit, and dry settlement with exact terrain and scaffold accounting."]`
+
+`[DECISION key=gameplay:village-expedition status=ACCEPTED date=2026-08-25 reason="Kevin physically completed village search, durable recall, return, and a roughly 590-block mixed-mode player-guidance continuation to the remembered bell."]`
+
+`[SUPERSEDED key=repair:model-route-retry by=repair:player-route-partials date=2026-08-22 reason="Native partial-route execution replaces response-loop suppression; player-route attempts remain executable while Pathfinder safety owns each execution."]`
+
+`[DECISION key=repair:player-route-partials status=ACCEPTED date=2026-08-22 reason="Ordinary player-directed travel uses the owned native goto partial-route executor with Kevin's effective Movements; whole-route proof remains available for explicitly atomic or returnability-critical consumers."]`
+
+`[DECISION key=repair:player-best-reachable status=ACCEPTED date=2026-08-22 reason="Opted-in player navigation preserves native A* or physically consumed best-frontier progress as an honest retryable closest outcome while exact arrival remains false."]`
+
+The response-loop player-route material-change blocker is **SUPERSEDED**; do not
+propose, use, or restore it. Use native player-route partial execution and keep
+physical safety, cancellation, and settlement at the existing Pathfinder and
+ActionManager owners.
+
+`[SUPERSEDED key=test:confidence-reruns by=test:evidence-saturation date=2026-08-21 reason="The architecture-owned evidence-saturation rubric replaces the blanket rerun prohibition so old and new mechanics receive material outcome-directed coverage without ceremonial repetition."]`
+
+The blanket confidence-rerun prohibition is **SUPERSEDED**; do not restore it.
+Use saved evidence for unchanged owners, but run controlled old or new mechanics
+when current ownership, composition, contradictory evidence, or a material repair
+can change the verdict. Do not create a confidence engine or verifier platform.
 
 ## State inherited from this session
 
@@ -60,8 +105,14 @@ complete current contract without a competing agenda.
 | Phase 3 exact eight-charcoal Mission, including direct and natural-language forms | `ACCEPTED / CLOSED` |
 | Phase 4 `probeSafeNavigationGoal` -> `goToGoal` inconclusive-route truth contract | `ACCEPTED / CLOSED` |
 | Phase 4 `probeSafeNavigationStances` result-shape truth contract (static only) | `ACCEPTED / CLOSED` |
+| Phase 4 player-directed incremental route and best-available convergence | `ACCEPTED / CLOSED` |
+| Pathfinder expensive finite-break routing | `ACCEPTED / CLOSED` |
 | Phase 5 `1-give`, trial 1, recorded trace, telemetry off, advisory preflight | `ACCEPTED / CLOSED` |
-| Repeating any closed campaign merely for confidence | `DEAD` |
+| Phase 6 controlled swim-exit | `ACCEPTED / CLOSED` |
+| Phase 6 composed dig/parkour/bridge/tower/stair/descent/swim/dry-arrival chain | `ACCEPTED / CLOSED` |
+| Autonomous village search, durable recall, return, and player guidance | `ACCEPTED / CLOSED` |
+| Phase 7 Container specialist and village supply cache | `ACTIVE` |
+| Outcome-directed confidence coverage under the evidence-saturation rubric | `ACTIVE` |
 
 The accepted Phase 3 result is:
 
@@ -85,9 +136,80 @@ managed Java remaining. Use it; do not rerun it.
 
 ## Current tranche
 
-**State: Phase 4 source review and the Phase 5 acquisition path are complete.
-Phase 5 has one valid recorded-trace observation; the other 111 cells remain
-`PENDING` and no additional physical run is authorized.**
+**State: Phase 7 Container is `ACTIVE`; its exact deposit, leave, return, exact
+withdrawal, chained stance workaround, custody, settlement, and durable cache-
+memory action completed physically. Other Phase 7 specialists and an interrupted
+open-window transaction remain open. The autonomous village expedition, recorded
+player-return route repair, and Phase 6 physical courses remain `ACCEPTED / CLOSED`.
+The corrected Luna matrix remains `0/112`, has no verdict, and has not started.**
+
+### Phase 7 Container action
+
+- Container commands now request a `container` Activity specialist. Its owner
+  spans native Pathfinder approach and Mineflayer window state, records window
+  open/close progress, closes the window on halt, and requires both window closure
+  and Pathfinder settlement before body release.
+- `!takeFromChestAt` now binds withdrawal to one exact chest or barrel instead of
+  whichever loaded chest is nearest.
+- From twelve oak logs, Kevin deposited exactly six into the chest at
+  `(796,67,-774)` and returned with six. The chest's unrelated village loot was
+  preserved.
+- On the recovery request, exact withdrawal first returned
+  `skill_chest_unreachable`. Kevin navigated to the chest, retried the same exact
+  binding, withdrew two, and returned. This is the accepted live workaround chain;
+  no blind repeat was used.
+- Final Paper truth: chest `oak_log:4`, Kevin `oak_log:8`, DirectorTest
+  `oak_log:0`, Kevin at `(779.5,64.9375,-773.4999)` beside the requester.
+- Runtime memory persists `village_supply_cache` near the chest at
+  `(797.488,67,-774.5)` in the Overworld.
+- The model treated “come back to me with them” as delivery after successful
+  return. The player correction to retain custody was ultimately honored; no item
+  left Kevin. This promise-interpretation defect belongs above Container mechanics.
+- Container remains `ACTIVE` because no live window transaction was interrupted.
+  Do not rerun the completed deposit/recovery path merely for reassurance.
+
+### Recorded player-return route repairs
+
+- The complete available trajectory is preserved in
+  `bots/Kevin/histories/8-21-2026_7-06-03PM.jsonl` and corroborated by
+  `launcher.log`: one player message caused repeated model-selected `!come` and
+  default `!goToPlayer` calls after the same retryable
+  `skill_route_unproven` result explicitly reported zero movement.
+- The previously cited telemetry files for this interval are absent from their
+  recorded paths. They were not treated as negative evidence and were not used
+  to justify this repair.
+- The temporary response-loop material-change blocker has been removed. No
+  player-route method, target, or world snapshot is stored to reject a later
+  attempt before ActionManager.
+- The same recording showed the deeper owning failure: `goToPlayer` required a
+  complete route preflight before native execution, so an inconclusive long search
+  suppressed Kevin's already-enabled walking, jumping/parkour, scaffolding,
+  breaking, and tool-aware mining edges and produced zero movement.
+- Managed-position reacquisition and live `GoalFollow` now delegate directly to
+  owned `goto()`. Native partial-path execution and replanning own ordinary player
+  travel; strict proof and segmented journeys remain available to consumers that
+  explicitly require atomicity or returnability. A legal outer `GoalFollow` stance
+  is refined against continuous body distance before exact success is reported.
+- Native A*'s best `noPath` endpoint is executable for opted-in player navigation.
+  If timeout or final stall occurs after Pathfinder has already consumed the useful
+  partial route, strict goal-metric improvement preserves that physical stance as
+  `closest_explored`. `goToPlayer` still returns false and the correlated terminal
+  receipt remains failed/retryable, so closest progress cannot masquerade as arrival.
+- `validation-output/player-route-obstruction-2026-08-22T18-43-22-588/player-route-obstruction.result.v1.json`
+  passed both transports with complete evidence. Kevin broke the two-block dirt
+  plug through real Pathfinder, crossed the wall, refined to 3.000 blocks from the
+  stationary player, ended `skill_arrived`, remained stable under Hold, and fully
+  restored the fixture/runtime.
+- `validation-output/player-route-best-reachable-2026-08-22T19-17-21-939/player-route-best-reachable.result.v1.json`
+  passed both transports with complete evidence. Against a sealed bedrock shell,
+  Kevin advanced to 6.179 and 6.185 blocks, ended retryable
+  `skill_closest_explored`, preserved the shell and terrain, remained stable under
+  Hold, and fully restored the fixture/runtime.
+- Both aggregates have zero retries and safety violations. No model provider or
+  paid API was used. Focused runtime checks pass `30/30`; Scenario Lab control-
+  plane checks pass `38/38`; syntax and diff checks pass.
+- Post-run doctor confirms ports 8080, 8081, and 25579 are free, the managed server
+  is stopped, and the runtime lock is free. This boundary is `ACCEPTED / CLOSED`.
 
 ### Phase 4 completed source boundary
 
@@ -100,8 +222,8 @@ Phase 5 has one valid recorded-trace observation; the other 111 cells remain
   candidate sets own termination.
 - Focused files pass segmented navigation `48/48`, critical runtime `27/27`,
   mining geometry `19/19`, and the explorer/work-order route contracts including
-  the 129th-candidate route case. This is source-level evidence; difficult physical
-  terrain remains the separate Phase 6 boundary.
+  the 129th-candidate route case. This is source-level evidence; the separate
+  Phase 6 physical terrain boundary is now closed by the composed course below.
 
 ### Phase 5 progress
 
@@ -128,9 +250,8 @@ Phase 5 has one valid recorded-trace observation; the other 111 cells remain
 - The recorded arm uses a one-response loopback OpenAI-compatible provider while
   preserving the production prompt and command path. It retains fingerprints and
   non-sensitive UTF-8 size measurements, not prompt text or fabricated token
-  usage, so the first physical smoke can support the paid-run cost estimate. The
-  frozen arm pins one `openai / gpt-4.1` route and cannot use the fixture's
-  fallback model.
+  usage. The corrected frozen arm pins one `codex / gpt-5.6-luna` route through
+  ChatGPT OAuth and cannot fall back to another model or provider.
 - Expected product failures are physically stopped and settled, then retained as
   valid `passed: false` observations. Broken setup, transport, evidence, or cleanup
   remains incomplete and cannot enter the matrix.
@@ -146,58 +267,201 @@ Phase 5 has one valid recorded-trace observation; the other 111 cells remain
   after a new typed goal already owned the physical request. The owning mechanisms
   now represent an absent candidate blob without aborting regression mode and stop
   a model command loop only after a newly accepted durable typed goal.
-- `validation-output/phase5-variance-20260821-v3` contains one valid observation:
+- `validation-output/phase5-variance-20260821-v3` contains the accepted first
+  observation:
   `1-give`, trial 1, recorded trace, telemetry off, advisory preflight. Kevin
   physically delivered exactly four of eight starting oak logs to `FollowTarget`.
   One provider request matched runtime input/output fingerprints; settlement,
   Hold, fixture/runtime restoration, player disconnect, and process cleanup all
-  passed. The acquisition state is partial (`1/112`) and has no matrix verdict.
+  passed.
+- The Director-authorized matrix ran from isolated source snapshot `00aa2bb` and
+  preserved four valid local recorded-trace reports at
+  `C:\Users\zerop\Development\minecraft-companion-brain-v2-phase5-matrix-00aa2bb\validation-output\phase5-variance-20260821-v4`.
+  Each physically delivered the exact four oak logs and passed correlation,
+  settlement, restoration, and cleanup.
+- The next cell, `1-give-trial-1-frozen-model-telemetry-off-preflight-off`,
+  stopped immediately when provider `openai-api` returned
+  `credit_balance_exhausted`: the configured OpenAI API project has no usable
+  credit or spend allowance. No retry, fallback, or route switch occurred.
+- Cleanup is complete: the isolated Java, Node, Paper, provider, and Kevin
+  processes are stopped; ports `25579` and `8081` are free; the runtime marker
+  and isolated credential copy are removed; configuration, properties, and
+  memory are restored. The main credential file was untouched.
+- The saved `acquisition-state.v1.json` reports `completedCells: 0` despite the
+  four valid report files. Resumption scans report files directly, so the
+  evidence is preserved and reusable. The progress-summary defect remains open.
+- Center-audit confirmed the provider failure's owner: the matrix selected the
+  delivery fixture's primary model, and that fixture still named
+  `openai / gpt-4.1`. The OAuth login itself was healthy; `codex login status`
+  reported `Logged in using ChatGPT`.
+- Kevin's checked-in runtime profile and both Scenario Lab gameplay fixtures now
+  use `codex / gpt-5.6-luna` for conversation, reasoning, autonomy, and memory.
+  Ordinary settings and launcher defaults select that Kevin profile through the
+  existing shared profile-path constant. The matrix reports the route as ChatGPT
+  subscription access.
+- The four old reports remain preserved evidence. Because provider selection is
+  part of the matrix plan and provenance, they do not count as completed cells
+  in the corrected Luna matrix. The corrected matrix is `0/112`, has no variance
+  verdict, and was explicitly authorized by the Director on 2026-08-21 without
+  another authorization ceremony. It has not started.
 
-## Next authorization boundary
+### Phase 6 terrain accepted boundary
 
-The next operation should be the frozen-model form of the same isolated cell, not
-the broad matrix:
+- Scenario Lab now owns a controlled generated-water-basin course for Kevin's
+  real `!goToCoordinates(1038,100,1008,0,false)` path under the configured `full`
+  traversal profile.
+- Both local transports use that explicit command. No model provider, API quota,
+  or paid request is involved.
+- Evidence requires upward water movement, dry-bank settlement, the effective
+  movement profile, correlated arrival, unchanged fixture blocks, unchanged
+  empty inventory/scaffold accounting, Hold, and complete runtime restoration.
+- The first run exposed hollow fixture subgrade; restoring solid dirt beneath the
+  grass repaired the owning fixture. The second run showed the controlled observer
+  occupying the destination; moving it off-goal removed that interference.
+- The post-repair aggregate is
+  `validation-output/terrain-swim-exit-2026-08-21T22-57-42-927/terrain-swim-exit.result.v1.json`.
+  It passed `2/2` transports with complete evidence, zero retries or safety
+  violations, real swim ascent and Pathfinder movement, dry-bank `skill_arrived`,
+  intact terrain, empty scaffold inventory, stable Hold, and full cleanup.
+- Focused fixture, manifest, worker, and Pathfinder checks pass. The aggregate is
+  the physical acceptance evidence; static catalog `not-run` fields are not the
+  acceptance ledger.
+- `validation-output/terrain-workaround-chain-2026-08-25-direct-r17/follow-field-evidence.json`
+  records one uninterrupted real Pathfinder action through the full composed
+  course. Kevin ended correlated `skill_arrived` after 17.982 seconds at
+  `(1052.5,107,1008.5)` after dig-through, parkour, two-block horizontal bridge,
+  two-block 1x1 tower, all nine stair-tunnel breaks across three rises, controlled
+  descent, contained-column swim ascent, and dry settlement.
+- Post-run state matches the body trace: bridge and tower contain exactly four
+  dirt blocks, inventory consumed exactly four dirt, all nine tunnel cells are
+  air, the iron pickaxe remains present, and the four water cells and dry grass
+  bank remain intact.
+- The saved report's false aggregate bit came only from the old hard-coded
+  `x=1049` swim checkpoint after the shaft moved to `x=1050`. The predicate now
+  derives the occupied cell from `TERRAIN_CHAIN_WATER`; reevaluation of the same
+  saved 100 ms trajectory reaches all eight checkpoints in order. No gameplay
+  rerun was spent on that evidence-only coordinate correction.
+- Pathfinder now binds three-block parkour to a verified runway, releases launch
+  controls inside the physical landing column, waits for ground contact, and
+  treats centered and raw post-processed coordinates as the same landing cell.
+  The course's bedrock roof, shaft, stable stair treads, and contained water wall
+  eliminate physical bypasses without adding a topology planner.
+- Dig-through, parkour, horizontal bridge, 1x1 tower, stair tunnel, controlled
+  descent, swim exit, and dry-arrival composition are `ACCEPTED / CLOSED`.
+  Existing Phases 1–2 evidence continues to own interruption because that
+  mechanism did not change. Phase 6 is `ACCEPTED / CLOSED`.
 
-```powershell
-npm run scenario:variance -- run --output-dir validation-output/phase5-variance-20260821-v3 --cell 1-give-trial-1-frozen-model-telemetry-off-preflight-off --authorized-phase5-matrix
-```
+### Autonomous village expedition
 
-This exact cell is the unaccepted frozen-model arm for `1-give`, trial 1,
-telemetry off, and advisory/advisory preflight. It repeats the now-closed physical
-four-log handoff but is the narrowest probe that can measure the real pinned
-`openai / gpt-4.1` route; the saved local-provider result cannot answer that
-provider/model question. Expect roughly 2-5 minutes. The recorded request was
-30,408 UTF-8 bytes; at the verified GPT-4.1 rates of $2/M input tokens and $8/M
-output tokens, one short response should cost roughly cents, with a possible
-second generated-answer correction request. It requires explicit per-run Director
-authorization after this disclosure.
+- The Scout agenda accepted “Find a village, remember it, come back to me, then
+  take me there,” verified the taiga village bell at `(781,66,-775)` with loaded
+  settlement evidence, and persisted it as `nearby_village`.
+- The natural continuation reused that finding instead of searching again. The
+  final physical leg moved the controlled player from near `(292.5,62,-429.3)` to
+  `(774.1,65,-771.5)` while Kevin ended at `(780.5,64.94,-773.5)`, 6.74 blocks
+  away beside the bell.
+- The roughly 590-block route composed forest travel, slopes, deep-water
+  traversal, shoreline ascent, repeated step-ups, wait-for-catch-up,
+  return-to-player, and continued guidance. One water-bank failure was repaired
+  at the shared `attemptShallowWaterExit` owner by maintaining the existing ascent
+  input until dry supported settlement; the same bank and the remaining route
+  then completed.
+- `bots/Kevin/agenda.json` records `state: complete` with
+  `scout_route_complete`; `bots/Kevin/runtime-memory.json` retains
+  `nearby_village`. The observed same-dimension loaded-world contract is
+  `ACCEPTED / CLOSED`; protected/sealed terrain and portal travel remain outside
+  this acceptance boundary.
 
-If that cell passes, retain it in the same resumable output directory and seek a
-separate authorization for the next untested boundary. The complete minimum
-matrix remains 112 cells with accepted overlap in Campaigns 28, 29, 70, 68, and
-M2. Plan roughly 8-12 hours; the configured outcome windows alone total 6.13
-hours before per-cell startup and cleanup. Fifty-six cells use only the local
-recorded provider. Fifty-six cells use the single configured `openai / gpt-4.1`
-API-project route, with up to 112 paid requests when generated answers consume
-both configured prompt turns; terminal provider failure stops after one request.
-ChatGPT subscription access does not establish API-project billing or quota.
-Before any paid or accepted-overlap run, disclose its exact cells, duration, and
-current API pricing/cost estimate and obtain separate explicit authorization. On
-any authentication, quota, billing, rate-limit, or routing failure, stop
-immediately, report the exact provider/error, and do not retry or switch providers.
+### Orchestration decision
+
+- Do not build a second orchestrator, scheduler, topology planner, or movement
+  engine from current evidence. Phase 3 proved that the existing Mission path can
+  execute a multi-stage prerequisite chain, and the in-flight Mission repair now
+  requires the outgoing Activity to stop and settle before replacement.
+- The standing execution path is: player request -> Mission and prerequisites ->
+  next ready Activity -> specialist adapter -> ActionManager -> Pathfinder or
+  Mineflayer action -> observed result and settlement -> Mission checkpoint.
+- Operator commands, critical survival, Mission work, and background reactions
+  are logical priority streams. They may compete for priority, but only one may
+  own Kevin's physical body at a time through ActionManager.
+- Future Phase 7 work should classify failures at the movement, configuration,
+  specialist-adapter, ActionManager, or Mission boundary. Reconsider the
+  scheduler only if direct evidence across independent specialists shows that the
+  existing Mission/Activity contract cannot express required dependency,
+  interruption, settlement, partial-effect, or resumption behavior.
+- This decision changed no runtime source. It constrains the next implementation
+  choices and prevents premature parallel machinery.
+
+### Outcome direction and execution order
+
+- Keep the existing Mission -> Activity -> specialist adapter -> ActionManager
+  architecture. Do not invent another engine.
+- Finish the bounded Phase 5 Luna variance question.
+- Add the actual Phase 7 specialist adapters at their package-owned seams.
+- Begin Phase 8 collapse of legacy directors and lanes as replacement evidence
+  covers their player-visible deeds.
+- Judge each tranche by whether Gabriel Jr. can state an ordinary-language
+  promise, Kevin can understand and execute its coherent multi-step plan, survive
+  interruption or change, and truthfully finish or explain what remains.
+- A verifier or harness expansion that does not materially advance that outcome
+  is out of scope.
+
+## Immediate next-session state
+
+- Branch: `recovery/iron-pickaxe-20260803`.
+- HEAD: `00aa2bb0cd878c8378db12ea534e7ecefab865c1`.
+- Scenario doctor confirms MindServer ports 8080 and 8081 and Paper port 25579 are
+  free, the managed server is not running, and the runtime lock is free.
+- Uncommitted forward work contains the accepted Phase 6 swim-exit and composed
+  terrain Scenario Lab courses, the Pathfinder finite-break/resource-state/
+  parkour-landing repairs, the terrain-course bypass and water-containment
+  repairs, Luna/OAuth provider and default-startup repair, the accepted player-
+  route obstruction and best-reachable repairs/courses, and canonical record
+  updates. Preserve and continue it; do not reset, stash, clean, restore, or
+  rebuild around it.
+- `artifacts/` remains untracked Director-owned physical evidence. Preserve it.
+- Q-007 is answered YES. Controlled runs are authorized without another per-run
+  question while each run can change a mechanic owner, repair, composition
+  verdict, or significant risk. This applies to new and old mechanics; saved
+  evidence remains valid and reassurance-only runs remain out of scope.
+- The corrected Luna Phase 5 matrix is `0/112` and fully authorized without a new
+  authorization ceremony. It has not started. Its four predecessor reports remain
+  preserved evidence from the superseded API-routed plan.
+
+## Runtime authorization boundaries
+
+The Phase 6 swim-exit and composed workaround chain are complete and
+`ACCEPTED / CLOSED`; do not repeat them unless changed ownership, composition,
+contradictory evidence, or a repair creates a material question.
+
+The autonomous village search, durable recall, return, and mixed-mode guide are
+`ACCEPTED / CLOSED`; do not repeat them unless changed ownership, contradictory
+evidence, or a new composition creates a material question.
+
+The player-route partial-execution, continuous arrival refinement, and best-
+available convergence repairs are physically `ACCEPTED / CLOSED`. Do not rerun
+either player-route course unless changed ownership, composition, contradictory
+evidence, or a material repair creates a new separation question.
+
+The corrected Phase 5 Luna matrix remains separately authorized. Preserve a new
+immutable source snapshot and its runtime provenance when execution starts.
+On any authentication, quota, rate-limit, or routing failure, stop immediately,
+report the exact provider/error, and do not retry or switch providers.
 
 ## Scope preserved by the closed tranche
 
-- no charcoal, doorway, obstruction, delivery, Stop/Hold, or lifecycle confidence
-  rerun;
-- no broad campaign, full certification course, or accepted-segment traversal;
-- no provider call or inventory change; game/Paper/world mutation was confined to
-  the authorized isolated generated fixture and was completely restored;
-- no accepted interaction-stance, route-probe, charcoal, doorway, obstruction,
-  delivery, or other gameplay rerun; no real Phase 5 matrix observation, Phase 6
-  terrain campaign, or Phase 7 specialist implementation;
-- no dependency change, provider repair, parallel plan, session handoff, or new test
-  framework.
+- saved charcoal, doorway, obstruction, and lifecycle evidence remains valid;
+  revisit those mechanics only when current ownership, composition, contradictory
+  evidence, or a material repair creates a real information gain;
+- no broad certification course or new verifier framework;
+- the misconfigured API-key provider stopped at its first credit failure with no
+  retry or fallback; all matrix game/Paper/world mutation was confined to the
+  authorized isolated generated fixture and was completely restored;
+- no accepted interaction-stance, route-probe, or charcoal gameplay rerun; the
+  Phase 6 swim-exit and composed terrain courses ran physically and closed, and
+  no Phase 7 specialist was added;
+- no dependency change, parallel plan, parallel handoff surface, or new test
+  framework; the existing canonical handoff and Q&A were updated in place.
 
 ## Workspace and continuity
 
@@ -207,3 +471,7 @@ uncommitted Director-owned forward work; do not infer that every dirty path belo
 to this handoff. Preserve all current source and validation evidence. Do not reset,
 stash, clean, checkout, revert, commit, push, launch the game, or mutate
 runtime/world state without explicit authority.
+
+`NEEDS.md` is a supporting capability-gap record, not a fifth authority or work
+order. Read it only when a missing audit or subscription-capacity capability is
+material to the selected tranche.

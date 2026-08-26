@@ -41,6 +41,7 @@ function inject (bot) {
   let stopPathing = false
   let lastStuckState = null
   let verticalTransition = null
+  let parkourTransition = null
   let pendingOpenable = null
   let activatingUseBlock = false
   let openableGeneration = 0
@@ -184,6 +185,7 @@ function inject (bot) {
     placing = false
     placingBlock = null
     verticalTransition = null
+    parkourTransition = null
     nodeProgress = null
     pathUpdated = false
     astarContext = null
@@ -814,6 +816,92 @@ function inject (bot) {
     return true
   }
 
+  function prepareParkourTransition (nextPoint, position) {
+    const locomotion = nextPoint.locomotion
+    if (!locomotion?.source || locomotion.type !== 'parkour') {
+      parkourTransition = null
+      return false
+    }
+
+    const key = `parkour:${locomotion.source.x},${locomotion.source.y},${locomotion.source.z}->${nextPoint.x},${nextPoint.y},${nextPoint.z}`
+    if (!parkourTransition || parkourTransition.key !== key) {
+      parkourTransition = {
+        key,
+        phase: locomotion.runUp ? 'run_up' : 'launch',
+        startedAt: performance.now(),
+        bestRunUpDistance: Infinity,
+        bestAcceleration: 0
+      }
+    }
+    if (parkourTransition.phase === 'launch') return false
+
+    const targetDx = nextPoint.x - position.x
+    const targetDz = nextPoint.z - position.z
+    const targetYaw = Math.atan2(-targetDx, -targetDz)
+    if (parkourTransition.phase === 'run_up') {
+      const runUpX = locomotion.runUp.x + 0.5
+      const runUpZ = locomotion.runUp.z + 0.5
+      const dx = runUpX - position.x
+      const dz = runUpZ - position.z
+      const runUpDistance = Math.hypot(dx, dz)
+      if (runUpDistance <= 0.12) {
+        bot.clearControlStates()
+        bot.look(targetYaw, 0, true)
+        parkourTransition.phase = 'accelerate'
+        parkourTransition.startedAt = performance.now()
+        lastNodeTime = performance.now()
+        return true
+      }
+      if (runUpDistance < parkourTransition.bestRunUpDistance - NODE_PROGRESS_EPSILON) {
+        parkourTransition.bestRunUpDistance = runUpDistance
+        lastNodeTime = performance.now()
+      }
+      if (performance.now() - parkourTransition.startedAt > 2000) {
+        resetPath('parkour_runup_stuck')
+        return true
+      }
+      // Face the landing and back into the graph-verified runway so the next
+      // phase accelerates forward without turning at the launch cell.
+      bot.look(targetYaw, 0, true)
+      bot.setControlState('forward', false)
+      bot.setControlState('back', true)
+      bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
+      return true
+    }
+
+    const runUpX = locomotion.runUp.x + 0.5
+    const runUpZ = locomotion.runUp.z + 0.5
+    const travelX = nextPoint.x - runUpX
+    const travelZ = nextPoint.z - runUpZ
+    const travelLength = Math.hypot(travelX, travelZ)
+    const acceleration = travelLength > 0
+      ? (((position.x - runUpX) * travelX) + ((position.z - runUpZ) * travelZ)) / travelLength
+      : 0
+    if (acceleration > parkourTransition.bestAcceleration + NODE_PROGRESS_EPSILON) {
+      parkourTransition.bestAcceleration = acceleration
+      lastNodeTime = performance.now()
+    }
+    // Entering the source cell gives sprint one supported block to accelerate
+    // before jump is asserted. The normal parkour branch then owns an
+    // uninterrupted sprint-jump flight to the bound landing.
+    if (acceleration >= 0.55) {
+      parkourTransition.phase = 'launch'
+      lastNodeTime = performance.now()
+      return false
+    }
+    if (performance.now() - parkourTransition.startedAt > 2000) {
+      resetPath('parkour_acceleration_stuck')
+      return true
+    }
+    bot.look(targetYaw, 0, true)
+    bot.setControlState('back', false)
+    bot.setControlState('forward', true)
+    bot.setControlState('jump', false)
+    bot.setControlState('sprint', true)
+    return true
+  }
+
   function stop () {
     if (activatingUseBlock || pendingOpenable) {
       stopPathing = true
@@ -1107,15 +1195,27 @@ function inject (bot) {
       && swimHead.type !== waterType
       && p.y >= nextPoint.y - 1
     )
+    // postProcessPath centers nodes before the first mutation while nodes
+    // after that mutation retain raw block coordinates. Compare occupied
+    // cells so both representations resolve to the same physical landing.
+    const occupiesDestinationColumn = p.floored().x === Math.floor(nextPoint.x) &&
+      p.floored().z === Math.floor(nextPoint.z)
     const reachedNextPoint = locomotionType === 'swim_up'
       ? Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && (
           surfacedIntoAir
           || (swimDestination?.type === waterType && p.y >= nextPoint.y - 0.05)
         ) && p.y < nextPoint.y + 1
+      : locomotionType === 'parkour'
+        // A parkour edge is complete when the body enters its bound landing
+        // block. Requiring proximity to the block-coordinate corner can reject
+        // a valid landing near the far half of the block, turn the bot back
+        // toward the completed jump, and drive it into the gap it just crossed.
+        ? occupiesDestinationColumn && bot.entity.onGround && Math.abs(dy) < 1
       : Math.abs(dx) <= 0.35 && Math.abs(dz) <= 0.35 && Math.abs(dy) < 1
     if (reachedNextPoint) {
       // arrived at next point
       verticalTransition = null
+      parkourTransition = null
       nodeProgress = null
       lastNodeTime = performance.now()
       if (stopPathing) {
@@ -1150,6 +1250,19 @@ function inject (bot) {
       locomotionType = nextPoint.locomotion?.type || 'legacy'
     }
 
+    // The launch controls deliberately hold jump through the flight. Once the
+    // body is horizontally inside the graph-bound landing block, release those
+    // controls and let server physics establish ground contact before handing
+    // the next edge the body. Otherwise every landing immediately becomes a
+    // new jump and the completed parkour edge can oscillate back into its gap.
+    if (locomotionType === 'parkour' && occupiesDestinationColumn && !bot.entity.onGround) {
+      bot.setControlState('forward', false)
+      bot.setControlState('back', false)
+      bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
+      return
+    }
+
     if (pathSegmentDrifted(nextPoint, p)) {
       resetPath('position_corrected')
       return
@@ -1157,6 +1270,7 @@ function inject (bot) {
 
     observeNodeConvergence(nextPoint, p)
     if (prepareVerticalTransition(nextPoint, p)) return
+    if (prepareParkourTransition(nextPoint, p)) return
 
     bot.look(
       Math.atan2(-dx, -dz),

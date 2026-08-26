@@ -1700,6 +1700,14 @@ export class AgendaDirector {
           const harvestBaseline = entry.kind === 'harvest'
             ? logInventoryCount(this.agent.bot?.inventory?.slots || [], entry.target)
             : 0;
+          const rememberedScout = entry.kind === 'scout' ? entry.rememberedFinding : null;
+          const rememberedScoutPrefix = rememberedScout?.finding === 'animal'
+            ? 'scoutAnimal'
+            : rememberedScout?.finding === 'village'
+              ? 'scoutVillage'
+              : rememberedScout?.finding === 'cave'
+                ? 'scoutCave'
+                : '';
           const workQuota = entry.kind === 'mine'
             ? miningBaseline + entry.quantity
             : entry.quantity;
@@ -1731,11 +1739,16 @@ export class AgendaDirector {
             } : {}),
             ...(entry.kind === 'scout' ? {
               constraints: { maxDistance: entry.radius },
-              maxAttempts: 8,
               checkpoint: {
                 homeDimension: entry.homeDimension,
                 scoutFindings: entry.findings,
                 scoutGuideFinding: entry.guideFinding,
+                ...(entry.searchLimit ? { scoutSearchLimit: entry.searchLimit } : {}),
+                ...(rememberedScoutPrefix ? {
+                  [`${rememberedScoutPrefix}X`]: rememberedScout.x,
+                  [`${rememberedScoutPrefix}Y`]: rememberedScout.y,
+                  [`${rememberedScoutPrefix}Z`]: rememberedScout.z,
+                } : {}),
               },
             } : {}),
             ...(entry.kind === 'explore' ? {

@@ -1,6 +1,7 @@
 import { createActionResult } from './action-result.js';
 import { isHuntable } from '../../utils/mcdata.js';
 import { resolvePlayerTarget } from '../player-target.js';
+import Vec3 from 'vec3';
 import {
   assessStableMiningCollectionTarget,
   isMiningTargetExposed,
@@ -435,6 +436,87 @@ function bindUsefulAnimal(context, args) {
   });
 }
 
+function bindVillage(context, args) {
+  const bot = context?.bot;
+  const origin = context?.snapshot?.position;
+  if (!bot?.findBlock || !origin) {
+    return immutable({
+      ok: false,
+      code: 'source_not_found',
+      detail: 'Loaded village-marker observations are unavailable.',
+      target: { name: 'village' },
+    });
+  }
+  let bell = null;
+  try {
+    bell = bot.findBlock({
+      matching: block => (
+        block?.name === 'bell'
+        && (
+          !Number.isFinite(args.searchLimit)
+          || Math.hypot(block.position.x - args.home.x, block.position.z - args.home.z) <= args.searchLimit
+        )
+      ),
+      maxDistance: args.range,
+    });
+  } catch {
+    bell = null;
+  }
+  let associatedVillager = null;
+  let associatedBed = null;
+  if (bell?.position) {
+    associatedVillager = Object.values(bot.entities || {}).find(entity => (
+      ['villager', 'zombie_villager'].includes(canonicalName(entity?.name))
+      && entity?.position
+      && Math.hypot(
+        entity.position.x - bell.position.x,
+        entity.position.y - bell.position.y,
+        entity.position.z - bell.position.z,
+      ) <= 48
+    )) || null;
+    try {
+      associatedBed = bot.findBlock({
+        matching: block => (
+          block?.name?.endsWith('_bed')
+          && Math.hypot(
+            block.position.x - bell.position.x,
+            block.position.y - bell.position.y,
+            block.position.z - bell.position.z,
+          ) <= 48
+        ),
+        maxDistance: args.range,
+      });
+    } catch {
+      associatedBed = null;
+    }
+  }
+  if (!bell?.position || (!associatedVillager && !associatedBed?.position)) {
+    return immutable({
+      ok: false,
+      code: 'source_not_found',
+      detail: Number.isFinite(args.searchLimit)
+        ? `No village bell with an associated villager or bed is currently observed inside the ${args.searchLimit}-block search radius.`
+        : 'No village bell with an associated villager or bed is currently observed in this loaded search region.',
+      target: { name: 'village' },
+    });
+  }
+  const target = {
+    name: 'village',
+    marker: 'bell',
+    x: bell.position.x,
+    y: bell.position.y,
+    z: bell.position.z,
+  };
+  return immutable({
+    ok: true,
+    commandName: '!goToCoordinates',
+    command: `!goToCoordinates(${target.x}, ${target.y}, ${target.z}, 3)`,
+    target,
+    closeness: 3,
+    dimension: context.snapshot?.dimension || '',
+  });
+}
+
 function bindExposedOre(context, args) {
   const bot = context?.bot;
   const origin = context?.snapshot?.position;
@@ -632,6 +714,58 @@ function verifyUsefulAnimal(_before, _after, binding, { agent, result } = {}) {
   });
 }
 
+function verifyVillageObservation(_before, after, binding, { agent } = {}) {
+  const bot = agent?.bot;
+  const observed = bot?.blockAt?.(new Vec3(binding.target.x, binding.target.y, binding.target.z));
+  const associatedVillager = Object.values(bot?.entities || {}).find(entity => (
+    ['villager', 'zombie_villager'].includes(canonicalName(entity?.name))
+    && entity?.position
+    && Math.hypot(
+      entity.position.x - binding.target.x,
+      entity.position.y - binding.target.y,
+      entity.position.z - binding.target.z,
+    ) <= 48
+  ));
+  let associatedBed = null;
+  try {
+    associatedBed = bot?.findBlock?.({
+      matching: block => (
+        block?.name?.endsWith('_bed')
+        && Math.hypot(
+          block.position.x - binding.target.x,
+          block.position.y - binding.target.y,
+          block.position.z - binding.target.z,
+        ) <= 48
+      ),
+      maxDistance: 64,
+    });
+  } catch {
+    associatedBed = null;
+  }
+  const distance = after?.position
+    ? Math.hypot(
+        after.position.x - binding.target.x,
+        after.position.y - binding.target.y,
+        after.position.z - binding.target.z,
+      )
+    : Number.POSITIVE_INFINITY;
+  const verified = Boolean(
+    observed?.name === 'bell'
+    && (associatedVillager || associatedBed?.position)
+    && distance <= binding.closeness + 0.75
+    && (!binding.dimension || after.dimension === binding.dimension)
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'village_observation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? 'Minecraft confirmed the village bell, an associated villager or bed, and Kevin\'s arrival at the exact saved location.'
+      : 'Minecraft did not confirm the village bell, an associated villager or bed, and arrival together.',
+    target: binding.target,
+    distance: Number.isFinite(distance) ? distance : null,
+  });
+}
+
 function verifyNavigation(_before, after, binding) {
   const position = after?.position;
   const distance = position
@@ -649,6 +783,31 @@ function verifyNavigation(_before, after, binding) {
       ? `Minecraft confirmed arrival within ${distance.toFixed(2)} blocks.`
       : 'Minecraft did not confirm arrival at the bound destination.',
     distance: Number.isFinite(distance) ? distance : null,
+  });
+}
+
+function verifyGuidedNavigation(_before, after, binding, { agent } = {}) {
+  const resolution = resolveCapabilityPlayer({ agent, bot: agent?.bot }, binding.player);
+  const player = resolution.entity;
+  const botDistance = after?.position
+    ? Math.hypot(after.position.x - binding.x, after.position.y - binding.y, after.position.z - binding.z)
+    : Number.POSITIVE_INFINITY;
+  const playerDistance = player?.position
+    ? Math.hypot(player.position.x - binding.x, player.position.y - binding.y, player.position.z - binding.z)
+    : Number.POSITIVE_INFINITY;
+  const verified = Boolean(
+    botDistance <= binding.closeness + 0.75
+    && playerDistance <= binding.playerCloseness
+    && (!binding.dimension || after.dimension === binding.dimension)
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'guided_navigation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? `Minecraft confirmed Kevin and ${binding.player} arrived together at the saved destination.`
+      : `Minecraft did not confirm both Kevin and ${binding.player} at the saved destination.`,
+    botDistance: Number.isFinite(botDistance) ? botDistance : null,
+    playerDistance: Number.isFinite(playerDistance) ? playerDistance : null,
   });
 }
 
@@ -1018,6 +1177,32 @@ defineCapability({
 });
 
 defineCapability({
+  id: 'observe_village',
+  parameters: {
+    home: { type: 'point' },
+    range: { type: 'integer', minimum: 16, maximum: 128 },
+    searchLimit: { type: 'number', optional: true },
+  },
+  normalizeArguments: args => immutable({
+    home: normalizePoint(args?.home),
+    range: boundedInteger(args?.range, 64, 16, 128),
+    searchLimit: Number.isSafeInteger(Number(args?.searchLimit)) && Number(args.searchLimit) > 0
+      ? Number(args.searchLimit)
+      : null,
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'finite scout origin', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
+    { requirement: 'connected block observations', satisfied: Boolean(snapshot.position) },
+    { requirement: 'registered village bell', satisfied: snapshot.hasBlock('bell') },
+  ]),
+  expectedEffects: () => [immutable({ kind: 'village_observed' })],
+  bind: bindVillage,
+  execute: executeBoundCommand,
+  verify: verifyVillageObservation,
+  cost: () => 2,
+});
+
+defineCapability({
   id: 'collect_exposed_ore',
   parameters: {
     home: { type: 'point' },
@@ -1082,6 +1267,69 @@ defineCapability({
   execute: executeBoundCommand,
   verify: verifyNavigation,
   cost: () => 2,
+});
+
+defineCapability({
+  id: 'guide_player_exact',
+  parameters: {
+    player: { type: 'player_name' },
+    x: { type: 'number' },
+    y: { type: 'number' },
+    z: { type: 'number' },
+    closeness: { type: 'number', minimum: 0 },
+    leashDistance: { type: 'number', minimum: 4 },
+    dimension: { type: 'dimension' },
+  },
+  normalizeArguments: args => immutable({
+    player: playerIdentity(args?.player),
+    x: Number(args?.x),
+    y: Number(args?.y),
+    z: Number(args?.z),
+    closeness: Math.max(0, Number(args?.closeness) || 2),
+    leashDistance: Math.max(4, Number(args?.leashDistance) || 12),
+    dimension: canonicalName(args?.dimension),
+  }),
+  preconditions: (snapshot, args) => preconditionReport([
+    { requirement: 'named player to guide', satisfied: Boolean(args.player) },
+    { requirement: 'finite destination', satisfied: [args.x, args.y, args.z].every(Number.isFinite) },
+    { requirement: `current dimension ${args.dimension}`, satisfied: !args.dimension || snapshot.dimension === args.dimension },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'guided_position',
+    player: args.player,
+    x: args.x,
+    y: args.y,
+    z: args.z,
+  })],
+  bind: (context, args) => {
+    const resolution = resolveCapabilityPlayer(context, args.player);
+    if (!resolution.entity) {
+      return immutable({
+        ok: false,
+        code: 'source_not_found',
+        detail: `${args.player} is not physically loaded beside Kevin for the guide route.`,
+      });
+    }
+    const player = resolution.canonical || args.player;
+    return immutable({
+      ok: true,
+      commandName: '!guidePlayerToCoordinates',
+      command: `!guidePlayerToCoordinates(${commandString(player)}, ${args.x}, ${args.y}, ${args.z}, ${args.closeness}, ${args.leashDistance})`,
+      player,
+      playerEntityId: Number.isFinite(resolution.entity.id) ? resolution.entity.id : null,
+      x: args.x,
+      y: args.y,
+      z: args.z,
+      closeness: args.closeness,
+      playerCloseness: args.closeness + 4,
+      leashDistance: args.leashDistance,
+      dimension: args.dimension,
+      target: { name: 'guided_destination', x: args.x, y: args.y, z: args.z },
+    });
+  },
+  execute: executeBoundCommand,
+  verify: verifyGuidedNavigation,
+  cost: () => 3,
 });
 
 defineCapability({

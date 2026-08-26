@@ -251,9 +251,11 @@ function normalizeCheckpoint(checkpoint) {
     'miningRegionRelocations',
     'corridorSearchLegs',
     'corridorRequirementProgress',
-    'scoutSearchRelocations',
   ]) {
     if (Number.isFinite(checkpoint[key])) normalized[key] = finiteInteger(checkpoint[key], 0, 0, 4096);
+  }
+  if (Number.isSafeInteger(checkpoint.scoutSearchRelocations) && checkpoint.scoutSearchRelocations >= 0) {
+    normalized.scoutSearchRelocations = checkpoint.scoutSearchRelocations;
   }
   if (Number.isFinite(checkpoint.miningReturnIndex)) {
     normalized.miningReturnIndex = finiteInteger(
@@ -281,17 +283,20 @@ function normalizeCheckpoint(checkpoint) {
   }
   const homeDimension = boundedText(checkpoint.homeDimension, 64);
   if (CANONICAL_NAME.test(homeDimension)) normalized.homeDimension = homeDimension;
+  if (Number.isSafeInteger(checkpoint.scoutSearchLimit) && checkpoint.scoutSearchLimit > 0) {
+    normalized.scoutSearchLimit = checkpoint.scoutSearchLimit;
+  }
   const scoutFindings = [...new Set((Array.isArray(checkpoint.scoutFindings)
     ? checkpoint.scoutFindings
     : [])
     .map(value => boundedText(value, 32))
-    .filter(value => ['cave', 'animal'].includes(value)))];
+    .filter(value => ['cave', 'animal', 'village'].includes(value)))];
   if (scoutFindings.length > 0) normalized.scoutFindings = Object.freeze(scoutFindings);
   const scoutGuideFinding = boundedText(checkpoint.scoutGuideFinding, 32);
   if (scoutFindings.includes(scoutGuideFinding)) {
     normalized.scoutGuideFinding = scoutGuideFinding;
   }
-  for (const [prefix, includeName] of [['scoutCave', false], ['scoutAnimal', true]]) {
+  for (const [prefix, includeName] of [['scoutCave', false], ['scoutAnimal', true], ['scoutVillage', false]]) {
     const coordinates = ['X', 'Y', 'Z'].map(axis => Number(checkpoint[`${prefix}${axis}`]));
     if (!coordinates.every(Number.isFinite)) continue;
     normalized[`${prefix}X`] = Math.floor(coordinates[0]);

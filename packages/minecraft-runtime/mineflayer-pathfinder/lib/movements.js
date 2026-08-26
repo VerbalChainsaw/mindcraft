@@ -131,11 +131,17 @@ class Movements {
     this.entityIntersections = {}
   }
 
-  makeMove (node, x, y, z, remainingBlocks, cost, toBreak = [], toPlace = [], type = 'walk', parkour = false) {
+  makeMove (node, x, y, z, remainingBlocks, cost, toBreak = [], toPlace = [], type = 'walk', parkour = false, locomotion = {}) {
     return new Move(x, y, z, remainingBlocks, cost, toBreak, toPlace, parkour, {
       type,
-      source: { x: node.x, y: node.y, z: node.z }
+      source: { x: node.x, y: node.y, z: node.z },
+      ...locomotion
     })
+  }
+
+  remainingScaffoldingAfter (node, actions) {
+    const consumed = actions.reduce((count, action) => count + (action?.useOne ? 0 : 1), 0)
+    return node.remainingBlocks - consumed
   }
 
   openableAction (node, block) {
@@ -156,30 +162,28 @@ class Movements {
   }
 
   exclusionPlace (block) {
-    if (this.exclusionAreasPlace.length === 0) return 0
-    let weight = 0
-    for (const a of this.exclusionAreasPlace) {
-      weight += a(block)
-    }
-    return weight
+    return this.exclusionWeight(this.exclusionAreasPlace, block)
   }
 
   exclusionStep (block) {
-    if (this.exclusionAreasStep.length === 0) return 0
-    let weight = 0
-    for (const a of this.exclusionAreasStep) {
-      weight += a(block)
-    }
-    return weight
+    return this.exclusionWeight(this.exclusionAreasStep, block)
   }
 
   exclusionBreak (block) {
-    if (this.exclusionAreasBreak.length === 0) return 0
+    return this.exclusionWeight(this.exclusionAreasBreak, block)
+  }
+
+  exclusionWeight (areas, block) {
+    if (areas.length === 0) return 0
     let weight = 0
-    for (const a of this.exclusionAreasBreak) {
+    for (const a of areas) {
       weight += a(block)
     }
-    return weight
+    // The public exclusion callback contract reserves a weight of 100 (or a
+    // larger accumulated weight) for a prohibited interaction. Normalize that
+    // policy sentinel here so ordinary movement costs can grow without being
+    // mistaken for an impossible edge.
+    return weight >= 100 ? Infinity : weight
   }
 
   countScaffoldingItems () {
@@ -237,7 +241,11 @@ class Movements {
         const minZ = Math.floor(ent.position.z - entSquareRadius)
         const maxZ = Math.ceil(ent.position.z + entSquareRadius)
 
-        const cost = avoidedEnt ? 100 : 1
+        // Keep policy prohibition separate from ordinary traversal cost. Slow
+        // digging can legitimately cost more than 100, while an avoided
+        // entity's occupied cells must never become selectable merely because
+        // A* is willing to pay that labor cost.
+        const cost = avoidedEnt ? Infinity : 1
 
         for (let y = minY; y < maxY; y++) {
           for (let x = minX; x < maxX; x++) {
@@ -329,11 +337,12 @@ class Movements {
       }
     }
 
-    return block.type && !this.blocksCantBreak.has(block.type) && this.exclusionBreak(block) < 100
+    return block.type && !this.blocksCantBreak.has(block.type) && Number.isFinite(this.exclusionBreak(block))
   }
 
   /**
-   * Takes into account if the block is within the stepExclusionAreas. And returns 100 if a block to be broken is within break exclusion areas.
+   * Returns a finite traversal cost for passable or breakable blocks, and
+   * Infinity when the interaction is prohibited.
    * @param {import('prismarine-block').Block} block block
    * @param {[]} toBreak
    * @returns {number}
@@ -355,7 +364,7 @@ class Movements {
       return cost + 1 // Small cost for opening trapdoor
     }
 
-    if (!this.safeToBreak(block)) return 100 // Can't break, so can't move
+    if (!this.safeToBreak(block)) return Infinity
     toBreak.push(block.position)
 
     if (block.physical) cost += this.getNumEntitiesAt(block.position, 0, 1, 0) * this.entityCost // Add entity cost if there is an entity above (a breakable block) that will fall
@@ -435,18 +444,18 @@ class Movements {
     if (blockC.height - launchHeight > 1.2) return // Too high to jump
 
     cost += this.safeOrBreak(blockA, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
     cost += this.safeOrBreak(blockH, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
     const openableAction = this.openableAction(node, blockB)
     if (openableAction) {
       toPlace.push(openableAction)
     } else {
       cost += this.safeOrBreak(blockB, toBreak)
-      if (cost > 100) return
+      if (!Number.isFinite(cost)) return
     }
 
-    neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'step_up'))
+    neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'step_up'))
   }
 
   getMoveForward (node, dir, neighbors) {
@@ -477,7 +486,7 @@ class Movements {
     }
 
     cost += this.safeOrBreak(blockB, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     // Open fence gates and doors
     const openableAction = this.openableAction(node, blockC)
@@ -485,12 +494,12 @@ class Movements {
       toPlace.push(openableAction)
     } else {
       cost += this.safeOrBreak(blockC, toBreak)
-      if (cost > 100) return
+      if (!Number.isFinite(cost)) return
     }
 
     if (this.getBlock(node, 0, 0, 0).liquid) cost += this.liquidCost
 
-    neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'walk'))
+    neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'walk'))
   }
 
   getMoveDiagonal (node, dir, neighbors) {
@@ -527,12 +536,12 @@ class Movements {
       cost += cost2
       toBreak.push(...toBreak2)
     }
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     cost += this.safeOrBreak(this.getBlock(node, dir.x, y, dir.z), toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
     cost += this.safeOrBreak(this.getBlock(node, dir.x, y + 1, dir.z), toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     if (this.getBlock(node, 0, 0, 0).liquid) cost += this.liquidCost
 
@@ -540,7 +549,7 @@ class Movements {
     if (y === 1) { // Case jump up by 1
       if (blockC.height - block0.height > 1.2) return // Too high to jump
       cost += this.safeOrBreak(this.getBlock(node, 0, 2, 0), toBreak)
-      if (cost > 100) return
+      if (!Number.isFinite(cost)) return
       cost += 1
       neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y + 1, blockC.position.z, node.remainingBlocks, cost, toBreak, [], 'step_up'))
     } else if (blockD.physical || blockC.liquid) {
@@ -585,17 +594,17 @@ class Movements {
     if (!this.infiniteLiquidDropdownDistance && ((node.y - blockLand.position.y) > this.maxDropDown)) return // Don't drop down into water
 
     cost += this.safeOrBreak(blockB, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
     cost += this.safeOrBreak(blockC, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
     cost += this.safeOrBreak(blockD, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     if (blockC.liquid) return // dont go underwater
 
     cost += this.getNumEntitiesAt(blockLand.position, 0, 0, 0) * this.entityCost // add cost for entities
 
-    neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'drop_down'))
+    neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'drop_down'))
   }
 
   getMoveDown (node, neighbors) {
@@ -609,13 +618,13 @@ class Movements {
     if (!blockLand) return
 
     cost += this.safeOrBreak(block0, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     if (this.getBlock(node, 0, 0, 0).liquid) return // dont go underwater
 
     cost += this.getNumEntitiesAt(blockLand.position, 0, 0, 0) * this.entityCost // add cost for entities
 
-    neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'fall_down'))
+    neighbors.push(this.makeMove(node, blockLand.position.x, blockLand.position.y, blockLand.position.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'fall_down'))
   }
 
   getMoveSwimUp (node, neighbors) {
@@ -640,6 +649,7 @@ class Movements {
     if (this.getNumEntitiesAt(node, 0, 1, 0) > 0) return false
 
     const cost = 1 + this.liquidCost + this.exclusionStep(destination)
+    if (!Number.isFinite(cost)) return false
     neighbors.push(this.makeMove(
       node,
       node.x,
@@ -665,7 +675,7 @@ class Movements {
     const toBreak = []
     const toPlace = []
     cost += this.safeOrBreak(block2, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     if (block1.climbable) {
       // A climb node is transient, not literal ground. The installed physics
@@ -692,9 +702,9 @@ class Movements {
       cost += this.placeCost // additional cost for placing a block
     }
 
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
-    neighbors.push(this.makeMove(node, node.x, node.y + 1, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'vertical_up'))
+    neighbors.push(this.makeMove(node, node.x, node.y + 1, node.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'vertical_up'))
   }
 
   getMoveClimbUpThroughTrapdoor (node, neighbors) {
@@ -714,12 +724,12 @@ class Movements {
 
     // Make sure we can break/pass through the block above if needed
     cost += this.safeOrBreak(blockAbove, toBreak)
-    if (cost > 100) return
+    if (!Number.isFinite(cost)) return
 
     // Add cost for opening the trapdoor
     toPlace.push({ x: node.x, y: node.y + 2, z: node.z, dx: 0, dy: 0, dz: 0, useOne: true })
 
-    neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, node.remainingBlocks - toPlace.length, cost, toBreak, toPlace, 'climb_up'))
+    neighbors.push(this.makeMove(node, node.x, node.y + 2, node.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'climb_up'))
   }
 
   startTransitionIsExecutable (node, neighbor) {
@@ -808,6 +818,16 @@ class Movements {
     // short of the landing. Do not advertise a move the native executor
     // cannot deterministically complete.
     const maxD = this.allowSprinting ? 3 : 2
+    const runUpFeet = this.getBlock(node, -dir.x, 0, -dir.z)
+    const runUpHead = this.getBlock(node, -dir.x, 1, -dir.z)
+    const runUpCeiling = this.getBlock(node, -dir.x, 2, -dir.z)
+    const runUpSupport = this.getBlock(node, -dir.x, -1, -dir.z)
+    const runUp = runUpFeet.safe && runUpHead.safe && runUpCeiling.safe &&
+      runUpSupport.physical && !runUpSupport.liquid &&
+      Math.abs(runUpSupport.height - block0.height) <= 0.2 &&
+      this.getNumEntitiesAt(runUpFeet.position, 0, 0, 0) === 0
+      ? { x: runUpFeet.position.x, y: node.y, z: runUpFeet.position.z }
+      : null
 
     for (let d = 2; d <= maxD; d++) {
       const dx = dir.x * d
@@ -821,16 +841,20 @@ class Movements {
 
       if (ceilingClear && blockB.safe && blockC.safe && blockD.physical) {
         cost += this.exclusionStep(blockB)
+        if (!Number.isFinite(cost)) break
+        if (d === 3 && !runUp) break
         // Forward
-        neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
+        neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, [], [], 'parkour', true, { distance: d, runUp }))
         break
       } else if (this.allowParkourAscend && ceilingClear && blockB.safe && blockC.physical) {
         // Up
         if (blockA.safe && d !== 4) { // 4 Blocks forward 1 block up is very difficult and fails often
           cost += this.exclusionStep(blockA)
+          if (!Number.isFinite(cost)) break
           if (blockC.height - block0.height > 1.2) break // Too high to jump
           cost += this.getNumEntitiesAt(blockB.position, 0, 0, 0) * this.entityCost
-          neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
+          if (d === 3 && !runUp) break
+          neighbors.push(this.makeMove(node, blockB.position.x, blockB.position.y, blockB.position.z, node.remainingBlocks, cost, [], [], 'parkour', true, { distance: d, runUp }))
           break
         }
       } else if ((ceilingClear || d === 2) && blockB.safe && blockC.safe && blockD.safe && floorCleared) {
@@ -838,8 +862,10 @@ class Movements {
         const blockE = this.getBlock(node, dx, -2, dz)
         if (blockE.physical) {
           cost += this.exclusionStep(blockD)
+          if (!Number.isFinite(cost)) break
           cost += this.getNumEntitiesAt(blockD.position, 0, 0, 0) * this.entityCost
-          neighbors.push(this.makeMove(node, blockD.position.x, blockD.position.y, blockD.position.z, node.remainingBlocks, cost, [], [], 'parkour', true))
+          if (d === 3 && !runUp) break
+          neighbors.push(this.makeMove(node, blockD.position.x, blockD.position.y, blockD.position.z, node.remainingBlocks, cost, [], [], 'parkour', true, { distance: d, runUp }))
         }
         floorCleared = floorCleared && !blockE.physical
       } else if (!blockB.safe || !blockC.safe) {
@@ -899,9 +925,14 @@ class Movements {
     // exit must be represented by an ordinary supported horizontal node.
     this.getMoveClimbUpThroughTrapdoor(node, neighbors)
 
-    return node?.physicalStart
-      ? neighbors.filter(neighbor => this.startTransitionIsExecutable(node, neighbor))
-      : neighbors
+    // Movement producers may accumulate an impossible contribution after an
+    // earlier local check (for example an entity occupying a drop landing).
+    // Enforce the graph contract once at its owning boundary: every advertised
+    // edge has a finite cost, regardless of which movement composed it.
+    return neighbors.filter(neighbor => (
+      Number.isFinite(neighbor?.cost) &&
+      (!node?.physicalStart || this.startTransitionIsExecutable(node, neighbor))
+    ))
   }
 
   // Update lava avoidance based on bot's current state

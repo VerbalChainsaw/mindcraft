@@ -117,7 +117,7 @@ const CAVE_EXPEDITION_CUES = Object.freeze([
   /\b(?:store|put|stash|deposit)\b[\s\S]*\b(?:chest|barrel)\b/i,
 ]);
 const SCOUT_REQUEST_CUES = Object.freeze([
-  /\b(?:scout|survey|look around|explore)\b/i,
+  /\b(?:scout|survey|look around|explore|find|locate|search for)\b/i,
   /\b(?:remember|record|mark|note)\b/i,
   /\b(?:return|come back|head back)\b/i,
   /\b(?:guide|lead|show|take)\b/i,
@@ -1275,26 +1275,42 @@ function caveExpeditionPlan(playerName, message, context) {
 // catalogue and never guessed or replayed from model text.
 function scoutMemoryPlan(playerName, message, context) {
   const text = normalizeMessage(message).trim();
-  if (!SCOUT_REQUEST_CUES.every(pattern => pattern.test(text))) return null;
   const findings = [];
   if (/\b(?:cave|cavern|underground entrance)\b/i.test(text)) findings.push('cave');
   if (/\b(?:animal|animals|livestock|wildlife)\b/i.test(text)) findings.push('animal');
+  if (/\b(?:village|settlement|town)\b/i.test(text)) findings.push('village');
   if (findings.length === 0) return null;
 
-  const guideClause = text.match(/\b(?:guide|lead|show|take)\b[\s\S]*?\b(cave|cavern|animal|animals|livestock|wildlife)\b/i);
+  const fullScoutRequest = SCOUT_REQUEST_CUES.every(pattern => pattern.test(text));
+  const rememberedContinuation = findings.length === 1
+    && /\b(?:return|come back|head back)\b/i.test(text)
+    && /\b(?:guide|lead|show|take)\b/i.test(text)
+    && /\b(?:found|remembered|saved|recorded|marked)\b/i.test(text);
+  if (!fullScoutRequest && !rememberedContinuation) return null;
+
+  const guideClause = text.match(/\b(?:guide|lead|show|take)\b[\s\S]*?\b(cave|cavern|animal|animals|livestock|wildlife|village|settlement|town)\b/i);
   const deicticGuide = findings.length === 1
     && /\b(?:guide|lead|show|take)\b[\s\S]*?\b(?:me|us|the family)?\s*(?:back\s+)?there\b/i.test(text);
   const guideFinding = /^(?:cave|cavern)$/i.test(guideClause?.[1] || '')
     ? 'cave'
     : /^(?:animal|animals|livestock|wildlife)$/i.test(guideClause?.[1] || '')
       ? 'animal'
+      : /^(?:village|settlement|town)$/i.test(guideClause?.[1] || '')
+        ? 'village'
       : deicticGuide
         ? findings[0]
       : '';
   if (!guideFinding || !findings.includes(guideFinding)) return null;
 
   const bot = context?.bot;
-  const position = context?.requesterPosition;
+  // A new search is anchored at the requester's loaded position. A remembered
+  // continuation already owns its verified destination, so it may start from
+  // Kevin's position even when the requester is connected outside entity-load
+  // range; the return capability will reacquire that player through the
+  // managed server observation it already owns.
+  const position = rememberedContinuation
+    ? context?.requesterPosition || bot?.entity?.position
+    : context?.requesterPosition;
   const homeDimension = String(bot?.game?.dimension || '')
     .trim()
     .toLowerCase()
@@ -1302,19 +1318,56 @@ function scoutMemoryPlan(playerName, message, context) {
   if (!position || ![position.x, position.y, position.z].every(Number.isFinite) || !homeDimension) {
     return { rejection: 'I could not bind that scout route to your current loaded position, so I did not start only part of it.' };
   }
-  const requestedRadius = Number(text.match(/\b(?:within|radius(?:\s+of)?)\s+(\d{1,3})\s+blocks?\b/i)?.[1]);
-  const radius = Math.max(16, Math.min(128, Number.isFinite(requestedRadius) ? requestedRadius : 64));
+  let rememberedFinding = null;
+  if (rememberedContinuation) {
+    const memoryName = guideFinding === 'village'
+      ? 'nearby_village'
+      : guideFinding === 'animal'
+        ? 'useful_animals'
+        : 'nearby_cave';
+    const saved = context?.memoryBank?.recallUserPlaceDetails?.(memoryName);
+    if (
+      !saved
+      || ![saved.x, saved.y, saved.z].every(Number.isFinite)
+      || canonicalDimension(saved.dimension) !== homeDimension
+    ) {
+      return { rejection: `I do not have a verified ${guideFinding} saved in this dimension to resume.` };
+    }
+    rememberedFinding = {
+      finding: guideFinding,
+      x: Math.floor(saved.x),
+      y: Math.floor(saved.y),
+      z: Math.floor(saved.z),
+      dimension: homeDimension,
+    };
+  }
+  const radiusMatch = text.match(/\b(?:within|radius(?:\s+of)?)\s+(\d+)\s+blocks?\b/i);
+  const requestedRadius = radiusMatch ? Number(radiusMatch[1]) : null;
+  const searchLimit = Number.isSafeInteger(requestedRadius) && requestedRadius > 0
+    ? requestedRadius
+    : null;
+  // This is the loaded-world observation radius for each region, not an
+  // expedition ceiling. Without an explicit player radius, the scout keeps
+  // expanding through adjacent observed regions until it finds the target or
+  // the player interrupts the mission.
+  const radius = Math.max(16, Math.min(128, searchLimit || 64));
   return {
     steps: [{
       segment: text,
       command: null,
-      response: `I will scout within ${radius} blocks, remember one verified ${findings.join(' and one verified ')}, return to you, then guide you to the ${guideFinding}.`,
+      response: rememberedFinding
+        ? `I remember the verified ${guideFinding}. I will return to you, then guide you there.`
+        : searchLimit
+          ? `I will scout within ${searchLimit} blocks, remember one verified ${findings.join(' and one verified ')}, return to you, then guide you to the ${guideFinding}.`
+          : `I will search outward for one verified ${findings.join(' and one verified ')}, remember it, return to you, then guide you to the ${guideFinding}.`,
       entry: {
         kind: 'scout',
         requester: playerName,
         findings,
         guideFinding,
         radius,
+        ...(rememberedFinding ? { rememberedFinding } : {}),
+        ...(searchLimit ? { searchLimit } : {}),
         x: Math.floor(position.x),
         y: Math.floor(position.y),
         z: Math.floor(position.z),
@@ -2124,6 +2177,7 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const scout = scoutMemoryPlan(playerName, body, context);
   if (scout?.rejection) {
     return {
+      owner: 'scout',
       disposition,
       multiStep: true,
       steps: [],
@@ -2133,6 +2187,7 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   }
   if (scout?.steps) {
     return {
+      owner: 'scout',
       disposition,
       multiStep: true,
       steps: scout.steps,

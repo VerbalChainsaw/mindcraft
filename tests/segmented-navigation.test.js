@@ -863,8 +863,8 @@ test('a bounded detour without later journey progress settles instead of earning
     assert.equal(bot.lastActionEvidence.segments[0].outcome, 'detour_verified');
 });
 
-test('player pursuit preserves the exact segmented navigation receipt in its final outcome', async () => {
-    const { bot, gotoTargets } = nativeJourneyBot();
+test('player pursuit delegates incremental travel to native Pathfinder and preserves its receipt', async () => {
+    const { bot, gotoTargets, routeCalls } = nativeJourneyBot();
     const player = {
         id: 42,
         type: 'player',
@@ -879,16 +879,14 @@ test('player pursuit preserves the exact segmented navigation receipt in its fin
     const arrived = await goToPlayer(bot, 'RouteGuide', 3);
 
     assert.equal(arrived, true);
-    assert.deepEqual(gotoTargets.map(position => position.x), [20, 50]);
+    assert.deepEqual(gotoTargets.map(position => position.x), [50]);
+    assert.equal(routeCalls.length, 0);
     assert.equal(bot.lastActionEvidence.kind, 'movement');
     assert.equal(bot.lastActionEvidence.outcome, 'arrived');
     assert.equal(bot.lastActionEvidence.target.name, 'RouteGuide');
     assert.equal(bot.lastActionEvidence.navigation.outcome, 'arrived');
-    assert.equal(bot.lastActionEvidence.navigation.segments.length, 1);
-    assert.deepEqual(
-        bot.lastActionEvidence.navigation.finalDestination,
-        { x: 50, y: 70, z: 0 },
-    );
+    assert.equal(Object.hasOwn(bot.lastActionEvidence.navigation, 'planning'), false);
+    assert.equal(Object.hasOwn(bot.lastActionEvidence.navigation, 'segments'), false);
     assert.equal(Object.isFrozen(bot.lastActionEvidence.navigation), true);
 });
 
@@ -1119,8 +1117,8 @@ test('planned navigation keeps completed noPath terminal', async () => {
     assert.equal(bot.lastActionEvidence.retryable, true);
 });
 
-test('composed player pursuit retains nested navigation receipts beside its terminal arrival', async () => {
-    const { bot, gotoTargets } = nativeJourneyBot();
+test('composed player pursuit retains native navigation receipts beside its terminal arrival', async () => {
+    const { bot, gotoTargets, routeCalls } = nativeJourneyBot();
     const player = {
         id: 44,
         type: 'player',
@@ -1158,23 +1156,24 @@ test('composed player pursuit retains nested navigation receipts beside its term
 
     assert.equal(outcome.result.phase, 'succeeded');
     assert.equal(outcome.result.code, 'skill_arrived');
-    assert.deepEqual(gotoTargets.map(position => position.x), [20, 50]);
+    assert.deepEqual(gotoTargets.map(position => position.x), [50]);
+    assert.equal(routeCalls.length, 0);
     const receipt = outcome.result.evidence.skill;
     assert.equal(receipt.outcome, 'arrived');
     assert.equal(receipt.target.name, 'RouteGuide');
     assert.equal(receipt.receiptSchemaVersion, 1);
     assert.equal(receipt.source, 'action_context');
     assert.equal(receipt.contract.valid, true);
-    assert.ok(receipt.children.navigation.length >= 2);
-    const segmented = receipt.children.navigation.find(child => child.segments?.length === 1);
-    assert.ok(segmented);
-    assert.equal(segmented.outcome, 'arrived');
-    assert.deepEqual(segmented.finalDestination, { x: 50, y: 70, z: 0 });
+    assert.ok(receipt.children.navigation.length >= 1);
+    const navigation = receipt.children.navigation.find(child => child.outcome === 'arrived');
+    assert.ok(navigation);
+    assert.equal(Object.hasOwn(navigation, 'planning'), false);
+    assert.equal(Object.hasOwn(navigation, 'segments'), false);
     assert.equal(Object.hasOwn(receipt, 'navigation'), false);
 });
 
-test('off-screen player pursuit segments the managed position before exact live-player reconciliation', async () => {
-    const { bot, gotoTargets } = nativeJourneyBot();
+test('off-screen player pursuit routes once to the managed position before live-player reconciliation', async () => {
+    const { bot, gotoTargets, routeCalls } = nativeJourneyBot();
     const player = {
         id: 43,
         type: 'player',
@@ -1202,19 +1201,21 @@ test('off-screen player pursuit segments the managed position before exact live-
     });
 
     assert.equal(arrived, true);
-    assert.deepEqual(gotoTargets.map(position => position.x), [20, 50]);
+    assert.deepEqual(gotoTargets.map(position => position.x), [50]);
+    assert.equal(routeCalls.length, 0);
     assert.equal(bot.lastActionEvidence.outcome, 'arrived');
     assert.equal(bot.lastActionEvidence.target.name, 'RouteGuide');
-    assert.equal(bot.lastActionEvidence.navigation.segments.length, 1);
-    assert.deepEqual(
-        bot.lastActionEvidence.navigation.finalDestination,
-        { x: 50, y: 70, z: 0 },
-    );
+    assert.equal(Object.hasOwn(bot.lastActionEvidence.navigation, 'planning'), false);
+    assert.equal(Object.hasOwn(bot.lastActionEvidence.navigation, 'segments'), false);
     assert.deepEqual(
         bot.lastActionEvidence.navigationStages.map(stage => stage.stage),
         ['managed_player_region', 'live_player_pursuit'],
     );
-    assert.equal(bot.lastActionEvidence.navigationStages[0].navigation.segments.length, 1);
+    assert.ok(bot.lastActionEvidence.navigationStages.every(stage => (
+        stage.navigation.outcome === 'arrived'
+        && !Object.hasOwn(stage.navigation, 'planning')
+        && !Object.hasOwn(stage.navigation, 'segments')
+    )));
     assert.equal(Object.isFrozen(bot.lastActionEvidence.navigationStages), true);
     assert.equal(Object.isFrozen(bot.lastActionEvidence.navigationStages[0]), true);
 });

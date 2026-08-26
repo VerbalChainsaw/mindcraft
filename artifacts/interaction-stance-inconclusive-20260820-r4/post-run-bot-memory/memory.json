@@ -1,0 +1,10 @@
+{
+  "memory": "",
+  "turns": [],
+  "self_prompting_state": 0,
+  "self_prompt": null,
+  "taskStart": 1787281321750,
+  "last_sender": null,
+  "operator_hold": true,
+  "operator_hold_reason": "operator stop command"
+}

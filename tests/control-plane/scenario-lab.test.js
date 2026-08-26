@@ -35,6 +35,7 @@ import {
 } from '../../tools/scenario-lab/variance-cases.mjs';
 import {
   createVarianceAcquisitionPlan,
+  resolveVarianceAcquisitionContext,
   selectVariancePlanCells,
 } from '../../tools/scenario-lab/run-variance-matrix.mjs';
 import {
@@ -359,7 +360,7 @@ function varianceObservation({
   });
 }
 
-test('the frozen v1 manifest registers six bounded replays and keeps other families unavailable', async () => {
+test('the frozen v1 manifest registers the bounded replays and keeps other families unavailable', async () => {
   const manifest = await loadScenarioManifest();
   assert.equal(manifest.manifestHash, computeScenarioManifestHash(manifest));
   assert.deepEqual(validateScenarioManifest(manifest), []);
@@ -401,6 +402,40 @@ test('the frozen v1 manifest registers six bounded replays and keeps other famil
   assert.equal(obstruction.world.fixtureHash, follow.world.fixtureHash);
   assert.equal(obstruction.seed, follow.seed);
   assert.ok(obstruction.expectedEvidence.includes('corridor-progress-confirmed'));
+
+  const playerRoute = manifest.scenarios.find(({ id }) => id === 'player-route-obstruction');
+  assert.ok(playerRoute, 'player-route-obstruction must be registered');
+  assert.equal(playerRoute.status, 'not-run');
+  assert.equal(playerRoute.executor.safe, true);
+  assert.equal(playerRoute.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(playerRoute.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(playerRoute.world.fixtureHash, obstruction.world.fixtureHash);
+  assert.equal(playerRoute.requestForms[0].request, '!goToPlayer("FollowTarget", 3)');
+  assert.equal(playerRoute.requestForms[0].request, playerRoute.requestForms[1].request);
+  assert.ok(playerRoute.expectedEvidence.includes('obstruction-broken-confirmed'));
+  assert.ok(playerRoute.expectedEvidence.includes('player-arrival-confirmed'));
+
+  const finiteBreakCost = manifest.scenarios.find(({ id }) => id === 'pathfinding-finite-break-cost');
+  assert.ok(finiteBreakCost, 'pathfinding-finite-break-cost must be registered');
+  assert.equal(finiteBreakCost.status, 'not-run');
+  assert.equal(finiteBreakCost.executor.safe, true);
+  assert.equal(finiteBreakCost.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(finiteBreakCost.world.fixtureHash, playerRoute.world.fixtureHash);
+  assert.equal(finiteBreakCost.requestForms[0].request, '!goToPlayer("FollowTarget", 3)');
+  assert.equal(finiteBreakCost.requestForms[0].request, finiteBreakCost.requestForms[1].request);
+  assert.ok(finiteBreakCost.expectedEvidence.includes('finite-break-cost-confirmed'));
+
+  const playerRouteBest = manifest.scenarios.find(({ id }) => id === 'player-route-best-reachable');
+  assert.ok(playerRouteBest, 'player-route-best-reachable must be registered');
+  assert.equal(playerRouteBest.status, 'not-run');
+  assert.equal(playerRouteBest.executor.safe, true);
+  assert.equal(playerRouteBest.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(playerRouteBest.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(playerRouteBest.world.fixtureHash, playerRoute.world.fixtureHash);
+  assert.equal(playerRouteBest.requestForms[0].request, '!goToPlayer("FollowTarget", 3)');
+  assert.equal(playerRouteBest.requestForms[0].request, playerRouteBest.requestForms[1].request);
+  assert.ok(playerRouteBest.expectedEvidence.includes('best-available-route-confirmed'));
+  assert.ok(playerRouteBest.expectedEvidence.includes('unbreakable-obstruction-preserved'));
 
   // The deliver course is the only registered scenario that exercises a typed
   // goal rather than !followPlayer, and the only one on a generated world. Its
@@ -461,13 +496,34 @@ test('the frozen v1 manifest registers six bounded replays and keeps other famil
   assert.ok(routeProbe.expectedEvidence.includes('no-unproven-movement-confirmed'));
   assert.ok(routeProbe.expectedEvidence.includes('terrain-preserved-confirmed'));
 
+  // Phase 6 begins with one package-mechanism probe. Both transports carry the
+  // same explicit command, so no model call can confound native swim behavior.
+  const terrainSwim = manifest.scenarios.find(({ id }) => id === 'terrain-swim-exit');
+  assert.ok(terrainSwim, 'terrain-swim-exit must be registered');
+  assert.equal(terrainSwim.status, 'not-run');
+  assert.equal(terrainSwim.executor.safe, true);
+  assert.equal(terrainSwim.executor.adapterId, 'follow-field-live-replay-v1');
+  assert.equal(terrainSwim.executor.evidenceAdapterId, 'follow-field-evidence-v1');
+  assert.equal(terrainSwim.world.fixtureId, deliver.world.fixtureId);
+  assert.equal(terrainSwim.world.fixtureHash, deliver.world.fixtureHash);
+  assert.equal(terrainSwim.requestForms[0].request, terrainSwim.requestForms[1].request);
+  assert.equal(terrainSwim.requestForms[0].request, '!goToCoordinates(1038,100,1008,0,false)');
+  assert.ok(terrainSwim.expectedEvidence.includes('effective-movements-confirmed'));
+  assert.ok(terrainSwim.expectedEvidence.includes('swim-ascent-confirmed'));
+  assert.ok(terrainSwim.expectedEvidence.includes('dry-bank-settlement-confirmed'));
+  assert.ok(terrainSwim.expectedEvidence.includes('scaffold-accounting-confirmed'));
+
   const registered = new Set([
     stone.id,
     follow.id,
     obstruction.id,
+    playerRoute.id,
+    finiteBreakCost.id,
+    playerRouteBest.id,
     deliver.id,
     orchestration.id,
     routeProbe.id,
+    terrainSwim.id,
   ]);
   assert.ok(manifest.scenarios
     .filter(({ id }) => !registered.has(id))
@@ -513,8 +569,37 @@ test('live workers require portable provenance and one managed-runtime lock', as
   assert.match(followHarness, /--request-file/);
   assert.match(followHarness, /doorway-corridor/);
   assert.match(followWorker, /route-probe-inconclusive/);
+  assert.match(followWorker, /terrain-swim-exit/);
+  assert.match(followWorker, /player-route-obstruction/);
+  assert.match(followWorker, /player-route-best-reachable/);
+  assert.match(
+    followWorker,
+    /Set-ServerProperty \$propertiesPath 'difficulty' 'peaceful'/,
+    'hostile isolation must be active before the measured bot joins the world',
+  );
+  assert.match(
+    followWorker,
+    /Write-ManagedDesiredState 'running' 'peaceful'/,
+    'managed runtime configuration must preserve hostile isolation during startup',
+  );
   assert.match(followRunner, /route-probe-inconclusive/);
+  assert.match(followRunner, /terrain-swim-exit/);
+  assert.match(followRunner, /player-route-obstruction/);
+  assert.match(followRunner, /player-route-best-reachable/);
   assert.match(followHarness, /route-probe-inconclusive/);
+  assert.match(followHarness, /terrain-swim-exit/);
+  assert.match(followHarness, /player-route-obstruction/);
+  assert.match(followHarness, /player-route-best-reachable/);
+  assert.match(
+    followHarness,
+    /const TERRAIN_SWIM_OBSERVER = Object\.freeze\([\s\S]{0,180}TERRAIN_SWIM_GOAL\.z \+ 4\.5/,
+    'the controlled observer must not occupy the swim destination block',
+  );
+  assert.match(
+    followHarness,
+    /TERRAIN_SWIM_COURSE\.y1[\s\S]{0,180}TERRAIN_SWIM_GOAL\.y - 2[\s\S]{0,80}dirt/,
+    'the swim course must restore solid subgrade below its dry-bank surface',
+  );
   assert.match(followHarness, /target\.chat\(options\.requestMessage\)/);
   assert.match(followHarness, /sendMessage\(options\.requestMessage\)/);
   assert.match(followHarness, /actuatorVelocityIsSettled/);
@@ -1097,6 +1182,273 @@ test('route-probe evidence requires an inconclusive terminal without movement or
   assert.equal(rejected.checks['route-probe-inconclusive-confirmed'], false);
 });
 
+test('terrain swim evidence requires native ascent, dry settlement, preservation, and scaffold accounting', async () => {
+  const issuedAt = 1_000;
+  const start = { x: 1029.5, y: 96, z: 1008.5 };
+  const final = { x: 1038.5, y: 100, z: 1008.5 };
+  const attempt = {
+    attempt: 1,
+    issuedAt,
+    activeAt: issuedAt + 25,
+    commandAck: { success: true },
+    terminal: {
+      actionId: 'action-terrain-swim',
+      phase: 'succeeded',
+      code: 'skill_arrived',
+      label: 'action:goToCoordinates',
+      retryable: false,
+      startedAt: issuedAt + 25,
+      finishedAt: issuedAt + 7_000,
+      evidence: {
+        request: {
+          requestId: 'request-terrain-swim',
+          routeOrigin: 'explicit-command',
+          selectedSkill: '!goToCoordinates',
+          args: [1038, 100, 1008, 0, false],
+        },
+      },
+    },
+    samples: [
+      { health: 20, position: start, pathfinding: { goal: 'GoalNear' } },
+      { health: 20, position: final, pathfinding: null },
+    ],
+    physicalSamples: [
+      { sampledAt: issuedAt + 100, position: start },
+      { sampledAt: issuedAt + 4_000, position: { x: 1031.5, y: 99.5, z: 1008.5 } },
+      { sampledAt: issuedAt + 7_000, position: final },
+    ],
+    performance: { botTrajectoryDistance: 12, targetTrajectoryDistance: 0 },
+    physicalAcceptance: {
+      course: 'terrain-swim-exit',
+      fixtureVerified: true,
+      terrainStartSubmerged: true,
+      terrainAscentObserved: true,
+      terrainDrySettlement: true,
+      terrainPathfinderObserved: true,
+      terrainTraversalPolicy: 'full',
+      terrainTerminalVerified: true,
+      terrainIntact: true,
+      terrainScaffoldAccountingVerified: true,
+      terrainInventoryBefore: {},
+      terrainInventoryAfter: {},
+      terrainStartPosition: start,
+      terrainFinalPosition: final,
+    },
+    stop: {
+      quiescenceMs: 100,
+      stableForTenSeconds: true,
+      stableSamples: [{ health: 20, position: final, pathfinding: null }],
+    },
+    passed: true,
+  };
+  const reportFor = terrainAttempt => ({
+    request_form: 'direct',
+    instrumentation: {
+      requested_mode: 'off',
+      decision_trace_enabled: false,
+      observed_decision_trace_present: false,
+      observed_schema_version: null,
+      verified: true,
+    },
+    fixture_authorized: true,
+    endpoints_local_only: true,
+    status: 'passed',
+    finished_utc: '2026-08-21T00:00:16.000Z',
+    harness_evidence: {
+      passed: true,
+      finishedAt: issuedAt + 16_000,
+      durationMs: 16_000,
+      attempts: [terrainAttempt],
+      fixture: {
+        courseVariant: 'terrain-swim-exit',
+        mobSpawning: { restored: true },
+      },
+      cleanup: { fixtureRestored: true, botHeld: true, targetDisconnected: true },
+    },
+    verdict: { passed: true, duration_ms: 16_000, external_retry_count: 0, false_success_observed: false },
+    cleanup: {
+      configuration_restored: true,
+      properties_restored: true,
+      pre_run_memory_restored: true,
+      remaining_managed_java: [],
+      errors: [],
+    },
+  });
+
+  const observation = observeFollowFieldRun(reportFor(attempt), 180_000, 'off');
+  assert.equal(observation.success, true);
+  assert.equal(observation.checks['terrain-movement-lifecycle'], true);
+  assert.equal(observation.checks['effective-movements-confirmed'], true);
+  assert.equal(observation.checks['swim-ascent-confirmed'], true);
+  assert.equal(observation.checks['dry-bank-settlement-confirmed'], true);
+  assert.equal(observation.checks['terrain-preserved-confirmed'], true);
+  assert.equal(observation.checks['scaffold-accounting-confirmed'], true);
+
+  const manifest = await loadScenarioManifest();
+  const plan = createExecutionPlan(manifest, 'terrain-swim-exit');
+  const aggregate = aggregateFollowFieldObservations(plan, [
+    observation,
+    { ...observation, form: 'natural-language' },
+  ]);
+  const result = createExecutionResult(manifest, 'terrain-swim-exit', aggregate);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidenceCompleteness, 'complete');
+
+  const noAscent = structuredClone(attempt);
+  noAscent.physicalAcceptance.terrainAscentObserved = false;
+  const rejected = observeFollowFieldRun(reportFor(noAscent), 180_000, 'off');
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.checks['swim-ascent-confirmed'], false);
+});
+
+test('player-route evidence requires correlated goToPlayer, a broken obstruction, and physical arrival', async () => {
+  const issuedAt = 1_000;
+  const start = { x: 1027.5, y: 100, z: 1008.5 };
+  const doorway = { x: 1033.5, y: 100, z: 1008.5 };
+  const final = { x: 1035.5, y: 100, z: 1008.5 };
+  const attempt = {
+    attempt: 1,
+    issuedAt,
+    activeAt: issuedAt + 25,
+    commandAck: { success: true },
+    terminal: {
+      actionId: 'action-player-route',
+      phase: 'succeeded',
+      code: 'skill_arrived',
+      label: 'action:goToPlayer',
+      retryable: false,
+      startedAt: issuedAt + 25,
+      finishedAt: issuedAt + 7_000,
+      evidence: {
+        request: {
+          requestId: 'request-player-route',
+          routeOrigin: 'explicit-command',
+          selectedSkill: '!goToPlayer',
+          args: ['FollowTarget', 3],
+        },
+      },
+    },
+    samples: [
+      { health: 20, position: start, pathfinding: { goal: 'GoalNear' } },
+      { health: 20, position: final, pathfinding: null },
+    ],
+    physicalSamples: [
+      { sampledAt: issuedAt + 100, position: start },
+      { sampledAt: issuedAt + 4_000, position: doorway },
+      { sampledAt: issuedAt + 7_000, position: final },
+    ],
+    performance: { botTrajectoryDistance: 8, targetTrajectoryDistance: 0 },
+    physicalAcceptance: {
+      course: 'player-route-obstruction',
+      fixtureVerified: true,
+      doorwayCrossed: true,
+      doorwayObservation: { position: doorway },
+      obstructionDugThrough: true,
+      playerRoutePathfinderObserved: true,
+      playerRouteTerminalVerified: true,
+      playerRouteArrivalVerified: true,
+      finalDistanceToTarget: 3,
+    },
+    stop: {
+      quiescenceMs: 100,
+      stableForTenSeconds: true,
+      stableSamples: [{ health: 20, position: final, pathfinding: null }],
+    },
+    passed: true,
+  };
+  const reportFor = playerRouteAttempt => ({
+    request_form: 'direct',
+    instrumentation: {
+      requested_mode: 'off',
+      decision_trace_enabled: false,
+      observed_decision_trace_present: false,
+      observed_schema_version: null,
+      verified: true,
+    },
+    fixture_authorized: true,
+    endpoints_local_only: true,
+    status: 'passed',
+    finished_utc: '2026-08-22T00:00:16.000Z',
+    harness_evidence: {
+      passed: true,
+      finishedAt: issuedAt + 16_000,
+      durationMs: 16_000,
+      attempts: [playerRouteAttempt],
+      fixture: {
+        courseVariant: 'player-route-obstruction',
+        mobSpawning: { restored: true },
+      },
+      cleanup: { fixtureRestored: true, botHeld: true, targetDisconnected: true },
+    },
+    verdict: { passed: true, duration_ms: 16_000, external_retry_count: 0, false_success_observed: false },
+    cleanup: {
+      configuration_restored: true,
+      properties_restored: true,
+      pre_run_memory_restored: true,
+      remaining_managed_java: [],
+      errors: [],
+    },
+  });
+
+  const observation = observeFollowFieldRun(reportFor(attempt), 180_000, 'off');
+  assert.equal(observation.success, true);
+  assert.equal(observation.checks['player-route-action-lifecycle'], true);
+  assert.equal(observation.checks['effective-movements-confirmed'], true);
+  assert.equal(observation.checks['obstruction-broken-confirmed'], true);
+  assert.equal(observation.checks['player-arrival-confirmed'], true);
+
+  const manifest = await loadScenarioManifest();
+  const plan = createExecutionPlan(manifest, 'player-route-obstruction');
+  const aggregate = aggregateFollowFieldObservations(plan, [
+    observation,
+    { ...observation, form: 'natural-language' },
+  ]);
+  const result = createExecutionResult(manifest, 'player-route-obstruction', aggregate);
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidenceCompleteness, 'complete');
+
+  const intactPlug = structuredClone(attempt);
+  intactPlug.physicalAcceptance.obstructionDugThrough = false;
+  intactPlug.physicalAcceptance.playerRouteArrivalVerified = false;
+  const rejected = observeFollowFieldRun(reportFor(intactPlug), 180_000, 'off');
+  assert.equal(rejected.success, false);
+  assert.equal(rejected.checks['obstruction-broken-confirmed'], false);
+  assert.equal(rejected.checks['player-arrival-confirmed'], false);
+
+  const bestAttempt = structuredClone(attempt);
+  bestAttempt.terminal.phase = 'failed';
+  bestAttempt.terminal.code = 'skill_closest_reachable';
+  bestAttempt.terminal.retryable = true;
+  bestAttempt.performance.botTrajectoryDistance = 5;
+  bestAttempt.physicalAcceptance = {
+    course: 'player-route-best-reachable',
+    fixtureVerified: true,
+    playerRoutePathfinderObserved: true,
+    playerRouteBestTerminalVerified: true,
+    playerRouteBestPositionVerified: true,
+    unbreakableObstructionPreserved: true,
+    blockedTerrainIntact: true,
+    finalDistanceToTarget: 6,
+  };
+  const bestReport = reportFor(bestAttempt);
+  bestReport.harness_evidence.fixture.courseVariant = 'player-route-best-reachable';
+  const bestObservation = observeFollowFieldRun(bestReport, 180_000, 'off');
+  assert.equal(bestObservation.success, true);
+  assert.equal(bestObservation.checks['player-route-best-action-lifecycle'], true);
+  assert.equal(bestObservation.checks['effective-movements-confirmed'], true);
+  assert.equal(bestObservation.checks['best-available-route-confirmed'], true);
+  assert.equal(bestObservation.checks['unbreakable-obstruction-preserved'], true);
+
+  const bestPlan = createExecutionPlan(manifest, 'player-route-best-reachable');
+  const bestAggregate = aggregateFollowFieldObservations(bestPlan, [
+    bestObservation,
+    { ...bestObservation, form: 'natural-language' },
+  ]);
+  const bestResult = createExecutionResult(manifest, 'player-route-best-reachable', bestAggregate);
+  assert.equal(bestResult.status, 'passed');
+  assert.equal(bestResult.evidenceCompleteness, 'complete');
+});
+
 test('charcoal Mission evidence requires stable IDs and exact eight-item delivery', async () => {
   const manifest = await loadScenarioManifest();
   const plan = createExecutionPlan(manifest, 'orchestration-charcoal');
@@ -1300,6 +1652,24 @@ test('Phase 5 request-completion cases have stable isolated fixture and recorded
   }
 });
 
+test('Phase 5 acquisition context freezes Kevin to Luna through Codex OAuth', async () => {
+  for (const fixture of ['deliver-item-flat-v1', 'orchestration-forest-v1']) {
+    const profile = JSON.parse(await readFile(
+      path.join(ROOT, 'tools', 'scenario-lab', 'fixtures', fixture, 'scenario-profile.json'),
+      'utf8',
+    ));
+    for (const role of ['model', 'reasoning_model', 'autonomy_model', 'memory_model']) {
+      assert.equal(profile[role].api, 'codex', `${fixture} ${role} provider`);
+      assert.equal(profile[role].model, 'gpt-5.6-luna', `${fixture} ${role} model`);
+    }
+  }
+  const context = await resolveVarianceAcquisitionContext();
+  assert.equal(context.frozenModel.api, 'codex');
+  assert.equal(context.frozenModel.model, 'gpt-5.6-luna');
+  assert.equal(context.frozenModel.routeCount, 1);
+  assert.equal(context.frozenModel.billingSurface, 'ChatGPT subscription through Codex OAuth');
+});
+
 test('Phase 5 acquisition plan covers every isolated axis cell and discloses accepted overlap', () => {
   const context = {
     candidateCommit: '4'.repeat(40),
@@ -1311,10 +1681,11 @@ test('Phase 5 acquisition plan covers every isolated axis cell and discloses acc
       seed: '8140427791654321',
     },
     frozenModel: {
-      api: 'openai',
-      model: 'gpt-4.1',
+      api: 'codex',
+      model: 'gpt-5.6-luna',
       maxPromptTurns: 2,
       routeCount: 1,
+      billingSurface: 'ChatGPT subscription through Codex OAuth',
     },
   };
   const plan = createVarianceAcquisitionPlan({ trials: 2, context });

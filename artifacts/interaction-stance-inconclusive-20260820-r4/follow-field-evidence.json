@@ -1,0 +1,2582 @@
+{
+  "schemaVersion": 1,
+  "scenario": "inconclusive-interaction-stance-probe-falls-through-to-real-pathfinder",
+  "route": "typed-dashboard-command",
+  "command": "physical interaction stance proof",
+  "bot": "MindcraftBot",
+  "controlledTarget": {
+    "name": "FollowTarget",
+    "kind": "temporary-mineflayer-client",
+    "model": false,
+    "profile": false,
+    "scheduler": false,
+    "events": [
+      {
+        "at": 1787281331367,
+        "event": "spawn",
+        "position": {
+          "x": 9.5,
+          "y": 100,
+          "z": -4.5
+        },
+        "version": "1.21.11"
+      },
+      {
+        "at": 1787281348848,
+        "event": "end",
+        "reason": "follow field verification complete"
+      }
+    ]
+  },
+  "fixture": {
+    "course": {
+      "x1": 1026,
+      "x2": 1058,
+      "y1": 99,
+      "y2": 103,
+      "z1": 1006,
+      "z2": 1038
+    },
+    "courseVariant": "interaction-stance-inconclusive",
+    "botStart": {
+      "x": 1027.5,
+      "y": 100,
+      "z": 1008.5
+    },
+    "targetStart": {
+      "x": 1029.5,
+      "y": 100,
+      "z": 1008.5
+    },
+    "wall": {
+      "x": 1033,
+      "y1": 100,
+      "y2": 102,
+      "z1": 1006,
+      "z2": 1012
+    },
+    "doorway": {
+      "x": 1033,
+      "y1": 100,
+      "y2": 101,
+      "z": 1008
+    },
+    "platform": {
+      "x1": 1028,
+      "x2": 1034,
+      "y": 100,
+      "z1": 1013,
+      "z2": 1015
+    },
+    "routeProbeTarget": null,
+    "routeProbeCage": null,
+    "interactionStanceTarget": {
+      "x": 1056,
+      "y": 100,
+      "z": 1008
+    },
+    "interactionStanceWalls": [
+      {
+        "x1": 1026,
+        "x2": 1058,
+        "y1": 100,
+        "y2": 102,
+        "z1": 1006,
+        "z2": 1006
+      },
+      {
+        "x1": 1026,
+        "x2": 1058,
+        "y1": 100,
+        "y2": 102,
+        "z1": 1038,
+        "z2": 1038
+      },
+      {
+        "x1": 1026,
+        "x2": 1026,
+        "y1": 100,
+        "y2": 102,
+        "z1": 1006,
+        "z2": 1038
+      },
+      {
+        "x1": 1058,
+        "x2": 1058,
+        "y1": 100,
+        "y2": 102,
+        "z1": 1006,
+        "z2": 1038
+      },
+      {
+        "x1": 1054,
+        "x2": 1054,
+        "y1": 100,
+        "y2": 102,
+        "z1": 1007,
+        "z2": 1036
+      }
+    ],
+    "waypoints": [],
+    "mobSpawning": {
+      "previous": true,
+      "duringFixture": false,
+      "restored": true
+    },
+    "difficulty": {
+      "previous": "normal",
+      "duringFixture": "peaceful",
+      "restored": true,
+      "after": "normal"
+    },
+    "beforeState": {
+      "compressedRuns": [
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1006,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1007,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1008,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1009,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1010,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1011,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1012,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1013,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1014,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1015,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1016,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1017,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1018,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1019,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1020,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1021,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1022,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1023,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1024,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1025,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1026,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1027,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1028,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1029,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1030,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1031,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1032,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1033,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1034,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1035,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1036,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1037,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 99,
+          "z": 1038,
+          "state": "minecraft:grass_block[snowy=false]"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1006,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1007,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1008,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1009,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1010,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1011,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1012,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1013,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1014,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1015,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1016,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1017,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1018,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1019,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1020,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1021,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1022,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1023,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1024,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1025,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1026,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1027,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1028,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1029,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1030,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1031,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1032,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1033,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1034,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1035,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1036,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1037,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 100,
+          "z": 1038,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1006,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1007,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1008,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1009,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1010,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1011,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1012,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1013,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1014,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1015,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1016,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1017,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1018,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1019,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1020,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1021,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1022,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1023,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1024,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1025,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1026,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1027,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1028,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1029,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1030,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1031,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1032,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1033,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1034,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1035,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1036,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1037,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 101,
+          "z": 1038,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1006,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1007,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1008,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1009,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1010,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1011,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1012,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1013,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1014,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1015,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1016,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1017,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1018,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1019,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1020,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1021,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1022,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1023,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1024,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1025,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1026,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1027,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1028,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1029,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1030,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1031,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1032,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1033,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1034,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1035,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1036,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1037,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 102,
+          "z": 1038,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1006,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1007,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1008,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1009,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1010,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1011,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1012,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1013,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1014,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1015,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1016,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1017,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1018,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1019,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1020,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1021,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1022,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1023,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1024,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1025,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1026,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1027,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1028,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1029,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1030,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1031,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1032,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1033,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1034,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1035,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1036,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1037,
+          "state": "minecraft:air"
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y": 103,
+          "z": 1038,
+          "state": "minecraft:air"
+        }
+      ],
+      "floorStates": {
+        "minecraft:grass_block[snowy=false]": 1089
+      },
+      "restoredAfterEachAttempt": true
+    }
+  },
+  "startedAt": 1787281330210,
+  "attempts": [
+    {
+      "attempt": 1,
+      "runId": "F1",
+      "issuedAt": 1787281334651,
+      "activeAt": 1787281334651,
+      "commandAck": {
+        "success": true,
+        "source": "direct-production-helper",
+        "provider": false
+      },
+      "terminal": {
+        "phase": "succeeded",
+        "receipt": {
+          "schemaVersion": 2,
+          "kind": "physical_verifier",
+          "target": {
+            "name": "isolated_stance",
+            "x": 1056,
+            "y": 100,
+            "z": 1008
+          },
+          "status": "ready",
+          "failureStage": null,
+          "code": "stance_reached",
+          "candidateCount": 1,
+          "selectedStance": {
+            "x": 1056,
+            "y": 100,
+            "z": 1008
+          },
+          "path": {
+            "status": "timeout",
+            "length": 24
+          },
+          "interaction": {
+            "attempted": false,
+            "confirmed": false
+          },
+          "functionalPostcondition": {
+            "status": "not_evaluated",
+            "code": "not_evaluated",
+            "target": null,
+            "expectedCount": 0,
+            "observedCount": 0
+          },
+          "stages": {
+            "selection": {
+              "status": "confirmed",
+              "code": "target_selected"
+            },
+            "feasibility": {
+              "status": "confirmed",
+              "code": "legal_stance_confirmed"
+            },
+            "planning": {
+              "status": "confirmed",
+              "code": "timeout"
+            },
+            "execution": {
+              "status": "confirmed",
+              "code": "stance_reached"
+            },
+            "acknowledgement": {
+              "status": "pending",
+              "code": "interaction_pending"
+            },
+            "functionalPostcondition": {
+              "status": "not_evaluated",
+              "code": "not_evaluated",
+              "target": null,
+              "expectedCount": 0,
+              "observedCount": 0
+            }
+          }
+        }
+      },
+      "performance": {
+        "durationMs": 13354,
+        "controlledTargetTrajectoryDistance": 70.19105763723286
+      },
+      "physicalAcceptance": {
+        "course": "interaction-stance-inconclusive",
+        "producerStatus": "timeout",
+        "producerConclusive": false,
+        "helperStatus": "ready",
+        "helperFailureStage": null,
+        "originalGoalReached": true,
+        "startPosition": {
+          "x": 1029.5,
+          "y": 100,
+          "z": 1008.5
+        },
+        "finalPosition": {
+          "x": 1056.4995763512243,
+          "y": 100,
+          "z": 1008.5
+        },
+        "pathfinderSettled": true,
+        "laterInteractionAttempted": false,
+        "inventoryIntact": true,
+        "terrainIntact": true,
+        "fixtureVerified": true
+      },
+      "paper": {
+        "before": {
+          "botPosition": {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "targetPosition": {
+            "x": 1029.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "wallVerified": false,
+          "plugVerified": false,
+          "sourceVerified": false,
+          "groundVerified": false,
+          "dryLandProbes": [
+            {
+              "name": "north",
+              "x": 1033,
+              "y": 99,
+              "z": 971,
+              "verified": false
+            },
+            {
+              "name": "south",
+              "x": 1033,
+              "y": 99,
+              "z": 1051,
+              "verified": false
+            },
+            {
+              "name": "east",
+              "x": 1073,
+              "y": 99,
+              "z": 1011,
+              "verified": false
+            },
+            {
+              "name": "west",
+              "x": 993,
+              "y": 99,
+              "z": 1011,
+              "verified": false
+            }
+          ],
+          "dryLandVerified": false,
+          "doorwayVerified": true,
+          "platformVerified": false,
+          "routeTargetVerified": false,
+          "lines": [
+            "[command] > scoreboard players set #F1_BEFORE_BEGIN fol001proof 1",
+            "[command] > data get entity MindcraftBot Pos",
+            "[command] > data get entity FollowTarget Pos",
+            "[command] > execute if block 1033 100 1007 minecraft:stone_bricks run scoreboard players set #F1_BEFORE_WALL fol001proof 1",
+            "> > > > [22:02:14 INFO]: Set [fol001proof] for #F1_BEFORE_BEGIN to 1",
+            "[command] > execute if block 1033 100 1008 minecraft:air run scoreboard players set #F1_BEFORE_OPEN fol001proof 1",
+            "[command] > execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set #F1_BEFORE_STEP fol001proof 1",
+            "> > >   [22:02:14 INFO]: MindcraftBot has the following entity data: [\u001b[33m1027.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+            ">   [22:02:14 INFO]: FollowTarget has the following entity data: [\u001b[33m1029.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+            "[command] > execute if block 1033 100 1008 minecraft:dirt run scoreboard players set #F1_BEFORE_PLUG fol001proof 1",
+            ">   [22:02:14 INFO]: Set [fol001proof] for #F1_BEFORE_OPEN to 1",
+            "[command] > execute if block 1029 100 1010 minecraft:dirt run scoreboard players set #F1_BEFORE_SRCE fol001proof 1",
+            "[command] > scoreboard players set #F1_BEFORE_END fol001proof 1",
+            "> ex> > >   [22:02:14 INFO]: Set [fol001proof] for #F1_BEFORE_END to 1"
+          ]
+        },
+        "after": {
+          "botPosition": {
+            "x": 1027.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "targetPosition": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1008.5
+          },
+          "wallVerified": false,
+          "plugVerified": false,
+          "sourceVerified": false,
+          "groundVerified": false,
+          "dryLandProbes": [
+            {
+              "name": "north",
+              "x": 1033,
+              "y": 99,
+              "z": 971,
+              "verified": false
+            },
+            {
+              "name": "south",
+              "x": 1033,
+              "y": 99,
+              "z": 1051,
+              "verified": false
+            },
+            {
+              "name": "east",
+              "x": 1073,
+              "y": 99,
+              "z": 1011,
+              "verified": false
+            },
+            {
+              "name": "west",
+              "x": 993,
+              "y": 99,
+              "z": 1011,
+              "verified": false
+            }
+          ],
+          "dryLandVerified": false,
+          "doorwayVerified": true,
+          "platformVerified": false,
+          "routeTargetVerified": false,
+          "lines": [
+            "[command] > scoreboard players set #F1_AFTER_BEGIN fol001proof 1",
+            "[command] > data get entity MindcraftBot Pos",
+            "[command] > data get entity FollowTarget Pos",
+            "[command] > execute if block 1033 100 1007 minecraft:stone_bricks run scoreboard players set #F1_AFTER_WALL fol001proof 1",
+            "[command] > execute if block 1033 100 1008 minecraft:air run scoreboard players set #F1_AFTER_OPEN fol001proof 1",
+            "[command] > execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set #F1_AFTER_STEP fol001proof 1",
+            "[command] > execute if block 1033 100 1008 minecraft:dirt run scoreboard players set #F1_AFTER_PLUG fol001proof 1",
+            "> > > > > > > >   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_BEGIN to 1",
+            ">   [22:02:27 INFO]: MindcraftBot has the following entity data: [\u001b[33m1027.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+            ">   [22:02:27 INFO]: FollowTarget has the following entity data: [\u001b[33m1056.4995763512243\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+            "[command] > execute if block 1029 100 1010 minecraft:dirt run scoreboard players set #F1_AFTER_SRCE fol001proof 1",
+            ">   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_OPEN to 1",
+            "[command] > scoreboard players set #F1_AFTER_END fol001proof 1",
+            "> ex> >   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_END to 1"
+          ]
+        }
+      },
+      "targetSamples": [
+        {
+          "at": 1787281334902,
+          "position": {
+            "x": 1029.8243605275352,
+            "y": 100,
+            "z": 1008.5
+          }
+        },
+        {
+          "at": 1787281335017,
+          "position": {
+            "x": 1030.4064485057993,
+            "y": 100,
+            "z": 1008.65274201183
+          }
+        },
+        {
+          "at": 1787281335131,
+          "position": {
+            "x": 1030.7542876604775,
+            "y": 100,
+            "z": 1008.6491316911571
+          }
+        },
+        {
+          "at": 1787281335232,
+          "position": {
+            "x": 1031.020827159386,
+            "y": 100,
+            "z": 1008.8638864005193
+          }
+        },
+        {
+          "at": 1787281335341,
+          "position": {
+            "x": 1030.7782058171922,
+            "y": 100,
+            "z": 1009.2403793110794
+          }
+        },
+        {
+          "at": 1787281335452,
+          "position": {
+            "x": 1030.8300869479722,
+            "y": 100,
+            "z": 1009.6784440565624
+          }
+        },
+        {
+          "at": 1787281335555,
+          "position": {
+            "x": 1030.9464935516414,
+            "y": 100,
+            "z": 1009.8984583237445
+          }
+        },
+        {
+          "at": 1787281335669,
+          "position": {
+            "x": 1031.4566068068868,
+            "y": 100,
+            "z": 1010.5176712523712
+          }
+        },
+        {
+          "at": 1787281335779,
+          "position": {
+            "x": 1031.8512347929147,
+            "y": 100,
+            "z": 1010.9080845776198
+          }
+        },
+        {
+          "at": 1787281335891,
+          "position": {
+            "x": 1032.260189598991,
+            "y": 100,
+            "z": 1011.2896276200014
+          }
+        },
+        {
+          "at": 1787281336001,
+          "position": {
+            "x": 1032.866627210174,
+            "y": 100,
+            "z": 1011.8723894324894
+          }
+        },
+        {
+          "at": 1787281336105,
+          "position": {
+            "x": 1033.2664740504295,
+            "y": 100,
+            "z": 1012.266054151948
+          }
+        },
+        {
+          "at": 1787281336205,
+          "position": {
+            "x": 1033.4655607783584,
+            "y": 100,
+            "z": 1012.4637821932496
+          }
+        },
+        {
+          "at": 1787281336305,
+          "position": {
+            "x": 1034.060902970191,
+            "y": 100,
+            "z": 1013.0589572525627
+          }
+        },
+        {
+          "at": 1787281336406,
+          "position": {
+            "x": 1034.457172628883,
+            "y": 100,
+            "z": 1013.4563850081372
+          }
+        },
+        {
+          "at": 1787281336510,
+          "position": {
+            "x": 1034.8538511329048,
+            "y": 100,
+            "z": 1013.853408759369
+          }
+        },
+        {
+          "at": 1787281336621,
+          "position": {
+            "x": 1035.2506515202608,
+            "y": 100,
+            "z": 1014.2503120704422
+          }
+        },
+        {
+          "at": 1787281336732,
+          "position": {
+            "x": 1035.647488242989,
+            "y": 100,
+            "z": 1014.6471794763771
+          }
+        },
+        {
+          "at": 1787281336842,
+          "position": {
+            "x": 1036.2427609885453,
+            "y": 100,
+            "z": 1015.2424631329385
+          }
+        },
+        {
+          "at": 1787281336956,
+          "position": {
+            "x": 1036.639612395364,
+            "y": 100,
+            "z": 1015.6393160286516
+          }
+        },
+        {
+          "at": 1787281337057,
+          "position": {
+            "x": 1037.0364643278106,
+            "y": 100,
+            "z": 1016.0361684049609
+          }
+        },
+        {
+          "at": 1787281337159,
+          "position": {
+            "x": 1037.6317424819708,
+            "y": 100,
+            "z": 1016.6314467169594
+          }
+        },
+        {
+          "at": 1787281337268,
+          "position": {
+            "x": 1037.8301685528133,
+            "y": 100,
+            "z": 1016.8298728017335
+          }
+        },
+        {
+          "at": 1787281337380,
+          "position": {
+            "x": 1038.227020702598,
+            "y": 100,
+            "z": 1017.226724963278
+          }
+        },
+        {
+          "at": 1787281337491,
+          "position": {
+            "x": 1038.6238728565345,
+            "y": 100,
+            "z": 1017.6235771207199
+          }
+        },
+        {
+          "at": 1787281337603,
+          "position": {
+            "x": 1039.0207250117085,
+            "y": 100,
+            "z": 1018.0204292769389
+          }
+        },
+        {
+          "at": 1787281337705,
+          "position": {
+            "x": 1039.6160032450712,
+            "y": 100,
+            "z": 1018.6157075106728
+          }
+        },
+        {
+          "at": 1787281337806,
+          "position": {
+            "x": 1040.0128554007454,
+            "y": 100,
+            "z": 1019.0125596663975
+          }
+        },
+        {
+          "at": 1787281337919,
+          "position": {
+            "x": 1040.4097075564375,
+            "y": 100,
+            "z": 1019.4094118221045
+          }
+        },
+        {
+          "at": 1787281338031,
+          "position": {
+            "x": 1040.806559712135,
+            "y": 100,
+            "z": 1019.8062639778062
+          }
+        },
+        {
+          "at": 1787281338142,
+          "position": {
+            "x": 1041.2034118678341,
+            "y": 100,
+            "z": 1020.2031161335063
+          }
+        },
+        {
+          "at": 1787281338254,
+          "position": {
+            "x": 1041.7986901013835,
+            "y": 100,
+            "z": 1020.7983943670558
+          }
+        },
+        {
+          "at": 1787281338355,
+          "position": {
+            "x": 1042.1955422570834,
+            "y": 100,
+            "z": 1021.1952465227553
+          }
+        },
+        {
+          "at": 1787281338455,
+          "position": {
+            "x": 1042.5923944127833,
+            "y": 100,
+            "z": 1021.5920986784547
+          }
+        },
+        {
+          "at": 1787281338554,
+          "position": {
+            "x": 1042.7908204906332,
+            "y": 100,
+            "z": 1021.7905247563044
+          }
+        },
+        {
+          "at": 1787281338655,
+          "position": {
+            "x": 1043.3254298173179,
+            "y": 100,
+            "z": 1022.4196749640859
+          }
+        },
+        {
+          "at": 1787281338760,
+          "position": {
+            "x": 1043.4850228469677,
+            "y": 100,
+            "z": 1022.9370503472609
+          }
+        },
+        {
+          "at": 1787281338871,
+          "position": {
+            "x": 1043.5419675241453,
+            "y": 100,
+            "z": 1023.4848115843391
+          }
+        },
+        {
+          "at": 1787281338983,
+          "position": {
+            "x": 1043.523760915482,
+            "y": 100,
+            "z": 1024.3208158206212
+          }
+        },
+        {
+          "at": 1787281339091,
+          "position": {
+            "x": 1043.5967633136509,
+            "y": 100,
+            "z": 1024.5714348598913
+          }
+        },
+        {
+          "at": 1787281339202,
+          "position": {
+            "x": 1044.0794503437564,
+            "y": 100,
+            "z": 1025.204159311706
+          }
+        },
+        {
+          "at": 1787281339304,
+          "position": {
+            "x": 1044.424150867928,
+            "y": 100,
+            "z": 1025.6068167298095
+          }
+        },
+        {
+          "at": 1787281339409,
+          "position": {
+            "x": 1044.5544260486736,
+            "y": 100,
+            "z": 1026.1188377119968
+          }
+        },
+        {
+          "at": 1787281339520,
+          "position": {
+            "x": 1044.646649924586,
+            "y": 100,
+            "z": 1026.6333343895874
+          }
+        },
+        {
+          "at": 1787281339632,
+          "position": {
+            "x": 1044.9521151548565,
+            "y": 100,
+            "z": 1027.0652048001405
+          }
+        },
+        {
+          "at": 1787281339743,
+          "position": {
+            "x": 1045.4865691264001,
+            "y": 100,
+            "z": 1027.6574257985433
+          }
+        },
+        {
+          "at": 1787281339853,
+          "position": {
+            "x": 1045.588131231392,
+            "y": 100,
+            "z": 1028.1691991391685
+          }
+        },
+        {
+          "at": 1787281339953,
+          "position": {
+            "x": 1045.6750145996314,
+            "y": 100,
+            "z": 1028.4178264232369
+          }
+        },
+        {
+          "at": 1787281340061,
+          "position": {
+            "x": 1045.9490545346298,
+            "y": 100,
+            "z": 1028.8824327368654
+          }
+        },
+        {
+          "at": 1787281340172,
+          "position": {
+            "x": 1046.4831694060367,
+            "y": 100,
+            "z": 1029.5181715415272
+          }
+        },
+        {
+          "at": 1787281340284,
+          "position": {
+            "x": 1046.8766137469465,
+            "y": 100,
+            "z": 1029.915486443965
+          }
+        },
+        {
+          "at": 1787281340394,
+          "position": {
+            "x": 1047.2814938847016,
+            "y": 100,
+            "z": 1030.3031225856735
+          }
+        },
+        {
+          "at": 1787281340502,
+          "position": {
+            "x": 1047.5456041321142,
+            "y": 100,
+            "z": 1031.0520330057443
+          }
+        },
+        {
+          "at": 1787281340604,
+          "position": {
+            "x": 1047.6439723368214,
+            "y": 100,
+            "z": 1031.571466605507
+          }
+        },
+        {
+          "at": 1787281340709,
+          "position": {
+            "x": 1047.9415967593743,
+            "y": 100,
+            "z": 1032.0142465040547
+          }
+        },
+        {
+          "at": 1787281340820,
+          "position": {
+            "x": 1048.3301104555378,
+            "y": 100,
+            "z": 1032.4012984349483
+          }
+        },
+        {
+          "at": 1787281340932,
+          "position": {
+            "x": 1048.941578437864,
+            "y": 100,
+            "z": 1032.972556789267
+          }
+        },
+        {
+          "at": 1787281341042,
+          "position": {
+            "x": 1049.1456105490586,
+            "y": 100,
+            "z": 1033.164562434043
+          }
+        },
+        {
+          "at": 1787281341154,
+          "position": {
+            "x": 1049.5510283745564,
+            "y": 100,
+            "z": 1033.5520654045342
+          }
+        },
+        {
+          "at": 1787281341265,
+          "position": {
+            "x": 1050.1489047343218,
+            "y": 100,
+            "z": 1034.1444649182076
+          }
+        },
+        {
+          "at": 1787281341375,
+          "position": {
+            "x": 1050.5449180066769,
+            "y": 100,
+            "z": 1034.5421126410915
+          }
+        },
+        {
+          "at": 1787281341487,
+          "position": {
+            "x": 1050.9410260487302,
+            "y": 100,
+            "z": 1034.9396947055218
+          }
+        },
+        {
+          "at": 1787281341599,
+          "position": {
+            "x": 1051.53567458374,
+            "y": 100,
+            "z": 1035.5355966317609
+          }
+        },
+        {
+          "at": 1787281341704,
+          "position": {
+            "x": 1051.9323817922475,
+            "y": 100,
+            "z": 1035.9325927607945
+          }
+        },
+        {
+          "at": 1787281341806,
+          "position": {
+            "x": 1052.3291907368703,
+            "y": 100,
+            "z": 1036.3294878372485
+          }
+        },
+        {
+          "at": 1787281341918,
+          "position": {
+            "x": 1052.92445360448,
+            "y": 100,
+            "z": 1036.924781333498
+          }
+        },
+        {
+          "at": 1787281342029,
+          "position": {
+            "x": 1053.1228783260517,
+            "y": 100,
+            "z": 1037.1232087585136
+          }
+        },
+        {
+          "at": 1787281342140,
+          "position": {
+            "x": 1053.5556280870271,
+            "y": 100,
+            "z": 1037.4489174875591
+          }
+        },
+        {
+          "at": 1787281342251,
+          "position": {
+            "x": 1054.3490134226743,
+            "y": 100,
+            "z": 1037.5641577101414
+          }
+        },
+        {
+          "at": 1787281342352,
+          "position": {
+            "x": 1054.9020747490438,
+            "y": 100,
+            "z": 1037.5450023345302
+          }
+        },
+        {
+          "at": 1787281342452,
+          "position": {
+            "x": 1055.180652382514,
+            "y": 100,
+            "z": 1037.5287027029747
+          }
+        },
+        {
+          "at": 1787281342552,
+          "position": {
+            "x": 1055.6666811433288,
+            "y": 100,
+            "z": 1037.309567270084
+          }
+        },
+        {
+          "at": 1787281342654,
+          "position": {
+            "x": 1056.0928910458479,
+            "y": 100,
+            "z": 1036.9687583075306
+          }
+        },
+        {
+          "at": 1787281342754,
+          "position": {
+            "x": 1056.4178386186575,
+            "y": 100,
+            "z": 1036.5422685484848
+          }
+        },
+        {
+          "at": 1787281342854,
+          "position": {
+            "x": 1056.5556344839881,
+            "y": 100,
+            "z": 1035.750603464278
+          }
+        },
+        {
+          "at": 1787281342955,
+          "position": {
+            "x": 1056.5501215862141,
+            "y": 100,
+            "z": 1035.196921117722
+          }
+        },
+        {
+          "at": 1787281343058,
+          "position": {
+            "x": 1056.5066345034265,
+            "y": 100,
+            "z": 1034.3592755927705
+          }
+        },
+        {
+          "at": 1787281343169,
+          "position": {
+            "x": 1056.4990487408984,
+            "y": 100,
+            "z": 1034.0791225587084
+          }
+        },
+        {
+          "at": 1787281343279,
+          "position": {
+            "x": 1056.4955739788984,
+            "y": 100,
+            "z": 1033.5182814842383
+          }
+        },
+        {
+          "at": 1787281343390,
+          "position": {
+            "x": 1056.4979086903738,
+            "y": 100,
+            "z": 1032.6765806856954
+          }
+        },
+        {
+          "at": 1787281343502,
+          "position": {
+            "x": 1056.498575754714,
+            "y": 100,
+            "z": 1032.1153717484503
+          }
+        },
+        {
+          "at": 1787281343603,
+          "position": {
+            "x": 1056.498909286884,
+            "y": 100,
+            "z": 1031.5541463433813
+          }
+        },
+        {
+          "at": 1787281343708,
+          "position": {
+            "x": 1056.4992428190542,
+            "y": 100,
+            "z": 1030.992915552231
+          }
+        },
+        {
+          "at": 1787281343820,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1030.1510671251278
+          }
+        },
+        {
+          "at": 1787281343931,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1029.8704504621944
+          }
+        },
+        {
+          "at": 1787281344041,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1029.028600099705
+          }
+        },
+        {
+          "at": 1787281344153,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1028.4673664246184
+          }
+        },
+        {
+          "at": 1787281344263,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1027.9061327314507
+          }
+        },
+        {
+          "at": 1787281344373,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1027.0642821829106
+          }
+        },
+        {
+          "at": 1787281344473,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1026.7836653327279
+          }
+        },
+        {
+          "at": 1787281344577,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1025.9418147816996
+          }
+        },
+        {
+          "at": 1787281344689,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1025.3805810808853
+          }
+        },
+        {
+          "at": 1787281344800,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1025.099964230468
+          }
+        },
+        {
+          "at": 1787281344911,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1024.2581136792032
+          }
+        },
+        {
+          "at": 1787281345021,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1023.4162631279332
+          }
+        },
+        {
+          "at": 1787281345132,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1022.855029427086
+          }
+        },
+        {
+          "at": 1787281345242,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1022.5744125766623
+          }
+        },
+        {
+          "at": 1787281345349,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1022.0131788758149
+          }
+        },
+        {
+          "at": 1787281345457,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1021.1713283245438
+          }
+        },
+        {
+          "at": 1787281345568,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1020.6100946236963
+          }
+        },
+        {
+          "at": 1787281345680,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1019.7682440724252
+          }
+        },
+        {
+          "at": 1787281345790,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1019.4876272220015
+          }
+        },
+        {
+          "at": 1787281345902,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1018.6457766707304
+          }
+        },
+        {
+          "at": 1787281346013,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1018.0845429698829
+          }
+        },
+        {
+          "at": 1787281346124,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1017.2426924186118
+          }
+        },
+        {
+          "at": 1787281346235,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1016.9620755681881
+          }
+        },
+        {
+          "at": 1787281346346,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1016.120225016917
+          }
+        },
+        {
+          "at": 1787281346453,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1015.5589913160695
+          }
+        },
+        {
+          "at": 1787281346567,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1015.2783744656458
+          }
+        },
+        {
+          "at": 1787281346678,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1014.4365239143747
+          }
+        },
+        {
+          "at": 1787281346790,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1013.5946733631035
+          }
+        },
+        {
+          "at": 1787281346901,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1013.0334396622561
+          }
+        },
+        {
+          "at": 1787281347013,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1012.191589110985
+          }
+        },
+        {
+          "at": 1787281347124,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1011.9109722605613
+          }
+        },
+        {
+          "at": 1787281347235,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1011.3497385597138
+          }
+        },
+        {
+          "at": 1787281347345,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1010.5078880084427
+          }
+        },
+        {
+          "at": 1787281347457,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1009.6660374571716
+          }
+        },
+        {
+          "at": 1787281347567,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1009.3854206067479
+          }
+        },
+        {
+          "at": 1787281347667,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1008.5
+          }
+        },
+        {
+          "at": 1787281347773,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1008.5
+          }
+        },
+        {
+          "at": 1787281347884,
+          "position": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1008.5
+          }
+        }
+      ],
+      "targetPathUpdates": [
+        {
+          "at": 1787281334818,
+          "status": "partial",
+          "visitedNodes": 237,
+          "generatedNodes": 272,
+          "pathLength": 24
+        },
+        {
+          "at": 1787281334860,
+          "status": "partial",
+          "visitedNodes": 495,
+          "generatedNodes": 532,
+          "pathLength": 24
+        },
+        {
+          "at": 1787281334901,
+          "status": "partial",
+          "visitedNodes": 755,
+          "generatedNodes": 787,
+          "pathLength": 24
+        },
+        {
+          "at": 1787281334954,
+          "status": "partial",
+          "visitedNodes": 875,
+          "generatedNodes": 901,
+          "pathLength": 24
+        },
+        {
+          "at": 1787281334961,
+          "status": "success",
+          "visitedNodes": 893,
+          "generatedNodes": 927,
+          "pathLength": 60
+        },
+        {
+          "at": 1787281335014,
+          "status": "partial",
+          "visitedNodes": 228,
+          "generatedNodes": 266,
+          "pathLength": 23
+        },
+        {
+          "at": 1787281335066,
+          "status": "partial",
+          "visitedNodes": 497,
+          "generatedNodes": 534,
+          "pathLength": 23
+        },
+        {
+          "at": 1787281335128,
+          "status": "partial",
+          "visitedNodes": 775,
+          "generatedNodes": 807,
+          "pathLength": 23
+        },
+        {
+          "at": 1787281335168,
+          "status": "success",
+          "visitedNodes": 865,
+          "generatedNodes": 927,
+          "pathLength": 60
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "error": null,
+  "cleanup": {
+    "fixtureRestored": true,
+    "botHeld": true,
+    "targetDisconnected": true
+  },
+  "finishedAt": 1787281348846,
+  "durationMs": 18636
+}

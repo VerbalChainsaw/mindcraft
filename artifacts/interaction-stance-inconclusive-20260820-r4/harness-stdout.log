@@ -1,0 +1,24 @@
+{
+  "scenario": "inconclusive-interaction-stance-probe-falls-through-to-real-pathfinder",
+  "route": "typed-dashboard-command",
+  "passed": true,
+  "attempts": [
+    {
+      "attempt": 1,
+      "passed": true,
+      "incomplete": false,
+      "botTravel": null,
+      "targetTravel": null,
+      "doorway": null,
+      "elevation": null,
+      "stopMs": null
+    }
+  ],
+  "error": null,
+  "cleanup": {
+    "fixtureRestored": true,
+    "botHeld": true,
+    "targetDisconnected": true
+  },
+  "evidence": "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2\\artifacts\\interaction-stance-inconclusive-20260820-r4\\follow-field-evidence.json"
+}

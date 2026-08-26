@@ -1,22 +1,24 @@
 {
   "name": "Kevin",
-  "model": [
-    { "api": "openai", "model": "gpt-4.1", "params": { "timeout": 12 } },
-    { "api": "openai", "model": "gpt-4.1-mini", "params": { "timeout": 10 } }
-  ],
-  "reasoning_model": {
-    "api": "openai",
-    "model": "gpt-5",
-    "params": { "timeout": 25 }
+  "model": {
+    "api": "deepseek",
+    "model": "deepseek-v4-flash",
+    "params": { "timeout": 45, "thinking": { "type": "disabled" } }
   },
-  "autonomy_model": [
-    { "api": "openai", "model": "gpt-4.1", "params": { "timeout": 12 } },
-    { "api": "openai", "model": "gpt-4.1-mini", "params": { "timeout": 10 } }
-  ],
+  "reasoning_model": {
+    "api": "deepseek",
+    "model": "deepseek-v4-flash",
+    "params": { "timeout": 45, "thinking": { "type": "enabled" }, "reasoning_effort": "high" }
+  },
+  "autonomy_model": {
+    "api": "deepseek",
+    "model": "deepseek-v4-flash",
+    "params": { "timeout": 45, "thinking": { "type": "disabled" } }
+  },
   "memory_model": {
-    "api": "openai",
-    "model": "gpt-4.1-mini",
-    "params": { "timeout": 15 }
+    "api": "deepseek",
+    "model": "deepseek-v4-flash",
+    "params": { "timeout": 45, "thinking": { "type": "disabled" } }
   },
   "cooldown": 350,
   "runtime": {

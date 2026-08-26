@@ -1,0 +1,3952 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "phase": "finished",
+  "started_utc": "2026-08-21T03:01:35.6630519Z",
+  "updated_utc": "2026-08-21T03:02:37.0347271Z",
+  "request_form": "direct",
+  "request_message": "physical interaction stance proof",
+  "candidate_commit": "ad37a3d2f2ab70d52cac93f22e5e6ebc16b0f748",
+  "instrumentation": {
+    "requested_mode": "off",
+    "decision_trace_enabled": false,
+    "observed_decision_trace_present": false,
+    "observed_schema_version": null,
+    "verified": true
+  },
+  "fixture_authorized": true,
+  "endpoints_local_only": true,
+  "conflict": false,
+  "branch": "recovery/iron-pickaxe-20260803",
+  "current_head": "ad37a3d2f2ab70d52cac93f22e5e6ebc16b0f748",
+  "source_world": "deliver-item-flat-v1",
+  "source_seed": "8140427791654321",
+  "source_archive_sha256": null,
+  "fixture_metadata_sha256": "5648172f406cd63604db1c8cf4f53923d4e8ec4e18a41ac92dd9fd12ef82489e",
+  "fixture_profile_sha256": "e82b8f03e0411678073191db52b35c9ad74d6cfe8e36572db07c866f0817ae57",
+  "baseline_contract_sha256": "",
+  "measurement_harness_sha256": "153316c2aad021379e97217abdc707567b14e0db811d7f336beb72589fd9bbd2",
+  "gameplay_skills_sha256": "f025a847096f800297b7584a3872acf6cd5a286df06eec9095cda42b4780223c",
+  "candidate_blob_checks": {
+    "follow_worker": {
+      "relative_path": "tools/scenario-lab/adapters/follow-field-worker.ps1",
+      "candidate_blob": "a04b9bbd1321991dfc0307943ab69e11a1f54cf8",
+      "current_blob": "51783156ab4200f5ca8154a61a273e12c6ee2c73",
+      "matched": false
+    },
+    "follow_runner": {
+      "relative_path": "tools/scenario-lab/adapters/run-follow-field.mjs",
+      "candidate_blob": "8c1e5296806f684837c2aedebcc957e613a2b8d5",
+      "current_blob": "a9de8dabfce10c696fb0596af4925cd343f2d0fc",
+      "matched": false
+    },
+    "evidence_adapter": {
+      "relative_path": "tools/scenario-lab/adapters/follow-field-evidence.mjs",
+      "candidate_blob": "13876f2846accac9e5c2825606e30e093e2516d2",
+      "current_blob": "94632be64b3f344083961b6b09ffe7e8100b882f",
+      "matched": false
+    },
+    "capture_helper": {
+      "relative_path": "tools/scenario-lab/adapters/capture-agent-state.mjs",
+      "candidate_blob": "51efde7cdaadfbad0db471363d55faf83060b5c6",
+      "current_blob": "51efde7cdaadfbad0db471363d55faf83060b5c6",
+      "matched": true
+    },
+    "measurement_harness": {
+      "relative_path": "tools/verify-follow-field.mjs",
+      "candidate_blob": "84f5ead44dd4565429ecd53de5c1a4f7202c2fb0",
+      "current_blob": "a194681e575d980c690e488a3e007bf1cbfe3dd7",
+      "matched": false
+    },
+    "directive_router": {
+      "relative_path": "src/agent/player-directives.js",
+      "candidate_blob": "e6085d22cb2f28434d439e549e3b026646ec4532",
+      "current_blob": "e6085d22cb2f28434d439e549e3b026646ec4532",
+      "matched": true
+    },
+    "gameplay_controller": {
+      "relative_path": "src/agent/library/skills.js",
+      "candidate_blob": "f0231bf2cfd90acff91384e4dec2f4e6896880eb",
+      "current_blob": "f550da5ad0cf01016baf27ce0a688c8498cebe64",
+      "matched": false
+    }
+  },
+  "replay_world": "scenario-lab-follow-field-direct-20260820-220135-659",
+  "run_dir": "C:\\Users\\zerop\\Development\\minecraft-companion-brain-v2\\artifacts\\interaction-stance-inconclusive-20260820-r4",
+  "main_pid": 36288,
+  "startup_isolation": {
+    "profile": "scenario-profile.json",
+    "autonomy": "command",
+    "init_message_disabled": true,
+    "default_goal_disabled": true,
+    "load_memory_disabled": true,
+    "profile_sha256": "08ead8c2aa9daddb9a4dfeff6dedaf6f80e5c55cc34ea6e2797f63cefb0ed89c",
+    "pre_harness_last_result": null,
+    "operator_hold_placed": true
+  },
+  "health": {
+    "minecraft_reachable": true,
+    "problems": [],
+    "bot_state": "running",
+    "bot_in_game": true,
+    "bot_socket_connected": true
+  },
+  "before": {
+    "observed_utc": "2026-08-21T03:02:09.654Z",
+    "position": {
+      "x": 7.5,
+      "y": 100,
+      "z": -4.5
+    },
+    "health": 20,
+    "hunger": 20,
+    "action_current": "Command only",
+    "action_idle": true,
+    "action_held": true,
+    "pathfinding": null,
+    "last_result": null
+  },
+  "harness_process": {
+    "pid": 40912,
+    "exit_code": 0,
+    "timed_out": false,
+    "started_at_unix_ms": 1787281329690,
+    "duration_ms": 19210,
+    "stdout": "{\n  \"scenario\": \"inconclusive-interaction-stance-probe-falls-through-to-real-pathfinder\",\n  \"route\": \"typed-dashboard-command\",\n  \"passed\": true,\n  \"attempts\": [\n    {\n      \"attempt\": 1,\n      \"passed\": true,\n      \"incomplete\": false,\n      \"botTravel\": null,\n      \"targetTravel\": null,\n      \"doorway\": null,\n      \"elevation\": null,\n      \"stopMs\": null\n    }\n  ],\n  \"error\": null,\n  \"cleanup\": {\n    \"fixtureRestored\": true,\n    \"botHeld\": true,\n    \"targetDisconnected\": true\n  },\n  \"evidence\": \"C:\\\\Users\\\\zerop\\\\Development\\\\minecraft-companion-brain-v2\\\\artifacts\\\\interaction-stance-inconclusive-20260820-r4\\\\follow-field-evidence.json\"\n}",
+    "stderr": ""
+  },
+  "harness_evidence": {
+    "schemaVersion": 1,
+    "scenario": "inconclusive-interaction-stance-probe-falls-through-to-real-pathfinder",
+    "route": "typed-dashboard-command",
+    "command": "physical interaction stance proof",
+    "bot": "MindcraftBot",
+    "controlledTarget": {
+      "name": "FollowTarget",
+      "kind": "temporary-mineflayer-client",
+      "model": false,
+      "profile": false,
+      "scheduler": false,
+      "events": [
+        {
+          "at": 1787281331367,
+          "event": "spawn",
+          "position": {
+            "x": 9.5,
+            "y": 100,
+            "z": -4.5
+          },
+          "version": "1.21.11"
+        },
+        {
+          "at": 1787281348848,
+          "event": "end",
+          "reason": "follow field verification complete"
+        }
+      ]
+    },
+    "fixture": {
+      "course": {
+        "x1": 1026,
+        "x2": 1058,
+        "y1": 99,
+        "y2": 103,
+        "z1": 1006,
+        "z2": 1038
+      },
+      "courseVariant": "interaction-stance-inconclusive",
+      "botStart": {
+        "x": 1027.5,
+        "y": 100,
+        "z": 1008.5
+      },
+      "targetStart": {
+        "x": 1029.5,
+        "y": 100,
+        "z": 1008.5
+      },
+      "wall": {
+        "x": 1033,
+        "y1": 100,
+        "y2": 102,
+        "z1": 1006,
+        "z2": 1012
+      },
+      "doorway": {
+        "x": 1033,
+        "y1": 100,
+        "y2": 101,
+        "z": 1008
+      },
+      "platform": {
+        "x1": 1028,
+        "x2": 1034,
+        "y": 100,
+        "z1": 1013,
+        "z2": 1015
+      },
+      "routeProbeTarget": null,
+      "routeProbeCage": null,
+      "interactionStanceTarget": {
+        "x": 1056,
+        "y": 100,
+        "z": 1008
+      },
+      "interactionStanceWalls": [
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y1": 100,
+          "y2": 102,
+          "z1": 1006,
+          "z2": 1006
+        },
+        {
+          "x1": 1026,
+          "x2": 1058,
+          "y1": 100,
+          "y2": 102,
+          "z1": 1038,
+          "z2": 1038
+        },
+        {
+          "x1": 1026,
+          "x2": 1026,
+          "y1": 100,
+          "y2": 102,
+          "z1": 1006,
+          "z2": 1038
+        },
+        {
+          "x1": 1058,
+          "x2": 1058,
+          "y1": 100,
+          "y2": 102,
+          "z1": 1006,
+          "z2": 1038
+        },
+        {
+          "x1": 1054,
+          "x2": 1054,
+          "y1": 100,
+          "y2": 102,
+          "z1": 1007,
+          "z2": 1036
+        }
+      ],
+      "waypoints": [],
+      "mobSpawning": {
+        "previous": true,
+        "duringFixture": false,
+        "restored": true
+      },
+      "difficulty": {
+        "previous": "normal",
+        "duringFixture": "peaceful",
+        "restored": true,
+        "after": "normal"
+      },
+      "beforeState": {
+        "compressedRuns": [
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1006,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1007,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1008,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1009,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1010,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1011,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1012,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1013,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1014,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1015,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1016,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1017,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1018,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1019,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1020,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1021,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1022,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1023,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1024,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1025,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1026,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1027,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1028,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1029,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1030,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1031,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1032,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1033,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1034,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1035,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1036,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1037,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 99,
+            "z": 1038,
+            "state": "minecraft:grass_block[snowy=false]"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1006,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1007,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1008,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1009,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1010,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1011,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1012,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1013,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1014,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1015,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1016,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1017,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1018,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1019,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1020,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1021,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1022,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1023,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1024,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1025,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1026,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1027,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1028,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1029,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1030,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1031,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1032,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1033,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1034,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1035,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1036,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1037,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 100,
+            "z": 1038,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1006,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1007,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1008,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1009,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1010,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1011,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1012,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1013,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1014,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1015,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1016,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1017,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1018,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1019,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1020,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1021,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1022,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1023,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1024,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1025,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1026,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1027,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1028,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1029,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1030,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1031,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1032,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1033,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1034,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1035,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1036,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1037,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 101,
+            "z": 1038,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1006,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1007,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1008,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1009,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1010,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1011,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1012,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1013,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1014,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1015,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1016,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1017,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1018,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1019,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1020,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1021,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1022,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1023,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1024,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1025,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1026,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1027,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1028,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1029,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1030,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1031,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1032,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1033,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1034,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1035,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1036,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1037,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 102,
+            "z": 1038,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1006,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1007,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1008,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1009,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1010,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1011,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1012,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1013,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1014,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1015,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1016,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1017,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1018,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1019,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1020,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1021,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1022,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1023,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1024,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1025,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1026,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1027,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1028,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1029,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1030,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1031,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1032,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1033,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1034,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1035,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1036,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1037,
+            "state": "minecraft:air"
+          },
+          {
+            "x1": 1026,
+            "x2": 1058,
+            "y": 103,
+            "z": 1038,
+            "state": "minecraft:air"
+          }
+        ],
+        "floorStates": {
+          "minecraft:grass_block[snowy=false]": 1089
+        },
+        "restoredAfterEachAttempt": true
+      }
+    },
+    "startedAt": 1787281330210,
+    "attempts": [
+      {
+        "attempt": 1,
+        "runId": "F1",
+        "issuedAt": 1787281334651,
+        "activeAt": 1787281334651,
+        "commandAck": {
+          "success": true,
+          "source": "direct-production-helper",
+          "provider": false
+        },
+        "terminal": {
+          "phase": "succeeded",
+          "receipt": {
+            "schemaVersion": 2,
+            "kind": "physical_verifier",
+            "target": {
+              "name": "isolated_stance",
+              "x": 1056,
+              "y": 100,
+              "z": 1008
+            },
+            "status": "ready",
+            "failureStage": null,
+            "code": "stance_reached",
+            "candidateCount": 1,
+            "selectedStance": {
+              "x": 1056,
+              "y": 100,
+              "z": 1008
+            },
+            "path": {
+              "status": "timeout",
+              "length": 24
+            },
+            "interaction": {
+              "attempted": false,
+              "confirmed": false
+            },
+            "functionalPostcondition": {
+              "status": "not_evaluated",
+              "code": "not_evaluated",
+              "target": null,
+              "expectedCount": 0,
+              "observedCount": 0
+            },
+            "stages": {
+              "selection": {
+                "status": "confirmed",
+                "code": "target_selected"
+              },
+              "feasibility": {
+                "status": "confirmed",
+                "code": "legal_stance_confirmed"
+              },
+              "planning": {
+                "status": "confirmed",
+                "code": "timeout"
+              },
+              "execution": {
+                "status": "confirmed",
+                "code": "stance_reached"
+              },
+              "acknowledgement": {
+                "status": "pending",
+                "code": "interaction_pending"
+              },
+              "functionalPostcondition": {
+                "status": "not_evaluated",
+                "code": "not_evaluated",
+                "target": null,
+                "expectedCount": 0,
+                "observedCount": 0
+              }
+            }
+          }
+        },
+        "performance": {
+          "durationMs": 13354,
+          "controlledTargetTrajectoryDistance": 70.19105763723286
+        },
+        "physicalAcceptance": {
+          "course": "interaction-stance-inconclusive",
+          "producerStatus": "timeout",
+          "producerConclusive": false,
+          "helperStatus": "ready",
+          "helperFailureStage": null,
+          "originalGoalReached": true,
+          "startPosition": {
+            "x": 1029.5,
+            "y": 100,
+            "z": 1008.5
+          },
+          "finalPosition": {
+            "x": 1056.4995763512243,
+            "y": 100,
+            "z": 1008.5
+          },
+          "pathfinderSettled": true,
+          "laterInteractionAttempted": false,
+          "inventoryIntact": true,
+          "terrainIntact": true,
+          "fixtureVerified": true
+        },
+        "paper": {
+          "before": {
+            "botPosition": {
+              "x": 1027.5,
+              "y": 100,
+              "z": 1008.5
+            },
+            "targetPosition": {
+              "x": 1029.5,
+              "y": 100,
+              "z": 1008.5
+            },
+            "wallVerified": false,
+            "plugVerified": false,
+            "sourceVerified": false,
+            "groundVerified": false,
+            "dryLandProbes": [
+              {
+                "name": "north",
+                "x": 1033,
+                "y": 99,
+                "z": 971,
+                "verified": false
+              },
+              {
+                "name": "south",
+                "x": 1033,
+                "y": 99,
+                "z": 1051,
+                "verified": false
+              },
+              {
+                "name": "east",
+                "x": 1073,
+                "y": 99,
+                "z": 1011,
+                "verified": false
+              },
+              {
+                "name": "west",
+                "x": 993,
+                "y": 99,
+                "z": 1011,
+                "verified": false
+              }
+            ],
+            "dryLandVerified": false,
+            "doorwayVerified": true,
+            "platformVerified": false,
+            "routeTargetVerified": false,
+            "lines": [
+              "[command] > scoreboard players set #F1_BEFORE_BEGIN fol001proof 1",
+              "[command] > data get entity MindcraftBot Pos",
+              "[command] > data get entity FollowTarget Pos",
+              "[command] > execute if block 1033 100 1007 minecraft:stone_bricks run scoreboard players set #F1_BEFORE_WALL fol001proof 1",
+              "> > > > [22:02:14 INFO]: Set [fol001proof] for #F1_BEFORE_BEGIN to 1",
+              "[command] > execute if block 1033 100 1008 minecraft:air run scoreboard players set #F1_BEFORE_OPEN fol001proof 1",
+              "[command] > execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set #F1_BEFORE_STEP fol001proof 1",
+              "> > >   [22:02:14 INFO]: MindcraftBot has the following entity data: [\u001b[33m1027.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+              ">   [22:02:14 INFO]: FollowTarget has the following entity data: [\u001b[33m1029.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+              "[command] > execute if block 1033 100 1008 minecraft:dirt run scoreboard players set #F1_BEFORE_PLUG fol001proof 1",
+              ">   [22:02:14 INFO]: Set [fol001proof] for #F1_BEFORE_OPEN to 1",
+              "[command] > execute if block 1029 100 1010 minecraft:dirt run scoreboard players set #F1_BEFORE_SRCE fol001proof 1",
+              "[command] > scoreboard players set #F1_BEFORE_END fol001proof 1",
+              "> ex> > >   [22:02:14 INFO]: Set [fol001proof] for #F1_BEFORE_END to 1"
+            ]
+          },
+          "after": {
+            "botPosition": {
+              "x": 1027.5,
+              "y": 100,
+              "z": 1008.5
+            },
+            "targetPosition": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1008.5
+            },
+            "wallVerified": false,
+            "plugVerified": false,
+            "sourceVerified": false,
+            "groundVerified": false,
+            "dryLandProbes": [
+              {
+                "name": "north",
+                "x": 1033,
+                "y": 99,
+                "z": 971,
+                "verified": false
+              },
+              {
+                "name": "south",
+                "x": 1033,
+                "y": 99,
+                "z": 1051,
+                "verified": false
+              },
+              {
+                "name": "east",
+                "x": 1073,
+                "y": 99,
+                "z": 1011,
+                "verified": false
+              },
+              {
+                "name": "west",
+                "x": 993,
+                "y": 99,
+                "z": 1011,
+                "verified": false
+              }
+            ],
+            "dryLandVerified": false,
+            "doorwayVerified": true,
+            "platformVerified": false,
+            "routeTargetVerified": false,
+            "lines": [
+              "[command] > scoreboard players set #F1_AFTER_BEGIN fol001proof 1",
+              "[command] > data get entity MindcraftBot Pos",
+              "[command] > data get entity FollowTarget Pos",
+              "[command] > execute if block 1033 100 1007 minecraft:stone_bricks run scoreboard players set #F1_AFTER_WALL fol001proof 1",
+              "[command] > execute if block 1033 100 1008 minecraft:air run scoreboard players set #F1_AFTER_OPEN fol001proof 1",
+              "[command] > execute if block 1030 100 1014 minecraft:smooth_stone run scoreboard players set #F1_AFTER_STEP fol001proof 1",
+              "[command] > execute if block 1033 100 1008 minecraft:dirt run scoreboard players set #F1_AFTER_PLUG fol001proof 1",
+              "> > > > > > > >   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_BEGIN to 1",
+              ">   [22:02:27 INFO]: MindcraftBot has the following entity data: [\u001b[33m1027.5\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+              ">   [22:02:27 INFO]: FollowTarget has the following entity data: [\u001b[33m1056.4995763512243\u001b[91md\u001b[0m, \u001b[33m100.0\u001b[91md\u001b[0m, \u001b[33m1008.5\u001b[91md\u001b[0m]",
+              "[command] > execute if block 1029 100 1010 minecraft:dirt run scoreboard players set #F1_AFTER_SRCE fol001proof 1",
+              ">   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_OPEN to 1",
+              "[command] > scoreboard players set #F1_AFTER_END fol001proof 1",
+              "> ex> >   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_END to 1"
+            ]
+          }
+        },
+        "targetSamples": [
+          {
+            "at": 1787281334902,
+            "position": {
+              "x": 1029.8243605275352,
+              "y": 100,
+              "z": 1008.5
+            }
+          },
+          {
+            "at": 1787281335017,
+            "position": {
+              "x": 1030.4064485057993,
+              "y": 100,
+              "z": 1008.65274201183
+            }
+          },
+          {
+            "at": 1787281335131,
+            "position": {
+              "x": 1030.7542876604775,
+              "y": 100,
+              "z": 1008.6491316911571
+            }
+          },
+          {
+            "at": 1787281335232,
+            "position": {
+              "x": 1031.020827159386,
+              "y": 100,
+              "z": 1008.8638864005193
+            }
+          },
+          {
+            "at": 1787281335341,
+            "position": {
+              "x": 1030.7782058171922,
+              "y": 100,
+              "z": 1009.2403793110794
+            }
+          },
+          {
+            "at": 1787281335452,
+            "position": {
+              "x": 1030.8300869479722,
+              "y": 100,
+              "z": 1009.6784440565624
+            }
+          },
+          {
+            "at": 1787281335555,
+            "position": {
+              "x": 1030.9464935516414,
+              "y": 100,
+              "z": 1009.8984583237445
+            }
+          },
+          {
+            "at": 1787281335669,
+            "position": {
+              "x": 1031.4566068068868,
+              "y": 100,
+              "z": 1010.5176712523712
+            }
+          },
+          {
+            "at": 1787281335779,
+            "position": {
+              "x": 1031.8512347929147,
+              "y": 100,
+              "z": 1010.9080845776198
+            }
+          },
+          {
+            "at": 1787281335891,
+            "position": {
+              "x": 1032.260189598991,
+              "y": 100,
+              "z": 1011.2896276200014
+            }
+          },
+          {
+            "at": 1787281336001,
+            "position": {
+              "x": 1032.866627210174,
+              "y": 100,
+              "z": 1011.8723894324894
+            }
+          },
+          {
+            "at": 1787281336105,
+            "position": {
+              "x": 1033.2664740504295,
+              "y": 100,
+              "z": 1012.266054151948
+            }
+          },
+          {
+            "at": 1787281336205,
+            "position": {
+              "x": 1033.4655607783584,
+              "y": 100,
+              "z": 1012.4637821932496
+            }
+          },
+          {
+            "at": 1787281336305,
+            "position": {
+              "x": 1034.060902970191,
+              "y": 100,
+              "z": 1013.0589572525627
+            }
+          },
+          {
+            "at": 1787281336406,
+            "position": {
+              "x": 1034.457172628883,
+              "y": 100,
+              "z": 1013.4563850081372
+            }
+          },
+          {
+            "at": 1787281336510,
+            "position": {
+              "x": 1034.8538511329048,
+              "y": 100,
+              "z": 1013.853408759369
+            }
+          },
+          {
+            "at": 1787281336621,
+            "position": {
+              "x": 1035.2506515202608,
+              "y": 100,
+              "z": 1014.2503120704422
+            }
+          },
+          {
+            "at": 1787281336732,
+            "position": {
+              "x": 1035.647488242989,
+              "y": 100,
+              "z": 1014.6471794763771
+            }
+          },
+          {
+            "at": 1787281336842,
+            "position": {
+              "x": 1036.2427609885453,
+              "y": 100,
+              "z": 1015.2424631329385
+            }
+          },
+          {
+            "at": 1787281336956,
+            "position": {
+              "x": 1036.639612395364,
+              "y": 100,
+              "z": 1015.6393160286516
+            }
+          },
+          {
+            "at": 1787281337057,
+            "position": {
+              "x": 1037.0364643278106,
+              "y": 100,
+              "z": 1016.0361684049609
+            }
+          },
+          {
+            "at": 1787281337159,
+            "position": {
+              "x": 1037.6317424819708,
+              "y": 100,
+              "z": 1016.6314467169594
+            }
+          },
+          {
+            "at": 1787281337268,
+            "position": {
+              "x": 1037.8301685528133,
+              "y": 100,
+              "z": 1016.8298728017335
+            }
+          },
+          {
+            "at": 1787281337380,
+            "position": {
+              "x": 1038.227020702598,
+              "y": 100,
+              "z": 1017.226724963278
+            }
+          },
+          {
+            "at": 1787281337491,
+            "position": {
+              "x": 1038.6238728565345,
+              "y": 100,
+              "z": 1017.6235771207199
+            }
+          },
+          {
+            "at": 1787281337603,
+            "position": {
+              "x": 1039.0207250117085,
+              "y": 100,
+              "z": 1018.0204292769389
+            }
+          },
+          {
+            "at": 1787281337705,
+            "position": {
+              "x": 1039.6160032450712,
+              "y": 100,
+              "z": 1018.6157075106728
+            }
+          },
+          {
+            "at": 1787281337806,
+            "position": {
+              "x": 1040.0128554007454,
+              "y": 100,
+              "z": 1019.0125596663975
+            }
+          },
+          {
+            "at": 1787281337919,
+            "position": {
+              "x": 1040.4097075564375,
+              "y": 100,
+              "z": 1019.4094118221045
+            }
+          },
+          {
+            "at": 1787281338031,
+            "position": {
+              "x": 1040.806559712135,
+              "y": 100,
+              "z": 1019.8062639778062
+            }
+          },
+          {
+            "at": 1787281338142,
+            "position": {
+              "x": 1041.2034118678341,
+              "y": 100,
+              "z": 1020.2031161335063
+            }
+          },
+          {
+            "at": 1787281338254,
+            "position": {
+              "x": 1041.7986901013835,
+              "y": 100,
+              "z": 1020.7983943670558
+            }
+          },
+          {
+            "at": 1787281338355,
+            "position": {
+              "x": 1042.1955422570834,
+              "y": 100,
+              "z": 1021.1952465227553
+            }
+          },
+          {
+            "at": 1787281338455,
+            "position": {
+              "x": 1042.5923944127833,
+              "y": 100,
+              "z": 1021.5920986784547
+            }
+          },
+          {
+            "at": 1787281338554,
+            "position": {
+              "x": 1042.7908204906332,
+              "y": 100,
+              "z": 1021.7905247563044
+            }
+          },
+          {
+            "at": 1787281338655,
+            "position": {
+              "x": 1043.3254298173179,
+              "y": 100,
+              "z": 1022.4196749640859
+            }
+          },
+          {
+            "at": 1787281338760,
+            "position": {
+              "x": 1043.4850228469677,
+              "y": 100,
+              "z": 1022.9370503472609
+            }
+          },
+          {
+            "at": 1787281338871,
+            "position": {
+              "x": 1043.5419675241453,
+              "y": 100,
+              "z": 1023.4848115843391
+            }
+          },
+          {
+            "at": 1787281338983,
+            "position": {
+              "x": 1043.523760915482,
+              "y": 100,
+              "z": 1024.3208158206212
+            }
+          },
+          {
+            "at": 1787281339091,
+            "position": {
+              "x": 1043.5967633136509,
+              "y": 100,
+              "z": 1024.5714348598913
+            }
+          },
+          {
+            "at": 1787281339202,
+            "position": {
+              "x": 1044.0794503437564,
+              "y": 100,
+              "z": 1025.204159311706
+            }
+          },
+          {
+            "at": 1787281339304,
+            "position": {
+              "x": 1044.424150867928,
+              "y": 100,
+              "z": 1025.6068167298095
+            }
+          },
+          {
+            "at": 1787281339409,
+            "position": {
+              "x": 1044.5544260486736,
+              "y": 100,
+              "z": 1026.1188377119968
+            }
+          },
+          {
+            "at": 1787281339520,
+            "position": {
+              "x": 1044.646649924586,
+              "y": 100,
+              "z": 1026.6333343895874
+            }
+          },
+          {
+            "at": 1787281339632,
+            "position": {
+              "x": 1044.9521151548565,
+              "y": 100,
+              "z": 1027.0652048001405
+            }
+          },
+          {
+            "at": 1787281339743,
+            "position": {
+              "x": 1045.4865691264001,
+              "y": 100,
+              "z": 1027.6574257985433
+            }
+          },
+          {
+            "at": 1787281339853,
+            "position": {
+              "x": 1045.588131231392,
+              "y": 100,
+              "z": 1028.1691991391685
+            }
+          },
+          {
+            "at": 1787281339953,
+            "position": {
+              "x": 1045.6750145996314,
+              "y": 100,
+              "z": 1028.4178264232369
+            }
+          },
+          {
+            "at": 1787281340061,
+            "position": {
+              "x": 1045.9490545346298,
+              "y": 100,
+              "z": 1028.8824327368654
+            }
+          },
+          {
+            "at": 1787281340172,
+            "position": {
+              "x": 1046.4831694060367,
+              "y": 100,
+              "z": 1029.5181715415272
+            }
+          },
+          {
+            "at": 1787281340284,
+            "position": {
+              "x": 1046.8766137469465,
+              "y": 100,
+              "z": 1029.915486443965
+            }
+          },
+          {
+            "at": 1787281340394,
+            "position": {
+              "x": 1047.2814938847016,
+              "y": 100,
+              "z": 1030.3031225856735
+            }
+          },
+          {
+            "at": 1787281340502,
+            "position": {
+              "x": 1047.5456041321142,
+              "y": 100,
+              "z": 1031.0520330057443
+            }
+          },
+          {
+            "at": 1787281340604,
+            "position": {
+              "x": 1047.6439723368214,
+              "y": 100,
+              "z": 1031.571466605507
+            }
+          },
+          {
+            "at": 1787281340709,
+            "position": {
+              "x": 1047.9415967593743,
+              "y": 100,
+              "z": 1032.0142465040547
+            }
+          },
+          {
+            "at": 1787281340820,
+            "position": {
+              "x": 1048.3301104555378,
+              "y": 100,
+              "z": 1032.4012984349483
+            }
+          },
+          {
+            "at": 1787281340932,
+            "position": {
+              "x": 1048.941578437864,
+              "y": 100,
+              "z": 1032.972556789267
+            }
+          },
+          {
+            "at": 1787281341042,
+            "position": {
+              "x": 1049.1456105490586,
+              "y": 100,
+              "z": 1033.164562434043
+            }
+          },
+          {
+            "at": 1787281341154,
+            "position": {
+              "x": 1049.5510283745564,
+              "y": 100,
+              "z": 1033.5520654045342
+            }
+          },
+          {
+            "at": 1787281341265,
+            "position": {
+              "x": 1050.1489047343218,
+              "y": 100,
+              "z": 1034.1444649182076
+            }
+          },
+          {
+            "at": 1787281341375,
+            "position": {
+              "x": 1050.5449180066769,
+              "y": 100,
+              "z": 1034.5421126410915
+            }
+          },
+          {
+            "at": 1787281341487,
+            "position": {
+              "x": 1050.9410260487302,
+              "y": 100,
+              "z": 1034.9396947055218
+            }
+          },
+          {
+            "at": 1787281341599,
+            "position": {
+              "x": 1051.53567458374,
+              "y": 100,
+              "z": 1035.5355966317609
+            }
+          },
+          {
+            "at": 1787281341704,
+            "position": {
+              "x": 1051.9323817922475,
+              "y": 100,
+              "z": 1035.9325927607945
+            }
+          },
+          {
+            "at": 1787281341806,
+            "position": {
+              "x": 1052.3291907368703,
+              "y": 100,
+              "z": 1036.3294878372485
+            }
+          },
+          {
+            "at": 1787281341918,
+            "position": {
+              "x": 1052.92445360448,
+              "y": 100,
+              "z": 1036.924781333498
+            }
+          },
+          {
+            "at": 1787281342029,
+            "position": {
+              "x": 1053.1228783260517,
+              "y": 100,
+              "z": 1037.1232087585136
+            }
+          },
+          {
+            "at": 1787281342140,
+            "position": {
+              "x": 1053.5556280870271,
+              "y": 100,
+              "z": 1037.4489174875591
+            }
+          },
+          {
+            "at": 1787281342251,
+            "position": {
+              "x": 1054.3490134226743,
+              "y": 100,
+              "z": 1037.5641577101414
+            }
+          },
+          {
+            "at": 1787281342352,
+            "position": {
+              "x": 1054.9020747490438,
+              "y": 100,
+              "z": 1037.5450023345302
+            }
+          },
+          {
+            "at": 1787281342452,
+            "position": {
+              "x": 1055.180652382514,
+              "y": 100,
+              "z": 1037.5287027029747
+            }
+          },
+          {
+            "at": 1787281342552,
+            "position": {
+              "x": 1055.6666811433288,
+              "y": 100,
+              "z": 1037.309567270084
+            }
+          },
+          {
+            "at": 1787281342654,
+            "position": {
+              "x": 1056.0928910458479,
+              "y": 100,
+              "z": 1036.9687583075306
+            }
+          },
+          {
+            "at": 1787281342754,
+            "position": {
+              "x": 1056.4178386186575,
+              "y": 100,
+              "z": 1036.5422685484848
+            }
+          },
+          {
+            "at": 1787281342854,
+            "position": {
+              "x": 1056.5556344839881,
+              "y": 100,
+              "z": 1035.750603464278
+            }
+          },
+          {
+            "at": 1787281342955,
+            "position": {
+              "x": 1056.5501215862141,
+              "y": 100,
+              "z": 1035.196921117722
+            }
+          },
+          {
+            "at": 1787281343058,
+            "position": {
+              "x": 1056.5066345034265,
+              "y": 100,
+              "z": 1034.3592755927705
+            }
+          },
+          {
+            "at": 1787281343169,
+            "position": {
+              "x": 1056.4990487408984,
+              "y": 100,
+              "z": 1034.0791225587084
+            }
+          },
+          {
+            "at": 1787281343279,
+            "position": {
+              "x": 1056.4955739788984,
+              "y": 100,
+              "z": 1033.5182814842383
+            }
+          },
+          {
+            "at": 1787281343390,
+            "position": {
+              "x": 1056.4979086903738,
+              "y": 100,
+              "z": 1032.6765806856954
+            }
+          },
+          {
+            "at": 1787281343502,
+            "position": {
+              "x": 1056.498575754714,
+              "y": 100,
+              "z": 1032.1153717484503
+            }
+          },
+          {
+            "at": 1787281343603,
+            "position": {
+              "x": 1056.498909286884,
+              "y": 100,
+              "z": 1031.5541463433813
+            }
+          },
+          {
+            "at": 1787281343708,
+            "position": {
+              "x": 1056.4992428190542,
+              "y": 100,
+              "z": 1030.992915552231
+            }
+          },
+          {
+            "at": 1787281343820,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1030.1510671251278
+            }
+          },
+          {
+            "at": 1787281343931,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1029.8704504621944
+            }
+          },
+          {
+            "at": 1787281344041,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1029.028600099705
+            }
+          },
+          {
+            "at": 1787281344153,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1028.4673664246184
+            }
+          },
+          {
+            "at": 1787281344263,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1027.9061327314507
+            }
+          },
+          {
+            "at": 1787281344373,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1027.0642821829106
+            }
+          },
+          {
+            "at": 1787281344473,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1026.7836653327279
+            }
+          },
+          {
+            "at": 1787281344577,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1025.9418147816996
+            }
+          },
+          {
+            "at": 1787281344689,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1025.3805810808853
+            }
+          },
+          {
+            "at": 1787281344800,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1025.099964230468
+            }
+          },
+          {
+            "at": 1787281344911,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1024.2581136792032
+            }
+          },
+          {
+            "at": 1787281345021,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1023.4162631279332
+            }
+          },
+          {
+            "at": 1787281345132,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1022.855029427086
+            }
+          },
+          {
+            "at": 1787281345242,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1022.5744125766623
+            }
+          },
+          {
+            "at": 1787281345349,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1022.0131788758149
+            }
+          },
+          {
+            "at": 1787281345457,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1021.1713283245438
+            }
+          },
+          {
+            "at": 1787281345568,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1020.6100946236963
+            }
+          },
+          {
+            "at": 1787281345680,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1019.7682440724252
+            }
+          },
+          {
+            "at": 1787281345790,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1019.4876272220015
+            }
+          },
+          {
+            "at": 1787281345902,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1018.6457766707304
+            }
+          },
+          {
+            "at": 1787281346013,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1018.0845429698829
+            }
+          },
+          {
+            "at": 1787281346124,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1017.2426924186118
+            }
+          },
+          {
+            "at": 1787281346235,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1016.9620755681881
+            }
+          },
+          {
+            "at": 1787281346346,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1016.120225016917
+            }
+          },
+          {
+            "at": 1787281346453,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1015.5589913160695
+            }
+          },
+          {
+            "at": 1787281346567,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1015.2783744656458
+            }
+          },
+          {
+            "at": 1787281346678,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1014.4365239143747
+            }
+          },
+          {
+            "at": 1787281346790,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1013.5946733631035
+            }
+          },
+          {
+            "at": 1787281346901,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1013.0334396622561
+            }
+          },
+          {
+            "at": 1787281347013,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1012.191589110985
+            }
+          },
+          {
+            "at": 1787281347124,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1011.9109722605613
+            }
+          },
+          {
+            "at": 1787281347235,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1011.3497385597138
+            }
+          },
+          {
+            "at": 1787281347345,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1010.5078880084427
+            }
+          },
+          {
+            "at": 1787281347457,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1009.6660374571716
+            }
+          },
+          {
+            "at": 1787281347567,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1009.3854206067479
+            }
+          },
+          {
+            "at": 1787281347667,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1008.5
+            }
+          },
+          {
+            "at": 1787281347773,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1008.5
+            }
+          },
+          {
+            "at": 1787281347884,
+            "position": {
+              "x": 1056.4995763512243,
+              "y": 100,
+              "z": 1008.5
+            }
+          }
+        ],
+        "targetPathUpdates": [
+          {
+            "at": 1787281334818,
+            "status": "partial",
+            "visitedNodes": 237,
+            "generatedNodes": 272,
+            "pathLength": 24
+          },
+          {
+            "at": 1787281334860,
+            "status": "partial",
+            "visitedNodes": 495,
+            "generatedNodes": 532,
+            "pathLength": 24
+          },
+          {
+            "at": 1787281334901,
+            "status": "partial",
+            "visitedNodes": 755,
+            "generatedNodes": 787,
+            "pathLength": 24
+          },
+          {
+            "at": 1787281334954,
+            "status": "partial",
+            "visitedNodes": 875,
+            "generatedNodes": 901,
+            "pathLength": 24
+          },
+          {
+            "at": 1787281334961,
+            "status": "success",
+            "visitedNodes": 893,
+            "generatedNodes": 927,
+            "pathLength": 60
+          },
+          {
+            "at": 1787281335014,
+            "status": "partial",
+            "visitedNodes": 228,
+            "generatedNodes": 266,
+            "pathLength": 23
+          },
+          {
+            "at": 1787281335066,
+            "status": "partial",
+            "visitedNodes": 497,
+            "generatedNodes": 534,
+            "pathLength": 23
+          },
+          {
+            "at": 1787281335128,
+            "status": "partial",
+            "visitedNodes": 775,
+            "generatedNodes": 807,
+            "pathLength": 23
+          },
+          {
+            "at": 1787281335168,
+            "status": "success",
+            "visitedNodes": 865,
+            "generatedNodes": 927,
+            "pathLength": 60
+          }
+        ],
+        "passed": true
+      }
+    ],
+    "passed": true,
+    "error": null,
+    "cleanup": {
+      "fixtureRestored": true,
+      "botHeld": true,
+      "targetDisconnected": true
+    },
+    "finishedAt": 1787281348846,
+    "durationMs": 18636
+  },
+  "verdict": {
+    "passed": true,
+    "duration_ms": 18636,
+    "external_retry_count": 0,
+    "false_success_observed": false
+  },
+  "cleanup": {
+    "hold_requested": true,
+    "api_stop_succeeded": true,
+    "main_forced": true,
+    "harness_forced": false,
+    "managed_java_fallback_kills": [],
+    "configuration_restored": true,
+    "properties_restored": true,
+    "pre_run_memory_restored": true,
+    "replay_memory_preserved": true,
+    "replay_world_preserved": true,
+    "remaining_managed_java": [],
+    "v2_status": [
+      " D .codeplan/campaign51-grounded-settlement.md",
+      " D .codeplan/campaign52-exact-harvest-intent.md",
+      " D .codeplan/campaign53-vertical-pillar-execution.md",
+      " D .codeplan/campaign56-agenda-preemption.md",
+      " D .codeplan/campaign63-chat-segmentation.md",
+      " D .codeplan/campaign64-fresh-player-authority.md",
+      " D .codeplan/campaign65-family-gift.md",
+      " D .codeplan/campaign66-material-clarification.md",
+      " D .codeplan/campaign67-craft-output-selection.md",
+      " D .codeplan/campaign70-mining-zero-progress.md",
+      " D .codeplan/campaign72-exact-container-inspection.md",
+      " D .codeplan/campaign73-existing-access-repair.md",
+      " D .codeplan/critical-survival-obligation.md",
+      " D .codeplan/fixture-admission-gate.md",
+      " D .codeplan/floodgate-authoritative-player-lookup.md",
+      " D .codeplan/follow-survival-continuity.md",
+      " D .codeplan/kevin-critical-rendezvous-and-eating.md",
+      " D .codeplan/low-health-combat-disengagement.md",
+      " D .codeplan/m3-shared-fallback-retry-authority.md",
+      " D .codeplan/open-water-follow-stability.md",
+      " D .codeplan/returnable-combat-pursuit.md",
+      " D .codeplan/session22-agenda-death-revalidation.md",
+      " D .codeplan/session22-blocked-projectile-retreat-fallback.md",
+      " D .codeplan/session22-death-recovery-freshness.md",
+      " D .codeplan/session22-death-recovery-identity.md",
+      " D .codeplan/session22-environmental-wait-anchor.md",
+      " D .codeplan/session22-exposed-hold-safety.md",
+      " D .codeplan/session22-harvest-target-binding.md",
+      " D .codeplan/session22-hostile-harvest-closeout.md",
+      " D .codeplan/session22-live-source-access-pending.md",
+      " D .codeplan/session22-night-source-pending.md",
+      " D .codeplan/session22-player-return-arrival-envelope.md",
+      " D .codeplan/session22-rendezvous-surface-continuation.md",
+      " D .codeplan/session22-self-defense-retry-authority.md",
+      " D .codeplan/session22-source-access-latch-order.md",
+      " D .codeplan/session22-source-search-settlement-r2.md",
+      " D .codeplan/session31-indefinite-wait-lifecycle.md",
+      " D .codeplan/session33-reflex-deferred-player-action.md",
+      " D .codeplan/session34-held-surface-stance.md",
+      " D .codeplan/session36-bed-sleep-stance.md",
+      " D .codeplan/session41-shared-family-placement.md",
+      " D .codeplan/session42-food-upkeep-handoff.md",
+      " D .codeplan/session45-family-group-spacing.md",
+      " D .codeplan/session48-equipment-intent.md",
+      " D .codeplan/session50-threat-grounding.md",
+      " D .codeplan/session52-critical-retreat-feasibility-latch.md",
+      " D .codeplan/sleep-fallback-diagonal-discovery.md",
+      " D .codeplan/whole-tree-quota-selection.md",
+      " M AGENTS.md",
+      " M ARCHITECTURE.md",
+      " M docs/CAMPAIGN-RECORD.md",
+      " D docs/ENGINE-ALIGNMENT.md",
+      " D docs/ENGINE-DOSSIER.md",
+      " D docs/ENGINE-RESEARCH.md",
+      " M docs/FUTURE-FEATURES.md",
+      " M docs/HANDOFF.md",
+      " D docs/REVIEW-PACKET.md",
+      " D docs/REVIEW-PROMPT.md",
+      " M docs/contracts/diagnostic-continuation-policy.md",
+      " M docs/gameplay-certification-map.md",
+      " M src/agent/action_manager.js",
+      " M src/agent/agent.js",
+      " M src/agent/commands/actions.js",
+      " M src/agent/commands/index.js",
+      " M src/agent/library/full_state.js",
+      " M src/agent/library/skills.js",
+      " M src/agent/runtime/action-result.js",
+      " M src/agent/runtime/behavior-arbiter.js",
+      " M src/agent/runtime/capability-catalogue.js",
+      " M src/agent/runtime/prerequisite-planner.js",
+      " M src/mindcraft/public/js/bot-brain.js",
+      " M src/models/prompter.js",
+      " M tech-debt-map.md",
+      " M tests/collection-target-safety.test.js",
+      " M tests/control-plane/action-correlation.test.js",
+      " M tests/control-plane/interaction-stance-contract.test.js",
+      " M tests/control-plane/scenario-lab.test.js",
+      " M tests/critical-runtime-output.test.js",
+      " M tests/segmented-navigation.test.js",
+      " M tools/scenario-lab.mjs",
+      " M tools/scenario-lab/adapters/follow-field-evidence.mjs",
+      " M tools/scenario-lab/adapters/follow-field-worker.ps1",
+      " M tools/scenario-lab/adapters/run-follow-field.mjs",
+      " M tools/scenario-lab/doctor.mjs",
+      " M tools/scenario-lab/fixtures/orchestration-forest-v1/fixture-metadata.json",
+      " M tools/scenario-lab/fixtures/orchestration-forest-v1/scenario-profile.json",
+      " M tools/scenario-lab/run.mjs",
+      " M tools/scenario-lab/scenarios.v1.json",
+      " M tools/verify-follow-field.mjs",
+      "?? PHASE4-PRE-AUDIT.md",
+      "?? Q&A.md",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/active-live-status.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/follow-field-evidence.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/harness-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/harness-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/latest-state.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/live-report.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/live-samples.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/last_profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/memory.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/memory.json.tmp-29828-5dbf2c75c883",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/operator-control.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/telemetry/flight-2026-08-21T02-56-39-606Z-29828-000.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/advancements/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/advancements/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/random_sequences.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/scoreboard.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/stopwatches.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/datapacks/bukkit/pack.mcmeta",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/playerdata/3d67aa06-62a2-372b-8c25-c44ac413fe27.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.1.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.1.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.2.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.2.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/stats/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/stats/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/data/raids_end.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/pre-run-mindcraft-server.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/pre-run-server.properties",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/request-message.txt",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/scenario-profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/stack-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r2/stack-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/active-live-status.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/follow-field-evidence.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/harness-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/harness-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/latest-state.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/live-report.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/live-samples.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/last_profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/memory.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/operator-control.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/telemetry/flight-2026-08-21T02-59-23-208Z-36704-000.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/advancements/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/advancements/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/random_sequences.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/scoreboard.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/stopwatches.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/datapacks/bukkit/pack.mcmeta",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/playerdata/3d67aa06-62a2-372b-8c25-c44ac413fe27.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.1.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.1.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.2.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.2.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/stats/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/stats/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/data/raids_end.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/DIM1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_the_end/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/pre-run-mindcraft-server.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/pre-run-server.properties",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/request-message.txt",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/scenario-profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/stack-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r3/stack-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/active-live-status.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/follow-field-evidence.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/harness-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/harness-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/latest-state.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/live-samples.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-bot-memory/last_profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-bot-memory/memory.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-bot-memory/memory.json.tmp-30024-415503154d19",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-bot-memory/operator-control.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-bot-memory/telemetry/flight-2026-08-21T03-02-01-896Z-30024-000.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/advancements/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/advancements/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/data/random_sequences.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/data/scoreboard.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/data/stopwatches.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/datapacks/bukkit/pack.mcmeta",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/playerdata/3d67aa06-62a2-372b-8c25-c44ac413fe27.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.1.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.1.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.2.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/region/r.2.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/stats/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/stats/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/DIM-1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_nether/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/data/raids_end.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/DIM1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/post-run-world_the_end/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/pre-run-mindcraft-server.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/pre-run-server.properties",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/request-message.txt",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/scenario-profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/stack-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820-r4/stack-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820/active-live-status.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/follow-field-evidence.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/harness-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820/harness-stdout.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820/latest-state.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/live-report.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/live-samples.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-bot-memory/last_profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-bot-memory/memory.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-bot-memory/operator-control.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-bot-memory/telemetry/flight-2026-08-21T02-54-49-584Z-27220-000.jsonl",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/advancements/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/advancements/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/data/random_sequences.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/data/scoreboard.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/data/stopwatches.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/datapacks/bukkit/pack.mcmeta",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/playerdata/3d67aa06-62a2-372b-8c25-c44ac413fe27.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat_old",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.1.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.1.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.2.1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/region/r.2.2.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/stats/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/stats/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/data/raids.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/DIM-1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_nether/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/data/chunks.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/data/raids_end.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/data/world_border.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/region/r.-1.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/region/r.-1.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/region/r.0.-1.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/DIM1/region/r.0.0.mca",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/level.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/paper-world.yml",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/session.lock",
+      "?? artifacts/interaction-stance-inconclusive-20260820/post-run-world_the_end/uid.dat",
+      "?? artifacts/interaction-stance-inconclusive-20260820/pre-run-mindcraft-server.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/pre-run-server.properties",
+      "?? artifacts/interaction-stance-inconclusive-20260820/request-message.txt",
+      "?? artifacts/interaction-stance-inconclusive-20260820/scenario-profile.json",
+      "?? artifacts/interaction-stance-inconclusive-20260820/stack-stderr.log",
+      "?? artifacts/interaction-stance-inconclusive-20260820/stack-stdout.log",
+      "?? src/agent/runtime/charcoal-mission.js",
+      "?? tests/collection-execution-ownership.test.js",
+      "?? tests/control-plane/action-manager-lifecycle.test.js",
+      "?? tests/control-plane/charcoal-mission.test.js",
+      "?? tests/smelting-input-reservation.test.js"
+    ],
+    "errors": [],
+    "api_stop_result": {
+      "success": true,
+      "error": null,
+      "server": {
+        "phase": "stopped",
+        "installed": true,
+        "host": "127.0.0.1",
+        "port": 25579,
+        "javaEndpoint": {
+          "host": "127.0.0.1",
+          "port": 25579,
+          "bindAddress": "0.0.0.0",
+          "access": "local-network",
+          "lanAddresses": [
+            "192.168.137.1",
+            "10.10.10.37",
+            "100.122.244.71"
+          ]
+        },
+        "memoryMb": 2048,
+        "distribution": "paper",
+        "version": "1.21.11",
+        "recommendedVersion": "1.21.11",
+        "compatible": true,
+        "eulaAccepted": true,
+        "settings": {
+          "motd": "Mindcraft Local Server",
+          "onlineMode": false,
+          "whiteList": false,
+          "enforceWhitelist": false,
+          "hideOnlinePlayers": false,
+          "logIps": true,
+          "gameMode": "survival",
+          "difficulty": "normal",
+          "maxPlayers": 10,
+          "pvp": true,
+          "forceGameMode": false,
+          "hardcore": false,
+          "allowFlight": true,
+          "enableCommandBlock": true,
+          "spawnProtection": 0,
+          "playerIdleTimeout": 0,
+          "opPermissionLevel": 4,
+          "viewDistance": 10,
+          "simulationDistance": 8,
+          "pauseWhenEmptySeconds": -1,
+          "entityBroadcastRangePercentage": 100
+        },
+        "crossplay": {
+          "enabled": false,
+          "installed": false,
+          "configured": false,
+          "state": "disabled",
+          "repairNeeded": false,
+          "runtimeObserved": false,
+          "observedEndpoint": null,
+          "endpointMatchesConfiguration": false,
+          "listening": false,
+          "joinable": false,
+          "lanJoinable": false,
+          "ready": false,
+          "configuration": {
+            "generated": true,
+            "inSync": true,
+            "bindAddress": "0.0.0.0",
+            "bedrockPort": 19132,
+            "authType": "floodgate",
+            "drift": []
+          },
+          "bedrockPort": 19132,
+          "bindAddress": "0.0.0.0",
+          "access": "local-network",
+          "runtimeReady": false,
+          "lanAddresses": [],
+          "geyserVersion": "2.11.1",
+          "floodgateVersion": "2.2.5",
+          "authentication": "floodgate",
+          "joinVerification": {
+            "verified": false,
+            "state": "inactive",
+            "method": "floodgate-prefixed-player-join",
+            "detail": "Start the Java server before verifying a Bedrock join.",
+            "player": null,
+            "verifiedAt": null
+          },
+          "viaVersion": "5.11.0"
+        },
+        "java": {
+          "path": "java",
+          "source": "PATH",
+          "available": true,
+          "supported": true,
+          "version": "21.0.12",
+          "major": 21,
+          "requiredMajor": 21
+        },
+        "pid": null,
+        "startedAt": null,
+        "error": null,
+        "logs": [
+          "[command] > execute if block 1029 100 1010 minecraft:dirt run scoreboard players set #F1_AFTER_SRCE fol001proof 1",
+          ">   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_OPEN to 1",
+          "[command] > scoreboard players set #F1_AFTER_END fol001proof 1",
+          "> ex> >   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_END to 1",
+          "[command] > fill 1026 100 1006 1058 103 1038 air",
+          "[command] > fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]",
+          "> > fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]> fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]> fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]> fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]> fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]> fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]> fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 474 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "[command] > fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill      [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 1026 99 101                  [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "[command] > fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]> fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]> fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]> fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]> fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]> fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]> fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 102          [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 1026 99              [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 1026 99 1020 1058 99                           [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 1026 99 1020 1058 99 1020 min                                    [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 1026 99 1020 1058 99 1020 minecraft:                                           [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "[command] > fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]> fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]> fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]> fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]> fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]> fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]> fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]> fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "[command] > fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "> fill 1        [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "[command] > fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]> fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]> fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]> fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]> fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]> fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]> fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          "[command] > fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]",
+          "[command] > forceload remove all",
+          "> fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]> fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]> fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]> >   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+          ">   [22:02:28 INFO]: Unmarked all force loaded chunks in minecraft:overworld",
+          ">   [22:02:28 INFO]: [Not Secure] <MindcraftBot> Agent stopped. It will remain held until you give a new command or goal.",
+          "[command] > fill 1026 100 1006 1058 103 1038 air",
+          "[command] > fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]",
+          "> >   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]> fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]> fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]> fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]> fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]> fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]> fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]> fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]> fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]> fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]> fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]> fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]> fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]> fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]> fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fi    [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]> fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]> fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]> fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]> fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]> fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]> fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]> fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecra                                        [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecraft                                          [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecraft:grass_                                                 [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecraft:grass_bloc                                                     [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[                                                       [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[sn                                                         [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snow                                                           [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]",
+          "[command] > fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]",
+          "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]> fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]> fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]> fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]> fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]> fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]> fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]> fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill      [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026           [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1                [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1038 1058                          [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1038 1058 99 10                              [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "> fill 1026 99 1038 1058 99 1038 min                                    [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          "[command] > forceload remove all",
+          "[command] > scoreboard objectives remove fol001proof",
+          "[command] > tp MindcraftBot 1071.5 100 1007.5",
+          "[command] > gamerule spawn_mobs true",
+          "[command] > difficulty normal",
+          "[command] > difficulty",
+          "> fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]> > > > > > >   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+          ">   [22:02:28 INFO]: Unmarked all force loaded chunks in minecraft:overworld",
+          ">   [22:02:28 INFO]: Removed objective [fol001proof]",
+          ">   [22:02:28 INFO]: Teleported MindcraftBot to 1071.500000, 100.000000, 1007.500000",
+          ">   [22:02:28 INFO]: Gamerule spawn_mobs is now set to: true",
+          ">   [22:02:28 INFO]: The difficulty has been set to Normal",
+          ">   [22:02:28 INFO]: The difficulty is Normal",
+          "[command] > gamerule spawn_mobs",
+          "> >   [22:02:28 INFO]: Gamerule spawn_mobs is currently set to: true",
+          ">   [22:02:28 INFO]: FollowTarget lost connection: Disconnected",
+          ">   [22:02:28 INFO]: \u001b[93mFollowTarget left the game\u001b[0m",
+          "> [22:02:28 INFO]: MindcraftBot lost connection: Disconnected",
+          ">   [22:02:28 INFO]: \u001b[93mMindcraftBot left the game\u001b[0m",
+          ">   [22:02:28 INFO]: Stopping the server",
+          ">   [22:02:29 INFO]: Stopping server",
+          ">   [22:02:29 INFO]: [Geyser-Spigot] Disabling Geyser-Spigot v2.11.1-SNAPSHOT",
+          ">   [22:02:29 INFO]: [Geyser-Spigot] Geyser shutdown successfully.",
+          ">   [22:02:29 INFO]: [ViaVersion] Disabling ViaVersion v5.11.0",
+          ">   [22:02:29 INFO]: [ViaVersion] ViaVersion has been disabled; uninjected the platform and shut down the scheduler.",
+          ">   [22:02:29 INFO]: [floodgate] Disabling floodgate v2.2.5-SNAPSHOT (b138-fc99cfc)",
+          ">   [22:02:29 INFO]: Saving players",
+          ">   [22:02:29 INFO]: Saving worlds",
+          ">   [22:02:29 INFO]: Saving chunks for level 'ServerLevel[scenario-lab-follow-field-direct-20260820-220135-659]'/minecraft:overworld",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Halted chunk system for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Saved 2398 block chunks, 726 entity chunks, 0 poi chunks in world 'scenario-lab-follow-field-direct-20260820-220135-659' in 0.18s",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+          ">   [22:02:29 INFO]: Saving chunks for level 'ServerLevel[scenario-lab-follow-field-direct-20260820-220135-659_nether]'/minecraft:the_nether",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Halted chunk system for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Saved 0 block chunks, 0 entity chunks, 0 poi chunks in world 'scenario-lab-follow-field-direct-20260820-220135-659_nether' in 0.00s",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+          ">   [22:02:29 INFO]: Saving chunks for level 'ServerLevel[scenario-lab-follow-field-direct-20260820-220135-659_the_end]'/minecraft:the_end",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Halted chunk system for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Saved 0 block chunks, 0 entity chunks, 0 poi chunks in world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end' in 0.00s",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+          ">   [22:02:29 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+          ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage (scenario-lab-follow-field-direct-20260820-220135-659): All chunks are saved",
+          ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved",
+          ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved",
+          ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage: All dimensions are saved",
+          ">   [22:02:29 INFO]: Waiting for all RegionFile I/O tasks to complete...",
+          ">   [22:02:29 INFO]: All RegionFile I/O tasks to complete",
+          ">   [22:02:29 INFO]: [MoonriseCommon] Awaiting termination of worker pool for up to 60s...",
+          ">   [22:02:29 INFO]: [MoonriseCommon] Awaiting termination of I/O pool for up to 60s...",
+          ">"
+        ],
+        "logCount": 200
+      },
+      "components": [
+        {
+          "component": "director",
+          "success": true,
+          "value": {
+            "success": true
+          },
+          "error": null
+        },
+        {
+          "component": "task-runners",
+          "success": true,
+          "value": {
+            "success": true,
+            "error": null,
+            "helpers": []
+          },
+          "error": null
+        },
+        {
+          "component": "agents",
+          "success": true,
+          "value": {
+            "success": true,
+            "error": null,
+            "agents": [
+              {
+                "name": "MindcraftBot",
+                "stopped": true,
+                "forced": false,
+                "error": null
+              }
+            ]
+          },
+          "error": null
+        },
+        {
+          "component": "minecraft",
+          "success": true,
+          "value": {
+            "phase": "stopped",
+            "installed": true,
+            "host": "127.0.0.1",
+            "port": 25579,
+            "javaEndpoint": {
+              "host": "127.0.0.1",
+              "port": 25579,
+              "bindAddress": "0.0.0.0",
+              "access": "local-network",
+              "lanAddresses": [
+                "192.168.137.1",
+                "10.10.10.37",
+                "100.122.244.71"
+              ]
+            },
+            "memoryMb": 2048,
+            "distribution": "paper",
+            "version": "1.21.11",
+            "recommendedVersion": "1.21.11",
+            "compatible": true,
+            "eulaAccepted": true,
+            "settings": {
+              "motd": "Mindcraft Local Server",
+              "onlineMode": false,
+              "whiteList": false,
+              "enforceWhitelist": false,
+              "hideOnlinePlayers": false,
+              "logIps": true,
+              "gameMode": "survival",
+              "difficulty": "normal",
+              "maxPlayers": 10,
+              "pvp": true,
+              "forceGameMode": false,
+              "hardcore": false,
+              "allowFlight": true,
+              "enableCommandBlock": true,
+              "spawnProtection": 0,
+              "playerIdleTimeout": 0,
+              "opPermissionLevel": 4,
+              "viewDistance": 10,
+              "simulationDistance": 8,
+              "pauseWhenEmptySeconds": -1,
+              "entityBroadcastRangePercentage": 100
+            },
+            "crossplay": {
+              "enabled": false,
+              "installed": false,
+              "configured": false,
+              "state": "disabled",
+              "repairNeeded": false,
+              "runtimeObserved": false,
+              "observedEndpoint": null,
+              "endpointMatchesConfiguration": false,
+              "listening": false,
+              "joinable": false,
+              "lanJoinable": false,
+              "ready": false,
+              "configuration": {
+                "generated": true,
+                "inSync": true,
+                "bindAddress": "0.0.0.0",
+                "bedrockPort": 19132,
+                "authType": "floodgate",
+                "drift": []
+              },
+              "bedrockPort": 19132,
+              "bindAddress": "0.0.0.0",
+              "access": "local-network",
+              "runtimeReady": false,
+              "lanAddresses": [],
+              "geyserVersion": "2.11.1",
+              "floodgateVersion": "2.2.5",
+              "authentication": "floodgate",
+              "joinVerification": {
+                "verified": false,
+                "state": "inactive",
+                "method": "floodgate-prefixed-player-join",
+                "detail": "Start the Java server before verifying a Bedrock join.",
+                "player": null,
+                "verifiedAt": null
+              },
+              "viaVersion": "5.11.0"
+            },
+            "java": {
+              "path": "java",
+              "source": "PATH",
+              "available": true,
+              "supported": true,
+              "version": "21.0.12",
+              "major": 21,
+              "requiredMajor": 21
+            },
+            "pid": null,
+            "startedAt": null,
+            "error": null,
+            "logs": [
+              "[command] > execute if block 1029 100 1010 minecraft:dirt run scoreboard players set #F1_AFTER_SRCE fol001proof 1",
+              ">   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_OPEN to 1",
+              "[command] > scoreboard players set #F1_AFTER_END fol001proof 1",
+              "> ex> >   [22:02:27 INFO]: Set [fol001proof] for #F1_AFTER_END to 1",
+              "[command] > fill 1026 100 1006 1058 103 1038 air",
+              "[command] > fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]",
+              "> > fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]> fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]> fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]> fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]> fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]> fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]> fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 474 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "[command] > fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill      [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 1026 99 101                  [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "[command] > fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]> fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]> fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]> fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]> fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]> fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]> fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 102          [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 1026 99              [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 1026 99 1020 1058 99                           [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 1026 99 1020 1058 99 1020 min                                    [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 1026 99 1020 1058 99 1020 minecraft:                                           [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "[command] > fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]> fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]> fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]> fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]> fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]> fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]> fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]> fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "[command] > fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "> fill 1        [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "[command] > fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]> fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]> fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]> fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]> fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]> fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]> fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              "[command] > fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]",
+              "[command] > forceload remove all",
+              "> fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]> fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]> fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]> >   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Successfully filled 33 block(s)",
+              ">   [22:02:28 INFO]: Unmarked all force loaded chunks in minecraft:overworld",
+              ">   [22:02:28 INFO]: [Not Secure] <MindcraftBot> Agent stopped. It will remain held until you give a new command or goal.",
+              "[command] > fill 1026 100 1006 1058 103 1038 air",
+              "[command] > fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]",
+              "> >   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1006 1058 99 1006 minecraft:grass_block[snowy=false]> fill 1026 99 1007 1058 99 1007 minecraft:grass_block[snowy=false]> fill 1026 99 1008 1058 99 1008 minecraft:grass_block[snowy=false]> fill 1026 99 1009 1058 99 1009 minecraft:grass_block[snowy=false]> fill 1026 99 1010 1058 99 1010 minecraft:grass_block[snowy=false]> fill 1026 99 1011 1058 99 1011 minecraft:grass_block[snowy=false]> fill 1026 99 1012 1058 99 1012 minecraft:grass_block[snowy=false]> fill 1026 99 1013 1058 99 1013 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1014 1058 99 1014 minecraft:grass_block[snowy=false]> fill 1026 99 1015 1058 99 1015 minecraft:grass_block[snowy=false]> fill 1026 99 1016 1058 99 1016 minecraft:grass_block[snowy=false]> fill 1026 99 1017 1058 99 1017 minecraft:grass_block[snowy=false]> fill 1026 99 1018 1058 99 1018 minecraft:grass_block[snowy=false]> fill 1026 99 1019 1058 99 1019 minecraft:grass_block[snowy=false]> fill 1026 99 1020 1058 99 1020 minecraft:grass_block[snowy=false]> fill 1026 99 1021 1058 99 1021 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fi    [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1022 1058 99 1022 minecraft:grass_block[snowy=false]> fill 1026 99 1023 1058 99 1023 minecraft:grass_block[snowy=false]> fill 1026 99 1024 1058 99 1024 minecraft:grass_block[snowy=false]> fill 1026 99 1025 1058 99 1025 minecraft:grass_block[snowy=false]> fill 1026 99 1026 1058 99 1026 minecraft:grass_block[snowy=false]> fill 1026 99 1027 1058 99 1027 minecraft:grass_block[snowy=false]> fill 1026 99 1028 1058 99 1028 minecraft:grass_block[snowy=false]> fill 1026 99 1029 1058 99 1029 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecra                                        [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecraft                                          [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecraft:grass_                                                 [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecraft:grass_bloc                                                     [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[                                                       [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[sn                                                         [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snow                                                           [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]",
+              "[command] > fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]",
+              "> fill 1026 99 1030 1058 99 1030 minecraft:grass_block[snowy=false]> fill 1026 99 1031 1058 99 1031 minecraft:grass_block[snowy=false]> fill 1026 99 1032 1058 99 1032 minecraft:grass_block[snowy=false]> fill 1026 99 1033 1058 99 1033 minecraft:grass_block[snowy=false]> fill 1026 99 1034 1058 99 1034 minecraft:grass_block[snowy=false]> fill 1026 99 1035 1058 99 1035 minecraft:grass_block[snowy=false]> fill 1026 99 1036 1058 99 1036 minecraft:grass_block[snowy=false]> fill 1026 99 1037 1058 99 1037 minecraft:grass_block[snowy=false]>   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill      [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026           [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1                [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1038 1058                          [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1038 1058 99 10                              [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "> fill 1026 99 1038 1058 99 1038 min                                    [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              "[command] > forceload remove all",
+              "[command] > scoreboard objectives remove fol001proof",
+              "[command] > tp MindcraftBot 1071.5 100 1007.5",
+              "[command] > gamerule spawn_mobs true",
+              "[command] > difficulty normal",
+              "[command] > difficulty",
+              "> fill 1026 99 1038 1058 99 1038 minecraft:grass_block[snowy=false]> > > > > > >   [22:02:28 INFO]: \u001b[91mNo blocks were filled\u001b[0m",
+              ">   [22:02:28 INFO]: Unmarked all force loaded chunks in minecraft:overworld",
+              ">   [22:02:28 INFO]: Removed objective [fol001proof]",
+              ">   [22:02:28 INFO]: Teleported MindcraftBot to 1071.500000, 100.000000, 1007.500000",
+              ">   [22:02:28 INFO]: Gamerule spawn_mobs is now set to: true",
+              ">   [22:02:28 INFO]: The difficulty has been set to Normal",
+              ">   [22:02:28 INFO]: The difficulty is Normal",
+              "[command] > gamerule spawn_mobs",
+              "> >   [22:02:28 INFO]: Gamerule spawn_mobs is currently set to: true",
+              ">   [22:02:28 INFO]: FollowTarget lost connection: Disconnected",
+              ">   [22:02:28 INFO]: \u001b[93mFollowTarget left the game\u001b[0m",
+              "> [22:02:28 INFO]: MindcraftBot lost connection: Disconnected",
+              ">   [22:02:28 INFO]: \u001b[93mMindcraftBot left the game\u001b[0m",
+              ">   [22:02:28 INFO]: Stopping the server",
+              ">   [22:02:29 INFO]: Stopping server",
+              ">   [22:02:29 INFO]: [Geyser-Spigot] Disabling Geyser-Spigot v2.11.1-SNAPSHOT",
+              ">   [22:02:29 INFO]: [Geyser-Spigot] Geyser shutdown successfully.",
+              ">   [22:02:29 INFO]: [ViaVersion] Disabling ViaVersion v5.11.0",
+              ">   [22:02:29 INFO]: [ViaVersion] ViaVersion has been disabled; uninjected the platform and shut down the scheduler.",
+              ">   [22:02:29 INFO]: [floodgate] Disabling floodgate v2.2.5-SNAPSHOT (b138-fc99cfc)",
+              ">   [22:02:29 INFO]: Saving players",
+              ">   [22:02:29 INFO]: Saving worlds",
+              ">   [22:02:29 INFO]: Saving chunks for level 'ServerLevel[scenario-lab-follow-field-direct-20260820-220135-659]'/minecraft:overworld",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Halted chunk system for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Saved 2398 block chunks, 726 entity chunks, 0 poi chunks in world 'scenario-lab-follow-field-direct-20260820-220135-659' in 0.18s",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'scenario-lab-follow-field-direct-20260820-220135-659'",
+              ">   [22:02:29 INFO]: Saving chunks for level 'ServerLevel[scenario-lab-follow-field-direct-20260820-220135-659_nether]'/minecraft:the_nether",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Halted chunk system for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Saved 0 block chunks, 0 entity chunks, 0 poi chunks in world 'scenario-lab-follow-field-direct-20260820-220135-659_nether' in 0.00s",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'scenario-lab-follow-field-direct-20260820-220135-659_nether'",
+              ">   [22:02:29 INFO]: Saving chunks for level 'ServerLevel[scenario-lab-follow-field-direct-20260820-220135-659_the_end]'/minecraft:the_end",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk system to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Halted chunk system for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Saving all chunkholders for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Saved 0 block chunks, 0 entity chunks, 0 poi chunks in world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end' in 0.00s",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Waiting 60s for chunk I/O to halt for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+              ">   [22:02:29 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'scenario-lab-follow-field-direct-20260820-220135-659_the_end'",
+              ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage (scenario-lab-follow-field-direct-20260820-220135-659): All chunks are saved",
+              ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved",
+              ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved",
+              ">   [22:02:29 INFO]: ThreadedAnvilChunkStorage: All dimensions are saved",
+              ">   [22:02:29 INFO]: Waiting for all RegionFile I/O tasks to complete...",
+              ">   [22:02:29 INFO]: All RegionFile I/O tasks to complete",
+              ">   [22:02:29 INFO]: [MoonriseCommon] Awaiting termination of worker pool for up to 60s...",
+              ">   [22:02:29 INFO]: [MoonriseCommon] Awaiting termination of I/O pool for up to 60s...",
+              ">"
+            ],
+            "logCount": 200
+          },
+          "error": null
+        },
+        {
+          "component": "local-services",
+          "success": true,
+          "value": {
+            "success": true,
+            "ollama": {
+              "owned": false,
+              "stopped": true,
+              "pid": null,
+              "error": null
+            }
+          },
+          "error": null
+        }
+      ]
+    }
+  },
+  "error": null,
+  "regression_mode": true,
+  "working_tree_dirty_count": 292,
+  "working_tree_dirty": [
+    " D .codeplan/campaign51-grounded-settlement.md",
+    " D .codeplan/campaign52-exact-harvest-intent.md",
+    " D .codeplan/campaign53-vertical-pillar-execution.md",
+    " D .codeplan/campaign56-agenda-preemption.md",
+    " D .codeplan/campaign63-chat-segmentation.md",
+    " D .codeplan/campaign64-fresh-player-authority.md",
+    " D .codeplan/campaign65-family-gift.md",
+    " D .codeplan/campaign66-material-clarification.md",
+    " D .codeplan/campaign67-craft-output-selection.md",
+    " D .codeplan/campaign70-mining-zero-progress.md",
+    " D .codeplan/campaign72-exact-container-inspection.md",
+    " D .codeplan/campaign73-existing-access-repair.md",
+    " D .codeplan/critical-survival-obligation.md",
+    " D .codeplan/fixture-admission-gate.md",
+    " D .codeplan/floodgate-authoritative-player-lookup.md",
+    " D .codeplan/follow-survival-continuity.md",
+    " D .codeplan/kevin-critical-rendezvous-and-eating.md",
+    " D .codeplan/low-health-combat-disengagement.md",
+    " D .codeplan/m3-shared-fallback-retry-authority.md",
+    " D .codeplan/open-water-follow-stability.md",
+    " D .codeplan/returnable-combat-pursuit.md",
+    " D .codeplan/session22-agenda-death-revalidation.md",
+    " D .codeplan/session22-blocked-projectile-retreat-fallback.md",
+    " D .codeplan/session22-death-recovery-freshness.md",
+    " D .codeplan/session22-death-recovery-identity.md",
+    " D .codeplan/session22-environmental-wait-anchor.md",
+    " D .codeplan/session22-exposed-hold-safety.md",
+    " D .codeplan/session22-harvest-target-binding.md",
+    " D .codeplan/session22-hostile-harvest-closeout.md",
+    " D .codeplan/session22-live-source-access-pending.md",
+    " D .codeplan/session22-night-source-pending.md",
+    " D .codeplan/session22-player-return-arrival-envelope.md",
+    " D .codeplan/session22-rendezvous-surface-continuation.md",
+    " D .codeplan/session22-self-defense-retry-authority.md",
+    " D .codeplan/session22-source-access-latch-order.md",
+    " D .codeplan/session22-source-search-settlement-r2.md",
+    " D .codeplan/session31-indefinite-wait-lifecycle.md",
+    " D .codeplan/session33-reflex-deferred-player-action.md",
+    " D .codeplan/session34-held-surface-stance.md",
+    " D .codeplan/session36-bed-sleep-stance.md",
+    " D .codeplan/session41-shared-family-placement.md",
+    " D .codeplan/session42-food-upkeep-handoff.md",
+    " D .codeplan/session45-family-group-spacing.md",
+    " D .codeplan/session48-equipment-intent.md",
+    " D .codeplan/session50-threat-grounding.md",
+    " D .codeplan/session52-critical-retreat-feasibility-latch.md",
+    " D .codeplan/sleep-fallback-diagonal-discovery.md",
+    " D .codeplan/whole-tree-quota-selection.md",
+    " M AGENTS.md",
+    " M ARCHITECTURE.md",
+    " M docs/CAMPAIGN-RECORD.md",
+    " D docs/ENGINE-ALIGNMENT.md",
+    " D docs/ENGINE-DOSSIER.md",
+    " D docs/ENGINE-RESEARCH.md",
+    " M docs/FUTURE-FEATURES.md",
+    " M docs/HANDOFF.md",
+    " D docs/REVIEW-PACKET.md",
+    " D docs/REVIEW-PROMPT.md",
+    " M docs/contracts/diagnostic-continuation-policy.md",
+    " M docs/gameplay-certification-map.md",
+    " M src/agent/action_manager.js",
+    " M src/agent/agent.js",
+    " M src/agent/commands/actions.js",
+    " M src/agent/commands/index.js",
+    " M src/agent/library/full_state.js",
+    " M src/agent/library/skills.js",
+    " M src/agent/runtime/action-result.js",
+    " M src/agent/runtime/behavior-arbiter.js",
+    " M src/agent/runtime/capability-catalogue.js",
+    " M src/agent/runtime/prerequisite-planner.js",
+    " M src/mindcraft/public/js/bot-brain.js",
+    " M src/models/prompter.js",
+    " M tech-debt-map.md",
+    " M tests/collection-target-safety.test.js",
+    " M tests/control-plane/action-correlation.test.js",
+    " M tests/control-plane/interaction-stance-contract.test.js",
+    " M tests/control-plane/scenario-lab.test.js",
+    " M tests/critical-runtime-output.test.js",
+    " M tests/segmented-navigation.test.js",
+    " M tools/scenario-lab.mjs",
+    " M tools/scenario-lab/adapters/follow-field-evidence.mjs",
+    " M tools/scenario-lab/adapters/follow-field-worker.ps1",
+    " M tools/scenario-lab/adapters/run-follow-field.mjs",
+    " M tools/scenario-lab/doctor.mjs",
+    " M tools/scenario-lab/fixtures/orchestration-forest-v1/fixture-metadata.json",
+    " M tools/scenario-lab/fixtures/orchestration-forest-v1/scenario-profile.json",
+    " M tools/scenario-lab/run.mjs",
+    " M tools/scenario-lab/scenarios.v1.json",
+    " M tools/verify-follow-field.mjs",
+    "?? PHASE4-PRE-AUDIT.md",
+    "?? Q&A.md",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/active-live-status.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/follow-field-evidence.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/harness-stderr.log",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/harness-stdout.log",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/latest-state.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/live-report.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/live-samples.jsonl",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/last_profile.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/memory.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/memory.json.tmp-29828-5dbf2c75c883",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/operator-control.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-bot-memory/telemetry/flight-2026-08-21T02-56-39-606Z-29828-000.jsonl",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/advancements/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/advancements/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/chunks.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/raids.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/random_sequences.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/scoreboard.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/stopwatches.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/data/world_border.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/datapacks/bukkit/pack.mcmeta",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/level.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/paper-world.yml",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/playerdata/3d67aa06-62a2-372b-8c25-c44ac413fe27.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.-1.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.-1.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.0.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.0.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.1.1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.1.2.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.2.1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/region/r.2.2.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/session.lock",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/stats/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/stats/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world/uid.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/data/chunks.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/data/raids.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/data/world_border.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.-1.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.-1.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.0.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/DIM-1/region/r.0.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/level.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/paper-world.yml",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/session.lock",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_nether/uid.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/data/chunks.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/data/raids_end.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/data/world_border.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.-1.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.-1.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.0.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/DIM1/region/r.0.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/level.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/paper-world.yml",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/session.lock",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/post-run-world_the_end/uid.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/pre-run-mindcraft-server.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/pre-run-server.properties",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/request-message.txt",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/scenario-profile.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/stack-stderr.log",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r2/stack-stdout.log",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/active-live-status.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/follow-field-evidence.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/harness-stderr.log",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/harness-stdout.log",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/latest-state.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/live-report.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/live-samples.jsonl",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/last_profile.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/memory.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/operator-control.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-bot-memory/telemetry/flight-2026-08-21T02-59-23-208Z-36704-000.jsonl",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/advancements/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/advancements/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/chunks.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/raids.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/random_sequences.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/scoreboard.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/stopwatches.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/data/world_border.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/datapacks/bukkit/pack.mcmeta",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/level.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/paper-world.yml",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/playerdata/3d67aa06-62a2-372b-8c25-c44ac413fe27.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/playerdata/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.-1.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.-1.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.0.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.0.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.1.1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.1.2.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.2.1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/region/r.2.2.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/session.lock",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/stats/3d67aa06-62a2-372b-8c25-c44ac413fe27.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/stats/44d7cc67-0c61-34e9-8b7a-6c05daad9e28.json",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world/uid.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/data/chunks.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/data/raids.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/data/world_border.dat",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.-1.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.-1.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.0.-1.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/DIM-1/region/r.0.0.mca",
+    "?? artifacts/interaction-stance-inconclusive-20260820-r3/post-run-world_nether/level.dat"
+  ],
+  "gameplay_skills_drifted": false,
+  "fixture_gameplay_skills_sha256": "",
+  "world_recipe": {
+    "level_type": "minecraft:flat",
+    "generator_settings": "{\"layers\":[{\"block\":\"minecraft:bedrock\",\"height\":1},{\"block\":\"minecraft:stone\",\"height\":155},{\"block\":\"minecraft:dirt\",\"height\":7},{\"block\":\"minecraft:grass_block\",\"height\":1}],\"biome\":\"minecraft:plains\",\"lakes\":false,\"features\":false}",
+    "generate_structures": "false",
+    "expected_top_block": "minecraft:grass_block",
+    "expected_top_y": 99,
+    "expected_stand_y": 100
+  },
+  "finished_utc": "2026-08-21T03:02:37.0347271Z"
+}

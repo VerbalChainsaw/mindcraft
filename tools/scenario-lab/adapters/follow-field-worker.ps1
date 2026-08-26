@@ -43,7 +43,7 @@ param(
     # scenario. 'obstruction-follow' spans the wall across the full course width
     # and plugs the doorway with a breakable block, so following the player
     # REQUIRES breaking it -- the case the registered course does not exercise.
-    [ValidateSet('doorway-corridor', 'obstruction-follow', 'deliver-item', 'orchestrate-charcoal', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion')]
+    [ValidateSet('doorway-corridor', 'obstruction-follow', 'player-route-obstruction', 'pathfinding-finite-break-cost', 'player-route-best-reachable', 'deliver-item', 'orchestrate-charcoal', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion', 'terrain-swim-exit', 'terrain-workaround-chain')]
     [string]$Course = 'doorway-corridor',
 
     [string]$FixtureRoot = '',
@@ -305,10 +305,13 @@ function Set-ServerProperty([string]$path, [string]$name, [string]$value) {
     [IO.File]::WriteAllLines($path, [string[]]$next, [Text.UTF8Encoding]::new($false))
 }
 
-function Write-ManagedDesiredState([string]$desiredState) {
+function Write-ManagedDesiredState([string]$desiredState, [string]$difficulty = '') {
     $configuration = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     $configuration.desiredState = $desiredState
     $configuration.crossplay = $false
+    if (-not [string]::IsNullOrWhiteSpace($difficulty)) {
+        $configuration.difficulty = $difficulty
+    }
     $json = ($configuration | ConvertTo-Json -Depth 12) + [Environment]::NewLine
     [IO.File]::WriteAllText($configPath, $json, [Text.UTF8Encoding]::new($false))
 }
@@ -765,11 +768,15 @@ try {
 
     Set-ServerProperty $propertiesPath 'level-name' $worldName
     Set-ServerProperty $propertiesPath 'level-seed' $sourceSeed
-    Set-ServerProperty $propertiesPath 'difficulty' 'normal'
+    # Hostile isolation must exist before Kevin joins. Applying peaceful only
+    # after world-ready allowed a drowned to damage him during boot, leaving a
+    # live survival incident that later preempted the measured player command.
+    # The outer worker restores the complete original properties file.
+    Set-ServerProperty $propertiesPath 'difficulty' 'peaceful'
     Set-ServerProperty $propertiesPath 'gamemode' 'survival'
     Set-ServerProperty $propertiesPath 'online-mode' 'false'
     Set-ServerProperty $propertiesPath 'spawn-protection' '0'
-    Write-ManagedDesiredState 'running'
+    Write-ManagedDesiredState 'running' 'peaceful'
     $configurationChanged = $true
 
     Save-Status 'starting-runtime'
@@ -869,6 +876,7 @@ try {
         '--bot', 'MindcraftBot',
         '--attempts', '1',
         '--evidence', $harnessEvidencePath,
+        '--operation-timeout-ms', [string]$TimeoutMs,
         # Every delivering course measures in deliver mode. Keyed to one course
         # name, orchestrate-charcoal silently ran in follow mode and timed out
         # waiting for follow ownership that a charcoal task never produces.
@@ -880,6 +888,10 @@ try {
             'route-probe'
         } elseif ($Course -eq 'interaction-stance-inconclusive') {
             'interaction-stance'
+        } elseif ($Course -in @('terrain-swim-exit', 'terrain-workaround-chain')) {
+            'terrain'
+        } elseif ($Course -in @('player-route-obstruction', 'pathfinding-finite-break-cost', 'player-route-best-reachable')) {
+            'player-route'
         } else {
             'follow'
         }),
@@ -982,6 +994,78 @@ try {
             $attempt.physicalAcceptance.outcomesVerified -eq $true -and
             $attempt.physicalAcceptance.fixtureVerified -eq $true -and
             $attempt.physicalAcceptance.preflightMode -eq $PreflightMode -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } elseif ($Course -eq 'terrain-swim-exit') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.terminal.label -eq 'action:goToCoordinates' -and
+            $attempt.terminal.phase -eq 'succeeded' -and
+            $attempt.terminal.code -eq 'skill_arrived' -and
+            $attempt.physicalAcceptance.terrainStartSubmerged -eq $true -and
+            $attempt.physicalAcceptance.terrainAscentObserved -eq $true -and
+            $attempt.physicalAcceptance.terrainDrySettlement -eq $true -and
+            $attempt.physicalAcceptance.terrainPathfinderObserved -eq $true -and
+            $attempt.physicalAcceptance.terrainTraversalPolicy -eq 'full' -and
+            $attempt.physicalAcceptance.terrainTerminalVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainIntact -eq $true -and
+            $attempt.physicalAcceptance.terrainScaffoldAccountingVerified -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } elseif ($Course -eq 'terrain-workaround-chain') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.terminal.label -eq 'action:goToCoordinates' -and
+            $attempt.terminal.phase -eq 'succeeded' -and
+            $attempt.terminal.code -eq 'skill_arrived' -and
+            $attempt.physicalAcceptance.terrainChainDigVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainParkourVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainBridgeVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainTowerVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainStairTunnelVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainDescentVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainSwimExitVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainScaffoldAccountingVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainPathfinderObserved -eq $true -and
+            $attempt.physicalAcceptance.terrainChainTraversalPolicy -eq 'full' -and
+            $attempt.physicalAcceptance.terrainChainTerminalVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainFixtureVerified -eq $true -and
+            $attempt.physicalAcceptance.terrainChainCheckpoints.complete -eq $true -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } elseif ($Course -eq 'player-route-best-reachable') {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.terminal.label -eq 'action:goToPlayer' -and
+            $attempt.terminal.phase -eq 'failed' -and
+            $attempt.terminal.code -in @('skill_closest_reachable', 'skill_closest_explored') -and
+            $attempt.physicalAcceptance.playerRoutePathfinderObserved -eq $true -and
+            $attempt.physicalAcceptance.playerRouteBestPositionVerified -eq $true -and
+            $attempt.physicalAcceptance.unbreakableObstructionPreserved -eq $true -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
+            $attempt.stop.stableForTenSeconds -eq $true -and
+            [double]$attempt.stop.quiescenceMs -le 2000
+        )
+    } elseif ($Course -in @('player-route-obstruction', 'pathfinding-finite-break-cost')) {
+        (
+            $null -ne $attempt -and
+            $attempt.passed -eq $true -and
+            $attempt.terminal.label -eq 'action:goToPlayer' -and
+            $attempt.terminal.phase -eq 'succeeded' -and
+            $attempt.terminal.code -eq 'skill_arrived' -and
+            $attempt.physicalAcceptance.playerRoutePathfinderObserved -eq $true -and
+            $attempt.physicalAcceptance.playerRouteArrivalVerified -eq $true -and
+            $attempt.physicalAcceptance.obstructionDugThrough -eq $true -and
+            $attempt.physicalAcceptance.doorwayCrossed -eq $true -and
+            ($Course -ne 'pathfinding-finite-break-cost' -or $attempt.physicalAcceptance.finiteBreakCostVerified -eq $true) -and
+            $attempt.physicalAcceptance.fixtureVerified -eq $true -and
             $attempt.stop.stableForTenSeconds -eq $true -and
             [double]$attempt.stop.quiescenceMs -le 2000
         )

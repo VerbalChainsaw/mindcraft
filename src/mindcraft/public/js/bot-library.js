@@ -99,7 +99,7 @@ export class BotLibraryPanel {
     this.capabilities = { services: [], providers: [] };
     this.providerCatalog = [
       { id: 'openai', label: 'OpenAI / Codex', examples: ['gpt-5.4-mini', 'codex-mini-latest'] },
-      { id: 'deepseek', label: 'DeepSeek', examples: ['deepseek-chat', 'deepseek-reasoner'] },
+      { id: 'deepseek', label: 'DeepSeek', examples: ['deepseek-v4-flash', 'deepseek-v4-pro'] },
       { id: 'anthropic', label: 'Anthropic / Claude', examples: ['claude-sonnet-4-5'] },
       { id: 'google', label: 'Google Gemini', examples: ['gemini-2.5-flash'] },
       { id: 'ollama', label: 'Ollama (local)', examples: ['qwen2.5:3b', 'llama3.2'] },

@@ -31,6 +31,44 @@ export const ROUTE_PROBE_EVIDENCE = Object.freeze([
   'terminal-quiescence-confirmed',
 ]);
 
+export const TERRAIN_SWIM_EVIDENCE = Object.freeze([
+  'request-correlation',
+  'instrumentation-mode-confirmed',
+  'terrain-movement-lifecycle',
+  'effective-movements-confirmed',
+  'swim-ascent-confirmed',
+  'dry-bank-settlement-confirmed',
+  'terrain-preserved-confirmed',
+  'scaffold-accounting-confirmed',
+  'terminal-quiescence-confirmed',
+]);
+
+export const PLAYER_ROUTE_EVIDENCE = Object.freeze([
+  'request-correlation',
+  'instrumentation-mode-confirmed',
+  'player-route-action-lifecycle',
+  'effective-movements-confirmed',
+  'obstruction-broken-confirmed',
+  'player-arrival-confirmed',
+  'terminal-quiescence-confirmed',
+]);
+
+export const PLAYER_ROUTE_FINITE_COST_EVIDENCE = Object.freeze([
+  ...PLAYER_ROUTE_EVIDENCE.slice(0, -1),
+  'finite-break-cost-confirmed',
+  'terminal-quiescence-confirmed',
+]);
+
+export const PLAYER_ROUTE_BEST_EVIDENCE = Object.freeze([
+  'request-correlation',
+  'instrumentation-mode-confirmed',
+  'player-route-best-action-lifecycle',
+  'effective-movements-confirmed',
+  'best-available-route-confirmed',
+  'unbreakable-obstruction-preserved',
+  'terminal-quiescence-confirmed',
+]);
+
 const EXPECTED_ROUTE = Object.freeze({
   direct: 'explicit-command',
   'natural-language': 'deterministic-nl',
@@ -618,6 +656,9 @@ const DELIVER_ACQUISITION_LABEL = 'action:collectBlocksInRange';
 const DELIVER_RECIPIENT = 'FollowTarget';
 const ROUTE_PROBE_SKILL = '!goToCoordinates';
 const ROUTE_PROBE_ARGS = Object.freeze([1038, 100, 1013, 0, true]);
+const TERRAIN_SWIM_ARGS = Object.freeze([1038, 100, 1008, 0, false]);
+const PLAYER_ROUTE_SKILL = '!goToPlayer';
+const PLAYER_ROUTE_ARGS = Object.freeze(['FollowTarget', 3]);
 
 function deliveryContract(course) {
   return course === 'orchestrate-charcoal'
@@ -795,6 +836,191 @@ function routeProbeTerrainPreserved(attempt) {
     && physical?.routeTerrainIntact === true;
 }
 
+function terrainSwimRequestCorrelated(attempt) {
+  const actionId = attempt?.terminal?.actionId;
+  const request = attempt?.terminal?.evidence?.request;
+  const args = Array.isArray(request?.args) ? request.args : [];
+  return Boolean(
+    typeof actionId === 'string'
+    && actionId.length > 0
+    && typeof request?.requestId === 'string'
+    && request.requestId.length > 0
+    && request?.routeOrigin === 'explicit-command'
+    && request?.selectedSkill === ROUTE_PROBE_SKILL
+    && args.length === TERRAIN_SWIM_ARGS.length
+    && args.every((value, index) => value === TERRAIN_SWIM_ARGS[index])
+  );
+}
+
+function terrainSwimLifecycleComplete(attempt) {
+  const terminal = attempt?.terminal;
+  const issuedAt = attempt?.issuedAt;
+  const activeAt = attempt?.activeAt;
+  const startedAt = terminal?.startedAt;
+  const finishedAt = terminal?.finishedAt;
+  return attempt?.commandAck?.success === true
+    && [issuedAt, activeAt, startedAt, finishedAt].every(Number.isFinite)
+    && activeAt >= issuedAt
+    && startedAt >= issuedAt
+    && activeAt <= finishedAt
+    && finishedAt >= startedAt
+    && terminal?.label === 'action:goToCoordinates'
+    && terminal?.phase === 'succeeded'
+    && terminal?.code === 'skill_arrived'
+    && terminal?.retryable === false;
+}
+
+function terrainSwimEffectiveMovements(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.terrainTraversalPolicy === 'full'
+    && physical?.terrainPathfinderObserved === true
+    && physical?.terrainTerminalVerified === true;
+}
+
+function terrainSwimAscentComplete(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.terrainStartSubmerged === true
+    && physical?.terrainAscentObserved === true
+    && [physical?.terrainStartPosition?.x, physical?.terrainStartPosition?.y, physical?.terrainStartPosition?.z]
+      .every(Number.isFinite);
+}
+
+function terrainSwimDrySettlement(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.terrainDrySettlement === true
+    && [physical?.terrainFinalPosition?.x, physical?.terrainFinalPosition?.y, physical?.terrainFinalPosition?.z]
+      .every(Number.isFinite);
+}
+
+function terrainSwimPreserved(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.fixtureVerified === true
+    && physical?.terrainIntact === true;
+}
+
+function terrainSwimScaffoldAccounting(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.terrainScaffoldAccountingVerified === true
+    && physical?.terrainInventoryBefore !== null
+    && physical?.terrainInventoryAfter !== null;
+}
+
+function playerRouteRequestCorrelated(attempt) {
+  const actionId = attempt?.terminal?.actionId;
+  const request = attempt?.terminal?.evidence?.request;
+  const args = Array.isArray(request?.args) ? request.args : [];
+  return Boolean(
+    typeof actionId === 'string'
+    && actionId.length > 0
+    && typeof request?.requestId === 'string'
+    && request.requestId.length > 0
+    && request?.routeOrigin === 'explicit-command'
+    && request?.selectedSkill === PLAYER_ROUTE_SKILL
+    && args.length === PLAYER_ROUTE_ARGS.length
+    && args.every((value, index) => value === PLAYER_ROUTE_ARGS[index])
+  );
+}
+
+function playerRouteLifecycleComplete(attempt) {
+  const terminal = attempt?.terminal;
+  const issuedAt = attempt?.issuedAt;
+  const activeAt = attempt?.activeAt;
+  const startedAt = terminal?.startedAt;
+  const finishedAt = terminal?.finishedAt;
+  return attempt?.commandAck?.success === true
+    && [issuedAt, activeAt, startedAt, finishedAt].every(Number.isFinite)
+    && activeAt >= issuedAt
+    && startedAt >= issuedAt
+    && activeAt <= finishedAt
+    && finishedAt >= startedAt
+    && terminal?.label === 'action:goToPlayer'
+    && terminal?.phase === 'succeeded'
+    && terminal?.code === 'skill_arrived'
+    && terminal?.retryable === false;
+}
+
+function playerRouteEffectiveMovements(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.playerRoutePathfinderObserved === true
+    && Number.isFinite(attempt?.performance?.botTrajectoryDistance)
+    && attempt.performance.botTrajectoryDistance >= 7;
+}
+
+function playerRouteObstructionBroken(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const position = physical?.doorwayObservation?.position;
+  return physical?.fixtureVerified === true
+    && physical?.obstructionDugThrough === true
+    && physical?.doorwayCrossed === true
+    && [position?.x, position?.y, position?.z].every(Number.isFinite);
+}
+
+function playerRouteArrived(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const finalDistance = physical?.finalDistanceToTarget;
+  const targetTravel = attempt?.performance?.targetTrajectoryDistance;
+  return physical?.playerRouteTerminalVerified === true
+    && physical?.playerRouteArrivalVerified === true
+    && Number.isFinite(finalDistance)
+    && finalDistance >= 0
+    && finalDistance <= 3.5
+    && Number.isFinite(targetTravel)
+    && targetTravel <= 0.3;
+}
+
+function playerRouteFiniteBreakCost(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const inventory = physical?.finiteBreakInventoryBefore;
+  return physical?.finiteBreakCostVerified === true
+    && inventory !== null
+    && typeof inventory === 'object'
+    && Object.values(inventory).every(count => Number(count) === 0);
+}
+
+function playerRouteBestLifecycleComplete(attempt) {
+  const terminal = attempt?.terminal;
+  const issuedAt = attempt?.issuedAt;
+  const activeAt = attempt?.activeAt;
+  const startedAt = terminal?.startedAt;
+  const finishedAt = terminal?.finishedAt;
+  return attempt?.commandAck?.success === true
+    && [issuedAt, activeAt, startedAt, finishedAt].every(Number.isFinite)
+    && activeAt >= issuedAt
+    && startedAt >= issuedAt
+    && activeAt <= finishedAt
+    && finishedAt >= startedAt
+    && terminal?.label === 'action:goToPlayer'
+    && terminal?.phase === 'failed'
+    && ['skill_closest_reachable', 'skill_closest_explored'].includes(terminal?.code)
+    && terminal?.retryable === true;
+}
+
+function playerRouteBestEffectiveMovements(attempt) {
+  return attempt?.physicalAcceptance?.playerRoutePathfinderObserved === true
+    && Number.isFinite(attempt?.performance?.botTrajectoryDistance)
+    && attempt.performance.botTrajectoryDistance > 0;
+}
+
+function playerRouteBestConverged(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const finalDistance = physical?.finalDistanceToTarget;
+  const targetTravel = attempt?.performance?.targetTrajectoryDistance;
+  return physical?.playerRouteBestTerminalVerified === true
+    && physical?.playerRouteBestPositionVerified === true
+    && Number.isFinite(finalDistance)
+    && finalDistance > 4
+    && finalDistance <= 6.25
+    && Number.isFinite(targetTravel)
+    && targetTravel <= 0.3;
+}
+
+function playerRouteBestObstructionPreserved(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.fixtureVerified === true
+    && physical?.unbreakableObstructionPreserved === true
+    && physical?.blockedTerrainIntact === true;
+}
+
 function requestCandidates(attempt) {
   const candidates = [];
   const terminalRequest = attempt?.terminal?.evidence?.request;
@@ -946,13 +1172,64 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
   const course = courseOf(report);
   const deliverCourse = course === 'deliver-item' || course === 'orchestrate-charcoal';
   const routeProbeCourse = course === 'route-probe-inconclusive';
-  const correlated = routeProbeCourse
+  const terrainSwimCourse = course === 'terrain-swim-exit';
+  const playerRouteFiniteCostCourse = course === 'pathfinding-finite-break-cost';
+  const playerRouteCourse = course === 'player-route-obstruction' || playerRouteFiniteCostCourse;
+  const playerRouteBestCourse = course === 'player-route-best-reachable';
+  const correlated = playerRouteCourse || playerRouteBestCourse
+    ? playerRouteRequestCorrelated(attempt)
+    : terrainSwimCourse
+    ? terrainSwimRequestCorrelated(attempt)
+    : routeProbeCourse
     ? routeProbeRequestCorrelated(attempt)
     : deliverCourse
     ? deliverRequestCorrelated(attempt, course)
     : Boolean(expectedRoute && requestCorrelated(attempt));
   const instrumentationConfirmed = instrumentationModeConfirmed(report, instrumentationMode);
-  const checks = routeProbeCourse
+  const checks = playerRouteBestCourse
+    ? {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'player-route-best-action-lifecycle': playerRouteBestLifecycleComplete(attempt),
+        'effective-movements-confirmed': playerRouteBestEffectiveMovements(attempt),
+        'best-available-route-confirmed': playerRouteBestConverged(attempt),
+        'unbreakable-obstruction-preserved': playerRouteBestObstructionPreserved(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      }
+    : playerRouteFiniteCostCourse
+    ? {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'player-route-action-lifecycle': playerRouteLifecycleComplete(attempt),
+        'effective-movements-confirmed': playerRouteEffectiveMovements(attempt),
+        'obstruction-broken-confirmed': playerRouteObstructionBroken(attempt),
+        'player-arrival-confirmed': playerRouteArrived(attempt),
+        'finite-break-cost-confirmed': playerRouteFiniteBreakCost(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      }
+    : playerRouteCourse
+    ? {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'player-route-action-lifecycle': playerRouteLifecycleComplete(attempt),
+        'effective-movements-confirmed': playerRouteEffectiveMovements(attempt),
+        'obstruction-broken-confirmed': playerRouteObstructionBroken(attempt),
+        'player-arrival-confirmed': playerRouteArrived(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      }
+    : terrainSwimCourse
+    ? {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'terrain-movement-lifecycle': terrainSwimLifecycleComplete(attempt),
+        'effective-movements-confirmed': terrainSwimEffectiveMovements(attempt),
+        'swim-ascent-confirmed': terrainSwimAscentComplete(attempt),
+        'dry-bank-settlement-confirmed': terrainSwimDrySettlement(attempt),
+        'terrain-preserved-confirmed': terrainSwimPreserved(attempt),
+        'scaffold-accounting-confirmed': terrainSwimScaffoldAccounting(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      }
+    : routeProbeCourse
     ? {
         'request-correlation': correlated,
         'instrumentation-mode-confirmed': instrumentationConfirmed,
@@ -1038,19 +1315,35 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
       ? report.verdict.external_retry_count
       : 0,
     terminalReason: success
-      ? (routeProbeCourse
+      ? (playerRouteBestCourse
+          ? 'player-route-best-reachable-verified'
+          : playerRouteFiniteCostCourse
+          ? 'pathfinding-finite-break-cost-verified'
+          : playerRouteCourse
+          ? 'player-route-obstruction-verified'
+          : terrainSwimCourse
+          ? 'terrain-swim-exit-verified'
+          : routeProbeCourse
           ? 'route-probe-inconclusive-verified'
           : deliverCourse ? 'deliver-item-goal-verified' : 'doorway-corridor-follow-verified')
       : String(report?.error || attempt?.terminal?.code || 'follow-field-failed').slice(0, 240),
     // Which evidence contract this observation was judged against. The aggregate
     // reads it rather than assuming the follow set, so a deliver run is never
     // marked incomplete for missing doorway evidence it could not produce.
-    evidenceSet: routeProbeCourse
+    evidenceSet: playerRouteBestCourse
+      ? PLAYER_ROUTE_BEST_EVIDENCE
+      : playerRouteFiniteCostCourse
+      ? PLAYER_ROUTE_FINITE_COST_EVIDENCE
+      : playerRouteCourse
+      ? PLAYER_ROUTE_EVIDENCE
+      : terrainSwimCourse
+      ? TERRAIN_SWIM_EVIDENCE
+      : routeProbeCourse
       ? ROUTE_PROBE_EVIDENCE
       : deliverCourse ? DELIVER_FIELD_EVIDENCE : FOLLOW_FIELD_EVIDENCE,
     elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : 0,
     actionId: attempt?.terminal?.actionId || null,
-    routeOrigin: routeProbeCourse ? 'explicit-command' : expectedRoute,
+    routeOrigin: routeProbeCourse || terrainSwimCourse || playerRouteCourse || playerRouteBestCourse ? 'explicit-command' : expectedRoute,
     // Which command the model actually chose, recorded for review rather than
     // asserted. A change here is worth a human look; it is not a failure.
     selectedSkill: attempt?.terminal?.evidence?.request?.selectedSkill || null,

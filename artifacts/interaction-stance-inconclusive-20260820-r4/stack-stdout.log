@@ -1,0 +1,34 @@
+MindServer running on port 8081 on host localhost
+Modded server found (Paper 1.21.11), attempting to use 1.21.11...
+MC server found. (Host: 127.0.0.1, Port: 25579, Version: 1.21.11)
+Connecting to MindServer
+Client connected
+MindcraftBot connected to MindServer
+Starting agent
+Copy profile saved.
+Initializing agent MindcraftBot...
+Examples initialized.
+No task.
+MindcraftBot logging into minecraft...
+MindcraftBot logged in!
+MindcraftBot updating available agents
+MindcraftBot updating available agents
+Initializing vision intepreter...
+MindcraftBot spawned.
+MindcraftBot updating available agents
+MindcraftBot updating available agents
+MindcraftBot received message from Director : !stop
+Director invoked !stop.
+parsed command: { commandName: '!stop', args: [] }
+Saved memory to: ./bots/MindcraftBot/memory.json
+Client connected
+Client connected
+MindcraftBot received message from ADMIN : !stop
+ADMIN invoked !stop.
+parsed command: { commandName: '!stop', args: [] }
+Saved memory to: ./bots/MindcraftBot/memory.json
+MindcraftBot received message from Director : !stop
+Director invoked !stop.
+parsed command: { commandName: '!stop', args: [] }
+Agent MindcraftBot disconnected
+Agent process exited with code null and signal SIGINT

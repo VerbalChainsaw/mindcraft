@@ -53,6 +53,7 @@ const PHASE5_SOURCE_FILES = Object.freeze([
   'tools/scenario-lab/adapters/recorded-trace-provider.mjs',
   'tools/verify-follow-field.mjs',
   'src/models/prompter.js',
+  'src/models/codex.js',
   'src/agent/action_manager.js',
   'src/agent/commands/actions.js',
   'src/agent/player-directives.js',
@@ -186,7 +187,7 @@ function spawnForText(command, args, cwd) {
 }
 
 async function currentCommit() {
-  const value = await spawnForText('bash', ['-c', 'git rev-parse HEAD'], REPOSITORY);
+  const value = await spawnForText('git', ['-C', REPOSITORY, 'rev-parse', 'HEAD'], REPOSITORY);
   if (!GIT_COMMIT.test(value)) throw new Error(`Git returned an invalid current commit: ${value}`);
   return value;
 }
@@ -244,7 +245,9 @@ export async function resolveVarianceAcquisitionContext(fixtureRoot = DEFAULT_FI
       params: frozenModel.params || null,
       maxPromptTurns,
       routeCount: 1,
-      billingSurface: 'provider API project; ChatGPT subscription access is separate',
+      billingSurface: frozenModel.api === 'codex'
+        ? 'ChatGPT subscription through Codex OAuth'
+        : 'provider API project; ChatGPT subscription access is separate',
     },
   };
 }

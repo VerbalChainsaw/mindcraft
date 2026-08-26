@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import settings from '../../settings.js';
+import { DEFAULT_LAUNCHER_CONFIG } from '../../src/mindcraft/launcher-config.js';
 import {
   createLocalQuickstartPlan,
   LOCAL_QUICKSTART_PROFILE,
@@ -12,6 +15,24 @@ const models = [
   { name: 'qwen2.5:3b', kind: 'chat' },
   { name: 'nomic-embed-text:latest', kind: 'embedding' },
 ];
+
+test('Checked-in Kevin profile uses DeepSeek V4 Flash for every model role', async () => {
+  const profile = JSON.parse(await readFile(
+    new URL('../../profiles/local-quickstart.json', import.meta.url),
+    'utf8',
+  ));
+  for (const role of ['model', 'reasoning_model', 'autonomy_model', 'memory_model']) {
+    assert.equal(profile[role].api, 'deepseek', `${role} provider`);
+    assert.equal(profile[role].model, 'deepseek-v4-flash', `${role} model`);
+  }
+  assert.deepEqual(profile.model.params.thinking, { type: 'disabled' });
+  assert.deepEqual(profile.reasoning_model.params.thinking, { type: 'enabled' });
+  assert.equal(profile.reasoning_model.params.reasoning_effort, 'high');
+  assert.deepEqual(profile.autonomy_model.params.thinking, { type: 'disabled' });
+  assert.deepEqual(profile.memory_model.params.thinking, { type: 'disabled' });
+  assert.deepEqual(settings.profiles, [LOCAL_QUICKSTART_PROFILE]);
+  assert.deepEqual(DEFAULT_LAUNCHER_CONFIG.profiles, [LOCAL_QUICKSTART_PROFILE]);
+});
 
 test('Given installed Ollama models, when local quickstart is planned, then it creates one persistent auto-start bot setup', () => {
   const plan = createLocalQuickstartPlan({

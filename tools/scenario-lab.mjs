@@ -26,9 +26,23 @@ export const FAMILIES = Object.freeze([
   // Plain language against a reduced command surface. The only scenario that
   // tests whether the LLM orchestrates primitives or routes to a procedure.
   'orchestration-charcoal',
+  // A valid break edge may cost more than the package's historical numeric
+  // impossible sentinel. This course proves the edge remains selectable and
+  // executable with an empty inventory and a slow hand break.
+  'pathfinding-finite-break-cost',
+  // When exact player arrival is physically impossible, finite navigation must
+  // consume Pathfinder's best available route without claiming false arrival.
+  'player-route-best-reachable',
+  // Finite player-directed navigation must reach a stationary requester even
+  // when the only route requires breaking ordinary terrain.
+  'player-route-obstruction',
   // Phase 4 truth boundary: an unfinished whole-route search remains
   // explicitly unproven and cannot authorize movement or terrain mutation.
   'route-probe-inconclusive',
+  // Phase 6 begins with the native water-ascent and dry-bank exit mechanism.
+  // Both request transports carry the same explicit command so the probe does
+  // not spend provider quota or confound locomotion with model interpretation.
+  'terrain-swim-exit',
 ]);
 export const DEFAULT_MANIFEST_PATH = fileURLToPath(
   new URL('./scenario-lab/scenarios.v1.json', import.meta.url),

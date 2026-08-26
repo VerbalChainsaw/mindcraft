@@ -16,6 +16,7 @@ const CONTROL_PLANE_FILES = [
   "src/mindcraft/runtime-config.js",
   "src/mindcraft/mindserver.js",
   "src/models/_model_map.js",
+  "src/models/deepseek.js",
   "src/models/openai_compatible.js",
   // These run under Node and use class fields (`static prefix = ...`), which
   // the browser/ES2021 base scope cannot even parse. Scope membership is about

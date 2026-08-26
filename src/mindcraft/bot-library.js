@@ -19,7 +19,7 @@ const AUTH_TYPES = new Set(['offline', 'microsoft']);
 
 export const BOT_PROVIDER_CATALOG = Object.freeze([
   { id: 'openai', label: 'OpenAI API', credentialEnv: 'OPENAI_API_KEY', examples: ['gpt-4.1-mini'] },
-  { id: 'deepseek', label: 'DeepSeek', credentialEnv: 'DEEPSEEK_API_KEY', examples: ['deepseek-chat', 'deepseek-reasoner'] },
+  { id: 'deepseek', label: 'DeepSeek', credentialEnv: 'DEEPSEEK_API_KEY', examples: ['deepseek-v4-flash', 'deepseek-v4-pro'] },
   { id: 'anthropic', label: 'Anthropic / Claude', credentialEnv: 'ANTHROPIC_API_KEY', examples: ['claude-sonnet-4-5'] },
   { id: 'google', label: 'Google Gemini', credentialEnv: 'GEMINI_API_KEY', examples: ['gemini-2.5-flash'] },
   { id: 'ollama', label: 'Ollama (local)', credentialEnv: null, examples: ['qwen2.5:3b', 'llama3.2'] },

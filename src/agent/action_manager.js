@@ -52,7 +52,7 @@ const INTERRUPT_REISSUE_MS = 120;
 
 function inferActivitySpecialist(_actionLabel, requestedSpecialist = null) {
     const requested = String(requestedSpecialist || '').trim().toLowerCase();
-    if (requested === 'pathfinder' || requested === 'collectblock') return requested;
+    if (requested === 'pathfinder' || requested === 'collectblock' || requested === 'container') return requested;
     return null;
 }
 
@@ -267,6 +267,68 @@ class CollectBlockActivityAdapter {
     dispose() {
         for (const [event, listener] of this.listeners) this.bot.removeListener(event, listener);
         this.listeners = [];
+    }
+}
+
+class ContainerActivityAdapter extends PathfinderActivityAdapter {
+    start() {
+        super.start();
+        this.listen('windowOpen', window => {
+            this.onProgress('container_opened', {
+                windowId: Number.isFinite(window?.id) ? window.id : null,
+                windowType: String(window?.type || 'unknown').slice(0, 80),
+            });
+        });
+        this.listen('windowClose', window => {
+            this.onProgress('container_closed', {
+                windowId: Number.isFinite(window?.id) ? window.id : null,
+            });
+        });
+    }
+
+    closeCurrentWindow() {
+        const window = this.bot?.currentWindow;
+        if (!window) return false;
+        try {
+            if (typeof window.close === 'function') window.close();
+            else this.bot.closeWindow?.(window);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    async requestHalt() {
+        const pathfinder = await super.requestHalt();
+        const closedWindow = this.closeCurrentWindow();
+        const acknowledged = this.isSettled();
+        return {
+            acknowledged,
+            evidence: acknowledged
+                ? (closedWindow ? 'container_closed_pathfinder_idle' : 'container_idle_pathfinder_idle')
+                : `container_halt_pending:${pathfinder?.evidence || 'pathfinder_unknown'}`,
+        };
+    }
+
+    async forceHalt() {
+        this.closeCurrentWindow();
+        await super.forceHalt();
+        const acknowledged = this.isSettled();
+        return {
+            acknowledged,
+            evidence: acknowledged ? 'container_force_closed_idle' : 'container_force_halt_pending',
+        };
+    }
+
+    isSettled() {
+        return this.bot?.currentWindow == null && super.isSettled();
+    }
+
+    async waitForSettlement(timeoutMs) {
+        const settlement = await super.waitForSettlement(timeoutMs);
+        return settlement?.settled === true
+            ? { settled: true, evidence: 'container_closed_pathfinder_idle' }
+            : { settled: false, evidence: 'container_settlement_timeout' };
     }
 }
 
@@ -520,6 +582,10 @@ export class ActionManager {
             })
             : selectedSpecialist === 'collectblock'
             ? new CollectBlockActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            })
+            : selectedSpecialist === 'container'
+            ? new ContainerActivityAdapter(this.agent.bot, (kind, evidence) => {
                 this.observeActivityProgress(kind, evidence);
             })
             : null;

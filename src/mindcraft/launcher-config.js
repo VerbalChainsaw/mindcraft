@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { writeJsonAtomicSync } from '../utils/atomic-file.js';
+import { LOCAL_QUICKSTART_PROFILE } from './local-quickstart.js';
 
 const CONFIG_FILENAME = 'launcher-config.json';
 
@@ -34,7 +35,7 @@ const DEFAULT_LAUNCHER_CONFIG = {
   auto_start: true,
   port_scan_start: 8080,
   port_scan_max: 20,
-  profiles: ['./andy.json'],
+  profiles: [LOCAL_QUICKSTART_PROFILE],
   agent_defaults: DEFAULT_AGENT_DEFAULTS,
   telemetry: DEFAULT_AGENT_TELEMETRY,
 };

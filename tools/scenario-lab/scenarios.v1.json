@@ -1,7 +1,7 @@
 {
  "schemaVersion": "scenario-lab.manifest.v1",
- "manifestRevision": "phase-4-route-probe-inconclusive-20260820.v1",
- "manifestHash": "0aa991ac9cbf9a8fa05e3cae98d7859624dbf38658fe0b40667282fdd3dc4bf3",
+ "manifestRevision": "pathfinding-finite-break-cost-20260822.v1",
+ "manifestHash": "54337d7bdf92b54f5061864cac79c07df11ee31e9ceea27f279135d79374f930",
  "title": "Release 0.1 deterministic Scenario Lab catalog",
  "candidateCommit": "ad37a3d2f2ab70d52cac93f22e5e6ebc16b0f748",
  "server": {
@@ -347,6 +347,172 @@
    "blockers": []
   },
   {
+   "id": "player-route-obstruction",
+   "family": "player-route-obstruction",
+   "title": "Reach a stationary player through breakable terrain",
+   "status": "not-run",
+   "seed": "3579780610592225162",
+   "world": {
+    "worldId": "viability-pilot-disposable",
+    "fixtureId": "scenario-lab.doorway-corridor-follow.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "be49ccbd9115e34ccd3ea6b0958302fa7c794709dfdcc6b379d06fba31a026b8",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 180000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "!goToPlayer(\"FollowTarget\", 3)",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "!goToPlayer(\"FollowTarget\", 3)",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "player-route-action-lifecycle",
+    "effective-movements-confirmed",
+    "obstruction-broken-confirmed",
+    "player-arrival-confirmed",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+    "player-route-obstruction"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
+  },
+  {
+   "id": "pathfinding-finite-break-cost",
+   "family": "pathfinding-finite-break-cost",
+   "title": "Preserve and execute an expensive finite break route",
+   "status": "not-run",
+   "seed": "3579780610592225162",
+   "world": {
+    "worldId": "viability-pilot-disposable",
+    "fixtureId": "scenario-lab.doorway-corridor-follow.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "be49ccbd9115e34ccd3ea6b0958302fa7c794709dfdcc6b379d06fba31a026b8",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 180000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "!goToPlayer(\"FollowTarget\", 3)",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "!goToPlayer(\"FollowTarget\", 3)",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "player-route-action-lifecycle",
+    "effective-movements-confirmed",
+    "obstruction-broken-confirmed",
+    "player-arrival-confirmed",
+    "finite-break-cost-confirmed",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+     "pathfinding-finite-break-cost"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
+  },
+  {
+   "id": "player-route-best-reachable",
+   "family": "player-route-best-reachable",
+   "title": "Advance to the best available stance outside an unbreakable enclosure",
+   "status": "not-run",
+   "seed": "3579780610592225162",
+   "world": {
+    "worldId": "viability-pilot-disposable",
+    "fixtureId": "scenario-lab.doorway-corridor-follow.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "be49ccbd9115e34ccd3ea6b0958302fa7c794709dfdcc6b379d06fba31a026b8",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 180000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "!goToPlayer(\"FollowTarget\", 3)",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "!goToPlayer(\"FollowTarget\", 3)",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "player-route-best-action-lifecycle",
+    "effective-movements-confirmed",
+    "best-available-route-confirmed",
+    "unbreakable-obstruction-preserved",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+     "player-route-best-reachable"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
+  },
+  {
    "id": "operator-stop-quiescence",
    "family": "operator-stop-quiescence",
    "title": "Operator stop and quiescence",
@@ -511,6 +677,64 @@
      "node",
      "tools/scenario-lab/run.mjs",
      "route-probe-inconclusive"
+    ],
+    "evidenceAdapterId": "follow-field-evidence-v1"
+   },
+   "blockers": []
+  },
+  {
+   "id": "terrain-swim-exit",
+   "family": "terrain-swim-exit",
+   "title": "Native swim ascent and dry-bank exit",
+   "status": "not-run",
+   "seed": "8140427791654321",
+   "world": {
+    "worldId": "deliver-item-flat-v1",
+    "fixtureId": "scenario-lab.deliver-item-flat.v1",
+    "fixtureVersion": 1,
+    "fixtureHash": "5648172f406cd63604db1c8cf4f53923d4e8ec4e18a41ac92dd9fd12ef82489e",
+    "dimension": "overworld"
+   },
+   "timeoutMs": 180000,
+   "requestForms": [
+    {
+     "form": "direct",
+     "request": "!goToCoordinates(1038,100,1008,0,false)",
+     "repetitions": 1
+    },
+    {
+     "form": "natural-language",
+     "request": "!goToCoordinates(1038,100,1008,0,false)",
+     "repetitions": 1
+    }
+   ],
+   "expectedEvidence": [
+    "request-correlation",
+    "instrumentation-mode-confirmed",
+    "terrain-movement-lifecycle",
+    "effective-movements-confirmed",
+    "swim-ascent-confirmed",
+    "dry-bank-settlement-confirmed",
+    "terrain-preserved-confirmed",
+    "scaffold-accounting-confirmed",
+    "terminal-quiescence-confirmed",
+    "canonical-outcome-envelope"
+   ],
+   "safetyInvariants": [
+    "authorized-active-world-required",
+    "deterministic-local-request-route",
+    "fixture-endpoints-local-only",
+    "bounded-timeout",
+    "no-false-success",
+    "runtime-restoration-required"
+   ],
+   "executor": {
+    "adapterId": "follow-field-live-replay-v1",
+    "safe": true,
+    "command": [
+     "node",
+     "tools/scenario-lab/run.mjs",
+     "terrain-swim-exit"
     ],
     "evidenceAdapterId": "follow-field-evidence-v1"
    },

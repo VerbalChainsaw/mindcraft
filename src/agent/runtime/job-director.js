@@ -1203,6 +1203,7 @@ export class JobDirector extends RoleDirector {
     const findings = [
       ['nearby_cave', 'scoutCave'],
       ['useful_animals', 'scoutAnimal'],
+      ['nearby_village', 'scoutVillage'],
     ];
     for (const [name, prefix] of findings) {
       const point = {

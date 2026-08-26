@@ -54,6 +54,23 @@ test('a server-authority request cannot authorize substitute physical work', () 
   }
 });
 
+test('a spoken status request cannot authorize movement named only in its words or safety clause', () => {
+  for (const message of [
+    'Confirm you are online by saying DeepSeek Flash online. Do not move or start a task.',
+    'Say "follow me". Do not move.',
+    'Tell me your current status.',
+  ]) {
+    assert.equal(classifyPlayerSpeechAuthority(message), 'response_only', message);
+    assert.equal(commandFor(message), null, message);
+  }
+
+  assert.equal(
+    classifyPlayerSpeechAuthority('Confirm you are ready, then follow me.'),
+    'action_eligible',
+    'an explicit follow-on physical instruction must retain action authority',
+  );
+});
+
 test('a preservation clause naming a build cannot grant construction authority', () => {
   const message = 'Come home to KidPlayer at the family base using safe existing terrain. Do not damage any build.';
   const directive = resolvePlayerDirective('DadPlayer', message, {});

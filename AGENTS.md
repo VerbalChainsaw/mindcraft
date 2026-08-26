@@ -25,47 +25,50 @@ Current source, runtime observation, and discriminating probes outrank summaries
 
 ## Test execution discipline
 
-An `ACCEPTED / CLOSED` test segment is durable evidence. Do not rerun, reopen,
-or implicitly traverse it unless the user explicitly authorizes that exact
-repetition. A later change to telemetry, provider routing, harness behavior,
-aggregation, cleanup, or an adjacent subsystem does not reopen accepted
-gameplay mechanics.
+An `ACCEPTED / CLOSED` segment is durable evidence, not immunity from later
+composition checks. The Director authorized adaptive confidence coverage across
+new and old mechanics on 2026-08-21. Run depth follows material uncertainty and
+observed failure evidence; it never follows a fixed count or a desire for more
+reassurance.
 
-General persistence instructions such as "continue," "finish," "keep going,"
-"work overnight," or "do not stop" authorize progress only inside the current
-untested boundary. They do not authorize another full campaign, confidence
-rerun, or traversal of accepted segments. A HANDOFF requirement names an
-acceptance target; it does not silently authorize repeated execution after the
-relevant segment has already been accepted.
+Every physical run must be able to change at least one of these: the mechanic
+verdict, the causal owner, the required repair, the player-visible composition
+verdict, or a significant risk. Before running, state the exact command, accepted
+overlap, load-bearing uncertainty, why saved evidence is insufficient, expected
+duration, and provider/subscription/API cost. The standing authorization covers
+controlled runs that satisfy this rubric; it does not cover ceremonial reruns.
 
-Before any command that would repeat or traverse accepted work, stop and report:
+Use this evidence-saturation sequence:
 
-1. the exact command;
-2. every accepted segment it would repeat;
-3. why saved evidence or a narrower probe cannot answer the question;
-4. the expected duration and provider, quota, or paid-service cost.
+1. Read saved reports, logs, state snapshots, telemetry, and current source first.
+2. Probe a new or changed mechanic at the smallest physical boundary that can
+   identify its owner.
+3. After a material repair, directly re-exercise the repaired boundary. An
+   unchanged retry is valid only when it distinguishes a named stochastic or
+   environmental hypothesis.
+4. Revisit an old mechanic through the current composed player outcome whenever
+   possible. Use a standalone old-mechanic probe only when its owner or dependency
+   changed, contradictory evidence exists, or composition cannot isolate it.
+5. For historically variable behavior, finish the bounded discriminating matrix
+   or equivalent separation question. Continue only while another observation can
+   separate a live hypothesis or verify its repair.
+6. Stop when the player-visible outcome is directly observed on current source,
+   all material variants and interruptions for the tranche are covered, the body
+   settles safely, truth and cleanup checks pass, and no unresolved failure can
+   change the verdict. Do not add a run that can only increase comfort.
 
-Run that command only after explicit per-run authorization. If the available
-verifier is broader than the unresolved boundary, ask whether to build or use a
-narrow probe or authorize the broad repetition. Never choose the broad verifier
-automatically.
-
-Use the smallest discriminating probe for the current unresolved boundary.
-Inspect saved reports, logs, state snapshots, telemetry, and artifacts before
-new physical execution. Once the authorized acceptance criteria, including any
-explicitly required repetitions, are satisfied, mark the segment
-`ACCEPTED / CLOSED` and stop. Do not add adjacent tests, extra confidence runs,
-or the next segment without direction.
+A failed run is progress only when it is classified. The next run must vary one
+controlled factor, test a named hypothesis, or verify a repair at the owning
+boundary. Never blind-retry the same failure or build a broader verifier when a
+narrower existing probe can answer it.
 
 Maintain a visible test ledger using only `PENDING`, `ACTIVE`,
-`ACCEPTED / CLOSED`, and `DEAD`. Never silently move an accepted segment back to
-active. If the user says a segment was already tested, close it immediately;
-do not use a plan, HANDOFF, campaign, or general autonomy instruction to argue
-that it must run again.
+`ACCEPTED / CLOSED`, and `DEAD`. Preserve accepted evidence and name any accepted
+overlap traversed by a composed run; do not silently erase or downgrade it.
 
-Treat the user's time, quota, and paid provider usage as material operation
-budgets. An unnecessary long-running or repeated test is a materially harmful
-action even when it is otherwise reversible.
+Treat the user's time, quota, subscription usage, and paid provider usage as
+material operation budgets. A run with no plausible material delta is harmful
+even when it is reversible.
 
 On provider authentication, quota, billing, rate-limit, or routing failure,
 stop and report the exact provider and error immediately. Do not retry, switch

@@ -33,6 +33,15 @@ const SCENARIOS = Object.freeze({
   'obstruction-follow':
     'Follow a player when terrain must be broken to reach them. Fails if the '
     + 'companion cannot dig — the 2026-08-16 defect.',
+  'player-route-obstruction':
+    'Reach a stationary player through a full-width wall whose only opening is '
+    + 'plugged with breakable terrain.',
+  'pathfinding-finite-break-cost':
+    'Reach a stationary player by hand-breaking a two-log plug whose valid '
+    + 'labor cost exceeds the former impossible-edge sentinel.',
+  'player-route-best-reachable':
+    'Advance to Pathfinder\'s best available stance outside a sealed bedrock '
+    + 'enclosure without claiming exact player arrival.',
   'deliver-item-goal':
     'Typed goal end to end: acquire a block of dirt and physically hand it to '
     + 'the player. The only course that exercises goal-director.',
@@ -42,6 +51,9 @@ const SCENARIOS = Object.freeze({
   'route-probe-inconclusive':
     'Phase 4 route truth: a whole-route search that exhausts its clock remains '
     + 'retryable and unproven without moving or excavating.',
+  'terrain-swim-exit':
+    'Phase 6 terrain probe: ascend a controlled water column, exit onto dry '
+    + 'ground, settle, and preserve the course.',
 });
 
 // The deliver course runs on a generated flat world instead of the captured
@@ -53,6 +65,7 @@ const GENERATED_FIXTURES = Object.freeze({
   'deliver-item-goal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
   'orchestration-charcoal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'orchestration-forest-v1'),
   'route-probe-inconclusive': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
+  'terrain-swim-exit': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
 });
 
 // The fixture is machine-local and gitignored. An explicit override wins outright. Falling back to the machine-local default
