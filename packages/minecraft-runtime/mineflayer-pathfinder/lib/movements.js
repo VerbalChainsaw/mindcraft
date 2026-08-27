@@ -465,6 +465,7 @@ class Movements {
     const blockB = this.getBlock(node, dir.x, 1, dir.z)
     const blockC = this.getBlock(node, dir.x, 0, dir.z)
     const blockD = this.getBlock(node, dir.x, -1, dir.z)
+    const sourceSupport = this.getBlock(node, 0, -1, 0)
 
     let cost = 1 // move cost
     cost += this.exclusionStep(blockC)
@@ -515,7 +516,19 @@ class Movements {
 
     if (this.getBlock(node, 0, 0, 0).liquid) cost += this.liquidCost
 
-    neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, this.remainingScaffoldingAfter(node, toPlace), cost, toBreak, toPlace, 'walk'))
+    neighbors.push(this.makeMove(
+      node,
+      blockC.position.x,
+      blockC.position.y,
+      blockC.position.z,
+      this.remainingScaffoldingAfter(node, toPlace),
+      cost,
+      toBreak,
+      toPlace,
+      'walk',
+      false,
+      { supportDelta: blockD.height - sourceSupport.height }
+    ))
   }
 
   getMoveDiagonal (node, dir, neighbors) {
@@ -569,7 +582,19 @@ class Movements {
       cost += 1
       neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y + 1, blockC.position.z, node.remainingBlocks, cost, toBreak, [], 'step_up'))
     } else if (blockD.physical || blockC.liquid) {
-      neighbors.push(this.makeMove(node, blockC.position.x, blockC.position.y, blockC.position.z, node.remainingBlocks, cost, toBreak, [], 'walk'))
+      neighbors.push(this.makeMove(
+        node,
+        blockC.position.x,
+        blockC.position.y,
+        blockC.position.z,
+        node.remainingBlocks,
+        cost,
+        toBreak,
+        [],
+        'walk',
+        false,
+        { supportDelta: blockD.height - block0.height }
+      ))
     } else if (this.getBlock(node, dir.x, -2, dir.z).physical || blockD.liquid) {
       if (!blockD.safe) return // don't self-immolate
       cost += this.getNumEntitiesAt(blockC.position, 0, -1, 0) * this.entityCost

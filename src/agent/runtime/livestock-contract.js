@@ -140,19 +140,22 @@ export function animalPenConstraintFromOrder(bot, order, animal, expectedDimensi
     || !dimension
     || (expectedDimension && canonicalDimension(expectedDimension) !== dimension)
   ) return null;
-  const gateCell = order.blueprint.cells.find(cell => (
+  const gateCells = order.blueprint.cells.filter(cell => (
     cell?.function === 'access'
     && String(cell.material || '').endsWith('_fence_gate')
     && [cell.x, cell.y, cell.z].every(Number.isFinite)
   ));
-  if (!gateCell) return null;
-  const gatePosition = bot.blockAt(new Vec3(
-    order.target.x + gateCell.x,
-    order.target.y + gateCell.y,
-    order.target.z + gateCell.z,
-  ))?.position;
-  if (!gatePosition) return null;
-  return penConstraintForGate(bot, gatePosition, animal, order.target);
+  for (const gateCell of gateCells) {
+    const gatePosition = bot.blockAt(new Vec3(
+      order.target.x + gateCell.x,
+      order.target.y + gateCell.y,
+      order.target.z + gateCell.z,
+    ))?.position;
+    if (!gatePosition) continue;
+    const constraint = penConstraintForGate(bot, gatePosition, animal, order.target);
+    if (constraint) return constraint;
+  }
+  return null;
 }
 
 export { canonicalDimension as canonicalLivestockDimension };

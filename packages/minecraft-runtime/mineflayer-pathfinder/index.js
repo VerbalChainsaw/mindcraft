@@ -1334,6 +1334,13 @@ function inject (bot) {
 
     let executionMode
     const feetBlock = bot.blockAt(p.floored())
+    // A* represents body cells with integer Y coordinates, so adjacent
+    // partial-height supports (for example dirt_path -> grass_block) form a
+    // horizontal walk edge even though the body must physically rise. Carry
+    // that support delta from Movements and use native jump locomotion at the
+    // executor seam; otherwise forcing jump=false drives forever into the lip.
+    const walkRequiresLift = locomotionType === 'walk'
+      && Number(nextPoint.locomotion?.supportDelta) > 0.001
     // Mineflayer can clear isInWater for a tick at the surface while the
     // physical feet cell is still water. Keep native ascent controls until
     // the body actually crosses into the dry route node.
@@ -1380,6 +1387,10 @@ function inject (bot) {
       executionMode = 'parkour'
       bot.setControlState('jump', true)
       bot.setControlState('sprint', stateMovements.allowSprinting)
+    } else if (walkRequiresLift) {
+      executionMode = 'walk_up'
+      bot.setControlState('jump', true)
+      bot.setControlState('sprint', false)
     } else if (locomotionType === 'walk' && stateMovements.allowSprinting && physics.canStraightLine(path, true)) {
       executionMode = 'sprint_straight'
       bot.setControlState('jump', false)
