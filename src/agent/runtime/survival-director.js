@@ -28,6 +28,7 @@ const BLOCKED_COOLDOWN_MS = 15_000;
 const SURVIVAL_ENVIRONMENT_TTL_MS = 1_000;
 const FOOD_RECOVERY_REGION_CHANGE_DISTANCE = 8;
 const SAFETY_INCIDENT_CALM_MS = 4_000;
+const SAFETY_REPEAT_SOURCE_WINDOW_MS = 120_000;
 const SAFETY_RENDEZVOUS_DISTANCE = 4;
 const SURVIVAL_DECISION_SCHEMA_VERSION = 1;
 const BED_SELECTION_RADIUS = 24;
@@ -425,9 +426,25 @@ function usefulDropCandidates(bot) {
       || /_(?:ore|ingot|nugget)$/.test(name)
       || ['coal', 'charcoal', 'diamond', 'emerald', 'torch', 'crafting_table', 'furnace', 'bucket', 'shield'].includes(name)
     );
-    if (useful) candidates.push({ name, distance, id: entity.id });
+    if (useful) candidates.push({
+      name,
+      distance,
+      id: entity.id,
+      x: entity.position.x,
+      y: entity.position.y,
+      z: entity.position.z,
+    });
   }
   return candidates.sort((left, right) => left.distance - right.distance);
+}
+
+function usefulDropInventorySignature(bot) {
+  const slots = Array.isArray(bot.inventory?.slots) ? bot.inventory.slots : [];
+  return slots.map((item, slot) => (
+    item?.name
+      ? `${slot}:${item.name}:${Math.max(0, Number(item.count) || 0)}`
+      : `${slot}:-`
+  )).join('|');
 }
 
 function offset(position, x, y, z) {
@@ -747,6 +764,7 @@ export class SurvivalDirector extends BehaviorDirector {
       || { accepted: false, code: 'job_director_unavailable' }
     ));
     this.foodSourceBlocker = null;
+    this.usefulDropBlockers = new Map();
     this.sleepBlockers = new Map();
     this.sleepExhaustionAnnouncedFor = null;
     this.sleepBlocker = null;
@@ -766,6 +784,70 @@ export class SurvivalDirector extends BehaviorDirector {
       safe: candidate.safe,
       occupied: candidate.occupied,
     })));
+  }
+
+  usefulDropBlockerReleased(blocker, candidates = []) {
+    if (!blocker) return true;
+    const current = candidates.find(candidate => Number(candidate?.id) === blocker.id);
+    if (!current || current.name !== blocker.name) return true;
+    const botPosition = physicalPosition(this.agent.bot?.entity?.position);
+    if (!botPosition) return false;
+    if (usefulDropInventorySignature(this.agent.bot) !== blocker.inventorySignature) return true;
+    if (Math.hypot(
+      botPosition.x - blocker.botPosition.x,
+      botPosition.y - blocker.botPosition.y,
+      botPosition.z - blocker.botPosition.z,
+    ) >= 4) return true;
+    return Math.hypot(
+      Number(current.x) - blocker.dropPosition.x,
+      Number(current.y) - blocker.dropPosition.y,
+      Number(current.z) - blocker.dropPosition.z,
+    ) >= 1;
+  }
+
+  eligibleUsefulDrops(situation = {}) {
+    const candidates = Array.isArray(situation.usefulDrops) ? situation.usefulDrops : [];
+    for (const [id, blocker] of this.usefulDropBlockers) {
+      if (this.usefulDropBlockerReleased(blocker, candidates)) this.usefulDropBlockers.delete(id);
+    }
+    if (this.usefulDropBlockers.size === 0) return candidates;
+    return candidates.filter(candidate => !this.usefulDropBlockers.has(Number(candidate?.id)));
+  }
+
+  settleUsefulDrops(intent, result, situation = {}) {
+    if (intent?.kind !== 'collect_useful_drop') return;
+    if (result?.phase === 'interrupted' || result?.code === 'interrupted') return;
+    if (result?.phase === 'succeeded') {
+      this.usefulDropBlockers.delete(Number(intent.target?.id));
+      return;
+    }
+    if (
+      result?.phase !== 'failed'
+      || (
+        result?.code !== 'skill_no_reachable_items'
+        && result?.evidence?.skill?.outcome !== 'no_reachable_items'
+      )
+    ) return;
+    const botPosition = physicalPosition(this.agent.bot?.entity?.position);
+    if (!botPosition) return;
+    const inventorySignature = usefulDropInventorySignature(this.agent.bot);
+    for (const candidate of Array.isArray(situation.usefulDrops) ? situation.usefulDrops : []) {
+      if (
+        !Number.isFinite(Number(candidate?.id))
+        || ![candidate?.x, candidate?.y, candidate?.z].every(Number.isFinite)
+      ) continue;
+      this.usefulDropBlockers.set(Number(candidate.id), Object.freeze({
+        id: Number(candidate.id),
+        name: String(candidate.name || ''),
+        botPosition,
+        dropPosition: Object.freeze({
+          x: Number(candidate.x),
+          y: Number(candidate.y),
+          z: Number(candidate.z),
+        }),
+        inventorySignature,
+      }));
+    }
   }
 
   recordDecision(context, outcomeCode, { scheduled = false } = {}) {
@@ -796,6 +878,19 @@ export class SurvivalDirector extends BehaviorDirector {
     return this.safetyIncident;
   }
 
+  tacticalObjectiveForThreat(threat) {
+    const incident = this.safetyIncident;
+    if (!incident?.active || !incident.failedResponse) return null;
+    const threatId = Number(threat?.id);
+    const sourceId = Number(incident.source?.id);
+    if (!Number.isFinite(threatId) || !Number.isFinite(sourceId) || threatId !== sourceId) return null;
+    const expectedUuid = boundedDecisionText(incident.failedResponse.entityUuid, 80) || null;
+    if (expectedUuid && boundedDecisionText(threat?.uuid, 80) !== expectedUuid) return null;
+    return ['melee', 'shield_melee'].includes(incident.failedResponse.response)
+      ? 'disengage'
+      : null;
+  }
+
   observeSafetySource(source) {
     if (!source) return false;
     const now = Date.now();
@@ -807,6 +902,13 @@ export class SurvivalDirector extends BehaviorDirector {
         health: finiteOrNull(this.agent.bot?.health),
       });
     } else {
+      const previousIncident = this.lastSafetyIncident;
+      const repeatsRecentSource = Boolean(
+        previousIncident
+        && sameSource(previousIncident.source, source)
+        && now - Number(previousIncident.resolvedAt || previousIncident.updatedAt || 0)
+          <= SAFETY_REPEAT_SOURCE_WINDOW_MS
+      );
       const position = physicalPosition(this.agent.bot?.entity?.position);
       this.safetyIncident = Object.freeze({
         id: `safety-${Math.floor(source.observedAt)}-${source.id ?? source.kind}`.slice(0, 96),
@@ -823,6 +925,9 @@ export class SurvivalDirector extends BehaviorDirector {
         announcedCode: null,
         failedPlayerTarget: null,
         failedCoverTarget: null,
+        encounterCount: repeatsRecentSource
+          ? Math.max(1, Number(previousIncident.encounterCount) || 1) + 1
+          : 1,
       });
       this.lastSafetyIncident = null;
     }
@@ -907,6 +1012,11 @@ export class SurvivalDirector extends BehaviorDirector {
       outcome,
       finishedAt: finiteOrNull(result.finishedAt) || Date.now(),
     });
+    const tacticalDecision = Array.isArray(skill?.decisions) ? skill.decisions.at(-1) : null;
+    const failedMelee = result.phase === 'failed'
+      && result.retryable === true
+      && skill?.kind === 'tactical_combat'
+      && ['melee', 'shield_melee'].includes(tacticalDecision?.response);
     if (result.phase === 'interrupted' || result.phase === 'cancelled' || result.code === 'interrupted') {
       this.replaceSafetyIncident({ stage: 'threat_response', lastAction });
     } else if (skill?.kind === 'tactical_combat' && outcome === 'secured') {
@@ -916,14 +1026,40 @@ export class SurvivalDirector extends BehaviorDirector {
         detail: 'The attributed hostile is no longer an active loaded threat after verified combat.',
       });
     } else if (skill?.kind === 'tactical_combat' && ['retreated', 'area_already_secure'].includes(outcome)) {
+      const safetyDetourBound = outcome === 'retreated'
+        && Number(this.safetyIncident.encounterCount) >= 2
+        && this.safetyIncident.safetyDetourBound !== true
+        && this.agent.job_director?.routeAroundRepeatedSafetySource?.({
+          source: this.safetyIncident.source,
+          incidentId: this.safetyIncident.id,
+        }) === true;
       this.replaceSafetyIncident({
         stage: outcome === 'retreated' ? 'disengaged' : 'assessing',
         lastAction,
+        ...(outcome === 'retreated' ? { failedResponse: null } : {}),
+        ...(safetyDetourBound ? { safetyDetourBound: true } : {}),
       });
     } else if (result.phase === 'succeeded') {
       this.replaceSafetyIncident({ stage: 'disengaged', lastAction });
     } else {
-      this.replaceSafetyIncident({ stage: 'response_blocked', lastAction });
+      this.replaceSafetyIncident({
+        stage: 'response_blocked',
+        lastAction,
+        ...(failedMelee
+          ? {
+              failedResponse: Object.freeze({
+                actionId: lastAction.actionId,
+                response: tacticalDecision.response,
+                entityId: this.safetyIncident.source?.id ?? null,
+                entityUuid: boundedDecisionText(
+                  this.agent.bot?.entities?.[Number(this.safetyIncident.source?.id)]?.uuid,
+                  80,
+                ) || null,
+                observedAt: Date.now(),
+              }),
+            }
+          : {}),
+      });
     }
     this.nextEligibleAt = 0;
     this.agent.behavior_arbiter?.wake?.('survival_incident_action_settled');
@@ -1511,7 +1647,11 @@ export class SurvivalDirector extends BehaviorDirector {
       // changed. The policy stays pure: it still picks the nearest reachable
       // safe bed from whatever remains, and its existing
       // `no_safe_reachable_bed` wait covers an empty list.
-      situation = { ...situation, beds: this.eligibleSleepBeds(situation) };
+      situation = {
+        ...situation,
+        beds: this.eligibleSleepBeds(situation),
+        usefulDrops: this.eligibleUsefulDrops(situation),
+      };
       // Command autonomy already suppresses the idle item-collecting mode. Keep
       // the same authority boundary for world-changing night shelters: nearby
       // drops and optional construction are upkeep, not bodily emergencies that
@@ -1727,12 +1867,27 @@ export class SurvivalDirector extends BehaviorDirector {
       return;
     }
     this.recordDecision(context, 'action_dispatched', { scheduled: true });
-    const previousActionId = this.agent.last_action_result?.actionId || null;
-
-    void Promise.resolve(this.executeCommand(this.agent, command, { owner: 'survival' }))
-      .then(() => {
-        const result = this.agent.last_action_result;
-        if (!result?.actionId || result.actionId === previousActionId) {
+    const incident = this.safetyIncident;
+    void Promise.resolve(this.executeCommand(this.agent, command, {
+      owner: 'survival',
+      routeOrigin: 'internal',
+      missionId: incident?.id || `survival:${intent.kind}`,
+      activityId: intent.kind,
+      materialToken: JSON.stringify([
+        incident?.stage || null,
+        incident?.source?.id || incident?.source?.uuid || null,
+        incident?.failedResponse?.actionId || null,
+        target || null,
+      ]),
+      returnExecution: true,
+    }))
+      .then(execution => {
+        const hasExecutionEnvelope = execution
+          && typeof execution === 'object'
+          && Object.hasOwn(execution, 'value')
+          && Object.hasOwn(execution, 'result');
+        const result = hasExecutionEnvelope ? execution.result || null : null;
+        if (!result?.actionId) {
           this.fail('missing_action_result', 'Survival action returned without a new structured result.', true);
           this.nextEligibleAt = Date.now() + FAILURE_COOLDOWN_MS;
           return;
@@ -1740,6 +1895,7 @@ export class SurvivalDirector extends BehaviorDirector {
         const safetySettled = this.settleSafetyIncident(intent, result);
         this.settleFoodRecovery(intent, result);
         this.settleSleep(intent, result);
+        this.settleUsefulDrops(intent, result, situation);
         if (!safetySettled) this.finish(result);
         this.nextEligibleAt = Date.now() + (
           result.phase === 'succeeded' ? SUCCESS_COOLDOWN_MS : FAILURE_COOLDOWN_MS

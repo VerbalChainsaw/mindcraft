@@ -1,4 +1,5 @@
 import { createWorkOrder } from '../work-order.js';
+import { isApprovedPrimaryConstructionMaterial } from './structural-material-contract.js';
 
 // Named structures a person can ask for by name.
 //
@@ -46,6 +47,9 @@ function structuralMaterial(value) {
     .replace(/[\s-]+/g, '_');
   if (!CANONICAL_NAME.test(material)) {
     throw new TypeError('Structure material must be a canonical block name.');
+  }
+  if (!isApprovedPrimaryConstructionMaterial(material)) {
+    throw new TypeError('Structure material must be an approved primary construction material.');
   }
   return material;
 }

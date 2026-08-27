@@ -214,7 +214,9 @@ export function evaluateMaterialChange(blockerValue, observation = {}, { now = n
   // world predicates, so existing consumers keep their exact meaning.
   let holdExpired = false;
   if (blocker.holdMs > 0 && blocker.createdAt !== null) {
-    const numericNow = Number(now);
+    const numericNow = now === null || now === undefined
+      ? Number.NaN
+      : Number(now);
     const currentTime = Number.isFinite(numericNow) ? numericNow : Date.now();
     holdExpired = currentTime - blocker.createdAt >= blocker.holdMs;
   }

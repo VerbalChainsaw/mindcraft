@@ -45,6 +45,9 @@ const SCENARIOS = Object.freeze({
   'deliver-item-goal':
     'Typed goal end to end: acquire a block of dirt and physically hand it to '
     + 'the player. The only course that exercises goal-director.',
+  'dynamic-escape-delivery':
+    'Begin a real player delivery, change the route after movement ownership '
+    + 'starts, traverse a rotated mixed-workaround chain, and complete the same handoff.',
   'orchestration-charcoal':
     'Phase 3 charcoal Mission vertical slice: the model interprets one promise, '
     + 'then stable causal Activities acquire and deliver exactly eight charcoal.',
@@ -63,6 +66,7 @@ const SCENARIOS = Object.freeze({
 // needs no machine-local path or override.
 const GENERATED_FIXTURES = Object.freeze({
   'deliver-item-goal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
+  'dynamic-escape-delivery': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
   'orchestration-charcoal': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'orchestration-forest-v1'),
   'route-probe-inconclusive': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),
   'terrain-swim-exit': path.join(REPO, 'tools', 'scenario-lab', 'fixtures', 'deliver-item-flat-v1'),

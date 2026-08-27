@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
+
 import Vec3 from 'vec3';
 
 import { isCookableFood } from '../../utils/food-semantics.js';
-import { executeCommand as executeAgentCommand } from '../commands/index.js';
+import { executeCommand as executeAgentCommand, parseCommandMessage } from '../commands/index.js';
 import { sendSquadRadio } from '../mindserver_proxy.js';
 import {
   actionResultTargetFailures,
@@ -20,6 +22,7 @@ import {
   createWorkOrder,
   normalizeWorkOrder,
   reconcileWorkOrder,
+  resumeFailedWorkOrder,
 } from './work-order.js';
 import {
   createBuilderStockpileOrder,
@@ -58,12 +61,14 @@ const JOB_SUCCESS_MS = 100;
 const JOB_PREEMPTION_MS = 0;
 const SURVIVAL_BUILDING_MATERIALS = new Set(['cobblestone', 'stone', 'dirt']);
 const ACQUISITION_METHOD_FAILURE = /(?:collect_blocked|lighting_failed|no_path|no_safe_stance|not_broken|not_collected|path_(?:stalled|timeout)|resource_not_found|source_not_found|stance_unverified|target_unloaded|unreachable)/;
+const ACQUISITION_REGION_MISS = /(?:resource|source)_not_found/;
 // How far a preemption may drag the bot before resuming means walking back
 // first. A fight can pull it a long way from its own worksite, and resuming
 // from wherever the chase ended is how a bot loses the thread of its work.
 const WORKSITE_RETURN_DISTANCE = 16;
 const BUILDER_EXECUTION_RETURN_DISTANCE = 4;
 const BUILDER_SURFACE_RETURN_DEPTH = 2;
+const ACTION_CIRCUIT_RADIUS_SQUARED = 2.5 ** 2;
 // After a manual command, hold off resuming autonomous job work briefly so the
 // two do not fight over the body. Two minutes was long enough that a paused
 // miner looked broken -- the player gave one order and the bot then stood inert
@@ -124,6 +129,38 @@ function failedAcquisitionRecovery(step, result) {
       && failedTargets.length < 1
     )
   ) return {};
+  // An empty loaded region is evidence about the region, not the acquisition
+  // method. Builder recovery owns bounded relocation and then re-plans this
+  // same connected-registry source from the new region. Globally excluding the
+  // method after one local scan turns a recoverable search into the false claim
+  // that no source is known at all.
+  if (
+    ACQUISITION_REGION_MISS.test(String(result?.code || ''))
+    && failedTargets.length < 1
+  ) {
+    // Explorer treats an exhausted exposed-ore scan as evidence about the
+    // exact cave region it just surveyed. Persisting that region is what lets
+    // the next survey bind a genuinely different cave (or exhaust into the
+    // deterministic corridor strategy) instead of relighting the same stance
+    // forever. Other acquisition plans still own their own regional
+    // relocation and must not globally exclude a method after one local miss.
+    if (
+      method === 'collect:exposed_ore->ores'
+      && target?.name === 'cave_region'
+      && result?.inconclusive !== true
+    ) {
+      return {
+        failedMethod: method,
+        failedTarget: {
+          name: target.name,
+          x: Math.floor(target.x),
+          y: Math.floor(target.y),
+          z: Math.floor(target.z),
+        },
+      };
+    }
+    return {};
+  }
   if (failedTargets.length > 0) {
     return {
       failedMethod: method,
@@ -161,19 +198,55 @@ function selectedBuilderMaterial(inventory) {
   )) || 'cobblestone';
 }
 
+function observedEmergencyShelterMaterial(order, bot) {
+  if (!order?.target || !Array.isArray(order?.blueprint?.cells)) return null;
+  const counts = new Map();
+  for (const cell of order.blueprint.cells) {
+    if (![cell?.x, cell?.y, cell?.z].every(Number.isFinite)) continue;
+    const observed = blockAt(
+      bot,
+      order.target.x + cell.x,
+      order.target.y + cell.y,
+      order.target.z + cell.z,
+    );
+    if (
+      !isSurvivalBuildingMaterial(observed?.name)
+      || isClearableWorksiteBlock(bot, observed)
+    ) continue;
+    counts.set(observed.name, (counts.get(observed.name) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || null;
+}
+
 function bindEmergencyShelterMaterial(order, bot) {
+  const boundedShelterBlueprint = [
+    'emergency_3x3',
+    'player_shelter_3x3',
+  ].includes(order?.blueprint?.id);
   if (
-    order?.kind !== 'emergency_shelter'
+    !boundedShelterBlueprint
     || !Array.isArray(order?.blueprint?.cells)
-    || !order.blueprint.cells.some(cell => cell?.material === 'survival_building_block')
   ) return order;
-  const material = selectedBuilderMaterial(inventoryCounts(bot));
+  const hasPlaceholder = order.blueprint.cells.some(cell => cell?.material === 'survival_building_block');
+  // A shelter retry at the same footprint must inherit the structure already
+  // present in Minecraft. Inventory order and an unresolved generic material
+  // are not architectural intent: both automatic and explicitly resumed 3x3
+  // shelter orders otherwise call their own existing walls obstructions. Only
+  // non-clearable survival building blocks are candidates, which excludes
+  // ordinary dirt/stone terrain while preserving a built shell.
+  const observedMaterial = (order.source === 'survival' || hasPlaceholder)
+    ? observedEmergencyShelterMaterial(order, bot)
+    : null;
+  if (!hasPlaceholder && !observedMaterial) return order;
+  const material = observedMaterial || selectedBuilderMaterial(inventoryCounts(bot));
   return {
     ...order,
     blueprint: {
       ...order.blueprint,
       cells: order.blueprint.cells.map(cell => (
         cell.material === 'survival_building_block'
+        || (observedMaterial && isSurvivalBuildingMaterial(cell.material))
           ? { ...cell, material }
           : cell
       )),
@@ -267,11 +340,28 @@ export function nextWorksiteReturnStep(order, snapshot) {
   if (![snapshot.x, snapshot.y, snapshot.z].every(Number.isFinite)) return null;
   const surfaceAccessRequired = order.checkpoint?.accessRequirement?.kind === 'surface';
   const surfaceAccessSatisfied = order.evidence?.code === 'skill_surface_reached';
-  if (builderExecution && surfaceAccessSatisfied && surfaceAccessRequired) {
+  // `accessRequirement:surface` can survive the exact recovery action that
+  // already climbed back to the worksite elevation when its generic egress
+  // probe is inconclusive under a canopy or partial roof. The Builder owns a
+  // stronger local fact than that generic probe: its bound construction plane.
+  // Once the body is back on that plane, clear the stale vertical prerequisite
+  // and let the ordinary horizontal worksite return/blueprint audit decide the
+  // next move. This does not claim that an arbitrary cave cell is a surface.
+  const worksiteElevationReached = Boolean(
+    Number.isFinite(Number(order.target?.y))
+    && Number(snapshot.y) >= Number(order.target.y) - BUILDER_SURFACE_RETURN_DEPTH
+  );
+  if (
+    builderExecution
+    && surfaceAccessRequired
+    && (surfaceAccessSatisfied || worksiteElevationReached)
+  ) {
     return {
       phase: order.phase,
       checkpoint: { ...order.checkpoint, accessRequirement: null },
-      code: 'worksite_surface_access_satisfied',
+      code: surfaceAccessSatisfied
+        ? 'worksite_surface_access_satisfied'
+        : 'worksite_elevation_access_satisfied',
       keepAnchor: true,
     };
   }
@@ -285,6 +375,21 @@ export function nextWorksiteReturnStep(order, snapshot) {
       )
     )
   ) {
+    const reserveSlots = Math.max(1, Number(order.constraints?.reserveSlots) || 1);
+    if (Number(snapshot.freeSlots) <= reserveSlots) {
+      const protectedMaterials = [...new Set([
+        ...(order.blueprint?.cells || []).map(cell => cell?.material),
+        order.checkpoint?.acquisitionRequirement?.target,
+      ].filter(name => /^[a-z0-9_]{1,64}$/.test(String(name || ''))))].join(',');
+      return {
+        command: `!releaseInventoryWorkingSlots(${JSON.stringify(protectedMaterials)}, ${Math.max(2, reserveSlots)})`,
+        nextPhase: order.phase,
+        code: 'surface_inventory_capacity_release_required',
+        keepAnchor: true,
+        target: { name: 'surface_working_inventory' },
+        reason: 'Open protected working slots before surface corridor excavation so recovered blocks cannot deadlock the ascent.',
+      };
+    }
     return {
       capability: { id: 'reach_surface', arguments: {} },
       nextPhase: order.phase,
@@ -390,7 +495,7 @@ function selectedResourcePresence(bot, order) {
 
 function replantSituation(agent, order, inventory) {
   if (order.role !== 'lumberjack') return undefined;
-  const target = agent.last_action_result?.evidence?.skill?.target;
+  const target = order.evidence?.target;
   if (![target?.x, target?.y, target?.z].every(Number.isFinite)) return { enabled: false };
   const family = canonicalLogFamily(target?.name) || canonicalLogFamily(order.target?.name);
   if (!family || ['crimson', 'warped'].includes(family)) return { enabled: false };
@@ -414,6 +519,41 @@ function replantSituation(agent, order, inventory) {
     y,
     z,
   };
+}
+
+function materialBlockerMatches(order, selectedCommand, materialToken, snapshot) {
+  const blocker = order?.evidence?.materialBlocker;
+  if (order?.evidence?.continuationKind !== 'retry_after_material_change' || !blocker) return false;
+  const parsed = parseCommandMessage(selectedCommand);
+  if (!parsed || typeof parsed === 'string') return true;
+  const args = Array.isArray(parsed.args) ? parsed.args : [];
+  const position = blocker.position;
+  const currentPosition = [snapshot?.x, snapshot?.y, snapshot?.z].every(Number.isFinite)
+    ? snapshot
+    : null;
+  const sameArea = !position || !currentPosition || (
+    (position.x - currentPosition.x) ** 2
+    + (position.y - currentPosition.y) ** 2
+    + (position.z - currentPosition.z) ** 2
+  ) <= ACTION_CIRCUIT_RADIUS_SQUARED;
+  return Boolean(
+    blocker.missionId === order.id
+    && blocker.activityId === `${order.phase}:${selectedCommand}`
+    && blocker.materialToken === materialToken
+    && blocker.selectedSkill === parsed.commandName
+    && JSON.stringify(blocker.args) === JSON.stringify(args)
+    && sameArea
+  );
+}
+
+function workOrderMaterialToken(order, step) {
+  const materialState = JSON.stringify([
+    order.phase,
+    order.checkpoint || null,
+    step.kind || null,
+    step.target || order.target || null,
+  ]);
+  return `work-order:v1:${createHash('sha256').update(materialState).digest('hex')}`;
 }
 
 function entityOccupies(bot, x, y, z) {
@@ -520,6 +660,51 @@ function auditBlueprint(bot, order, inventory) {
           index: -1,
           clearable: isClearableWorksiteBlock(bot, current),
         });
+      }
+    }
+  }
+  // A functional shelter is not complete merely because every positive
+  // blueprint block exists. Its unoccupied interior cells are load-bearing
+  // negative space: Kevin must be able to stand, open storage, use utilities,
+  // and cross the room after the roof closes. Audit those cells as required
+  // air, deriving them from the persisted named blueprint so older resumable
+  // orders gain the same contract without being replaced or migrated.
+  if (
+    String(order.blueprint.id || '').startsWith('functional_shelter_')
+    && Number.isInteger(order.blueprint.width)
+    && Number.isInteger(order.blueprint.depth)
+    && Number.isInteger(order.blueprint.height)
+  ) {
+    for (let relativeY = 1; relativeY < order.blueprint.height - 1; relativeY += 1) {
+      for (let relativeX = 1; relativeX < order.blueprint.width - 1; relativeX += 1) {
+        for (let relativeZ = 1; relativeZ < order.blueprint.depth - 1; relativeZ += 1) {
+          if (blueprintPositions.has(`${relativeX}:${relativeY}:${relativeZ}`)) continue;
+          const x = anchor.x + relativeX;
+          const y = anchor.y + relativeY;
+          const z = anchor.z + relativeZ;
+          const current = blockAt(bot, x, y, z);
+          if (!current) return { valid: false, code: 'unloaded', missing: [], incorrect: [] };
+          if (['water', 'lava'].includes(current.name)) {
+            return { valid: false, code: 'liquid', missing: [], incorrect: [] };
+          }
+          if (isProtectedGameplayBlock(current)) {
+            return { valid: false, code: 'protected', missing: [], incorrect: [] };
+          }
+          if (entityOccupies(bot, x, y, z)) {
+            return { valid: false, code: 'occupied', missing: [], incorrect: [] };
+          }
+          if (!isReplaceableGameplayBlock(current)) {
+            incorrect.push({
+              x,
+              y,
+              z,
+              expected: 'air',
+              observed: current.name,
+              index: -1,
+              clearable: isClearableWorksiteBlock(bot, current),
+            });
+          }
+        }
       }
     }
   }
@@ -1119,6 +1304,55 @@ export class JobDirector extends RoleDirector {
     return { accepted: true, code: 'operator_stop_resumed', id: this.activeOrder.id };
   }
 
+  resumeLastOrder(orderId = null) {
+    if (this.activeOrder) {
+      return { accepted: false, code: 'job_busy', id: this.activeOrder.id };
+    }
+    const receipt = this.lastReceipt;
+    const terminalOrder = receipt?.order;
+    if (
+      !terminalOrder
+      || !['failed', 'complete'].includes(receipt?.phase)
+      || (orderId && receipt.orderId !== orderId)
+    ) {
+      return { accepted: false, code: 'terminal_job_receipt_missing', id: orderId || null };
+    }
+
+    const resumeCandidate = receipt.phase === 'failed'
+      ? resumeFailedWorkOrder(terminalOrder, this.now(), { allowAutomatic: true })
+      : normalizeWorkOrder({
+          ...terminalOrder,
+          phase: 'assess',
+          resumePhase: null,
+          attempts: 0,
+          recoveries: 0,
+          preemptions: 0,
+          evidence: {
+            code: 'operator_revalidation_requested',
+            detail: 'The operator requested a fresh Minecraft audit after the completed world outcome changed.',
+            actionId: '',
+          },
+          updatedAt: this.now(),
+        });
+    const resumed = normalizeWorkOrder(bindEmergencyShelterMaterial(resumeCandidate, this.agent.bot));
+    this.activeOrder = resumed;
+    this.lastOrder = null;
+    this.lastReceipt = null;
+    this.completedOrderIds.delete(this.activeOrder.id);
+    this.invalidateDispatch();
+    this.store.save(this.activeOrder, null);
+    this.nextAttemptAt = 0;
+    this.setStatus(
+      'waiting',
+      'terminal_job_resumed',
+      this.activeOrder.target?.name || null,
+      'The exact terminal work order will re-audit current Minecraft state before continuing.',
+      true,
+    );
+    this.agent.behavior_arbiter?.wake?.('terminal_job_resumed');
+    return { accepted: true, code: 'terminal_job_resumed', id: this.activeOrder.id };
+  }
+
   invalidateDispatch() {
     this.dispatchGeneration += 1;
     this.activeDispatch = null;
@@ -1254,13 +1488,79 @@ export class JobDirector extends RoleDirector {
     }
   }
 
+  routeAroundRepeatedSafetySource({ source = null, incidentId = null } = {}) {
+    const order = this.activeOrder;
+    if (
+      !order
+      || order.role !== 'miner'
+      || order.kind !== 'explore'
+      || ['completed', 'failed', 'cancelled'].includes(order.phase)
+      || order.checkpoint?.acquisitionStrategy === 'mining_corridor'
+    ) return false;
+
+    const threat = Number.isFinite(Number(source?.id))
+      ? this.agent.bot?.entities?.[Number(source.id)] || null
+      : null;
+    const position = threat?.position || this.agent.bot?.entity?.position || null;
+    const failedTargets = [
+      ...(order.checkpoint?.failedTargets || []),
+      ...(position && [position.x, position.y, position.z].every(Number.isFinite)
+        ? [{
+            name: 'cave_region',
+            x: Math.floor(position.x),
+            y: Math.floor(position.y),
+            z: Math.floor(position.z),
+            failureCode: 'repeated_safety_source',
+          }]
+        : []),
+    ].slice(-24);
+    this.persist({
+      ...order,
+      phase: 'execute',
+      resumePhase: null,
+      checkpoint: {
+        ...order.checkpoint,
+        failedTargets,
+        caveLit: false,
+        acquisitionStrategy: 'mining_corridor',
+        corridorSearchLegs: 0,
+        miningReturnRoute: [],
+        safetyDetours: Math.max(0, Number(order.checkpoint?.safetyDetours) || 0) + 1,
+      },
+      evidence: {
+        code: 'safety_route_detour_bound',
+        detail: `Repeated contact with ${String(source?.name || 'the same threat').slice(0, 64)} made the cave approach non-convergent; continuing this expedition through its deterministic mining corridor.`,
+        actionId: String(incidentId || '').slice(0, 96),
+        continuationKind: 'retry_after_material_change',
+      },
+      updatedAt: this.now(),
+    });
+    this.nextAttemptAt = this.now();
+    this.setStatus(
+      'waiting',
+      'safety_route_detour_bound',
+      'mining_corridor',
+      'A repeated threat blocked the cave approach; the same expedition will continue through a deterministic mining corridor.',
+      true,
+    );
+    this.agent.behavior_arbiter?.wake?.('job_safety_route_detour_bound');
+    return true;
+  }
+
   acceptStructureMaterialAlternative(order, result, { reassess = false } = {}) {
     if (order?.role !== 'builder' || order.kind === 'stockpile') return false;
     const harvestEvidence = result?.evidence?.skill;
     const alternativeOutput = harvestEvidence?.outcome === 'alternative_source_observed'
       ? harvestEvidence.alternativeOutput
       : null;
-    if (!alternativeOutput) return false;
+    const regionalFamilyRebind = Boolean(
+      !alternativeOutput
+      && result?.retryable === true
+      && ACQUISITION_REGION_MISS.test(String(result?.code || ''))
+      && order.checkpoint?.acquisitionRequirement?.target
+      && order.checkpoint?.acquisitionVariantCommitted !== true
+    );
+    if (!alternativeOutput && !regionalFamilyRebind) return false;
     const preservedProgress = preservesStructureAccessoryProgress(
       order,
       this.agent.bot,
@@ -1292,14 +1592,22 @@ export class JobDirector extends RoleDirector {
         checkpoint: {
           ...rebound.checkpoint,
           acquisitionRequirement: reboundRequirement,
-          ...(preservedProgress
+          materialSearchTarget: null,
+          materialSearchRelocations: null,
+          ...(regionalFamilyRebind || preservedProgress
             ? { acquisitionVariantCommitted: true }
             : { acquisitionVariantCommitted: null }),
         },
       } : {}),
       evidence: {
-        code: preservedProgress ? 'material_alternative_deferred' : 'material_alternative_bound',
-        detail: preservedProgress
+        code: regionalFamilyRebind
+          ? 'regional_material_variant_bound'
+          : preservedProgress
+            ? 'material_alternative_deferred'
+            : 'material_alternative_bound',
+        detail: regionalFamilyRebind
+          ? `The prior accessory species was absent in this loaded region; bound the same material family to ${reboundRequirement?.target || 'the nearest supported local variant'}.`
+          : preservedProgress
           ? `Kept the structure accessory already backed by more carried recipe progress than ${alternativeOutput}.`
           : `Bound the structure accessory to verified ${alternativeOutput}.`,
         actionId: result?.actionId || '',
@@ -1412,14 +1720,8 @@ export class JobDirector extends RoleDirector {
     }
 
     let transitions = 0;
-    let materialBindingSupersededResult = false;
     while (this.activeOrder && transitions < 6) {
       transitions += 1;
-      if (this.activeOrder.role === 'builder' && this.activeOrder.kind !== 'stockpile') {
-        if (this.acceptStructureMaterialAlternative(this.activeOrder, this.agent.last_action_result)) {
-          materialBindingSupersededResult = true;
-        }
-      }
       const reducer = reducerFor(this.activeOrder);
       if (!reducer) {
         this.finishOrder('failed', 'unsupported_job_role', 'No job plan exists for this work order.', false);
@@ -1429,9 +1731,6 @@ export class JobDirector extends RoleDirector {
       let step;
       try {
         snapshot = this.getJobSnapshot(this.agent, this.activeOrder);
-        const reducerResult = materialBindingSupersededResult
-          ? null
-          : this.agent.last_action_result;
         const upkeepStep = nextJobUpkeepStep(this.activeOrder, snapshot);
         if (upkeepStep?.code === 'food_resupply_required') {
           const upkeepOutcome = this.agent.survival_director?.jobFoodUpkeepOutcome?.(this.activeOrder.id);
@@ -1457,7 +1756,7 @@ export class JobDirector extends RoleDirector {
         }
         step = upkeepStep
           || nextWorksiteReturnStep(this.activeOrder, snapshot)
-          || reducer(this.activeOrder, snapshot, reducerResult, {
+          || reducer(this.activeOrder, snapshot, null, {
             planItem: ({
               target,
               quantity,
@@ -1546,6 +1845,34 @@ export class JobDirector extends RoleDirector {
           updatedAt: this.now(),
         });
       }
+      const selectedCommand = step.capability ? capabilityCommand(step.capability) : step.command;
+      // Request contexts deliberately bound their text fields. Hash the full
+      // durable state instead of truncating its JSON so a large expedition
+      // checkpoint cannot make a circuit appear changed on the next tick or
+      // alias another state that shares the same prefix.
+      const materialToken = workOrderMaterialToken(this.activeOrder, step);
+      if (materialBlockerMatches(this.activeOrder, selectedCommand, materialToken, snapshot)) {
+        this.setStatus(
+          'waiting',
+          'job_retry_after_material_change',
+          step.target?.name || this.activeOrder.target?.name,
+          'The same automatic action remains blocked until its target, checkpoint, method, position, or another material input changes.',
+          true,
+        );
+        this.nextAttemptAt = this.now() + JOB_RETRY_MS;
+        return;
+      }
+      if (this.activeOrder.evidence?.materialBlocker) {
+        this.persist({
+          ...this.activeOrder,
+          evidence: {
+            code: 'job_material_change_observed',
+            detail: 'A durable circuit input changed; the existing work order may select its next action again.',
+            actionId: this.activeOrder.evidence.actionId,
+          },
+          updatedAt: this.now(),
+        });
+      }
       const orderAtDispatch = this.activeOrder;
       const dispatchToken = Object.freeze({
         generation: this.dispatchGeneration + 1,
@@ -1554,8 +1881,6 @@ export class JobDirector extends RoleDirector {
       this.dispatchGeneration = dispatchToken.generation;
       this.activeDispatch = dispatchToken;
       this.inFlight = true;
-      const previousActionId = this.agent.last_action_result?.actionId || null;
-      const selectedCommand = step.capability ? capabilityCommand(step.capability) : step.command;
       this.setStatus(
         'acting',
         `job_${orderAtDispatch.phase}`,
@@ -1569,13 +1894,32 @@ export class JobDirector extends RoleDirector {
           executeCommand: this.executeJobCommand,
           owner: 'job',
           routeOrigin: 'job-director',
+          missionId: orderAtDispatch.id,
+          activityId: `${orderAtDispatch.phase}:${selectedCommand || step.capability?.id || 'capability'}`,
+          materialToken,
         })
-        : Promise.resolve(this.executeJobCommand(this.agent, selectedCommand, { owner: 'job' }))
-          .then(value => ({ value, verification: null, result: null }));
+        : Promise.resolve(this.executeJobCommand(this.agent, selectedCommand, {
+          owner: 'job',
+          routeOrigin: 'job-director',
+          missionId: orderAtDispatch.id,
+          activityId: `${orderAtDispatch.phase}:${selectedCommand}`,
+          materialToken,
+          returnExecution: true,
+        })).then(commandExecution => {
+          const hasExecutionEnvelope = commandExecution
+            && typeof commandExecution === 'object'
+            && Object.hasOwn(commandExecution, 'value')
+            && Object.hasOwn(commandExecution, 'result');
+          return {
+            value: hasExecutionEnvelope ? commandExecution.value : commandExecution,
+            verification: null,
+            result: hasExecutionEnvelope ? commandExecution.result || null : null,
+          };
+        });
       void Promise.resolve(execution)
         .then(outcome => {
-          let result = outcome?.result || this.agent.last_action_result;
-          if (!result?.actionId || result.actionId === previousActionId) {
+          let result = outcome?.result || null;
+          if (!result?.actionId) {
             result = {
               actionId: `missing-${this.now()}`,
               phase: 'failed',
@@ -1644,7 +1988,7 @@ export class JobDirector extends RoleDirector {
               : orderAtDispatch;
           const acquisitionRecovery = failedAcquisitionRecovery(step, result);
           const advanced = advanceWorkOrder(verifiedOrder, result, {
-            previousActionId,
+            previousActionId: orderAtDispatch.evidence?.actionId || null,
             nextPhase: step.nextPhase,
             recoveryAction: step.recoveryAction === true,
             ...acquisitionRecovery,
@@ -1663,19 +2007,32 @@ export class JobDirector extends RoleDirector {
           if (advanced.phase === 'failed' || advanced.phase === 'cancelled') {
             this.finishOrder(
               advanced.phase,
-              result?.code || 'job_attempts_exhausted',
-              result?.detail || 'The work order exhausted its bounded recovery budget.',
+              advanced.evidence?.code || result?.code || 'job_attempts_exhausted',
+              advanced.evidence?.detail || result?.detail || 'The work order exhausted its bounded recovery budget.',
               false,
             );
             return;
           }
           const succeeded = advanced.phase === step.nextPhase && result?.phase === 'succeeded';
+          const status = preempted
+            ? 'waiting'
+            : succeeded
+              ? 'succeeded'
+              : advanced.phase === 'recover'
+                ? 'recovering'
+                : 'failed';
           this.setStatus(
-            succeeded ? 'succeeded' : advanced.phase === 'recover' ? 'recovering' : 'failed',
-            result?.code || (succeeded ? 'job_phase_succeeded' : 'job_phase_failed'),
+            status,
+            result?.code || (preempted ? 'job_preempted' : succeeded ? 'job_phase_succeeded' : 'job_phase_failed'),
             step.target?.name || advanced.target?.name,
-            result?.detail || (succeeded ? 'Verified job phase completed.' : 'Job phase did not verify.'),
-            advanced.phase === 'recover',
+            result?.detail || (
+              preempted
+                ? 'Survival interrupted the action; the durable work order remains active.'
+                : succeeded
+                  ? 'Verified job phase completed.'
+                  : 'Job phase did not verify.'
+            ),
+            preempted || advanced.phase === 'recover',
           );
           this.nextAttemptAt = this.now() + (
             preempted
@@ -1694,7 +2051,7 @@ export class JobDirector extends RoleDirector {
             detail: error?.message || error,
             retryable: true,
           }, {
-            previousActionId,
+            previousActionId: orderAtDispatch.evidence?.actionId || null,
             now: this.now(),
           });
           this.persist(failed);

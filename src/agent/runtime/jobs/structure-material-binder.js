@@ -7,9 +7,9 @@ import {
 } from '../../../utils/entity-harvest-semantics.js';
 import { buildPrerequisitePlan } from '../prerequisite-planner.js';
 import { createWorkOrder } from '../work-order.js';
+import { isApprovedPrimaryConstructionMaterial } from './structural-material-contract.js';
 
 const LOCAL_BIND_RANGE = 16;
-const BASIC_STRUCTURAL_MATERIALS = new Set(['cobblestone', 'dirt', 'stone']);
 
 const FAMILY_DEFAULTS = Object.freeze({
   oak_door: Object.freeze({
@@ -216,14 +216,10 @@ function rankCandidate(bot, name, range, planItem, blockProximityCache, required
   };
 }
 
-function isSafeStructuralMaterial(name) {
-  return BASIC_STRUCTURAL_MATERIALS.has(name) || String(name || '').endsWith('_planks');
-}
-
 function structuralMaterialCandidates(bot) {
   return Object.values(bot?.registry?.itemsByName || {})
     .map(item => item?.name)
-    .filter(isSafeStructuralMaterial)
+    .filter(isApprovedPrimaryConstructionMaterial)
     .filter(name => Boolean(bot?.registry?.blocksByName?.[name]))
     .sort();
 }
@@ -250,6 +246,7 @@ function selectStructuralMaterial(bot, order, cells, range, planItem) {
 
 function familyDefaultForCell(cell, rebindRest = false) {
   if (cell?.materialFamily) {
+    if (cell.materialFamily === 'wooden_door') return 'oak_door';
     if (rebindRest && cell.materialFamily === 'bed') return 'red_bed';
     if (cell.materialFamily === 'wooden_fence') return 'oak_fence';
     if (cell.materialFamily === 'wooden_fence_gate') return 'oak_fence_gate';
@@ -334,7 +331,7 @@ export function bindStructureAccessoryMaterials(order, bot, {
   if (structuralMaterialAlternatives && structuralFamilyCells.length === 0) {
     const structuralCounts = new Map();
     for (const cell of order.blueprint.cells) {
-      if (cell?.fixtureId || !isSafeStructuralMaterial(cell?.material)) continue;
+      if (cell?.fixtureId || !isApprovedPrimaryConstructionMaterial(cell?.material)) continue;
       structuralCounts.set(cell.material, (structuralCounts.get(cell.material) || 0) + 1);
     }
     const primary = [...structuralCounts.entries()]

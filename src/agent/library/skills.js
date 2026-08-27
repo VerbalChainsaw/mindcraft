@@ -33,6 +33,41 @@ import {
     rankCollectionCandidates,
     rankWholeTreeCandidates,
 } from '../runtime/collection-candidate-selector.js';
+
+let workstationTransactionSequence = 0;
+
+function workstationTransactionId(kind) {
+    workstationTransactionSequence += 1;
+    return `${kind}-${Date.now()}-${workstationTransactionSequence}`;
+}
+
+function workstationTransactionBinding(bot, block, expectedName, exactWorkstation = null) {
+    const position = block?.position || exactWorkstation?.position;
+    if (!position || ![position.x, position.y, position.z].every(Number.isFinite)) return null;
+    return {
+        name: expectedName,
+        position: {
+            x: Math.floor(position.x),
+            y: Math.floor(position.y),
+            z: Math.floor(position.z),
+        },
+        dimension: exactWorkstation?.dimension || bot?.game?.dimension || null,
+    };
+}
+
+function furnaceTransactionState(furnace) {
+    if (!furnace) return null;
+    const slot = item => item
+        ? { name: item.name || mc.getItemName(item.type), count: Math.max(1, Number(item.count) || 1) }
+        : null;
+    return {
+        input: slot(furnace.inputItem?.()),
+        fuel: slot(furnace.fuelItem?.()),
+        output: slot(furnace.outputItem?.()),
+        progress: Number.isFinite(Number(furnace.progress)) ? Number(furnace.progress) : null,
+        fuelRemaining: Number.isFinite(Number(furnace.fuel)) ? Number(furnace.fuel) : null,
+    };
+}
 import {
     chooseTacticalCombatDecision,
     reconcileTacticalRetreatHealth,
@@ -75,6 +110,7 @@ import {
     selectBoundedMiningProgressStances,
 } from '../runtime/mining-corridor-planner.js';
 import { createComponentTransactionReceipt } from '../runtime/component-transaction.js';
+import { createWorkstationTransactionReceipt } from '../runtime/workstation-transaction.js';
 import {
     isPlayerBuildEvidence,
     observeWorldModificationAuthority,
@@ -183,7 +219,12 @@ const DROWNING_FINAL_ASCENT_RESERVE_MS = 2_000;
 const DROWNING_SHORE_ATTEMPT_TIMEOUT_MS = 10_000;
 const DELIVERY_MIN_DROP_DISTANCE = 1.6;
 const DELIVERY_MAX_DROP_DISTANCE = 3.25;
-const DELIVERY_MAX_DROP_AXIS_OFFSET = 0.65;
+// A one-cell lateral offset is still a recipient-facing handoff lane. Requiring
+// a perfectly cardinal block made ordinary mixed terrain impossible: a player
+// and Kevin can share the tip of a tree canopy while the nearest supported
+// receiving stance is one cell sideways and two cells forward. Keep rejecting
+// broad diagonal throws, whose midpoint can re-enter the thrower's pickup box.
+const DELIVERY_MAX_DROP_AXIS_OFFSET = 1.5;
 const DELIVERY_PICKUP_TIMEOUT_MS = 3_250;
 const MAX_DELIVERY_DROP_ATTEMPTS = 3;
 const MOUNT_INTERACTION_RANGE = 4.5;
@@ -393,6 +434,8 @@ const PORTAL_EXIT_TIMEOUT_MS = 5_000;
 const EXPLORATION_STALL_TIMEOUT_MS = 20_000;
 const EXPLORATION_LEG_TIMEOUT_MS = 90_000;
 const CONTAINER_OPEN_TIMEOUT_MS = 20_000;
+const CRAFT_RECIPE_FILL_TIMEOUT_MS = 2_000;
+const CRAFT_RESULT_CONFIRM_TIMEOUT_MS = 3_000;
 const ASSIGNED_CONTAINER_LOAD_RADIUS = 16;
 const BREW_STAGE_TIMEOUT_MS = 28_000;
 const BREW_POLL_MS = 100;
@@ -1871,7 +1914,13 @@ export function interactionStandingStances(bot, target, goal, radius = 5) {
                 const stance = new Vec3(x, y, z);
                 if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
                 if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
-                if (!isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)))) continue;
+                const support = bot.blockAt(stance.offset(0, -1, 0));
+                // Doors, gates, and trapdoors are traversable interactions,
+                // not stable floors. Treating an upper door half as support
+                // advertised a two-block step onto the doorway while building
+                // the roof above it, even though no horizontal standing
+                // surface existed there.
+                if (!isSafeGameplaySupport(support) || support.openable) continue;
                 if (!goal.isEnd(stance)) continue;
                 candidates.push(stance);
             }
@@ -2807,10 +2856,10 @@ export function assessStableMiningCollectionTarget(bot, block) {
         //
         // "This cell is stone" and "this cell is bedrock" are not the same
         // answer. One is a hard no; the other is one swing of a pickaxe.
-        // prospectiveMiningStandingPositions already models the second case --
-        // it was simply never consulted here, only in a bounded recovery much
-        // further downstream. Ask it before declaring anything unreachable, and
-        // let pathfinder work out the actual sequence of moves.
+        // prospectiveMiningStandingPositions already models the second case.
+        // Preserve it as a viable target, but do not advertise its still-solid
+        // stance as an ordinary clear route: the deterministic mining-access
+        // owner must carve and verify that corridor first.
         const prospective = prospectiveMiningStandingPositions(bot, block);
         if (prospective.length > 0) {
             return {
@@ -3156,9 +3205,10 @@ function collectionCandidateObservations(
         const targetAssessment = stableMiningStance
             ? assessStableMiningCollectionTarget(bot, block)
             : null;
-        const route = targetAssessment && !targetAssessment.safe
+        const requiresMiningAccess = targetAssessment?.code === 'prospective_stance_available';
+        const route = targetAssessment && (!targetAssessment.safe || requiresMiningAccess)
             ? {
-                routeStatus: targetAssessment.code,
+                routeStatus: requiresMiningAccess ? 'mining_access_required' : targetAssessment.code,
                 routeCost: 0,
                 routeLength: 0,
                 routeTimeMs: 0,
@@ -3181,6 +3231,7 @@ function collectionCandidateObservations(
             descentFallback,
             dropDepth: targetAssessment?.dropDepth ?? null,
             safeStances: targetAssessment?.stances || null,
+            requiresMiningAccess,
             ...route,
         };
     });
@@ -3201,7 +3252,9 @@ function selectCollectionCandidate(
     );
     const rankingOptions = { inconclusive: bot?.preflightPolicy?.collectionRoute };
     const ranked = rankCollectionCandidates(observations, rankingOptions);
-    const selected = ranked.find(candidate => candidate.reachable) || null;
+    const selected = ranked.find(candidate => (
+        candidate.reachable && candidate.requiresMiningAccess !== true
+    )) || null;
     if (selected) return { selected, ranked, descentFallback: null };
 
     const maxDropDown = survivableDropDistance(bot);
@@ -3226,7 +3279,9 @@ function selectCollectionCandidate(
         ),
         rankingOptions,
     );
-    const descentSelected = descentRanked.find(candidate => candidate.reachable) || null;
+    const descentSelected = descentRanked.find(candidate => (
+        candidate.reachable && candidate.requiresMiningAccess !== true
+    )) || null;
     return {
         selected: descentSelected,
         ranked: descentRanked,
@@ -3409,7 +3464,8 @@ async function recoverCollectionAccess(bot, resourceName, selection, search, {
         // definition. Reuse the bounded supported mining route to create one;
         // ordinary resources still use the non-digging local recovery below.
         const requiresDeterministicMiningAccess = allowNaturalRouteDigging && (
-            candidateEntry.routeStatus === 'no_safe_stance'
+            candidateEntry.requiresMiningAccess === true
+            || candidateEntry.routeStatus === 'no_safe_stance'
             || candidateEntry.reachable === false
         );
         if (requiresDeterministicMiningAccess) {
@@ -3608,6 +3664,126 @@ async function equipHighestAttack(bot) {
         await bot.equip(weapon, 'hand');
 }
 
+async function waitForCraftingOutput(bot, window, itemName, timeoutMs=CRAFT_RECIPE_FILL_TIMEOUT_MS) {
+    const signal = actionCancellationSignal();
+    const deadline = Date.now() + Math.max(1, remainingActionTimeMs(timeoutMs));
+    while (Date.now() < deadline && !bot.interrupt_code && !signal?.aborted) {
+        if (window?.slots?.[0]?.name === itemName) return true;
+        await interruptibleDelay(bot, 25);
+    }
+    return !bot.interrupt_code
+        && !signal?.aborted
+        && window?.slots?.[0]?.name === itemName;
+}
+
+function craftingInventoryCount(bot, window, itemName) {
+    // While a workstation window is open, Mineflayer's player-inventory view
+    // can remain stale until that window closes even though the authoritative
+    // window slots already contain the crafted item. Observe both projections
+    // of the same carried inventory so a successful recipe-book transfer is
+    // not mislabeled as a failed craft.
+    return Math.max(
+        inventoryCount(bot, itemName),
+        carriedWindowInventoryCount(window, itemName),
+    );
+}
+
+async function waitForCraftingInventoryCount(bot, window, itemName, expectedCount, timeoutMs) {
+    const signal = actionCancellationSignal();
+    const deadline = Date.now() + Math.max(1, remainingActionTimeMs(timeoutMs));
+    while (
+        craftingInventoryCount(bot, window, itemName) < expectedCount
+        && Date.now() < deadline
+        && !bot.interrupt_code
+        && !signal?.aborted
+    ) {
+        await interruptibleDelay(bot, INVENTORY_POLL_MS);
+    }
+    return !bot.interrupt_code
+        && !signal?.aborted
+        && craftingInventoryCount(bot, window, itemName) >= expectedCount;
+}
+
+function craftingInterruptedError() {
+    const error = new Error('Crafting was interrupted before the server transaction settled.');
+    error.name = 'AbortError';
+    return error;
+}
+
+async function craftWithUnlockedRecipeBook(bot, itemName, craftAttempts, outputPerCraft, craftingTable) {
+    const displays = mc.unlockedCraftingRecipeDisplays(bot, itemName, {
+        requiresTable: Boolean(craftingTable),
+    });
+    if (displays.length === 0) return { attempted: false, crafts: 0 };
+
+    const signal = actionCancellationSignal();
+    if (bot.interrupt_code || signal?.aborted) throw craftingInterruptedError();
+    let window = bot.inventory;
+    let openedTable = false;
+    if (craftingTable) {
+        const openTimeoutMs = Math.max(
+            1,
+            remainingActionTimeMs(CONTAINER_OPEN_TIMEOUT_MS),
+        );
+        window = await bot.openBlock(
+            craftingTable,
+            undefined,
+            undefined,
+            {
+                signal,
+                timeoutMs: Math.min(CONTAINER_OPEN_TIMEOUT_MS, openTimeoutMs),
+            },
+        );
+        openedTable = true;
+    }
+
+    let completed = 0;
+    try {
+        for (let attempt = 0; attempt < craftAttempts; attempt += 1) {
+            if (bot.interrupt_code || signal?.aborted) throw craftingInterruptedError();
+            const beforeCount = craftingInventoryCount(bot, window, itemName);
+            let selectedDisplay = null;
+            for (const display of displays) {
+                bot._client.write('craft_recipe_request', {
+                    windowId: window.id,
+                    recipeId: display.displayId,
+                    makeAll: false,
+                });
+                if (await waitForCraftingOutput(bot, window, itemName)) {
+                    selectedDisplay = display;
+                    break;
+                }
+            }
+            if (!selectedDisplay) {
+                throw new Error(`The server recipe book did not populate ${itemName} in the active crafting grid.`);
+            }
+
+            // The server has already validated and populated this exact recipe.
+            // Mineflayer's ordinary craft path manually clicks every ingredient
+            // and waits for output-slot updates after incomplete intermediate
+            // shapes; Paper 1.21.11 need not emit those unchanged-slot updates.
+            // Taking the authoritative result avoids that false 20s stall while
+            // retaining Mineflayer's normal cursor and inventory handling.
+            await bot.putAway(0);
+            const expectedCount = beforeCount + outputPerCraft;
+            if (!await waitForCraftingInventoryCount(
+                bot,
+                window,
+                itemName,
+                expectedCount,
+                Math.max(1, remainingActionTimeMs(CRAFT_RESULT_CONFIRM_TIMEOUT_MS)),
+            )) {
+                if (bot.interrupt_code || signal?.aborted) throw craftingInterruptedError();
+                throw new Error(`Minecraft did not confirm ${itemName} after accepting recipe ${selectedDisplay.displayId}.`);
+            }
+            completed += 1;
+        }
+        return { attempted: true, crafts: completed };
+    } finally {
+        if (openedTable) await closeContainerQuietly(window);
+    }
+}
+
 export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
     /**
      * Attempt to craft the given item name from a recipe. May craft many items.
@@ -3622,10 +3798,43 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
     const requestedCrafts = Math.floor(Number(num));
     let temporaryTable = null;
     let finalEvidence = null;
+    let craftMechanism = 'manual_grid';
     let workstationInteractionStance = null;
     let workstationInteractionAttempted = false;
     let workstationInteractionAcknowledged = false;
+    let resolvedWorkstation = null;
+    let outputPerCraft = 1;
+    let beforeOutputCount = inventoryCount(bot, itemName);
+    const transactionId = workstationTransactionId('craft');
     const finish = (success, evidence, message) => {
+        let transaction = null;
+        try {
+            const afterOutputCount = inventoryCount(bot, itemName);
+            const outputDelta = Math.max(0, afterOutputCount - beforeOutputCount);
+            const completedCrafts = Math.min(
+                requestedCrafts,
+                Math.max(
+                    0,
+                    Math.floor(Number(evidence?.completedCrafts) || (outputDelta / outputPerCraft)),
+                ),
+            );
+            transaction = createWorkstationTransactionReceipt({
+                kind: 'craft',
+                transactionId,
+                target: itemName,
+                output: itemName,
+                requestedQuantity: requestedCrafts,
+                completedQuantity: completedCrafts,
+                outputPerOperation: outputPerCraft,
+                beforeOutputCount,
+                afterOutputCount,
+                workstation: resolvedWorkstation,
+                materialChanged: outputDelta > 0,
+                interrupted: evidence?.outcome === 'interrupted',
+            });
+        } catch {
+            transaction = null;
+        }
         const receipt = workstationInteractionStance
             ? success
                 ? confirmedInteractionStance(workstationInteractionStance, 'craft_confirmed', {
@@ -3652,12 +3861,21 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
                     ? rejectedInteractionStance(workstationInteractionStance, evidence.outcome)
                     : workstationInteractionStance
             : null;
-        finalEvidence = evidenceWithInteractionStance(evidence, receipt);
+        finalEvidence = evidenceWithInteractionStance({
+            ...evidence,
+            ...(transaction ? { transaction, materialChanged: transaction.materialChanged } : {}),
+        }, receipt);
         setActionEvidence(bot, finalEvidence);
         if (message) log(bot, message);
         return success;
     };
 
+    bot.emit('craft_transaction_start', {
+        transactionId,
+        target,
+        requested: requestedCrafts,
+        workstation: exactWorkstation,
+    });
     try {
         if (!itemName || !Number.isFinite(requestedCrafts) || requestedCrafts < 1) {
             return finish(false, { kind: 'craft', outcome: 'invalid_request', target, retryable: false }, 'Crafting needs an item and a positive recipe count.');
@@ -3766,6 +3984,12 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
                 temporaryTable = localTable;
                 craftingTable = localTable.block;
             }
+            resolvedWorkstation = workstationTransactionBinding(
+                bot,
+                craftingTable,
+                'crafting_table',
+                exactWorkstation,
+            );
             recipes = bot.recipesFor(itemId, null, 1, craftingTable);
             if (!recipes?.length) {
                 const mixed = mixedPlankRecipe(true);
@@ -3818,7 +4042,7 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             return finish(false, { kind: 'craft', outcome: 'missing_material', target, retryable: true }, `You do not have enough materials to craft ${itemName}.`);
         }
 
-        const outputPerCraft = Math.max(
+        outputPerCraft = Math.max(
             1,
             Math.floor(Number(recipe?.result?.count || recipeDocs[0]?.[1]?.craftedCount) || 1),
         );
@@ -3853,7 +4077,7 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             }
         }
 
-        const beforeCount = inventoryCount(bot, itemName);
+        beforeOutputCount = inventoryCount(bot, itemName);
         try {
             const finalSafety = craftingSafetyBlocker(bot);
             if (finalSafety) {
@@ -3868,7 +4092,16 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
                     : `Cannot safely craft ${itemName}: ${finalSafety.threat.name} is ${finalSafety.threat.distance} blocks away.`);
             }
             workstationInteractionAttempted = Boolean(craftingTable);
-            if (isPlankFamilyRecipe(recipe)) {
+            const recipeBookCraft = await craftWithUnlockedRecipeBook(
+                bot,
+                itemName,
+                craftAttempts,
+                outputPerCraft,
+                craftingTable,
+            );
+            if (recipeBookCraft.attempted) {
+                craftMechanism = 'server_recipe_book';
+            } else if (isPlankFamilyRecipe(recipe)) {
                 for (let attempt = 0; attempt < craftAttempts; attempt += 1) {
                     const attemptSafety = craftingSafetyBlocker(bot);
                     if (attemptSafety) {
@@ -3891,12 +4124,52 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             }
             workstationInteractionAcknowledged = Boolean(craftingTable);
         } catch (error) {
-            return finish(false, { kind: 'craft', outcome: 'craft_blocked', target, error: error.message, retryable: true }, `Could not craft ${itemName}: ${error.message}.`);
+            const afterCount = inventoryCount(bot, itemName);
+            const outputCount = Math.max(0, afterCount - beforeOutputCount);
+            const completedCrafts = Math.min(craftAttempts, Math.floor(outputCount / outputPerCraft));
+            const interrupted = bot.interrupt_code
+                || actionCancellationSignal()?.aborted
+                || error?.name === 'AbortError';
+            const outcome = interrupted ? 'interrupted' : completedCrafts > 0 ? 'partial' : 'craft_blocked';
+            return finish(false, {
+                kind: 'craft',
+                outcome,
+                target,
+                error: error.message,
+                requestedCrafts,
+                craftAttempts,
+                completedCrafts,
+                remainingCrafts: Math.max(0, requestedCrafts - completedCrafts),
+                beforeCount: beforeOutputCount,
+                afterCount,
+                outputCount,
+                expectedOutputCount,
+                retryable: !interrupted,
+            }, interrupted
+                ? `Crafting ${itemName} was interrupted after ${completedCrafts} verified recipe operation${completedCrafts === 1 ? '' : 's'}.`
+                : `Could not finish crafting ${itemName}: ${error.message}.`);
         }
         const afterCount = inventoryCount(bot, itemName);
-        const outputCount = afterCount - beforeCount;
+        const outputCount = Math.max(0, afterCount - beforeOutputCount);
+        const completedCrafts = Math.min(craftAttempts, Math.floor(outputCount / outputPerCraft));
         if (outputCount < 1) {
-            return finish(false, { kind: 'craft', outcome: 'not_crafted', target, beforeCount, afterCount, expectedOutputCount, retryable: true }, `Minecraft did not confirm a new ${itemName} in inventory after crafting.`);
+            return finish(false, { kind: 'craft', outcome: 'not_crafted', target, beforeCount: beforeOutputCount, afterCount, expectedOutputCount, completedCrafts: 0, retryable: true }, `Minecraft did not confirm a new ${itemName} in inventory after crafting.`);
+        }
+        if (completedCrafts < requestedCrafts) {
+            return finish(false, {
+                kind: 'craft',
+                outcome: 'partial',
+                target,
+                requestedCrafts,
+                craftAttempts,
+                completedCrafts,
+                remainingCrafts: requestedCrafts - completedCrafts,
+                expectedOutputCount,
+                outputCount,
+                craftMechanism,
+                workstation: exactWorkstation,
+                retryable: true,
+            }, `Crafted ${outputCount} ${itemName}; ${requestedCrafts - completedCrafts} recipe operation${requestedCrafts - completedCrafts === 1 ? '' : 's'} remain.`);
         }
 
         try {
@@ -3910,8 +4183,11 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             target,
             requestedCrafts,
             craftAttempts,
+            completedCrafts,
+            remainingCrafts: 0,
             expectedOutputCount,
             outputCount,
+            craftMechanism,
             ...(isPlankFamilyRecipe(recipe) ? { ingredientFamily: 'planks' } : {}),
             workstation: exactWorkstation,
             retryable: false,
@@ -3943,6 +4219,13 @@ export async function craftRecipe(bot, itemName, num=1, exactWorkstation=null) {
             if (finalEvidence) setActionEvidence(bot, { ...finalEvidence, cleanup });
             else setActionEvidence(bot, { kind: 'craft', outcome: 'cleanup_only', cleanup, retryable: cleanup.retryable });
         }
+        bot.emit('craft_transaction_end', {
+            transactionId,
+            target,
+            requested: requestedCrafts,
+            workstation: exactWorkstation,
+            outcome: finalEvidence?.outcome || 'unsettled',
+        });
     }
 }
 
@@ -5026,7 +5309,33 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
     let reclaimedOutput = null;
     let workstationInteractionStance = null;
     let workstationInteractionAttempted = false;
+    let resolvedWorkstation = null;
+    let furnaceState = null;
+    let total = 0;
+    let materialChanged = false;
+    const beforeOutputCount = inventoryCount(bot, outputName);
+    const transactionId = workstationTransactionId('furnace');
     const finish = (success, outcome, detail = {}) => {
+        let transaction = null;
+        try {
+            transaction = createWorkstationTransactionReceipt({
+                kind: 'smelt',
+                transactionId,
+                target: itemName,
+                output: outputName,
+                requestedQuantity: amount,
+                completedQuantity: Math.max(total, Number(detail.count) || 0),
+                outputPerOperation: 1,
+                beforeOutputCount,
+                afterOutputCount: inventoryCount(bot, outputName),
+                workstation: resolvedWorkstation,
+                furnaceState: detail.furnaceState || furnaceState,
+                materialChanged,
+                interrupted: outcome === 'interrupted',
+            });
+        } catch {
+            transaction = null;
+        }
         const receipt = workstationInteractionStance
             ? success
                 ? confirmedInteractionStance(workstationInteractionStance, 'smelt_confirmed')
@@ -5044,20 +5353,62 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             ...(reclaimedOutput ? { reclaimedOutput } : {}),
             retryable: !success,
             ...detail,
+            ...(transaction ? { transaction, materialChanged: transaction.materialChanged } : {}),
         }, receipt);
         setActionEvidence(bot, finalEvidence);
         return success;
+    };
+    const ensureSmeltOutputCapacity = async resumePosition => {
+        let outputCapacity = carriedOutputCapacity(bot, outputName);
+        if (outputCapacity.capacity >= amount) return null;
+
+        const requiredAdditionalSlots = Math.ceil(
+            (amount - outputCapacity.capacity) / outputCapacity.stackSize,
+        );
+        const requiredFreeSlots = bot.inventory.emptySlotCount() + requiredAdditionalSlots;
+        const protectedNames = new Set([
+            itemName,
+            outputName,
+            'furnace',
+            ...bot.inventory.items()
+                .filter(item => mc.getFuelSmeltOutput(item.name) > 0)
+                .map(item => item.name),
+        ]);
+        const capacityReleased = await freeCollectionWorkingSlots(bot, protectedNames, requiredFreeSlots, {
+            allowLocalCache: false,
+            resumePosition,
+        });
+        outputCapacity = carriedOutputCapacity(bot, outputName);
+        if (capacityReleased && outputCapacity.capacity >= amount) return null;
+
+        return {
+            expectedOutputCount: amount,
+            availableOutputCapacity: outputCapacity.capacity,
+            requiredFreeSlots,
+            requiredAdditionalSlots,
+            observedFreeSlots: bot.inventory.emptySlotCount(),
+            retryable: false,
+        };
     };
 
     if (!itemName || !mc.isSmeltable(itemName) || !mc.getItemId(itemName)) {
         log(bot, `Cannot smelt ${itemName || 'that item'}.`);
         return finish(false, 'not_smeltable', { retryable: false });
     }
-    if (inventoryCount(bot, itemName) < amount) {
+    // An exact bound furnace may already own input from an interrupted prior
+    // dispatch. Do not reject that resumable transaction from carried inventory
+    // alone; reconcile the authoritative furnace slots after opening it.
+    if (inventoryCount(bot, itemName) < amount && !exactWorkstation) {
         log(bot, `You do not have ${amount} ${itemName} to smelt.`);
         return finish(false, 'missing_input', { available: inventoryCount(bot, itemName) });
     }
 
+    bot.emit('furnace_transaction_start', {
+        transactionId,
+        target,
+        requested: amount,
+        workstation: exactWorkstation,
+    });
     try {
         const furnaceBinding = await bindExistingWorkstation(bot, 'furnace', 64, null, exactWorkstation);
         workstationInteractionStance = furnaceBinding.interactionStance || null;
@@ -5084,6 +5435,15 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             log(bot, 'The nearest world furnace has no non-destructive native route; using a carried local fallback if available.');
         }
         if (!furnaceBlock && inventoryCount(bot, 'furnace') > 0) {
+            // Capacity release can require leaving nearby dropped items behind.
+            // Do that before placing a carried fallback so the new workstation
+            // is created at the verified clean stance instead of pulling the
+            // bot back through the pickup radius it just escaped.
+            const capacityFailure = await ensureSmeltOutputCapacity(null);
+            if (capacityFailure) {
+                log(bot, `Cannot smelt ${itemName}: inventory has no safe capacity for ${amount} ${outputName}.`);
+                return finish(false, 'inventory_full', capacityFailure);
+            }
             const localFurnace = await placeLocalWorkstation(bot, 'furnace', 8);
             if (!localFurnace.ok && localFurnace.outcome === 'no_workstation_space') {
                 log(bot, 'There is no safe local space to place the furnace.');
@@ -5117,6 +5477,12 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
                 pathStatus: 'local_placement',
             });
         }
+        resolvedWorkstation = workstationTransactionBinding(
+            bot,
+            furnaceBlock,
+            'furnace',
+            exactWorkstation,
+        );
         if (!furnaceBlock) {
             log(bot, worldFurnaceRouteFailed
                 ? 'The world furnace is unreachable without excavation, and no carried furnace is available.'
@@ -5133,127 +5499,143 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
         // input or fuel so a successful furnace action cannot silently lose
         // its output. Reuse the shared bounded overflow policy and preserve
         // every material that can participate in this smelt.
-        let outputCapacity = carriedOutputCapacity(bot, outputName);
-        if (outputCapacity.capacity < amount) {
-            const requiredAdditionalSlots = Math.ceil(
-                (amount - outputCapacity.capacity) / outputCapacity.stackSize,
-            );
-            const requiredFreeSlots = bot.inventory.emptySlotCount() + requiredAdditionalSlots;
-            const protectedNames = new Set([
-                itemName,
-                outputName,
-                'furnace',
-                ...bot.inventory.items()
-                    .filter(item => mc.getFuelSmeltOutput(item.name) > 0)
-                    .map(item => item.name),
-            ]);
-            const capacityReleased = await freeCollectionWorkingSlots(bot, protectedNames, requiredFreeSlots, {
-                allowLocalCache: false,
-                resumePosition: furnaceBlock.position,
-            });
-            outputCapacity = carriedOutputCapacity(bot, outputName);
-            if (!capacityReleased || outputCapacity.capacity < amount) {
-                log(bot, `Cannot smelt ${itemName}: inventory has no safe capacity for ${amount} ${outputName}.`);
-                return finish(false, 'inventory_full', {
-                    expectedOutputCount: amount,
-                    availableOutputCapacity: outputCapacity.capacity,
-                    requiredFreeSlots,
-                    requiredAdditionalSlots,
-                    observedFreeSlots: bot.inventory.emptySlotCount(),
-                    retryable: false,
-                });
-            }
+        const capacityFailure = await ensureSmeltOutputCapacity(furnaceBlock.position);
+        if (capacityFailure) {
+            log(bot, `Cannot smelt ${itemName}: inventory has no safe capacity for ${amount} ${outputName}.`);
+            return finish(false, 'inventory_full', capacityFailure);
         }
 
         bot.modes.pause('unstuck');
         await bot.lookAt(furnaceBlock.position);
         workstationInteractionAttempted = true;
         furnace = await bot.openFurnace(furnaceBlock);
+        const takeVerifiedOutput = async output => {
+            const outputCount = Math.max(1, Number(output?.count) || 1);
+            const capacity = carriedOutputCapacity(bot, output.name).capacity;
+            if (capacity < outputCount) return { ok: false, outputCount, capacity, received: 0 };
+            const beforeReclaim = carriedWindowInventoryCount(furnace, output.name);
+            const reclaimed = await furnace.takeOutput();
+            await waitForWorldCondition(
+                bot,
+                () => carriedWindowInventoryCount(furnace, output.name) >= beforeReclaim + outputCount,
+                1_000,
+            );
+            const received = Math.max(
+                0,
+                carriedWindowInventoryCount(furnace, output.name) - beforeReclaim,
+            );
+            return {
+                ok: !furnace.outputItem() && Boolean(reclaimed) && received >= outputCount,
+                outputCount,
+                capacity,
+                received,
+                item: reclaimed,
+            };
+        };
+
         const existingInput = furnace.inputItem();
         if (existingInput && existingInput.type !== mc.getItemId(itemName) && existingInput.count > 0) {
             log(bot, `The furnace is already smelting ${existingInput.name || mc.getItemName(existingInput.type)}.`);
             return finish(false, 'furnace_busy', {
                 observed: existingInput.name || mc.getItemName(existingInput.type),
+                furnaceState: furnaceTransactionState(furnace),
             });
         }
         const existingOutput = furnace.outputItem();
-        if (existingOutput && outputName && existingOutput.name !== outputName) {
-            const outputCount = Math.max(1, Number(existingOutput.count) || 1);
-            const capacity = carriedOutputCapacity(bot, existingOutput.name).capacity;
-            if (capacity < outputCount) {
-                log(bot, `The furnace contains ${existingOutput.name}, but inventory cannot safely reclaim it before smelting ${outputName}.`);
-                return finish(false, 'furnace_output_inventory_blocked', {
+        if (existingOutput) {
+            const transfer = await takeVerifiedOutput(existingOutput);
+            if (!transfer.ok) {
+                const outcome = transfer.capacity < transfer.outputCount
+                    ? 'furnace_output_inventory_blocked'
+                    : 'furnace_output_reclaim_unverified';
+                log(bot, outcome === 'furnace_output_inventory_blocked'
+                    ? `The furnace contains ${existingOutput.name}, but inventory cannot safely reclaim it.`
+                    : `Could not verify reclaiming the existing ${existingOutput.name} furnace output.`);
+                return finish(false, outcome, {
                     observed: existingOutput.name,
-                    observedCount: outputCount,
-                    availableCapacity: capacity,
+                    expected: transfer.outputCount,
+                    received: transfer.received,
+                    availableCapacity: transfer.capacity,
+                    furnaceState: furnaceTransactionState(furnace),
                 });
             }
-            const beforeReclaim = carriedWindowInventoryCount(furnace, existingOutput.name);
-            const reclaimed = await furnace.takeOutput();
-            await waitForWorldCondition(
-                bot,
-                () => carriedWindowInventoryCount(furnace, existingOutput.name) >= beforeReclaim + outputCount,
-                1_000,
-            );
-            const received = Math.max(
-                0,
-                carriedWindowInventoryCount(furnace, existingOutput.name) - beforeReclaim,
-            );
-            if (furnace.outputItem() || !reclaimed || received < outputCount) {
-                log(bot, `Could not verify reclaiming the existing ${existingOutput.name} furnace output.`);
-                return finish(false, 'furnace_output_reclaim_unverified', {
-                    observed: existingOutput.name,
-                    expected: outputCount,
-                    received,
-                });
+            reclaimedOutput = { name: existingOutput.name, count: transfer.received };
+            materialChanged = true;
+            if (existingOutput.name === outputName) {
+                total += transfer.received;
+                log(bot, `Reconciled ${transfer.received} already-produced ${outputName} from the exact furnace.`);
+            } else {
+                log(bot, `Reclaimed ${transfer.received} ${existingOutput.name} before smelting ${outputName}.`);
             }
-            reclaimedOutput = { name: existingOutput.name, count: received };
-            log(bot, `Reclaimed ${received} ${existingOutput.name} from the furnace before smelting ${outputName}.`);
         }
 
+        const remainingToProduce = Math.max(0, amount - total);
+        const residentInputCount = furnace.inputItem()?.type === mc.getItemId(itemName)
+            ? Math.max(0, Number(furnace.inputItem().count) || 0)
+            : 0;
+        const availableInput = residentInputCount + inventoryCount(bot, itemName);
+        if (remainingToProduce > 0 && availableInput < 1) {
+            return finish(false, 'missing_input', {
+                available: 0,
+                count: total,
+                furnaceState: furnaceTransactionState(furnace),
+            });
+        }
+        const inputLimitedAmount = Math.min(remainingToProduce, availableInput);
         const existingFuel = furnace.fuelItem();
-        const existingFuelCapacity = existingFuel
+        const slottedFuelCapacity = existingFuel
             ? Math.max(0, Number(existingFuel.count) || 0)
                 * mc.getFuelSmeltOutput(existingFuel.name || mc.getItemName(existingFuel.type) || '')
             : 0;
+        // The actively burning fuel item has already left the slot. Count only
+        // one guaranteed remaining smelt from it; the loop observes any extra
+        // server-side burn as real output instead of assuming future capacity.
+        const activeBurnCapacity = Number(furnace.fuel) > 0 ? 1 : 0;
+        const existingFuelCapacity = slottedFuelCapacity + activeBurnCapacity;
         const fuelPlan = selectSmeltingFuelPlan(
             bot.inventory.items(),
-            Math.max(0, amount - existingFuelCapacity),
-            { [itemName]: amount },
+            Math.max(0, inputLimitedAmount - existingFuelCapacity),
+            { [itemName]: Math.max(0, inputLimitedAmount - residentInputCount) },
         );
         const availableSmelts = existingFuelCapacity + fuelPlan.availableSmelts;
-        let plannedAmount = amount;
-        if (!fuelPlan.ok) {
-            plannedAmount = Math.min(amount, Math.floor(availableSmelts));
-            if (plannedAmount < 1) {
-                log(bot, `Available furnace fuel cannot cook any of ${amount} ${itemName}.`);
-                return finish(false, availableSmelts > 0 ? 'insufficient_fuel' : 'missing_fuel', {
-                    requiredSmelts: amount,
-                    availableSmelts,
-                    fuels: fuelPlan.entries.map(entry => ({
-                        name: entry.name,
-                        count: entry.count,
-                        outputPerItem: entry.outputPerItem,
-                    })),
-                });
-            }
-            log(bot, `Fuel can cook ${plannedAmount} of ${amount} ${itemName}; completing that verified partial batch.`);
+        const plannedAmount = Math.min(inputLimitedAmount, Math.floor(availableSmelts));
+        if (remainingToProduce > 0 && plannedAmount < 1) {
+            log(bot, `Available furnace fuel cannot cook any of ${remainingToProduce} remaining ${itemName}.`);
+            return finish(false, availableSmelts > 0 ? 'insufficient_fuel' : 'missing_fuel', {
+                count: total,
+                requiredSmelts: remainingToProduce,
+                availableSmelts,
+                fuels: fuelPlan.entries.map(entry => ({
+                    name: entry.name,
+                    count: entry.count,
+                    outputPerItem: entry.outputPerItem,
+                })),
+                furnaceState: furnaceTransactionState(furnace),
+            });
+        }
+        if (plannedAmount < remainingToProduce) {
+            log(bot, `Current input and fuel can produce ${plannedAmount} of ${remainingToProduce} remaining ${itemName}; completing that verified partial batch.`);
         }
         let nextFuelEntry = 0;
         const refuelIfEmpty = async () => {
             if (furnace.fuelItem() || nextFuelEntry >= fuelPlan.entries.length) return;
             const entry = fuelPlan.entries[nextFuelEntry];
             await furnace.putFuel(entry.type, null, entry.count);
+            materialChanged = true;
             nextFuelEntry += 1;
         };
         await refuelIfEmpty();
 
-        await furnace.putInput(mc.getItemId(itemName), null, plannedAmount);
-        let total = 0;
+        const inputToInsert = Math.max(0, plannedAmount - residentInputCount);
+        if (inputToInsert > 0) {
+            await furnace.putInput(mc.getItemId(itemName), null, inputToInsert);
+            materialChanged = true;
+        }
+        const targetCollected = total + plannedAmount;
         let observedOutput = outputName;
         let lastProgressAt = Date.now();
         const deadline = Date.now() + Math.min(660_000, Math.max(25_000, (plannedAmount * 11_000) + 15_000));
-        while (total < plannedAmount && Date.now() < deadline) {
+        while (total < targetCollected && Date.now() < deadline) {
             if (bot.interrupt_code) break;
             await new Promise(resolve => setTimeout(resolve, 500));
             // Furnace slots consume the active fuel stack before its burn
@@ -5276,6 +5658,7 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
                 );
                 if (collected && received > 0) {
                     total += received;
+                    materialChanged = true;
                     observedOutput = collected.name || mc.getItemName(collected.type);
                     lastProgressAt = Date.now();
                 } else {
@@ -5293,29 +5676,98 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
             if (Date.now() - lastProgressAt > 15_000) break;
         }
 
-        if (furnace.inputItem()) await furnace.takeInput();
-        if (furnace.fuelItem()) await furnace.takeFuel();
         if (bot.interrupt_code) {
+            furnaceState = furnaceTransactionState(furnace);
             log(bot, `Stopped smelting ${itemName} after collecting ${total}.`);
-            return finish(false, 'interrupted', { count: total, observedOutput, retryable: false });
+            return finish(false, 'interrupted', {
+                count: total,
+                observedOutput,
+                furnaceState,
+                retryable: false,
+            });
         }
         if (total < amount) {
+            // A bound furnace is the durable continuation surface. Leave its
+            // authoritative input/fuel/output slots intact so server-side burn
+            // after window closure is recovered by the next exact dispatch.
+            // An unbound/local action has no durable fixture identity, so it
+            // must reclaim its remaining carried materials before release.
+            if (!exactWorkstation) {
+                if (furnace.inputItem()) {
+                    await furnace.takeInput();
+                    materialChanged = true;
+                }
+                if (furnace.fuelItem()) {
+                    await furnace.takeFuel();
+                    materialChanged = true;
+                }
+            }
+            furnaceState = furnaceTransactionState(furnace);
             log(bot, `The furnace produced ${total} of ${amount} requested ${observedOutput || 'items'}.`);
             return finish(false, total > 0 ? 'partial' : 'stalled', {
                 count: total,
                 plannedAmount,
                 availableSmelts,
                 observedOutput,
+                furnaceState,
             });
         }
+        if (furnace.inputItem()) {
+            await furnace.takeInput();
+            materialChanged = true;
+        }
+        if (furnace.fuelItem()) {
+            await furnace.takeFuel();
+            materialChanged = true;
+        }
+        furnaceState = furnaceTransactionState(furnace);
         log(bot, `Smelted ${amount} ${itemName} into ${total} ${observedOutput || outputName || 'items'}.`);
-        return finish(true, 'smelted', { count: total, observedOutput, retryable: false });
+        return finish(true, 'smelted', {
+            count: total,
+            observedOutput,
+            furnaceState,
+            retryable: false,
+        });
     } catch (error) {
         const message = String(error?.message || error).slice(0, 240);
-        log(bot, `Could not smelt ${itemName}: ${message}.`);
-        return finish(false, 'smelt_blocked', { error: message });
+        const interrupted = bot.interrupt_code
+            || actionCancellationSignal()?.aborted
+            || error?.name === 'AbortError';
+        furnaceState = furnaceTransactionState(furnace);
+        log(bot, interrupted
+            ? `Stopped smelting ${itemName} after collecting ${total}.`
+            : `Could not smelt ${itemName}: ${message}.`);
+        return finish(false, interrupted ? 'interrupted' : 'smelt_blocked', {
+            count: total,
+            error: message,
+            furnaceState,
+            retryable: !interrupted,
+        });
     } finally {
+        furnaceState = furnaceTransactionState(furnace) || furnaceState;
         await closeContainerQuietly(furnace);
+        if (finalEvidence?.transaction) {
+            try {
+                const transaction = createWorkstationTransactionReceipt({
+                    ...finalEvidence.transaction,
+                    completedQuantity: Math.max(
+                        total,
+                        Number(finalEvidence.transaction.completedQuantity) || 0,
+                    ),
+                    beforeOutputCount,
+                    afterOutputCount: inventoryCount(bot, outputName),
+                    workstation: resolvedWorkstation,
+                    furnaceState,
+                    materialChanged,
+                    interrupted: finalEvidence.outcome === 'interrupted',
+                });
+                finalEvidence = { ...finalEvidence, furnaceState, transaction };
+                setActionEvidence(bot, finalEvidence);
+            } catch {
+                // The original bounded terminal remains authoritative when a
+                // malformed registry value prevents only the optional receipt.
+            }
+        }
         if (temporaryFurnace) {
             let cleanup;
             try {
@@ -5333,8 +5785,18 @@ export async function smeltItem(bot, itemName, num=1, exactWorkstation=null) {
                     retryable: true,
                 };
             }
-            if (finalEvidence) setActionEvidence(bot, { ...finalEvidence, cleanup });
+            if (finalEvidence) {
+                finalEvidence = { ...finalEvidence, cleanup };
+                setActionEvidence(bot, finalEvidence);
+            }
         }
+        bot.emit('furnace_transaction_end', {
+            transactionId,
+            target,
+            requested: amount,
+            workstation: exactWorkstation,
+            outcome: finalEvidence?.outcome || 'unsettled',
+        });
     }
 }
 
@@ -5618,7 +6080,7 @@ export async function clearNearestFurnace(bot) {
                 ? 'not_found'
                 : 'unreachable';
         setActionEvidence(bot, evidenceWithInteractionStance({
-            kind: 'furnace',
+                    kind: 'smelt',
             outcome,
             target,
             retryable: outcome !== 'interrupted',
@@ -7366,11 +7828,35 @@ function redundantNaturalFillStack(
 }
 
 export function selectRedundantExcavationDebrisStack(inventoryItems, protectedNames = new Set()) {
-    return redundantNaturalFillStack(
-        Array.isArray(inventoryItems) ? inventoryItems : [],
-        protectedNames instanceof Set ? protectedNames : new Set(protectedNames || []),
+    const items = Array.isArray(inventoryItems) ? inventoryItems : [];
+    const protectedSet = protectedNames instanceof Set ? protectedNames : new Set(protectedNames || []);
+    const sameMaterialSurplus = redundantNaturalFillStack(
+        items,
+        protectedSet,
         EXCAVATION_DEBRIS_ITEMS,
     );
+    if (sameMaterialSurplus) return sameMaterialSurplus;
+
+    // A mining route produces several interchangeable natural-fill variants.
+    // Requiring a second stack of the *same* variant strands capacity when the
+    // carried reserve is split across dirt, granite, diorite, andesite, etc.
+    // Retire the smallest unprotected natural-fill stack only when the whole
+    // excavation family still leaves a useful placement reserve. Cobbled
+    // outputs count toward that reserve but are not selected by this fallback:
+    // their separate crafting value (furnace/tools) remains intact.
+    const excavationReserve = items
+        .filter(item => EXCAVATION_DEBRIS_ITEMS.has(item.name))
+        .reduce((sum, item) => sum + Math.max(0, Number(item.count) || 0), 0);
+    return items
+        .filter(item => (
+            Number.isInteger(item.slot)
+            && item.count > 0
+            && NATURAL_FILL_BLOCKS.has(item.name)
+            && !protectedSet.has(item.name)
+            && (excavationReserve - item.count) >= MIN_COLLECTION_NATURAL_FILL_RESERVE
+        ))
+        .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))[0]
+        || null;
 }
 
 async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1, {
@@ -7397,8 +7883,14 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             && bot.entity?.position?.distanceTo(entity.position) <= 2.5
         ));
         if (staleDrop) {
-            const cleanStanceReached = await moveAway(bot, 4, { allowLocalRecovery: false });
-            if (!cleanStanceReached) {
+            // This is a separation requirement from a specific pickup hazard,
+            // not a generic request to leave the current cell. Anchor the route
+            // to the dropped entity so a legal retreat cannot accidentally end
+            // on the same side of (or closer to) the item.
+            const cleanStanceReached = await moveAwayFromEntity(bot, staleDrop, 4);
+            const clearOfStaleDrop = !staleDrop.position
+                || bot.entity.position.distanceTo(staleDrop.position) >= 2.5;
+            if (!cleanStanceReached || !clearOfStaleDrop) {
                 log(bot, 'Could not reach a clean disposal stance away from old dropped items.');
                 return false;
             }
@@ -7538,7 +8030,12 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             continue;
         }
 
-        const bulkDebris = redundantNaturalFillStack(inventoryItems, protectedNames);
+        // Cobblestone is never generic world terrain, but a redundant carried
+        // stack produced by verified excavation is safe inventory debris. The
+        // ordinary fallback must use the inventory-provenance selector too;
+        // otherwise underground prerequisite crafting can report inventory
+        // full while multiple expendable cobblestone stacks are still carried.
+        const bulkDebris = selectRedundantExcavationDebrisStack(inventoryItems, protectedNames);
         if (bulkDebris) {
             // Releasing the bound stack guarantees that this action actually
             // opens a slot instead of draining equivalent blocks elsewhere.
@@ -7575,7 +8072,16 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             leftDisposalStance = resumeGoal.isEnd(bot.entity.position.floored())
                 || await goToGoal(bot, resumeGoal, { allowLocalRecovery: false });
         } else {
-            leftDisposalStance = await moveAway(bot, 3, { allowLocalRecovery: false });
+            const liveDiscard = discardedEntities
+                .map(entry => bot.entities?.[entry.id])
+                .filter(entity => entity?.position)
+                .sort((left, right) => (
+                    bot.entity.position.distanceTo(left.position)
+                    - bot.entity.position.distanceTo(right.position)
+                ))[0];
+            leftDisposalStance = liveDiscard
+                ? await moveAwayFromEntity(bot, liveDiscard, 3)
+                : await moveAway(bot, 3, { allowLocalRecovery: false });
         }
         await interruptibleDelay(bot, 150);
         const clearOfDiscardedItems = discardedEntities.every(entry => {
@@ -7819,14 +8325,18 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         { stableMiningStance: allowNaturalRouteDigging },
                     ).map(candidate => ({
                         ...candidate,
-                        routeStatus: candidate.safeStances?.length > 0
+                        routeStatus: candidate.requiresMiningAccess === true
+                            ? candidate.routeStatus
+                            : candidate.safeStances?.length > 0
                             ? 'explicit_target'
                             : candidate.routeStatus,
                     })),
                     { inconclusive: bot?.preflightPolicy?.collectionRoute },
                 );
                 return {
-                    selected: ranked.find(candidate => candidate.reachable) || null,
+                    selected: ranked.find(candidate => (
+                        candidate.reachable && candidate.requiresMiningAccess !== true
+                    )) || null,
                     ranked,
                     descentFallback: null,
                 };
@@ -10332,15 +10842,58 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             return true;
         }
 
-        if (bot.entity.position.distanceTo(block.position) > 4.5) {
-            let pos = block.position;
-            const reached = await goToGoal(bot, new pf.goals.GoalNear(pos.x, pos.y, pos.z, 4));
-            if (!reached || bot.entity.position.distanceTo(block.position) > 4.5) {
-                setActionEvidence(bot, { kind: 'break', outcome: 'unreachable', target, retryable: true });
-                log(bot, `Cannot reach ${block.name} to break it.`);
-                return false;
-            }
+        // Distance alone is not an interaction stance. GoalNear can stop on
+        // the far side of a wall, satisfy its radius, and hand Mineflayer a
+        // block with no visible face. Bind the same supported, visible-face
+        // contract used by placement so enclosed worksite cleanup routes
+        // through doors instead of digging blindly through the shell.
+        const breakGoal = new pf.goals.GoalLookAtBlock(block.position, bot.world, {
+            reach: 4.5,
+            requireIndependentSupport: options?.requireIndependentSupport === true,
+        });
+        const interactionStance = await reachInteractionStance(bot, {
+            kind: 'break',
+            target,
+            goal: breakGoal,
+            navigationOptions: {
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        });
+        if (interactionStance.status !== 'ready') {
+            setActionEvidence(bot, evidenceWithInteractionStance({
+                kind: 'break',
+                outcome: interactionStance.status === 'interrupted' ? 'interrupted' : 'unreachable',
+                target,
+                retryable: interactionStance.status !== 'interrupted',
+            }, interactionStance));
+            log(bot, `Cannot reach a visible face of ${block.name} to break it.`);
+            return false;
         }
+
+        const rebound = bot.blockAt(Vec3(x, y, z));
+        if (!rebound || isReplaceableGameplayBlock(rebound)) {
+            setActionEvidence(bot, evidenceWithInteractionStance({
+                kind: 'break',
+                outcome: 'already_clear',
+                target,
+                retryable: false,
+            }, interactionStance));
+            log(bot, `${block.name} at ${x}, ${y}, ${z} was already cleared while approaching it.`);
+            return true;
+        }
+        if (rebound.name !== block.name) {
+            setActionEvidence(bot, evidenceWithInteractionStance({
+                kind: 'break',
+                outcome: 'target_changed',
+                target,
+                observed: rebound.name,
+                retryable: true,
+            }, interactionStance));
+            log(bot, `Cannot break ${block.name} at ${x}, ${y}, ${z}: it changed to ${rebound.name} while approaching.`);
+            return false;
+        }
+        block = rebound;
         if (bot.game.gameMode !== 'creative') {
             const requireHarvest = options?.requireHarvest !== false;
             const durability = requireHarvest
@@ -11356,7 +11909,10 @@ export async function placeBlock(
         }
         await new Promise(resolve => setTimeout(resolve, 200)); // wait for block to break
     }
-    // get the buildoffblock and facevec based on whichever adjacent block is not empty
+    // Preserve the caller's support preference, while presenting every currently
+    // valid support to the native placement goal. Pathfinder then owns which
+    // reachable face it can actually use; this is not a project-side stance or
+    // topology selection.
     let buildOffBlock = null;
     let faceVec = null;
     let placementDirection = null;
@@ -11381,20 +11937,18 @@ export async function placeBlock(
     }
     dirs.push(...Object.values(dir_map).filter(d => !dirs.includes(d)));
 
-    for (let d of dirs) {
+    const supportDirections = [];
+    for (const d of dirs) {
         const block = bot.blockAt(target_dest.plus(d));
         if (
             block
             && !isReplaceableGameplayBlock(block)
             && !block.name.endsWith('_door')
         ) {
-            buildOffBlock = block;
-            faceVec = new Vec3(-d.x, -d.y, -d.z); // invert
-            placementDirection = d;
-            break;
+            supportDirections.push(d);
         }
     }
-    if (!buildOffBlock) {
+    if (supportDirections.length === 0) {
         setActionEvidence(bot, { kind: 'place', outcome: 'missing_support', target, retryable: true });
         log(bot, `Cannot place ${blockType} at ${targetBlock.position}: nothing to place on.`);
         return false;
@@ -11402,7 +11956,7 @@ export async function placeBlock(
 
     const placementGoal = new pf.goals.GoalPlaceBlock(target_dest, bot.world, {
         range: 4.5,
-        faces: [placementDirection],
+        faces: supportDirections,
         LOS: true,
     });
     // Pathfinder already owns the exact physical predicate for placing a
@@ -11428,10 +11982,36 @@ export async function placeBlock(
         return false;
     }
 
-    // The world can change while Pathfinder is moving. Rebind the exact
-    // support face before sending the placement packet.
-    buildOffBlock = bot.blockAt(target_dest.plus(placementDirection));
-    if (!buildOffBlock || isReplaceableGameplayBlock(buildOffBlock)) {
+    // The world can change while Pathfinder is moving. Ask the same native goal
+    // which face is legal from the arrived eye position, then rebind that exact
+    // support reference before sending the placement packet.
+    const eyePosition = bot.entity?.position?.offset?.(
+        0,
+        Number(bot.entity?.eyeHeight) || 1.6,
+        0,
+    );
+    const selectedFace = eyePosition
+        ? placementGoal.getFaceAndRef(eyePosition)
+        : null;
+    placementDirection = selectedFace?.face || null;
+    const selectedReference = selectedFace?.ref || null;
+    const expectedReference = placementDirection
+        ? target_dest.plus(placementDirection)
+        : null;
+    if (
+        !placementDirection
+        || !selectedReference?.equals?.(expectedReference)
+    ) {
+        setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'place', outcome: 'missing_support', target, retryable: true }, interactionStance));
+        log(bot, `Cannot place ${blockType} at ${targetBlock.position}: no selected supporting face remains usable.`);
+        return false;
+    }
+    buildOffBlock = bot.blockAt(selectedReference);
+    if (
+        !buildOffBlock
+        || isReplaceableGameplayBlock(buildOffBlock)
+        || buildOffBlock.name.endsWith('_door')
+    ) {
         setActionEvidence(bot, evidenceWithInteractionStance({ kind: 'place', outcome: 'missing_support', target, retryable: true }, interactionStance));
         log(bot, `Cannot place ${blockType} at ${targetBlock.position}: its supporting face changed.`);
         return false;
@@ -11441,6 +12021,17 @@ export async function placeBlock(
         -placementDirection.y,
         -placementDirection.z,
     );
+
+    // The placement specialist owns this exact interval: from material binding
+    // through confirmation of the server-visible world effect. A halt may stop
+    // Pathfinder immediately, but ActionManager must retain the body until this
+    // in-flight placement packet has either verified or settled as a failure.
+    const placementOperation = {
+        operationId: `placement-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        target,
+        item: item_name,
+    };
+    bot.emit('placement_start', placementOperation);
 
     // will throw error if an entity is in the way, and sometimes even if the block was placed
     try {
@@ -11515,6 +12106,10 @@ export async function placeBlock(
             retryable: false,
             interactionStance: confirmedInteractionStance(interactionStance, 'placement_confirmed'),
         });
+        bot.emit('placement_verified', {
+            ...placementOperation,
+            observed: placedBlock?.name || null,
+        });
         log(bot, `Placed ${blockType} at ${target_dest}.`);
         return true;
     } catch (err) {
@@ -11529,6 +12124,11 @@ export async function placeBlock(
         });
         log(bot, `Failed to place ${blockType} at ${target_dest}: ${message}.`);
         return false;
+    } finally {
+        bot.emit('placement_end', {
+            ...placementOperation,
+            outcome: bot.lastActionEvidence?.outcome || 'unknown',
+        });
     }
 }
 
@@ -12514,6 +13114,11 @@ export async function recoverDeathItems(bot, deathRecord, {
             .filter(([name, count]) => name && Number.isFinite(count) && count > 0)
             .map(([name, count]) => [name, Math.floor(count)]))
         : {};
+    const previouslyRecovered = deathRecord?.recoveredInventory && typeof deathRecord.recoveredInventory === 'object'
+        ? Object.fromEntries(Object.entries(deathRecord.recoveredInventory)
+            .filter(([name, count]) => Object.hasOwn(expected, name) && Number.isFinite(count) && count > 0)
+            .map(([name, count]) => [name, Math.min(expected[name], Math.floor(count))]))
+        : {};
     const dimension = normalizedDimension(deathRecord?.dimension);
     const target = position && [position.x, position.y, position.z].every(Number.isFinite)
         ? { name: 'last_death_position', x: position.x, y: position.y, z: position.z }
@@ -12569,7 +13174,10 @@ export async function recoverDeathItems(bot, deathRecord, {
         for (const [name, expectedCount] of Object.entries(expected)) {
             const carried = Math.max(0, Number(after[name]) || 0);
             const gainedCount = Math.max(0, carried - (Number(before[name]) || 0));
-            recoveredByItem[name] = Math.min(expectedCount, carried);
+            recoveredByItem[name] = Math.max(
+                Math.max(0, Number(previouslyRecovered[name]) || 0),
+                Math.min(expectedCount, carried),
+            );
             gainedByItem[name] = Math.min(expectedCount, gainedCount);
             recovered += recoveredByItem[name];
             gained += gainedByItem[name];
@@ -14346,12 +14954,19 @@ export function deliveryDropStances(bot, player) {
     // the supported body cell rather than assuming both bodies share one Y.
     const candidates = [];
     for (const dy of [0, 1, -1, 2, -2]) {
-        candidates.push(
-            new Vec3(x + 2, y + dy, z),
-            new Vec3(x - 2, y + dy, z),
-            new Vec3(x, y + dy, z + 2),
-            new Vec3(x, y + dy, z - 2),
-        );
+        // Search the complete block-grid handoff lane rather than four rigid
+        // cardinal cells. The exclusivity predicate below remains the physical
+        // authority for pickup separation, so this admits supported 1x2 and
+        // 1x3 mixed-terrain stances without turning the selector into an
+        // unbounded local route planner.
+        for (const major of [-3, -2, 2, 3]) {
+            for (const lateral of [-1, 0, 1]) {
+                candidates.push(
+                    new Vec3(x + major, y + dy, z + lateral),
+                    new Vec3(x + lateral, y + dy, z + major),
+                );
+            }
+        }
     }
     return candidates.filter(position => {
         const center = position.offset(0.5, 0, 0.5);
@@ -14476,6 +15091,30 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     let droppedEntityId = null;
     let deliveryAttempts = 0;
     let reclaimedAttempts = 0;
+    const finishVerifiedDelivery = ({
+        actualTransferred,
+        inventoryBeforeDrop,
+        inventoryAfterDrop,
+    }) => {
+        const complete = actualTransferred >= requested;
+        setActionEvidence(bot, {
+            kind: 'give',
+            outcome: complete ? 'delivered' : 'partial',
+            target,
+            item: itemType,
+            requested,
+            transferred: actualTransferred,
+            inventoryBefore,
+            inventoryBeforeDrop,
+            inventoryAfter: inventoryAfterDrop,
+            droppedEntityId,
+            deliveryAttempts,
+            reclaimedAttempts,
+            retryable: !complete,
+        });
+        log(bot, `${username} received ${actualTransferred} ${itemType}.`);
+        return complete;
+    };
     const existingEntityIds = new Set(Object.values(bot.entities || {}).map(entity => entity?.id));
     const markDelivered = entityId => {
         if (given) return;
@@ -14595,24 +15234,11 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
                 if (Date.now() - pickupStartedAt > DELIVERY_PICKUP_TIMEOUT_MS) break;
             }
             if (given) {
-                const complete = actualTransferred >= requested;
-                setActionEvidence(bot, {
-                    kind: 'give',
-                    outcome: complete ? 'delivered' : 'partial',
-                    target,
-                    item: itemType,
-                    requested,
-                    transferred: actualTransferred,
-                    inventoryBefore,
+                return finishVerifiedDelivery({
+                    actualTransferred,
                     inventoryBeforeDrop,
-                    inventoryAfter: inventoryAfterDrop,
-                    droppedEntityId,
-                    deliveryAttempts,
-                    reclaimedAttempts,
-                    retryable: !complete,
+                    inventoryAfterDrop,
                 });
-                log(bot, `${username} received ${actualTransferred} ${itemType}.`);
-                return true;
             }
             if (deliveryAttempts >= MAX_DELIVERY_DROP_ATTEMPTS) break;
             // `reclaimed` is set by a listener when the drop happens to come
@@ -14635,12 +15261,30 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
                     .catch(() => false);
             }
             reclaimedAttempts += 1;
+            // The recipient can collect the exact entity while Kevin is moving
+            // in to reclaim it. The packet listener has already verified that
+            // collector and entity; honor that receipt before requiring the
+            // item to return to Kevin's inventory.
+            if (given) {
+                return finishVerifiedDelivery({
+                    actualTransferred,
+                    inventoryBeforeDrop,
+                    inventoryAfterDrop,
+                });
+            }
             const reacquired = await waitForWorldCondition(
                 bot,
                 () => inventoryCount(bot, itemType) >= transferCount,
                 750,
                 25,
             );
+            if (given) {
+                return finishVerifiedDelivery({
+                    actualTransferred,
+                    inventoryBeforeDrop,
+                    inventoryAfterDrop,
+                });
+            }
             if (!reacquired) break;
         }
     } finally {
@@ -15128,19 +15772,41 @@ async function attemptShallowWaterExit(bot, {
             const position = bot.entity?.position?.floored?.();
             const currentFeet = position ? bot.blockAt(position) : null;
             const support = position ? bot.blockAt(position.offset(0, -1, 0)) : null;
-            const exited = lastOutcome?.state === 'resolved'
+            const reachedDryCell = lastOutcome?.state === 'resolved'
                 && !isLiquidGameplayBlock(currentFeet)
                 && isTraversableShoreSupport(support);
-            if (exited) {
+            // GoalBlock can resolve during the single physics frame in which a
+            // swimmer crests a bank. Releasing the ascent lease immediately in
+            // that frame lets the body slide back into the source water cell,
+            // after which self-preservation repeatedly reports a false stable
+            // shore and preempts the same durable trip. Require the ordinary
+            // supported-stance dwell while this escape still owns both the
+            // Pathfinder and ascent control; a slip simply advances to the
+            // next already-verified shore candidate.
+            const settled = reachedDryCell
+                ? await waitForStableSupportedStandingCell(
+                    bot,
+                    Math.min(
+                        GROUND_SETTLE_TIMEOUT_MS,
+                        remainingActionTimeMs(GROUND_SETTLE_TIMEOUT_MS),
+                        Number.isFinite(deadlineAt)
+                            ? Math.max(1, deadlineAt - Date.now())
+                            : GROUND_SETTLE_TIMEOUT_MS,
+                    ),
+                    Math.max(500, SUPPORTED_STANCE_STABILITY_MS),
+                )
+                : null;
+            if (settled) {
+                const settledSupport = bot.blockAt(settled.offset(0, -1, 0));
                 return {
                     success: true,
                     strategy: 'pathfinder_shore_exit',
-                    outcome: isSafeGameplaySupport(support) ? 'stable_shore_reached' : 'shore_reached',
+                    outcome: isSafeGameplaySupport(settledSupport) ? 'stable_shore_reached' : 'shore_reached',
                     target: {
-                        x: candidate.position.x,
-                        y: candidate.position.y,
-                        z: candidate.position.z,
-                        support: support.name,
+                        x: settled.x,
+                        y: settled.y,
+                        z: settled.z,
+                        support: settledSupport?.name || 'unknown',
                     },
                     distance: Math.round(bot.entity.position.distanceTo(start) * 100) / 100,
                 };
@@ -16730,55 +17396,67 @@ async function carveExploratoryDepthRoute(bot, targetY, options = {}) {
         const stances = orderedMiningHeadings(bot)
             .slice(0, MAX_MINING_ROUTE_HEADINGS)
             .map(heading => origin.offset(heading.x * run, -drop, heading.z * run));
-        const plan = buildMiningAccessPlan(bot, null, run, {
-            breakTarget: false,
-            stances,
-            maxRouteSteps: run,
-            preservedReturnRoute: options.preservedReturnRoute,
-        });
-        if (!plan.ok) {
-            const outcome = plan.outcome || 'no_safe_route';
-            rejections[outcome] = (rejections[outcome] || 0) + 1;
-            if (outcome === 'insufficient_tool_durability' && plan.replacementTool) {
-                toolRequirement = {
-                    name: plan.replacementTool,
-                    minimumUsableDurability: plan.minimumUsableDurability,
+        for (const stance of stances) {
+            const plan = buildMiningAccessPlan(bot, null, run, {
+                breakTarget: false,
+                stances: [stance],
+                maxRouteSteps: run,
+                preservedReturnRoute: options.preservedReturnRoute,
+            });
+            if (!plan.ok) {
+                const outcome = plan.outcome || 'no_safe_route';
+                rejections[outcome] = (rejections[outcome] || 0) + 1;
+                if (outcome === 'insufficient_tool_durability' && plan.replacementTool) {
+                    toolRequirement = {
+                        name: plan.replacementTool,
+                        minimumUsableDurability: plan.minimumUsableDurability,
+                    };
+                }
+                continue;
+            }
+            const access = await executeMiningAccessPlan(bot, null, plan);
+            if (!access.success) {
+                const failureOutcome = access.failureOutcome || access.outcome;
+                const safelyReturned = access.retreat?.success === true;
+                if (safelyReturned && failureOutcome === 'route_block_not_broken') {
+                    // Live face visibility can invalidate one statically safe
+                    // staircase after execution begins. The exact origin has
+                    // been restored, so reject only this heading and preflight
+                    // the next one instead of replaying the same impossible dig.
+                    rejections[failureOutcome] = (rejections[failureOutcome] || 0) + 1;
+                    continue;
+                }
+                return {
+                    success: false,
+                    progressed: false,
+                    outcome: access.outcome,
+                    failureOutcome,
+                    retreat: access.retreat || null,
+                    excavated: access.excavated,
+                    routeSteps: plan.route.length,
                 };
             }
-            continue;
-        }
-        const access = await executeMiningAccessPlan(bot, null, plan);
-        if (!access.success) {
+            const observed = observedSupportedStandingCell(bot);
+            const verticalProgress = observed ? origin.y - observed.y : 0;
+            const returnable = Boolean(
+                observed
+                && verticalProgress >= 1
+                && isMiningRouteCellReturnable(bot, plan.route.at(-1)?.position)
+            );
             return {
-                success: false,
-                progressed: false,
-                outcome: access.outcome,
-                failureOutcome: access.failureOutcome || access.outcome,
-                retreat: access.retreat || null,
-                excavated: access.excavated,
+                success: returnable && observed.y <= targetY + 1,
+                progressed: returnable,
+                outcome: returnable ? 'mining_depth_advanced' : 'depth_stance_unverified',
+                observedY: observed?.y ?? bot.entity.position.y,
+                observed,
+                verticalProgress,
                 routeSteps: plan.route.length,
+                excavated: access.excavated,
+                durability: plan.durability,
+                returnable,
+                returnRoute: miningReturnRoute(plan.origin || origin, plan.route, observed),
             };
         }
-        const observed = observedSupportedStandingCell(bot);
-        const verticalProgress = observed ? origin.y - observed.y : 0;
-        const returnable = Boolean(
-            observed
-            && verticalProgress >= 1
-            && isMiningRouteCellReturnable(bot, plan.route.at(-1)?.position)
-        );
-        return {
-            success: returnable && observed.y <= targetY + 1,
-            progressed: returnable,
-            outcome: returnable ? 'mining_depth_advanced' : 'depth_stance_unverified',
-            observedY: observed?.y ?? bot.entity.position.y,
-            observed,
-            verticalProgress,
-            routeSteps: plan.route.length,
-            excavated: access.excavated,
-            durability: plan.durability,
-            returnable,
-            returnRoute: miningReturnRoute(plan.origin || origin, plan.route, observed),
-        };
     }
     return {
         success: false,
@@ -17006,7 +17684,7 @@ export function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
     };
 }
 
-export function orderMiningExcavationBlocks(blocks, origin = null) {
+export function orderMiningExcavationBlocks(blocks, origin = null, { ascending = false } = {}) {
     return [...(Array.isArray(blocks) ? blocks : [])].sort((left, right) => {
         // Clear the lowest gravity block while its solid plug remains in
         // place. Any higher gravity block then settles into that same bound
@@ -17020,18 +17698,16 @@ export function orderMiningExcavationBlocks(blocks, origin = null) {
         // Gravity blocks keep the lowest-first rule above. Ordinary rock and
         // soil must go the other way: top down, the way anyone digs.
         //
-        // Lowest-first applied to everything, and it made descending steps
-        // impossible. Measured 2026-08-17: the companion broke the surface
-        // block, dropped in, and was then told to break a block one down and
-        // one over -- still capped by unbroken dirt, every face against solid
-        // ground. mineflayer raycasts for a visible face and correctly threw
-        // "Block not in view"; the route reversed out and twelve reachable
-        // candidates were reported as noPath. Nothing was wrong with the
-        // digging. It was asked to start at the bottom of a hole it had not
-        // opened yet.
+        // Descending routes open from the top down; otherwise the lower block
+        // remains capped and has no visible face. Ascending routes are the
+        // inverse: clear the lower forward block first so it exposes the block
+        // above. A single global top-down rule made Kevin target Y=58 through
+        // the still-solid Y=57 block from the adjacent lower stair.
         const heightOrder = leftFalls && rightFalls
             ? leftY - rightY
-            : rightY - leftY;
+            : ascending
+                ? leftY - rightY
+                : rightY - leftY;
         if (heightOrder !== 0) return heightOrder;
         if (!origin?.distanceTo) return 0;
         return origin.distanceTo(left.position) - origin.distanceTo(right.position);
@@ -17367,7 +18043,8 @@ function assessMiningAccessPlan(
             if (route[index].yOffset <= 0) continue;
             const stagingCell = route[index - 1].position;
             const precleared = stepExcavationBlocks[index].filter(block => (
-                block.position.x === stagingCell.x
+                isFallingGameplayBlock(block)
+                && block.position.x === stagingCell.x
                 && block.position.z === stagingCell.z
                 && block.position.y >= stagingCell.y + 2
             ));
@@ -17801,9 +18478,7 @@ async function restorePreservedMiningRouteCell(bot, target) {
     const head = target.offset(0, 1, 0);
     const support = target.offset(0, -1, 0);
     const supportBlock = bot.blockAt(support);
-    if (!isAnchoredGameplaySupport(bot, supportBlock)) {
-        return { success: false, outcome: 'return_route_support_changed', cleared: 0 };
-    }
+    const supportRepairNeeded = !isAnchoredGameplaySupport(bot, supportBlock);
     if (miningRouteTouchesLiquid(bot, [feet, head])) {
         return { success: false, outcome: 'return_route_liquid_risk', cleared: 0 };
     }
@@ -17854,6 +18529,18 @@ async function restorePreservedMiningRouteCell(bot, target) {
             .filter(block => block && !isCollectionStandingCellClear(block))
             .sort((left, right) => left.position.y - right.position.y);
         const lowest = blocked[0] || null;
+        if (!lowest && supportRepairNeeded) {
+            // The corridor is still open, but hostile/world activity removed
+            // its floor. Full traversal movements can restore that one support
+            // while walking the exact preserved cell; the final postcondition
+            // below still requires an anchored, occupied stance.
+            return {
+                success: true,
+                outcome: 'return_route_support_repair_needed',
+                cleared,
+                supportRepairNeeded: true,
+            };
+        }
         if (!lowest || !isFallingGameplayBlock(lowest)) {
             return { success: false, outcome: 'return_route_changed', cleared };
         }
@@ -17950,10 +18637,16 @@ export async function traverseMiningRouteCell(bot, x, y, z) {
         && physicallyOccupiesStandingCell(bot, target)
         && isMiningRouteCellReturnable(bot, target)
     );
+    const supportRepaired = Boolean(
+        restoration.supportRepairNeeded
+        && isAnchoredGameplaySupport(bot, bot.blockAt(target.offset(0, -1, 0)))
+    );
     setActionEvidence(bot, {
         kind: 'mining_return',
         outcome: success
             ? 'route_cell_returned'
+            : restoration.supportRepairNeeded
+                ? 'return_route_support_repair_failed'
             : traversal.success
                 ? 'return_route_settlement_changed'
                 : traversal.outcome,
@@ -17961,12 +18654,14 @@ export async function traverseMiningRouteCell(bot, x, y, z) {
         observedPosition: traversal.observed || null,
         fallingEntitiesObserved,
         debrisRestored: restoration.cleared,
+        supportRepairNeeded: restoration.supportRepairNeeded === true,
+        supportRepaired,
         returnable: success,
         routeDigging: restoration.cleared > 0,
         retryable: !success && !bot.interrupt_code,
     });
     log(bot, success
-        ? `Returned through preserved mining cell ${target.x}, ${target.y}, ${target.z}${restoration.cleared > 0 ? ` after clearing ${restoration.cleared} settled debris block${restoration.cleared === 1 ? '' : 's'}` : ''}.`
+        ? `Returned through preserved mining cell ${target.x}, ${target.y}, ${target.z}${supportRepaired ? ' after restoring its changed support' : restoration.cleared > 0 ? ` after clearing ${restoration.cleared} settled debris block${restoration.cleared === 1 ? '' : 's'}` : ''}.`
         : `Could not settle on preserved mining cell ${target.x}, ${target.y}, ${target.z}.`);
     return success;
 }
@@ -18075,10 +18770,13 @@ function miningRouteInventoryRequirement(bot, plan, targetBlock) {
     }
     return {
         expectedDrops: [...expectedCounts.keys()].sort(),
-        requiredFreeSlots: Math.max(
-            MINING_COLLECTION_SLOT_RESERVE,
-            Math.min(12, additionalSlots + 1),
-        ),
+        // A bound mining route already accounts for every planned block and
+        // every registered drop variant above. Requiring the collection-wide
+        // three-slot reserve here can reject a physically safe corridor even
+        // when all of its drops fit existing stacks. Keep one contingency
+        // slot for a live block/drop change, but let the route's actual output
+        // capacity own the rest of this preflight.
+        requiredFreeSlots: Math.min(12, additionalSlots + 1),
     };
 }
 
@@ -18173,8 +18871,15 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                     step: nextStep.position,
                 });
             }
+            // Pre-clear only gravity blocks before occupying the cell beneath
+            // them. Ordinary rock in the next ascent step must remain there:
+            // from the prior diagonal cell it may have no visible face, while
+            // after this step is occupied it is directly overhead and safely
+            // diggable. Treating all overhead as falling debris caused the
+            // surface corridor to repeat an impossible diagonal diorite dig.
             boundBlocks.push(...nextAssessment.blocks.filter(block => (
-                block.position.x === step.position.x
+                isFallingGameplayBlock(block)
+                && block.position.x === step.position.x
                 && block.position.z === step.position.z
                 && block.position.y >= step.position.y + 2
             )));
@@ -18220,6 +18925,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                     block => bot.entity.position.distanceTo(block.position) <= 4.5,
                 ),
                 bot.entity.position,
+                { ascending: step.yOffset > 0 },
             )[0];
             if (!liveBlock) {
                 const nearest = liveBlocks.sort((left, right) => (
@@ -19307,19 +20013,11 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
             )
             : null;
         if (openRoute && !openRoute.reachable && openRoute.conclusive !== true) {
-            setActionEvidence(bot, {
-                kind: 'mining_relocation',
-                outcome: 'open_cave_route_unproven',
-                target,
-                candidates: candidates.length,
-                routeStatus: openRoute.status,
-                returnRouteStatus: openRoute.returnStatus || null,
-                routeDigging: false,
-                inconclusive: true,
-                retryable: true,
-            });
-            log(bot, `The non-destructive cave-route search did not finish for the productive y=${boundedY} band; no excavation was started.`);
-            return false;
+            // An inconclusive read-only probe is not evidence that the owned
+            // excavation strategy is unsafe. Continue into the preflighted,
+            // returnable staircase below instead of spending the WorkOrder's
+            // method budget replaying the same two-second cave search.
+            log(bot, `The non-destructive cave-route search did not finish for y=${boundedY}; falling back to a preflighted returnable staircase.`);
         }
         if (openRoute?.reachable && openRoute.terminalPosition) {
             const candidate = openRoute.terminalPosition;
@@ -25358,6 +26056,15 @@ export async function goToSurface(bot, {
                 })),
                 movement: access.movement || null,
                 retreat: access.retreat || null,
+                requiredFreeSlots: Number.isFinite(access.requiredFreeSlots)
+                    ? access.requiredFreeSlots
+                    : null,
+                observedFreeSlots: Number.isFinite(access.observedFreeSlots)
+                    ? access.observedFreeSlots
+                    : null,
+                expectedDrops: Array.isArray(access.expectedDrops)
+                    ? access.expectedDrops
+                    : null,
                 routeDigging: true,
                 legs: leg,
                 verticalProgress: observed.y - origin.y,

@@ -74,7 +74,7 @@ const GAMEPLAY_OPERATING_RULES = [
     'A physical task is complete only when current Minecraft state verifies its whole postcondition, including cleanup, exact custody/destination, and any final wait or return.',
     'Never claim that a carried item is absent or "did not register" when INVENTORY lists it. A current snapshot cannot prove whether an item is newly received; report only the exact carried and nearby-drop evidence.',
     'For an unfamiliar item or block, use !inspectMinecraft with its name; use !getCraftingPlan when a recipe chain is unclear.',
-    'For an acquisition or delivery outcome, prefer one typed !requestItemGoal; its causal planner derives and verifies prerequisites one physical step at a time.',
+    'For every player-requested acquisition or delivery outcome, select one typed !requestItemGoal; its causal planner derives and verifies prerequisites one physical step at a time. !givePlayer is only the terminal atomic handoff inside work already owned by a goal or agenda.',
     'For a natural-language promise whose final delivered item is charcoal, use exactly one !acceptCharcoalMission(quantity). Choose the exact promised quantity, using 8 as the safe bounded default for “some”; after acceptance the deterministic Mission owns prerequisites, custody, delivery, cleanup, and replanning, so do not sequence its primitive commands yourself.',
     'When one broad player outcome requires you to choose several concrete inventory outputs, compile the complete final inventory floors once with !queueItemPlan. Account for current inventory, use real registry-backed targets, and never invent an umbrella target such as starter_kit. A typed runtime barrier re-verifies the whole promised set after production.',
     'For complex work, compose available primitives: observe, preflight tools/materials/reachability/hazards, act once, verify the result, then adapt.',
@@ -315,7 +315,11 @@ export function latestMessageRequestsAction(messages) {
 export function clarificationQuestionFromGeneration(generation) {
     const text = String(generation || '').trim();
     if (containsCommand(text)) return null;
-    const match = /^\[CLARIFY\]\s+([^\r\n]{1,200})$/i.exec(text);
+    // The marker is the control surface. Permit one short explanatory preface,
+    // but require exactly one final marker line so ordinary prose containing the
+    // word "clarify" cannot accidentally suspend physical work.
+    if ((text.match(/\[CLARIFY\]/gi) || []).length !== 1) return null;
+    const match = /(?:^|\r?\n)\s*\[CLARIFY\]\s+([^\r\n]{1,200})\s*$/i.exec(text);
     if (!match) return null;
     const question = match[1].trim();
     if (!question.endsWith('?') || (question.match(/\?/g) || []).length !== 1) return null;
@@ -708,11 +712,17 @@ export class Prompter {
         this.last_prompt_time = Date.now();
     }
 
-    async promptConvo(messages) {
+    async promptConvo(messages, { typedResult = false, requestContext = null } = {}) {
+        const result = (kind, text, extra = {}) => {
+            const normalizedText = String(text || '');
+            if (!typedResult) return normalizedText;
+            return Object.freeze({ kind, text: normalizedText, ...extra });
+        };
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
         const turnStartedAt = current_msg_time;
-        const requiresActionCommand = latestMessageRequestsAction(messages);
+        const requiresActionCommand = requestContext?.requiresActionCommand === true
+            || latestMessageRequestsAction(messages);
         let actionCorrection = '';
         let groundingFallback = '';
         const measurementAttempts = [];
@@ -734,12 +744,21 @@ export class Prompter {
         for (let i = 0; i < maxTurns; i++) { // retry only within this profile's budget
             await this.checkCooldown();
             if (current_msg_time !== this.most_recent_msg_time) {
-                return '';
+                return result('response', '');
             }
 
             const promptBuildStartedAt = Date.now();
             let prompt = this.profile.conversing;
             prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
+            if (requestContext && typeof requestContext === 'object') {
+                const context = {
+                    requestId: String(requestContext.requestId || '').slice(0, 96),
+                    clarificationToken: String(requestContext.clarificationToken || '').slice(0, 128),
+                    requester: String(requestContext.requester || '').slice(0, 64),
+                    phase: String(requestContext.phase || '').slice(0, 40),
+                };
+                prompt += `\n[REQUEST_INTERPRETATION_CONTEXT]\n${JSON.stringify(context)}\n${String(requestContext.instruction || '').slice(0, 500)}\n[/REQUEST_INTERPRETATION_CONTEXT]`;
+            }
             const groundingState = getFullState(this.agent);
             const actionGrounding = recentActionGroundingPrompt(groundingState);
             if (actionGrounding) prompt += `\n${actionGrounding}`;
@@ -821,7 +840,7 @@ export class Prompter {
                 // loop would repeat the same paid request and can neither fix
                 // authentication/quota nor improve the response. Correctable
                 // generated-answer failures continue to use later prompt turns.
-                if (outcome === 'provider_failed') return PROVIDER_FAILURE_TEXT;
+                if (outcome === 'provider_failed') return result('response', PROVIDER_FAILURE_TEXT);
                 continue;
             }
 
@@ -833,7 +852,7 @@ export class Prompter {
 
             if (current_msg_time !== this.most_recent_msg_time) {
                 console.warn(`${this.agent.name} received new message while generating, discarding old response.`);
-                return '';
+                return result('response', '');
             }
 
             if (generation?.includes('</think>')) {
@@ -857,34 +876,34 @@ export class Prompter {
 
             const clarificationQuestion = clarificationQuestionFromGeneration(generation);
             const unsupportedCapability = unsupportedCapabilityFromGeneration(generation);
+            if (clarificationQuestion) {
+                this.performance.conversation = {
+                    ...this.performance.conversation,
+                    outcome: 'clarification',
+                };
+                return result('clarification', clarificationQuestion, { question: clarificationQuestion });
+            }
             if (requiresActionCommand && unsupportedCapability) {
                 this.performance.conversation = {
                     ...this.performance.conversation,
                     outcome: 'unsupported',
                 };
-                return unsupportedCapability;
+                return result('unsupported', unsupportedCapability, { detail: unsupportedCapability });
             }
             if (requiresActionCommand && !containsCommand(generation)) {
-                if (clarificationQuestion) {
-                    this.performance.conversation = {
-                        ...this.performance.conversation,
-                        outcome: 'clarification',
-                    };
-                    return clarificationQuestion;
-                }
                 console.warn('LLM described or answered an action request without a command. Trying again...');
                 actionCorrection = '\nCRITICAL RETRY: The latest player message requests an action. Respond with a valid !command only when that command fulfills the request. If the request is outside your capabilities or permissions, respond exactly `[UNSUPPORTED] concise missing capability or permission.` with no command. Do not choose unrelated substitute work, promise, narrate, roleplay, or claim the action happened.';
                 continue;
             }
 
-            return clarificationQuestion || generation;
+            return result('response', generation);
         }
 
         if (requiresActionCommand) {
-            return 'I could not map that request to a safe gameplay command. Ask me to inspect with !awareness or use a specific available command.';
+            return result('response', 'I could not map that request to a safe gameplay command. Ask me to inspect with !awareness or use a specific available command.');
         }
-        if (groundingFallback) return groundingFallback;
-        return '';
+        if (groundingFallback) return result('response', groundingFallback);
+        return result('response', '');
     }
 
     async promptCoding(messages) {

@@ -1,5 +1,6 @@
 import { createWorkOrder } from '../work-order.js';
 import { validateStructureBlueprint } from './structure-catalog.js';
+import { isApprovedPrimaryConstructionMaterial } from './structural-material-contract.js';
 
 // A parametric design language, so a player can ask for a building nobody wrote
 // a function for.
@@ -899,14 +900,18 @@ export function createDesignedStructureOrder({
   constraints,
   canSupportMaterial,
 } = {}) {
+  const primaryMaterial = canonicalMaterial(material);
+  if (!isApprovedPrimaryConstructionMaterial(primaryMaterial)) {
+    throw new TypeError('Design material must be an approved primary construction material.');
+  }
   const id = String(name || 'designed_structure')
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_')
     .replace(/[^a-z0-9_]/g, '')
     .slice(0, 48) || 'designed_structure';
-  const blueprint = expandStructureDesign(design, material, {
-    id: `${id}_${canonicalMaterial(material)}`,
+  const blueprint = expandStructureDesign(design, primaryMaterial, {
+    id: `${id}_${primaryMaterial}`,
     canSupportMaterial,
   });
   return createWorkOrder({

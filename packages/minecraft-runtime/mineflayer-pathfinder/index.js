@@ -483,6 +483,37 @@ function inject (bot) {
     bot.emit('path_stop', reason)
   }
 
+  function settleReachedStaticGoal () {
+    if (
+      !stateGoal ||
+      dynamicGoal ||
+      digging ||
+      placing ||
+      activatingUseBlock ||
+      !bot.entity?.position
+    ) return false
+    const feet = bot.entity.position.floored()
+    if (!stateGoal.isEnd(feet) && !stateGoal.isEnd(feet.offset(0, 1, 0))) return false
+
+    // The body can satisfy a short interaction route while the final graph
+    // node is still queued (most visibly after opening a door into the goal
+    // cell). Physical goal truth outranks that stale node. Settle without a
+    // path_reset event so goto resolves normally and the caller can perform
+    // its interaction.
+    const reachedGoal = stateGoal
+    if (pendingOpenable) pendingOpenable.goalReached = true
+    path = []
+    verticalTransition = null
+    parkourTransition = null
+    nodeProgress = null
+    stateGoal = null
+    statePathOptions = {}
+    lastNodeTime = performance.now()
+    fullStop()
+    bot.emit('goal_reached', reachedGoal)
+    return true
+  }
+
   function servicePendingOpenable () {
     const pending = pendingOpenable
     if (!pending) return false
@@ -556,6 +587,16 @@ function inject (bot) {
         if (Math.abs(progress) >= OPENABLE_SAFE_CLEARANCE) {
           pending.failAfterClose = error
           shouldClose = true
+        } else if (pending.goalReached) {
+          // The route may intentionally end in the openable's body cell (for
+          // example, a placement stance just inside a shelter door). Arrival
+          // is already physically verified, while closing here would intersect
+          // the body. Leave the fixture open and let a later movement close it
+          // after real clearance instead of converting successful travel into
+          // a path failure.
+          pendingOpenable = null
+          lastNodeTime = now
+          return false
         } else {
           pending.phase = 'failed'
           pending.error = error
@@ -942,6 +983,7 @@ function inject (bot) {
       return
     }
     if (servicePendingOpenable()) return
+    if (settleReachedStaticGoal()) return
     if (stopPathing) {
       stop()
       return
@@ -1007,7 +1049,7 @@ function inject (bot) {
       lastNodeTime = performance.now()
       if (stateGoal && stateMovements) {
         if (stateGoal.isEnd(bot.entity.position.floored())) {
-          if (pendingOpenable) return
+          if (pendingOpenable) pendingOpenable.goalReached = true
           if (!dynamicGoal) {
             bot.emit('goal_reached', stateGoal)
             stateGoal = null
@@ -1090,6 +1132,7 @@ function inject (bot) {
             destination: action.closeAfterCrossing.destination,
             stateDeadlineAt: now + OPENABLE_STATE_TIMEOUT_MS,
             clearDeadlineAt: now + OPENABLE_CLEAR_TIMEOUT_MS,
+            goalReached: false,
             error: null
           }
         }
@@ -1224,13 +1267,22 @@ function inject (bot) {
       }
       path.shift()
       if (path.length === 0) { // done
-        if (pendingOpenable) {
+        // If this route intentionally ends in the doorway, arrival must settle
+        // before best-effort close cleanup. A non-goal endpoint still waits for
+        // the openable contract exactly as before.
+        const goalReached = Boolean(
+          !dynamicGoal &&
+          stateGoal &&
+          (stateGoal.isEnd(p.floored()) || stateGoal.isEnd(p.floored().offset(0, 1, 0)))
+        )
+        if (pendingOpenable && !goalReached) {
           fullStop()
           return
         }
+        if (pendingOpenable && goalReached) pendingOpenable.goalReached = true
         // If the block the bot is standing on is not a full block only checking for the floored position can fail as
         // the distance to the goal can get greater then 0 when the vector is floored.
-        if (!dynamicGoal && stateGoal && (stateGoal.isEnd(p.floored()) || stateGoal.isEnd(p.floored().offset(0, 1, 0)))) {
+        if (goalReached) {
             bot.emit('goal_reached', stateGoal)
             stateGoal = null
             statePathOptions = {}

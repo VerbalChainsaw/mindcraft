@@ -27,6 +27,7 @@ const SCENARIO_COURSE = Object.freeze({
   'pathfinding-finite-break-cost': 'pathfinding-finite-break-cost',
   'player-route-best-reachable': 'player-route-best-reachable',
   'deliver-item-goal': 'deliver-item',
+  'dynamic-escape-delivery': 'dynamic-escape-delivery',
   'orchestration-charcoal': 'orchestrate-charcoal',
   'route-probe-inconclusive': 'route-probe-inconclusive',
   'terrain-swim-exit': 'terrain-swim-exit',

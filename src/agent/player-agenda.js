@@ -9,6 +9,7 @@ import { AGENDA_KINDS } from './runtime/agenda.js';
 import { requestedQuantity } from './runtime/goal-contract.js';
 import { familyFoodPoints, familyInventoryEntries } from './runtime/item-family.js';
 import { selectExistingAccessRepair } from './runtime/access-repair.js';
+import { currentAnimalPenConstraint } from './runtime/livestock-contract.js';
 import { miningOutputName } from './runtime/jobs/miner-plan.js';
 import { breedingFoodForAnimal } from '../utils/mcdata.js';
 
@@ -959,123 +960,6 @@ function canonicalDimension(value) {
   return String(value || '').trim().toLowerCase().replace(/^minecraft:/, '');
 }
 
-function isFenceBoundary(block) {
-  const name = String(block?.name || '');
-  return name.endsWith('_fence') || name.endsWith('_fence_gate');
-}
-
-function enclosureComponent(bot, gatePosition) {
-  const queue = [gatePosition];
-  const visited = new Map();
-  while (queue.length > 0 && visited.size < 256) {
-    const position = queue.shift();
-    const key = `${position.x},${position.y},${position.z}`;
-    if (visited.has(key)) continue;
-    const block = bot.blockAt(position);
-    if (!isFenceBoundary(block)) continue;
-    visited.set(key, { block, position });
-    for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      queue.push(position.offset(x, 0, z));
-    }
-  }
-  return [...visited.values()];
-}
-
-function penConstraintForGate(bot, gatePosition, animal, origin) {
-  const component = enclosureComponent(bot, gatePosition);
-  if (component.length < 8) return null;
-  const xs = component.map(entry => entry.position.x);
-  const zs = component.map(entry => entry.position.z);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minZ = Math.min(...zs);
-  const maxZ = Math.max(...zs);
-  const y = gatePosition.y;
-  const width = maxX - minX + 1;
-  const depth = maxZ - minZ + 1;
-  if (width < 3 || width > 16 || depth < 3 || depth > 16) return null;
-
-  for (let x = minX; x <= maxX; x += 1) {
-    for (const z of [minZ, maxZ]) {
-      if (!isFenceBoundary(bot.blockAt(gatePosition.offset(x - gatePosition.x, 0, z - gatePosition.z)))) return null;
-    }
-  }
-  for (let z = minZ; z <= maxZ; z += 1) {
-    for (const x of [minX, maxX]) {
-      if (!isFenceBoundary(bot.blockAt(gatePosition.offset(x - gatePosition.x, 0, z - gatePosition.z)))) return null;
-    }
-  }
-
-  let outside;
-  if (gatePosition.x === minX) outside = { x: gatePosition.x - 1, y, z: gatePosition.z };
-  else if (gatePosition.x === maxX) outside = { x: gatePosition.x + 1, y, z: gatePosition.z };
-  else if (gatePosition.z === minZ) outside = { x: gatePosition.x, y, z: gatePosition.z - 1 };
-  else if (gatePosition.z === maxZ) outside = { x: gatePosition.x, y, z: gatePosition.z + 1 };
-  else return null;
-
-  const inside = {
-    x: Math.floor((minX + maxX) / 2),
-    y,
-    z: Math.floor((minZ + maxZ) / 2),
-  };
-  const insideFeet = bot.blockAt(gatePosition.offset(
-    inside.x - gatePosition.x,
-    0,
-    inside.z - gatePosition.z,
-  ));
-  const insideHead = bot.blockAt(gatePosition.offset(
-    inside.x - gatePosition.x,
-    1,
-    inside.z - gatePosition.z,
-  ));
-  const support = bot.blockAt(gatePosition.offset(
-    inside.x - gatePosition.x,
-    -1,
-    inside.z - gatePosition.z,
-  ));
-  if (insideFeet?.boundingBox !== 'empty' || insideHead?.boundingBox !== 'empty' || support?.boundingBox !== 'block') return null;
-
-  const baselineAnimals = Object.values(bot.entities || {}).filter(entity => (
-    entity?.name === animal
-    && entity.position
-    && entity.position.x > minX
-    && entity.position.x < maxX + 1
-    && entity.position.z > minZ
-    && entity.position.z < maxZ + 1
-    && entity.position.y >= y - 1
-    && entity.position.y <= y + 2
-  )).length;
-  return {
-    gate: { x: gatePosition.x, y, z: gatePosition.z },
-    inside,
-    outside,
-    bounds: { minX, maxX, minZ, maxZ, y },
-    dimension: canonicalDimension(bot.game?.dimension),
-    baselineAnimals,
-    distance: Math.hypot(
-      gatePosition.x - origin.x,
-      gatePosition.y - origin.y,
-      gatePosition.z - origin.z,
-    ),
-  };
-}
-
-function currentAnimalPenConstraint(bot, animal, origin) {
-  if (!origin || typeof bot?.findBlocks !== 'function' || typeof bot?.blockAt !== 'function') return null;
-  const gates = bot.findBlocks({
-    matching: block => String(block?.name || '').endsWith('_fence_gate'),
-    // The requester may stand at home while the companion is returning from
-    // remembered work. Search the bounded loaded region around the bot, then
-    // rank and accept only a pen physically near the requester below.
-    maxDistance: 128,
-    count: 32,
-  });
-  return gates
-    .map(position => penConstraintForGate(bot, position, animal, origin))
-    .filter(candidate => candidate && candidate.distance <= 32)
-    .sort((left, right) => left.distance - right.distance)[0] || null;
-}
-
 function foodStockingPlan(playerName, message, context) {
   const text = normalizeMessage(message).trim();
   if (!FOOD_STOCKING_CUES.every(pattern => pattern.test(text))) return null;
@@ -1374,6 +1258,133 @@ function scoutMemoryPlan(playerName, message, context) {
         homeDimension,
       },
     }],
+  };
+}
+
+function requestedConstructionMaterial(text) {
+  const wood = text.match(/\b(oak|spruce|birch|jungle|acacia|dark\s+oak|mangrove|cherry|bamboo|crimson|warped)\s+(?:planks?|wood)\b/i)?.[1];
+  if (wood) return `${wood.toLowerCase().replaceAll(' ', '_')}_planks`;
+  const fullBlock = text.match(/\b(cobblestone|stone|dirt)\b/i)?.[1];
+  return fullBlock ? fullBlock.toLowerCase() : 'auto';
+}
+
+// Compile a complete livestock project without asking the model to invent
+// commands for capabilities the runtime already owns. Inputs which do not
+// exist yet remain typed selectors; AgendaDirector resolves and persists their
+// exact world identities only after the producing construction/scout steps
+// have succeeded.
+function livestockProjectPlan(playerName, message, context) {
+  const text = normalizeMessage(message).trim();
+  const animal = ['cow', 'sheep', 'pig', 'chicken', 'rabbit']
+    .find(name => new RegExp(`\\b${name}s?\\b`, 'i').test(text));
+  const completeProject = Boolean(
+    animal
+    && /\b(?:build|make|construct|set up)\b[\s\S]*\b(?:pen|paddock|corral|enclosure)\b/i.test(text)
+    && /\b(?:scout|find|locate|search for)\b/i.test(text)
+    && /\b(?:remember|record|mark|note)\b/i.test(text)
+    && /\b(?:bring|move|lead|lure)\b[\s\S]*\b(?:cow|sheep|pig|chicken|rabbit)s?\b/i.test(text)
+    && /\b(?:breed|mate|make more|raise)\b/i.test(text)
+    && /\b(?:close|shut|secure)\b[\s\S]*\b(?:gate|pen|paddock|corral|enclosure)\b/i.test(text)
+    && /\b(?:return|come back|head back)\b/i.test(text)
+  );
+  if (!completeProject) return null;
+  const bot = context?.bot;
+  const position = context?.requesterPosition;
+  const dimension = canonicalDimension(bot?.game?.dimension);
+  const food = breedingFoodForAnimal(animal);
+  if (
+    !food
+    || !position
+    || ![position.x, position.y, position.z].every(Number.isFinite)
+    || !dimension
+  ) {
+    return { rejection: 'I could not bind the livestock project to the requester and current dimension, so I did not start only part of it.' };
+  }
+  const adultCount = Math.max(2, Math.min(8, requestedQuantity(text) || 2));
+  const breedingPairs = Math.max(1, Math.floor(adultCount / 2));
+  const material = requestedConstructionMaterial(text);
+  return {
+    steps: [
+      {
+        segment: `build and secure an animal pen near the functional base using ${material === 'auto' ? 'a feasible primary material' : material.replaceAll('_', ' ')}`,
+        command: null,
+        response: 'I will bind the catalogue animal pen to one safe loaded site and let Builder finish and verify it.',
+        entry: {
+          kind: 'construction',
+          requester: playerName,
+          constructionIntent: {
+            requiredFunctions: ['containment', 'access'],
+            catalogueStructure: 'animal_pen',
+            structuralMaterial: material,
+          },
+        },
+      },
+      {
+        segment: `scout for and remember at least ${adultCount} ${animal}, return, and guide ${playerName} to them`,
+        command: null,
+        response: `I will verify at least ${adultCount} ${animal}, remember their source region, return, and guide ${playerName} there.`,
+        entry: {
+          kind: 'scout',
+          requester: playerName,
+          findings: ['animal'],
+          guideFinding: 'animal',
+          animal,
+          minimumAnimalCount: adultCount,
+          radius: 64,
+          x: Math.floor(position.x),
+          y: Math.floor(position.y),
+          z: Math.floor(position.z),
+          homeDimension: dimension,
+        },
+        dependency: { policy: 'requires_success' },
+      },
+      {
+        segment: `prepare ${breedingPairs * 2} ${food.replaceAll('_', ' ')} for the ${animal}`,
+        command: null,
+        response: `I will prepare the verified attraction food before moving the ${animal}.`,
+        entry: {
+          kind: 'acquire',
+          requester: playerName,
+          target: food,
+          quantity: breedingPairs * 2,
+          quantityMode: 'minimum',
+        },
+        dependency: { policy: 'requires_success' },
+      },
+      {
+        segment: `bring ${adultCount} ${animal} into the completed pen, breed ${breedingPairs} pair, exit, and close the gate`,
+        command: null,
+        response: `I will resolve the exact completed pen and remembered ${animal} source, then settle and verify the livestock.`,
+        entry: {
+          kind: 'settle_livestock',
+          requester: playerName,
+          target: animal,
+          quantity: adultCount,
+          breedingPairs,
+          sourceSelector: {
+            kind: 'remembered_scout',
+            memoryName: 'useful_animals',
+            dimension,
+            animal,
+            minimumCount: adultCount,
+          },
+          penSelector: {
+            kind: 'remembered_structure',
+            structure: 'animal_pen',
+            dimension,
+            animal,
+          },
+        },
+        dependency: { policy: 'requires_success' },
+      },
+      {
+        segment: `return to ${playerName}`,
+        command: null,
+        response: `I will return to ${playerName} after the pen, adults, breeding result, and closed gate are verified.`,
+        entry: { kind: 'goto', requester: playerName, recipient: playerName },
+        dependency: { policy: 'requires_success' },
+      },
+    ],
   };
 }
 
@@ -2156,9 +2167,30 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
       unresolved: [],
     };
   }
+  const livestockProject = livestockProjectPlan(playerName, body, context);
+  if (livestockProject?.rejection) {
+    return {
+      owner: 'livestock',
+      disposition,
+      multiStep: true,
+      steps: [],
+      unresolved: [],
+      rejection: livestockProject.rejection,
+    };
+  }
+  if (livestockProject?.steps) {
+    return {
+      owner: 'livestock',
+      disposition,
+      multiStep: true,
+      steps: livestockProject.steps,
+      unresolved: [],
+    };
+  }
   const livestock = livestockHomePlan(playerName, body, context);
   if (livestock?.rejection) {
     return {
+      owner: 'livestock',
       disposition,
       multiStep: true,
       steps: [],
@@ -2168,6 +2200,7 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   }
   if (livestock?.steps) {
     return {
+      owner: 'livestock',
       disposition,
       multiStep: true,
       steps: livestock.steps,

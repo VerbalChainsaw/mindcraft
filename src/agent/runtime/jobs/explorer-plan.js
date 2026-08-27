@@ -648,6 +648,8 @@ function scoutObservationStep(order, finding) {
     return createCapabilityRequest('observe_useful_animal', {
       home: order.target,
       range: order.constraints?.maxDistance,
+      animal: order.checkpoint?.scoutAnimalTarget || null,
+      minimumCount: order.checkpoint?.scoutAnimalMinimumCount || 1,
     }, {
       nextPhase: 'execute',
       code: 'scout_useful_animal',
@@ -945,6 +947,42 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
       if (
         checkpoint.caveLit
         && order.evidence?.code === 'resource_not_found'
+        && order.evidence?.inconclusive === true
+      ) {
+        // The ore exists, but bounded advisory path probes could not prove a
+        // returnable approach. Replaying the same probes cannot add evidence.
+        // Keep this expedition and its required outputs intact, then compose
+        // into the deterministic corridor strategy from the settled stance.
+        const requirement = outstandingRequirements(snapshot, checkpoint)[0] || null;
+        return {
+          phase: 'execute',
+          code: 'expedition_strategy_changed',
+          detail: 'Observed exposed ore could not be bound through a finished round-trip probe; switching the same expedition to a bounded deterministic mining corridor.',
+          checkpoint: {
+            ...checkpoint,
+            caveLit: false,
+            acquisitionStrategy: 'mining_corridor',
+            corridorSearchLegs: 0,
+            ...(requirement ? {
+              corridorRequirementItem: requirement.item,
+              corridorRequirementProgress: requirementProgress(
+                snapshot,
+                checkpoint,
+                requirement,
+              ),
+            } : {}),
+          },
+          target: {
+            name: 'mining_corridor',
+            x: Number.isFinite(snapshot?.x) ? Math.floor(snapshot.x) : order.target.x,
+            y: Number.isFinite(snapshot?.y) ? Math.floor(snapshot.y) : order.target.y,
+            z: Number.isFinite(snapshot?.z) ? Math.floor(snapshot.z) : order.target.z,
+          },
+        };
+      }
+      if (
+        checkpoint.caveLit
+        && order.evidence?.code === 'resource_not_found'
         && order.evidence?.inconclusive !== true
       ) {
         // The selected cave was physically reached and lit but yielded no
@@ -963,8 +1001,14 @@ export function nextExplorerStep(order, snapshot = {}, _lastResult = null, { pla
       if (
         !checkpoint.caveLit
         && order.evidence?.code === 'source_not_found'
-        && order.evidence?.inconclusive !== true
       ) {
+        // An unfinished round-trip probe is not negative terrain evidence, but
+        // replaying the same bounded search from the same stance cannot answer
+        // it either. Change the physical vantage point, then let the existing
+        // bounded sequence fall through to the deterministic mining-corridor
+        // strategy if cave access still cannot be proven. This composes the
+        // workarounds instead of spending productive attempts on an unchanged
+        // advisory timeout.
         const partial = bestEffortDelivery(order, snapshot);
         if (partial) return partial;
         return caveSearchRelocationStep(order, snapshot);

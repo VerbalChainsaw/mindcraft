@@ -15,6 +15,7 @@ import {
 } from '../../utils/recipe-families.js';
 import { createCapabilityPlanAction } from './capability-catalogue.js';
 import { completionRequirementSatisfied } from './goal-contract.js';
+import { normalizeWorkstationTransactionReceipt } from './workstation-transaction.js';
 
 const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
@@ -1906,6 +1907,7 @@ export function buildPrerequisitePlan(bot, {
   workstationRequirement = null,
   accessRequirement = null,
   workstationConstraint = null,
+  workstationTransaction = null,
   blockProximityCache = null,
   allowEntityAlternatives = false,
   allowUnobservedSelfDropRoot = true,
@@ -1987,6 +1989,52 @@ export function buildPrerequisitePlan(bot, {
     };
   }
 
+  const pendingWorkstationTransaction = normalizeWorkstationTransactionReceipt(
+    workstationTransaction,
+  );
+  const pendingFurnaceState = pendingWorkstationTransaction?.furnaceState;
+  const resumesBoundFurnace = pendingWorkstationTransaction?.kind === 'smelt'
+    && pendingWorkstationTransaction.remainingQuantity > 0
+    && pendingWorkstationTransaction.workstation?.name === 'furnace'
+    && Boolean(
+      pendingFurnaceState?.input
+      || pendingFurnaceState?.fuel
+      || pendingFurnaceState?.output
+      || Number(pendingFurnaceState?.progress) > 0
+      || Number(pendingFurnaceState?.fuelRemaining) > 0
+    );
+  if (resumesBoundFurnace) {
+    const action = publicAction(createCapabilityPlanAction('smelt', {
+      input: pendingWorkstationTransaction.target,
+      output: pendingWorkstationTransaction.output,
+      count: pendingWorkstationTransaction.remainingQuantity,
+      expectedIncrease: pendingWorkstationTransaction.remainingQuantity,
+      workstation: pendingWorkstationTransaction.workstation,
+    }, {
+      kind: 'smelt',
+      target: pendingWorkstationTransaction.output,
+      expectedName: pendingWorkstationTransaction.output,
+      expectedFamily: null,
+      expectedIncrease: pendingWorkstationTransaction.remainingQuantity,
+      reason: 'Resume the exact bound furnace transaction before replanning ingredients already committed to its slots.',
+      trail: [canonicalTarget, 'bound_furnace_resume', pendingWorkstationTransaction.output],
+      learningKey: `smelt:${pendingWorkstationTransaction.target}->${pendingWorkstationTransaction.output}`,
+      learnedPreference: 0,
+    }, { bot }));
+    return {
+      status: 'ready',
+      code: 'bound_furnace_transaction_ready',
+      detail: `The exact furnace still owns a partial ${pendingWorkstationTransaction.target} transaction; ${pendingWorkstationTransaction.remainingQuantity} output remain.`,
+      target: canonicalTarget,
+      quantity: desired,
+      actions: [action],
+      nextStep: action,
+      blocker: null,
+      trail: [...action.trail],
+      exploredNodes: 0,
+    };
+  }
+
   const context = {
     ledger: inventoryLedger(bot),
     actions: [],
@@ -2034,6 +2082,33 @@ export function buildPrerequisitePlan(bot, {
       trail: [canonicalTarget, 'surface_access'],
       learningKey: null,
     });
+  }
+  const requiredWorkstation = context.workstationRequirement.carried
+    ? context.workstationRequirement.name
+    : null;
+  if (!failure && requiredWorkstation) {
+    if (!bot.registry?.itemsByName?.[requiredWorkstation]) {
+      failure = blocked(
+        'unknown_workstation_requirement',
+        `The physical executor requested an unknown carried workstation: ${requiredWorkstation}.`,
+        requiredWorkstation,
+        [canonicalTarget, 'workstation_requirement'],
+      );
+    } else {
+      // A discovered carried-workstation requirement is an execution
+      // precondition for the failed leaf, so it must lead the next causal
+      // plan. Letting ordinary target expansion encounter it later can schedule
+      // the same smelt/craft first, overwrite a nested table requirement, and
+      // oscillate forever between two unreachable world workstations.
+      failure = ensurePersistentItem(
+        bot,
+        context,
+        requiredWorkstation,
+        requiredWorkstation === canonicalTarget
+          ? ['workstation_requirement']
+          : [canonicalTarget, 'workstation_requirement'],
+      );
+    }
   }
   if (requiredTool) {
     if (!bot.registry?.itemsByName?.[requiredTool]) {

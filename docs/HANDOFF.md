@@ -1,22 +1,50 @@
 # Handoff — next session / forward proof boundary
 
-**Prepared 2026-08-25. Current tranche state: the Phase 7 Container specialist is
-`ACTIVE` with its first major player-valued action complete. Kevin deposited six
-oak logs in the exact village chest at `(796,67,-774)`, returned, later recovered
-two from that same chest after working around an unreachable first interaction
-stance, returned with custody intact, and durably saved `village_supply_cache`.
-Paper ended with four logs in the chest, eight on Kevin, and zero on the controlled
-player. The autonomous village expedition, player-directed route convergence, and
-Phase 6 workaround chain remain `ACCEPTED / CLOSED`. Other Phase 7 specialists and
-Container interruption during an open window remain unimplemented. The separately
-authorized corrected Luna matrix has not started. Runtime cleanup is complete:
-the controlled player and Kevin disconnected, Paper stopped after saving the world,
-the launcher exited, ports 8080, 8081, and 25579 are free, and the temporary driver
-was removed.**
+**Updated 2026-08-26. Dynamic escape, compounded Placement, and functional-base
+commissioning are `ACCEPTED / CLOSED`. The workshop project is preserved
+`ACTIVE — PARTIAL`: ore exploration, iron pickaxe, and shield completed; bucket
+failed; deposits and return were player-cancelled. Phase 7B's deterministic
+compound livestock project is the current gameplay frontier locked in
+`ARCHITECTURE.md`. Current source owns catalogue-pen resumption, requested cow
+population scouting, exact deferred pen/source binding, settlement, and return;
+it has static evidence only. Kevin remains disconnected at the Director's pause.
+Do not restart him from this documentation change. Launcher PID 24172 and Paper
+PID 30156 remain preserved.**
 
 `ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
 governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
 `ACCEPTED / CLOSED` ledger. This file names only the current execution boundary.
+
+## Live continuity ledger
+
+- **DONE:** Native player travel consumes partial paths and preserves honest
+  best-available progress; finite-cost breaking, dig, parkour, bridge, tower,
+  stair excavation, descent, swim exit, shoreline recovery, long-distance village
+  guidance, the first Container custody chain, and controlled after-ownership route
+  mutation plus non-course live-world GoalDirector resumption have direct physical
+  evidence. Dynamic escape, compounded Placement, and the 85-cell functional base
+  with its installed fixtures and verified 137-item cache are closed.
+- **NOW:** Phase 7B source implementation is coherent through the existing owners:
+  deterministic livestock compiler ownership under model sequencing; exact resume
+  of compatible partial catalogue construction; requested-animal/minimum-population
+  Scout binding; durable exact completed-pen and remembered-source resolution; and
+  unchanged-placement containment. `CS-1` through `CS-5` are also forward source
+  implementations, but neither tranche has new physical acceptance.
+- **NEXT ACCEPTANCE:** After the Director explicitly resumes gameplay, continue the
+  exact partial animal-pen order `builder-0545847a-84e8-497f-89f6-49c43c08f8d0`
+  from 37/49, then execute the single typed chain: finish/secure pen -> verify at
+  least two adult cows -> remember/return/guide -> acquire wheat -> move/breed ->
+  close gate -> requester return. Classify any failure at its exact owner; do not
+  rerun an unchanged action.
+- **NOT NEXT:** A new planner/director/scheduler, another model-authored livestock
+  script, a new pen site while the compatible partial order is resumable, standalone
+  cow search/breeding evidence, coal/travel/escape/Placement replay, Phase 5 Luna
+  matrix, Phase 8 collapse, verifier framework, branch cleanup, or provider ceremony.
+
+Update this block whenever a gameplay tranche materially advances or the Director
+changes priority. The newest explicit Director direction outranks stale prose; the
+same working change must reconcile this handoff, the architecture phase/proof
+ledger, and the campaign record before another mechanism is recommended.
 
 ## Startup sequence
 
@@ -110,8 +138,14 @@ complete current contract without a competing agenda.
 | Phase 5 `1-give`, trial 1, recorded trace, telemetry off, advisory preflight | `ACCEPTED / CLOSED` |
 | Phase 6 controlled swim-exit | `ACCEPTED / CLOSED` |
 | Phase 6 composed dig/parkour/bridge/tower/stair/descent/swim/dry-arrival chain | `ACCEPTED / CLOSED` |
+| Phase 6B controlled after-ownership route mutation and GoalDirector resumption, direct and natural-language | `ACCEPTED / CLOSED` |
+| Phase 6B non-course live-world escape, Mission resumption, and repaired terminal handoff | `ACCEPTED / CLOSED` |
 | Autonomous village search, durable recall, return, and player guidance | `ACCEPTED / CLOSED` |
 | Phase 7 Container specialist and village supply cache | `ACTIVE` |
+| Phase 7 Placement specialist and compounded survival shelter | `ACCEPTED / CLOSED` |
+| Phase 7 functional-base commissioning | `ACCEPTED / CLOSED` |
+| Phase 7A composition strengthening through the operational workshop expedition | `ACTIVE — PARTIAL` |
+| Phase 7B deterministic compound livestock project | `ACTIVE` |
 | Outcome-directed confidence coverage under the evidence-saturation rubric | `ACTIVE` |
 
 The accepted Phase 3 result is:
@@ -136,14 +170,44 @@ managed Java remaining. Use it; do not rerun it.
 
 ## Current tranche
 
-**State: Phase 7 Container is `ACTIVE`; its exact deposit, leave, return, exact
-withdrawal, chained stance workaround, custody, settlement, and durable cache-
-memory action completed physically. Other Phase 7 specialists and an interrupted
-open-window transaction remain open. The autonomous village expedition, recorded
-player-return route repair, and Phase 6 physical courses remain `ACCEPTED / CLOSED`.
-The corrected Luna matrix remains `0/112`, has no verdict, and has not started.**
+**State: Phase 7B deterministic compound livestock is `ACTIVE`; its path is locked
+in `ARCHITECTURE.md` under “Phase 7B — deterministic compound livestock project.”
+The workshop remains preserved `ACTIVE — PARTIAL`, not the current cursor.
+Functional-base commissioning and its fixtures are `ACCEPTED / CLOSED`. The Luna
+matrix remains `0/112` and does not displace this tranche.**
 
-### Phase 7 Container action
+### Execution cursor
+
+1. **`LB-1` deterministic ownership — SOURCE COMPLETE / PHYSICAL OPEN:** the whole
+   livestock sentence now stays on the typed Agenda path even when model sequencing
+   is enabled. It compiles one five-step outcome and no longer asks the model to
+   invent the existing structure or settlement calls.
+2. **`LB-2` catalogue pen preservation — SOURCE COMPLETE / PHYSICAL OPEN:** Agenda
+   uses the same safe-site/material binder as `!buildStructure`; when the latest
+   compatible animal-pen WorkOrder is partial and failed, a fresh player request
+   resumes that exact order/checkpoint instead of selecting a new site.
+3. **`LB-3` requested population — SOURCE COMPLETE / PHYSICAL OPEN:** Scout carries
+   exact animal plus minimum adult count through Agenda -> WorkOrder -> Explorer ->
+   Capability binding and verification. Two cows can no longer be satisfied by one
+   cow or a different useful animal.
+4. **`LB-4` exact deferred inputs — SOURCE COMPLETE / PHYSICAL OPEN:** settlement's
+   unresolved source and pen remain typed selectors until producing work succeeds;
+   Agenda then resolves the exact remembered cow point and exact completed pen,
+   physically validates them, persists concrete constraints, and only then acts.
+5. **`LB-5` Builder failure containment — SOURCE COMPLETE / PHYSICAL OPEN:** exact
+   placement interaction stage and the durable material-change circuit replace the
+   old generic `skill_unreachable`/three-identical-retry degradation. Do not add a
+   fence-cell or spruce-specific workaround without new discriminating evidence.
+6. **`LB-6` compound acceptance — NOT STARTED:** after explicit runtime resumption,
+   continue pen 37/49; finish/secure it; scout/remember/return/guide at least two
+   adult cows; acquire wheat; settle two cows; breed one pair; exit and close the
+   exact gate; return to the requester; settle every owner and truth boundary.
+
+Do not treat these as independent work orders or create a parallel plan surface.
+Full acceptance, continue/stop rules, and Definition of Done live only in the cited
+Architecture subsection. Static syntax/module evidence does not close `LB-6`.
+
+### Preserved Phase 7 Container action — not the current tranche
 
 - Container commands now request a `container` Activity specialist. Its owner
   spans native Pathfinder approach and Mineflayer window state, records window
@@ -396,10 +460,22 @@ The corrected Luna matrix remains `0/112`, has no verdict, and has not started.*
 
 - Keep the existing Mission -> Activity -> specialist adapter -> ActionManager
   architecture. Do not invent another engine.
-- Finish the bounded Phase 5 Luna variance question.
-- Add the actual Phase 7 specialist adapters at their package-owned seams.
-- Begin Phase 8 collapse of legacy directors and lanes as replacement evidence
-  covers their player-visible deeds.
+- Preserve the closed dynamic-escape and Placement outcomes as composed foundations;
+  do not replay them as standalone demonstrations.
+- Functional-base commissioning is `ACCEPTED / CLOSED`. Preserve its completed
+  85-cell shelter, local-charcoal fallback, exact fixtures, and 137-item retained-
+  inventory cache as the launch point; do not replay construction or coal.
+- Preserve the workshop's completed ore exploration, iron pickaxe, and shield as
+  partial evidence; do not replay them. Its bucket/storage/return predicates remain
+  open but are not the current gameplay cursor.
+- Commission deterministic compound livestock as the current mechanism. One
+  ordinary-language project must resume or complete the exact catalogue pen,
+  verify and remember the requested adult population, return and guide, acquire
+  attraction food, move and breed the animals, close the gate, return, and settle.
+- Preserve the bounded Phase 5 Luna question as separately authorized later work;
+  it does not displace the current Phase 7B livestock composition outcome.
+- Begin Phase 8 collapse of legacy directors and lanes only after the active Phase
+  7 composition work closes and replacement evidence covers player-visible deeds.
 - Judge each tranche by whether Gabriel Jr. can state an ordinary-language
   promise, Kevin can understand and execute its coherent multi-step plan, survive
   interruption or change, and truthfully finish or explain what remains.
@@ -409,17 +485,34 @@ The corrected Luna matrix remains `0/112`, has no verdict, and has not started.*
 ## Immediate next-session state
 
 - Branch: `recovery/iron-pickaxe-20260803`.
-- HEAD: `00aa2bb0cd878c8378db12ea534e7ecefab865c1`.
-- Scenario doctor confirms MindServer ports 8080 and 8081 and Paper port 25579 are
-  free, the managed server is not running, and the runtime lock is free.
-- Uncommitted forward work contains the accepted Phase 6 swim-exit and composed
-  terrain Scenario Lab courses, the Pathfinder finite-break/resource-state/
-  parkour-landing repairs, the terrain-course bypass and water-containment
-  repairs, Luna/OAuth provider and default-startup repair, the accepted player-
-  route obstruction and best-reachable repairs/courses, and canonical record
-  updates. Preserve and continue it; do not reset, stash, clean, restore, or
-  rebuild around it.
-- `artifacts/` remains untracked Director-owned physical evidence. Preserve it.
+- Published capability baseline: `a6e69f8ff5d7d0eb0bfe9c6b37058a66d7c393ba`.
+- Launcher PID 24172 and Paper Java PID 30156 remain live. Kevin was gracefully
+  disconnected and is paused by Director request. Preserve the server/world and
+  launcher; do not
+  restart Kevin or mutate the world as part of documentation or implementation
+  preparation.
+- That published baseline contains the accepted Phase 6 terrain mechanics,
+  finite-break/resource-state/parkour repairs, player-route obstruction and
+  best-reachable work, village expedition, Container baseline, provider repair,
+  canonical records, and Director-owned interaction-stance evidence. Preserve and
+  continue it; do not rebuild around an older checkpoint or detached matrix copy.
+- `bots/Kevin/agenda.json` is no longer an active eight-entry workshop cursor. It
+  records completed workshop exploration, iron-pickaxe, and shield entries; a
+  failed bucket entry (`inventory_capacity_blocked`); and player-cancelled deposit/
+  return entries (`agenda_cleared`). Preserve those outcomes; do not describe the
+  old Explorer as active or replay completed outputs.
+- `bots/Kevin/job-state.json` and `home-state.json` preserve failed animal-pen
+  Builder order `builder-0545847a-84e8-497f-89f6-49c43c08f8d0`, origin
+  `(731,68,-796)`, checkpoint 37/49, with the next spruce-fence cell at absolute
+  `(734,69,-790)`. The old runtime retained only generic `skill_unreachable` after
+  three attempts. A compatible fresh compound request must resume this exact order
+  rather than select another pen.
+- The active working change preserves all prior forward work and now adds exact
+  result delivery, typed continuation/checkpoints, local material-change circuits,
+  same-incident disengagement, Craft/Furnace transaction receipts, deterministic
+  catalogue livestock compilation, requested adult-population scouting, exact
+  deferred pen/source binding, and compatible partial-pen resumption. Static syntax
+  and module loading pass; no gameplay or provider run has accepted these changes.
 - Q-007 is answered YES. Controlled runs are authorized without another per-run
   question while each run can change a mechanic owner, repair, composition
   verdict, or significant risk. This applies to new and old mechanics; saved
@@ -429,6 +522,21 @@ The corrected Luna matrix remains `0/112`, has no verdict, and has not started.*
   preserved evidence from the superseded API-routed plan.
 
 ## Runtime authorization boundaries
+
+Phase 7B deterministic compound livestock is the active technical/gameplay tranche.
+The Director's later pause controls the current runtime: Kevin remains disconnected
+until the Director explicitly resumes gameplay after the implementation is ready.
+This documentation update does not itself authorize a restart.
+
+After runtime resumption, the physical continuation must advance or materially
+classify the complete livestock outcome: exact partial-pen resumption, completion
+and gate security, requested adult-population scout evidence, durable source memory,
+return/guidance, attraction-food custody, relocation, breeding, closed-gate truth,
+requester return, or final settlement. Use the single typed project and existing
+owners; do not manually sequence isolated commands, issue a new pen while the exact
+partial order is compatible, or build a parallel verifier. Before each physical
+run, state the command, accepted overlap, unresolved question, expected duration,
+and provider cost as required by `AGENTS.md`.
 
 The Phase 6 swim-exit and composed workaround chain are complete and
 `ACCEPTED / CLOSED`; do not repeat them unless changed ownership, composition,
@@ -457,9 +565,10 @@ report the exact provider/error, and do not retry or switch providers.
 - the misconfigured API-key provider stopped at its first credit failure with no
   retry or fallback; all matrix game/Paper/world mutation was confined to the
   authorized isolated generated fixture and was completely restored;
-- no accepted interaction-stance, route-probe, or charcoal gameplay rerun; the
-  Phase 6 swim-exit and composed terrain courses ran physically and closed, and
-  no Phase 7 specialist was added;
+- no accepted interaction-stance, route-probe, or old charcoal gameplay rerun; the
+  Phase 6 swim-exit, composed terrain courses, Phase 7 Placement shelter, and
+  functional-base commissioning ran physically and closed; Container remains
+  preserved `ACTIVE` evidence;
 - no dependency change, parallel plan, parallel handoff surface, or new test
   framework; the existing canonical handoff and Q&A were updated in place.
 

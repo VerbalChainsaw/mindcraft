@@ -209,28 +209,66 @@ export function selectOppositeLandmarkLayoutSites(bot, blueprint, {
   return { sites, inspected: candidates.length, code: sites.length > 0 ? 'layout_sites_found' : 'no_legal_layout' };
 }
 
+function terrainStancesAt(bot, x, z, candidateY, isNaturalTerrain) {
+  return candidateY
+    .filter((y, index, values) => Number.isFinite(y) && values.indexOf(y) === index)
+    .map(y => ({ x, y, z }))
+    .filter(stance => (
+      clearConstructionCell(blockAt(bot, stance.x, stance.y, stance.z))
+      && clearConstructionCell(blockAt(bot, stance.x, stance.y + 1, stance.z))
+      && naturalSupport(blockAt(bot, stance.x, stance.y - 1, stance.z), isNaturalTerrain)
+      && !entityOccupies(bot, stance.x, stance.y, stance.z)
+    ));
+}
+
+function serviceRingColumns(anchor, blueprint) {
+  const minX = anchor.x - 1;
+  const maxX = anchor.x + blueprint.width;
+  const minZ = anchor.z - 1;
+  const maxZ = anchor.z + blueprint.depth;
+  const columns = [];
+  for (let x = minX; x <= maxX; x += 1) columns.push({ x, z: minZ });
+  for (let z = minZ + 1; z <= maxZ; z += 1) columns.push({ x: maxX, z });
+  for (let x = maxX - 1; x >= minX; x -= 1) columns.push({ x, z: maxZ });
+  for (let z = maxZ - 1; z > minZ; z -= 1) columns.push({ x: minX, z });
+  return columns;
+}
+
 function serviceStances(bot, anchor, blueprint, isNaturalTerrain) {
-  const stances = [];
-  const add = (x, z) => {
-    const feet = blockAt(bot, x, anchor.y, z);
-    const head = blockAt(bot, x, anchor.y + 1, z);
-    const support = blockAt(bot, x, anchor.y - 1, z);
-    if (
-      clearConstructionCell(feet)
-      && clearConstructionCell(head)
-      && naturalSupport(support, isNaturalTerrain)
-      && !entityOccupies(bot, x, anchor.y, z)
-    ) stances.push({ x, y: anchor.y, z });
-  };
-  for (let x = anchor.x - 1; x <= anchor.x + blueprint.width; x += 1) {
-    add(x, anchor.z - 1);
-    add(x, anchor.z + blueprint.depth);
+  const columns = serviceRingColumns(anchor, blueprint);
+  const candidates = columns.map(({ x, z }) => terrainStancesAt(
+    bot,
+    x,
+    z,
+    [anchor.y, anchor.y - 1, anchor.y + 1],
+    isNaturalTerrain,
+  ));
+  if (candidates.some(column => column.length === 0)) return [];
+
+  // A usable work ring is a connected loop, not a perfectly level plane.
+  // Keep one safe stance in every perimeter column and allow only Minecraft's
+  // ordinary one-block step between neighbours, including the closing edge.
+  // Native Pathfinder still proves entry to the selected loop before the
+  // order is accepted; Builder gains no digging or scaffold authority here.
+  for (const first of candidates[0]) {
+    let pathsByLastY = new Map([[first.y, [first]]]);
+    for (let index = 1; index < candidates.length && pathsByLastY.size > 0; index += 1) {
+      const nextPaths = new Map();
+      for (const [lastY, path] of pathsByLastY) {
+        for (const candidate of candidates[index]) {
+          if (Math.abs(candidate.y - lastY) > 1 || nextPaths.has(candidate.y)) continue;
+          nextPaths.set(candidate.y, [...path, candidate]);
+        }
+      }
+      pathsByLastY = nextPaths;
+    }
+    const closed = [...pathsByLastY.values()].find(path => (
+      path.length === columns.length
+      && Math.abs(path[path.length - 1].y - first.y) <= 1
+    ));
+    if (closed) return closed;
   }
-  for (let z = anchor.z; z < anchor.z + blueprint.depth; z += 1) {
-    add(anchor.x - 1, z);
-    add(anchor.x + blueprint.width, z);
-  }
-  return stances;
+  return [];
 }
 
 function serviceRingSize(blueprint) {
@@ -257,22 +295,28 @@ function accessApproaches(bot, anchor, blueprint, isNaturalTerrain) {
     // a player. This is deliberately site-selection judgment; Pathfinder
     // still owns locomotion to the accepted stance.
     const exterior = { x: -inward.x, z: -inward.z };
-    const approachY = [door.y - 1, door.y].find(y => [1, 2].every(distance => {
-      const x = door.x + exterior.x * distance;
-      const z = door.z + exterior.z * distance;
-      return (
-        clearConstructionCell(blockAt(bot, x, y, z))
-        && clearConstructionCell(blockAt(bot, x, y + 1, z))
-        && naturalSupport(blockAt(bot, x, y - 1, z), isNaturalTerrain)
-        && !entityOccupies(bot, x, y, z)
-      );
-    }));
-    if (approachY == null) return null;
+    const near = terrainStancesAt(
+      bot,
+      door.x + exterior.x,
+      door.z + exterior.z,
+      [door.y - 1, door.y],
+      isNaturalTerrain,
+    );
+    const far = terrainStancesAt(
+      bot,
+      door.x + exterior.x * 2,
+      door.z + exterior.z * 2,
+      [door.y - 1, door.y - 2, door.y, door.y + 1],
+      isNaturalTerrain,
+    );
+    const approach = near
+      .flatMap(nearStance => far.map(farStance => ({ near: nearStance, far: farStance })))
+      .find(candidate => Math.abs(candidate.near.y - candidate.far.y) <= 1);
+    if (!approach) return null;
     approaches.push({
-      x: door.x + exterior.x * 2,
-      y: approachY,
-      z: door.z + exterior.z * 2,
+      ...approach.far,
       fixtureId: fixture.id,
+      path: [approach.far, approach.near],
     });
   }
   return approaches;

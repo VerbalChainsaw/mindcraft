@@ -19,7 +19,7 @@ import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { resolveBlockedActions } from './command-policy.js';
 import { addressesAgent, stripLeadingAgentAddress } from './chat-address.js';
-import { resolvePlayerDirective, routeCompoundToolGoal } from './player-directives.js';
+import { resolvePlayerDirective, resolveTypedItemGoalDirective, routeCompoundToolGoal } from './player-directives.js';
 import { classifyPlayerSpeechAuthority } from './player-speech-authority.js';
 import {
     compilePlayerIntentLedger,
@@ -52,6 +52,7 @@ import { BehaviorFlightRecorder, isTelemetryBookmarkMessage } from './runtime/be
 import { signalInterrupt } from './runtime/interruptible-delay.js';
 import { minecraftWeather } from './runtime/weather-state.js';
 import { observeReceivedDamageSource } from './runtime/combat-attribution.js';
+import { randomUUID } from 'node:crypto';
 
 const HOLD_SAFE_COMMANDS = new Set([
     '!stop',
@@ -94,6 +95,7 @@ const MIN_INGAME_CHAT_INTERVAL_MS = 450;
 // the only way an already-loaded hostile closing the distance becomes an edge.
 const THREAT_SENSOR_INTERVAL_MS = 150;
 const THREAT_SENSOR_DISTANCE = 12;
+const MAX_MODEL_CLARIFICATION_AGE_MS = 120_000;
 const STARTUP_MILESTONES = new Set([
     'settings_profile_ready',
     'mineflayer_created',
@@ -113,17 +115,21 @@ export function emitStartupMilestone(milestone) {
 }
 
 export function correlatedPersistentJobSubmissionAccepted({
-    deferredAssignment,
     commandName,
-    previousGeneration,
+    requestContext,
     submission,
     activeOrder,
 } = {}) {
     return Boolean(
-        deferredAssignment
-        && commandAssignsPersistentJob(commandName)
-        && Number(submission?.generation) > (Number(previousGeneration) || 0)
+        commandAssignsPersistentJob(commandName)
+        && requestContext?.requestId
+        && submission?.submissionKind === 'job_submission'
+        && submission?.requestId === requestContext.requestId
+        && requestContext.selectedSkill === commandName
         && submission?.selectedSkill === commandName
+        && submission?.routeOrigin === requestContext.routeOrigin
+        && (submission?.missionId || null) === requestContext.missionId
+        && (submission?.activityId || null) === requestContext.activityId
         && submission?.accepted === true
         && submission?.submittedOrderId
         && submission.submittedOrderId === submission.activeOrderId
@@ -133,23 +139,31 @@ export function correlatedPersistentJobSubmissionAccepted({
 
 export function correlatedPersistentGoalAssignmentAccepted({
     commandName,
-    previousGoalIds = [],
+    requestContext,
+    submission,
     activeGoal,
-    lastGoal,
 } = {}) {
-    const currentGoal = activeGoal || lastGoal;
-    const previousIds = new Set(previousGoalIds.filter(Boolean));
     return Boolean(
         commandAssignsPersistentGoal(commandName)
-        && currentGoal?.id
-        && !previousIds.has(currentGoal.id)
+        && requestContext?.requestId
+        && submission?.submissionKind === 'goal_submission'
+        && submission.requestId === requestContext.requestId
+        && requestContext.selectedSkill === commandName
+        && submission.selectedSkill === commandName
+        && submission.routeOrigin === requestContext.routeOrigin
+        && (submission.missionId || null) === requestContext.missionId
+        && (submission.activityId || null) === requestContext.activityId
+        && submission.accepted === true
+        && submission.submittedGoalId
+        && submission.submittedGoalId === submission.activeGoalId
+        && submission.activeGoalId === activeGoal?.id
     );
 }
 
 export function correlatedAgendaPlanSubmissionAccepted({
     deferredAssignment,
     commandName,
-    previousGeneration,
+    requestContext,
     submission,
     agendaEntries,
 } = {}) {
@@ -160,8 +174,15 @@ export function correlatedAgendaPlanSubmissionAccepted({
     return Boolean(
         ['item_plan', 'storage_plan'].includes(deferredAssignment?.kind)
         && allowedCommands.has(commandName)
-        && Number(submission?.generation) > (Number(previousGeneration) || 0)
+        && requestContext?.requestId
+        && submission?.submissionKind === 'agenda_submission'
+        && submission.planKind === deferredAssignment.kind
+        && submission.requestId === requestContext.requestId
+        && requestContext.selectedSkill === commandName
         && submission?.selectedSkill === commandName
+        && submission.routeOrigin === requestContext.routeOrigin
+        && (submission.missionId || null) === requestContext.missionId
+        && (submission.activityId || null) === requestContext.activityId
         && submission?.accepted === true
         && Array.isArray(submission?.entryIds)
         && submission.entryIds.length > 0
@@ -210,6 +231,68 @@ export function modelCommandAwaitsPlayerConfirmation(response, commandName = con
     const proposal = text.slice(0, commandIndex).trim();
     if (!proposal.endsWith('?')) return false;
     return /(?:\bshould\s+i\b|\bshall\s+i\b|\bmay\s+i\b|\bcan\s+i\b|\bwould\s+you\s+like\s+me\s+to\b|\bdo\s+you\s+want\s+me\s+to\b|\bwant\s+me\s+to\b|\bis\s+it\s+okay\s+if\s+i\b)/i.test(proposal);
+}
+
+function conversationFromOpenPlayerRequest(history, openRequest) {
+    const turns = Array.isArray(history) ? history : [];
+    const source = String(openRequest?.requester?.replySource || openRequest?.source || '').trim();
+    const request = String(openRequest?.interpretedRequest || openRequest?.message || '').trim();
+    if (!source || !request) return turns;
+    // The request record is the authority boundary. Build a bounded view from
+    // its literal turns rather than looking up text in history: a repeated
+    // request sentence or a stale assistant command must not become current
+    // action authority just because it happens to share the same text.
+    const scoped = [{ role: 'user', content: `${source}: ${request}` }];
+    const clarification = openRequest?.clarification;
+    if (clarification?.question) {
+        scoped.push({ role: 'assistant', content: clarification.question });
+    }
+    if (openRequest?.state === 'RESOLVING' && clarification?.interpretedAnswer) {
+        const answerSource = String(clarification.replySource || source).trim();
+        scoped.push({
+            role: 'user',
+            content: `${answerSource}: ${clarification.interpretedAnswer}`,
+        });
+    }
+    return scoped;
+}
+
+function isExplicitClarificationSupersession(message) {
+    return /^(?:actually\s+)?(?:new\s+request|new\s+task|change\s+of\s+plan|forget\s+(?:that|it)|instead\b)/i
+        .test(String(message || '').trim());
+}
+
+function requestInterpretationPromptContext(openRequest) {
+    if (!openRequest?.requestId || !openRequest?.clarification) return null;
+    const clarification = openRequest.clarification;
+    return Object.freeze({
+        requestId: openRequest.requestId,
+        clarificationToken: clarification.token,
+        requester: openRequest.requester?.canonical || null,
+        phase: openRequest.state,
+        requiresActionCommand: true,
+        instruction: 'This is a correlated clarification answer for the current player request. Re-interpret the literal request and answer together against current world state. Do not resume historical work or issue a command unless it fulfills this request.',
+    });
+}
+
+// Plain language still reaches the model first. Once the model has interpreted a
+// registry-valid item promise as physical work, deterministic policy binds the
+// whole promise to GoalDirector before any primitive can take body ownership.
+// This keeps provider choices such as !givePlayer or !prepareMaterial from
+// bypassing acquisition, interruption recovery, and Mission resumption.
+export function promoteModelItemGoalCommand(response, typedGoalDirective) {
+    const selectedCommand = containsCommand(response);
+    if (
+        !selectedCommand
+        || selectedCommand === '!requestItemGoal'
+        || selectedCommand === '!acceptCharcoalMission'
+        || !isAction(selectedCommand)
+        || !typedGoalDirective?.command
+    ) return null;
+    const truncated = truncCommandMessage(response);
+    const commandIndex = truncated.indexOf(selectedCommand);
+    const prefix = commandIndex >= 0 ? truncated.slice(0, commandIndex).trim() : '';
+    return prefix ? `${prefix} ${typedGoalDirective.command}` : typedGoalDirective.command;
 }
 
 // Director's call, 2026-08-17: "Yes, it should mine it. It can mine it. Why
@@ -335,6 +418,8 @@ export class Agent {
         this._deathCleanupPromise = null;
         this._lastAliveInventorySnapshot = {};
         this._lastAliveInventorySnapshotAt = 0;
+        this._trackedDeathRecoveryRecordedAt = null;
+        this._deathRecoveryObservationNotBefore = 0;
         this._playerPositionLookup = null;
         this._playerPositionLookupGeneration = 0;
         this._requestPlayerPosition = requestPlayerPosition;
@@ -825,6 +910,129 @@ export class Agent {
         return this.operator_hold === true;
     }
 
+    supersedeOpenPlayerRequest(reason = 'superseded') {
+        const openRequest = this.open_player_request;
+        if (!openRequest) return null;
+        this.prompter?.cancelPendingModelGeneration?.();
+        this.open_player_request = null;
+        this.commands_since_request_reminder = 0;
+        this.request_reminders_sent = 0;
+        this.publishBehaviorEvent?.({
+            type: 'player.request_superseded',
+            target: { name: openRequest.requester?.canonical || openRequest.requester?.replySource || '' },
+            evidence: {
+                requestId: openRequest.requestId,
+                code: String(reason || 'superseded').slice(0, 96),
+            },
+            salience: 2,
+        });
+        return openRequest;
+    }
+
+    beginOpenPlayerRequest({ source, canonicalRequester, rawRequest, interpretedRequest }) {
+        const canonical = String(canonicalRequester || '').trim();
+        const request = String(interpretedRequest || '').trim();
+        if (!canonical || !request) return null;
+        const previous = this.open_player_request;
+        if (
+            previous?.state === 'INTERPRETING'
+            && previous.requester?.canonical === canonical
+            && previous.interpretedRequest === request
+        ) return previous;
+        if (previous) this.supersedeOpenPlayerRequest('later_player_request');
+        const openedAt = Date.now();
+        const openRequest = Object.freeze({
+            requestId: `player-request-${randomUUID()}`,
+            requester: Object.freeze({ canonical, replySource: String(source || '').trim() }),
+            rawRequest: String(rawRequest || '').trim(),
+            interpretedRequest: request,
+            receivedAt: openedAt,
+            state: 'INTERPRETING',
+            clarification: null,
+        });
+        this.open_player_request = openRequest;
+        this.commands_since_request_reminder = 0;
+        this.request_reminders_sent = 0;
+        return openRequest;
+    }
+
+    requestOpenPlayerClarification(requestId, question) {
+        const openRequest = this.open_player_request;
+        const trimmedQuestion = String(question || '').trim();
+        if (
+            !openRequest
+            || openRequest.requestId !== requestId
+            || !['INTERPRETING', 'RESOLVING'].includes(openRequest.state)
+            || !trimmedQuestion
+        ) return null;
+        const askedAt = Date.now();
+        const clarification = Object.freeze({
+            token: `clarification-${randomUUID()}`,
+            requestId,
+            requesterCanonical: openRequest.requester.canonical,
+            replySource: openRequest.requester.replySource,
+            question: trimmedQuestion,
+            scope: 'request_interpretation',
+            activityId: null,
+            askedAt,
+            expiresAt: askedAt + MAX_MODEL_CLARIFICATION_AGE_MS,
+            rawAnswer: null,
+            interpretedAnswer: null,
+        });
+        const waiting = Object.freeze({
+            ...openRequest,
+            state: 'WAITING_FOR_INPUT',
+            clarification,
+        });
+        this.open_player_request = waiting;
+        return waiting;
+    }
+
+    resolveOpenPlayerClarification({ canonicalRequester, source, rawAnswer, interpretedAnswer }) {
+        const openRequest = this.open_player_request;
+        const clarification = openRequest?.clarification;
+        const canonical = String(canonicalRequester || '').trim();
+        if (!openRequest || openRequest.state !== 'WAITING_FOR_INPUT' || !clarification) {
+            return Object.freeze({ state: 'none' });
+        }
+        if (Date.now() > clarification.expiresAt) {
+            this.supersedeOpenPlayerRequest('clarification_expired');
+            return Object.freeze({ state: 'expired' });
+        }
+        if (canonical !== clarification.requesterCanonical) {
+            return Object.freeze({ state: 'other_requester' });
+        }
+        const answer = String(interpretedAnswer || '').trim();
+        if (!answer) return Object.freeze({ state: 'empty' });
+        const resolving = Object.freeze({
+            ...openRequest,
+            state: 'RESOLVING',
+            clarification: Object.freeze({
+                ...clarification,
+                replySource: String(source || clarification.replySource || '').trim(),
+                rawAnswer: String(rawAnswer || '').trim(),
+                interpretedAnswer: answer,
+                answeredAt: Date.now(),
+            }),
+        });
+        this.open_player_request = resolving;
+        return Object.freeze({
+            state: 'resolved',
+            requestId: resolving.requestId,
+            token: resolving.clarification.token,
+        });
+    }
+
+    isCurrentOpenPlayerClarification(requestId, token, state = null) {
+        const openRequest = this.open_player_request;
+        return Boolean(
+            openRequest
+            && openRequest.requestId === requestId
+            && openRequest.clarification?.token === token
+            && (!state || openRequest.state === state)
+        );
+    }
+
     getKnownAgentNames() {
         return [this.name, ...convoManager.getInGameAgents()];
     }
@@ -1090,6 +1298,7 @@ export class Agent {
      */
     async dispatchPlayerAgenda(source, canonicalPlayer, message, requesterPosition = null, {
         historyMessage = message,
+        bypassModelSequencing = false,
     } = {}) {
         const director = this.agenda_director;
         if (!director?.addMany || !director?.validateMany) return false;
@@ -1107,7 +1316,11 @@ export class Agent {
         // contract back through free-form model command selection lets the
         // provider split it into unrelated searches and stale coordinates.
         // Other requests retain the configured model-first sequencing path.
-        if (this.llm_sequencing && plan.owner !== 'scout') return false;
+        if (
+            this.llm_sequencing
+            && !['scout', 'livestock'].includes(plan.owner)
+            && bypassModelSequencing !== true
+        ) return false;
         if (plan.rejection) {
             await this.history.add(source, historyMessage);
             await this.history.add(this.name, plan.rejection);
@@ -1289,6 +1502,8 @@ export class Agent {
             return false;
         }
 
+        const rawIncomingMessage = String(message);
+
         let used_command = false;
         let deferredModelAssignment = null;
         let authorizedModelHoldGeneration = null;
@@ -1318,7 +1533,7 @@ export class Agent {
 
         const self_prompt = source === 'system' || source === this.name;
         const from_other_bot = convoManager.isOtherAgent(source);
-        const playerSpeechAuthority = !self_prompt && !from_other_bot
+        let playerSpeechAuthority = !self_prompt && !from_other_bot
             ? classifyPlayerSpeechAuthority(message)
             : 'action_eligible';
         // ADMIN is the authenticated dashboard transport identity, not a
@@ -1327,11 +1542,14 @@ export class Agent {
         const companionResolution = !self_prompt && !from_other_bot && source !== 'ADMIN'
             ? this.companion_context?.observeChat?.(source)
             : null;
+        let canonicalPlayer = null;
+        let requestClarificationResolution = null;
 
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands
             message = routeCompoundToolGoal(source, message);
             const user_command_name = containsCommand(message);
                 if (user_command_name) {
+                    this.supersedeOpenPlayerRequest('direct_player_command');
                     this.pending_player_clarification = null;
                     if (!commandExists(user_command_name)) {
                     this.routeResponse(source, `Command ${user_command_name.substring(1)} is unavailable for this bot profile.`);
@@ -1391,7 +1609,7 @@ export class Agent {
 
             // Recognized player directives use the same deterministic command path
             // as explicit !commands; unrecognized conversation still reaches the LLM.
-            const canonicalPlayer = companionResolution?.canonical || resolveCanonicalPlayerIdentity(source, this.bot, {
+            canonicalPlayer = companionResolution?.canonical || resolveCanonicalPlayerIdentity(source, this.bot, {
                 isBotAgent: identity => {
                     if (convoManager.isOtherAgent(identity)) return true;
                     const keys = new Set(identityMatchKeys(identity));
@@ -1400,8 +1618,36 @@ export class Agent {
                     );
                 },
             });
-            const deterministicMessage = stripLeadingAgentAddress(message, this.name);
+            let deterministicMessage = stripLeadingAgentAddress(message, this.name);
             const clarificationContext = { bot: this.bot };
+            const waitingRequest = this.open_player_request;
+            if (
+                waitingRequest?.state === 'WAITING_FOR_INPUT'
+                && canonicalPlayer === waitingRequest.requester?.canonical
+                && isExplicitClarificationSupersession(deterministicMessage)
+            ) {
+                this.supersedeOpenPlayerRequest('explicit_player_replacement');
+            } else {
+                requestClarificationResolution = this.resolveOpenPlayerClarification({
+                    canonicalRequester: canonicalPlayer,
+                    source,
+                    rawAnswer: rawIncomingMessage,
+                    interpretedAnswer: deterministicMessage,
+                });
+                if (requestClarificationResolution.state === 'resolved') {
+                    playerSpeechAuthority = 'action_eligible';
+                    this.publishBehaviorEvent?.({
+                        type: 'player.clarification_resolved',
+                        target: { name: canonicalPlayer },
+                        evidence: {
+                            code: 'model_request_clarified',
+                            requestId: requestClarificationResolution.requestId,
+                        },
+                        salience: 3,
+                    });
+                }
+            }
+            if (requestClarificationResolution?.state !== 'resolved') {
             if (this.pending_player_clarification) {
                 const resolution = resolveMaterialPlayerClarification(
                     this.pending_player_clarification,
@@ -1642,6 +1888,7 @@ export class Agent {
             if (['action_eligible', 'response_only'].includes(playerSpeechAuthority) && this.isOperatorHeld()) {
                 authorizedModelHoldGeneration = this.operator_hold_generation;
             }
+            }
         }
 
         if (from_other_bot)
@@ -1649,6 +1896,22 @@ export class Agent {
 
         // Now translate the message
         message = await handleEnglishTranslation(message);
+        if (requestClarificationResolution?.state === 'resolved') {
+            const current = this.open_player_request;
+            if (this.isCurrentOpenPlayerClarification(
+                requestClarificationResolution.requestId,
+                requestClarificationResolution.token,
+                'RESOLVING',
+            )) {
+                this.open_player_request = Object.freeze({
+                    ...current,
+                    clarification: Object.freeze({
+                        ...current.clarification,
+                        interpretedAnswer: stripLeadingAgentAddress(message, this.name),
+                    }),
+                });
+            }
+        }
         console.log('received message from', source, ':', message);
 
         const checkInterrupt = () => {
@@ -1673,7 +1936,12 @@ export class Agent {
         }
 
         // Handle other user messages
-        if (!playerMessageAlreadyRecorded) await this.history.add(source, message);
+        if (!playerMessageAlreadyRecorded) {
+            await this.history.add(
+                source,
+                requestClarificationResolution?.state === 'resolved' ? rawIncomingMessage : message,
+            );
+        }
         this.history.save();
 
         if (!self_prompt && this.self_prompter.isActive()) // message is from user during self-prompting
@@ -1704,14 +1972,31 @@ export class Agent {
         // it: the reminders below fired twice across twenty-eight commands
         // precisely because the counters, and the request text itself, died
         // with the first invocation.
-        if (!self_prompt && !from_other_bot && playerSpeechAuthority === 'action_eligible') {
+        if (
+            !self_prompt
+            && !from_other_bot
+            && playerSpeechAuthority === 'action_eligible'
+            && requestClarificationResolution?.state !== 'resolved'
+        ) {
             const requestText = String(message || '').trim();
-            if (requestText && requestText !== this.open_player_request?.message) {
-                this.open_player_request = { source, message: requestText, at: Date.now() };
-                this.commands_since_request_reminder = 0;
-                this.request_reminders_sent = 0;
-            }
+            this.beginOpenPlayerRequest({
+                source,
+                canonicalRequester: canonicalPlayer || (source === 'ADMIN' ? 'ADMIN' : null),
+                rawRequest: rawIncomingMessage,
+                interpretedRequest: requestText,
+            });
         }
+        const agendaSnapshot = this.agenda_director?.snapshot?.();
+        const scopeModelHistoryToOpenRequest = Boolean(
+            this.llm_sequencing
+            && this.open_player_request
+            && !self_prompt
+            && !from_other_bot
+            && playerSpeechAuthority === 'action_eligible'
+            && !this.goal_director?.activeGoal
+            && !this.job_director?.activeOrder
+            && !(agendaSnapshot?.remaining > 0)
+        );
         try {
             for (let i=0; i<max_responses; i++) {
                 if (checkInterrupt()) {
@@ -1719,7 +2004,23 @@ export class Agent {
                     break;
                 }
                 let history = this.history.getHistory();
-                let res = await this.prompter.promptConvo(history);
+                // A fresh unowned physical request must not inherit executable
+                // authority from commands generated for a cancelled request.
+                // Keep the durable transcript for audit and conversation, but
+                // expose only this request and its subsequent outcomes to the
+                // model turn that is choosing physical work.
+                if (scopeModelHistoryToOpenRequest) {
+                    history = conversationFromOpenPlayerRequest(
+                        history,
+                        this.open_player_request,
+                    );
+                }
+                const requestAtPrompt = this.open_player_request;
+                const promptResult = await this.prompter.promptConvo(history, {
+                    typedResult: true,
+                    requestContext: requestInterpretationPromptContext(requestAtPrompt),
+                });
+                let res = String(promptResult?.text || '');
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
             if (this.llm_sequencing) console.log('[llm-seq] model returned', JSON.stringify(String(res || '').slice(0, 300)));
@@ -1729,7 +2030,66 @@ export class Agent {
                 break; // empty response ends loop
             }
 
+                const modelClarificationQuestion = promptResult?.kind === 'clarification'
+                    ? String(promptResult.question || res).trim()
+                    : '';
+                if (
+                    modelClarificationQuestion
+                    && !self_prompt
+                    && !from_other_bot
+                    && playerSpeechAuthority === 'action_eligible'
+                    && !deferredModelAssignment
+                ) {
+                    const waiting = this.requestOpenPlayerClarification(
+                        requestAtPrompt?.requestId,
+                        modelClarificationQuestion,
+                    );
+                    if (waiting) {
+                        await this.history.add(this.name, modelClarificationQuestion);
+                        this.history.save();
+                        this.publishBehaviorEvent?.({
+                            type: 'player.clarification_requested',
+                            target: { name: waiting.requester.canonical },
+                            evidence: {
+                                code: 'model_request_ambiguous',
+                                requestId: waiting.requestId,
+                                token: waiting.clarification.token,
+                            },
+                            salience: 3,
+                        });
+                        this.routeResponse(waiting.requester.replySource || source, modelClarificationQuestion);
+                        break;
+                    }
+                }
+
+                if (
+                    requestClarificationResolution?.state === 'resolved'
+                    && !this.isCurrentOpenPlayerClarification(
+                        requestClarificationResolution.requestId,
+                        requestClarificationResolution.token,
+                        'RESOLVING',
+                    )
+                ) break;
+
                 let command_name = containsCommand(res);
+                if (
+                    command_name
+                    && !self_prompt
+                    && !from_other_bot
+                    && playerSpeechAuthority === 'action_eligible'
+                    && !deferredModelAssignment
+                ) {
+                    const requestText = requestClarificationResolution?.state === 'resolved'
+                        ? this.open_player_request?.interpretedRequest || message
+                        : message;
+                    const typedGoalDirective = resolveTypedItemGoalDirective(source, requestText, { bot: this.bot });
+                    const promoted = promoteModelItemGoalCommand(res, typedGoalDirective);
+                    if (promoted) {
+                        console.log(`[mission-policy] promoted player-origin item work from ${command_name} to !requestItemGoal`);
+                        res = promoted;
+                        command_name = containsCommand(res);
+                    }
+                }
 
             if (command_name) { // contains query or command
                 if (
@@ -1849,23 +2209,22 @@ export class Agent {
                         this.routeResponse(source, pre_message);
                 }
 
-                const previousActionId = this.last_action_result?.actionId || null;
-                const previousJobSubmissionGeneration = Number(
-                    this.last_persistent_job_submission?.generation,
-                ) || 0;
-                const previousAgendaPlanSubmissionGeneration = Number(
-                    this.last_agenda_plan_submission?.generation,
-                ) || 0;
-                const previousGoalIds = [
-                    this.goal_director?.activeGoal?.id,
-                    this.goal_director?.lastGoal?.id,
-                ].filter(Boolean);
+                if (
+                    requestClarificationResolution?.state === 'resolved'
+                    && !this.isCurrentOpenPlayerClarification(
+                        requestClarificationResolution.requestId,
+                        requestClarificationResolution.token,
+                        'RESOLVING',
+                    )
+                ) break;
                 const commandOwner = self_prompt || source === 'system' ? 'autonomy' : 'player';
-                let execute_res = await executeCommand(this, res, {
+                const commandExecution = await executeCommand(this, res, {
                     owner: commandOwner,
                     routeOrigin: 'model-selected',
                     agendaDisposition: deferredModelAssignment?.agendaDisposition || 'append',
+                    returnExecution: true,
                 });
+                const execute_res = commandExecution?.value;
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
@@ -1882,15 +2241,30 @@ export class Agent {
                     this.history.save();
                     break;
                 }
+                const durableSubmission = commandExecution?.durableSubmission || null;
                 if (correlatedPersistentGoalAssignmentAccepted({
                     commandName: command_name,
-                    previousGoalIds,
+                    requestContext: commandExecution?.requestContext,
+                    submission: durableSubmission,
                     activeGoal: this.goal_director?.activeGoal,
-                    lastGoal: this.goal_director?.lastGoal,
                 })) {
                     // GoalDirector now owns the durable physical work and its
                     // terminal player handoff. Asking the model for another
                     // command here creates a second owner for the same request.
+                    this.history.save();
+                    break;
+                }
+                const submittedJob = durableSubmission;
+                const persistentJobAccepted = correlatedPersistentJobSubmissionAccepted({
+                    commandName: command_name,
+                    requestContext: commandExecution?.requestContext,
+                    submission: submittedJob,
+                    activeOrder: this.job_director?.activeOrder,
+                });
+                if (persistentJobAccepted && !deferredModelAssignment) {
+                    // JobDirector now owns durable progression for the order
+                    // created by this exact request. Yield model-turn
+                    // continuation; ActionManager remains the sole body owner.
                     this.history.save();
                     break;
                 }
@@ -1917,28 +2291,20 @@ export class Agent {
                     this.request_reminders_sent += 1;
                     await this.history.add(
                         'system',
-                        `Still open, in ${openRequest.source}'s own words: "${openRequest.message.slice(0, 300)}".`
+                        `Still open, in ${openRequest.requester?.replySource || source}'s own words: "${String(openRequest.interpretedRequest || '').slice(0, 300)}".`
                         + ' If you already have what was asked for, hand it over now and say so.'
                         + ' If a step remains, do that step. Gathering more than the request needs is not the request.',
                     );
                 }
-                const submittedJob = this.last_persistent_job_submission;
-                const submittedAgendaPlan = this.last_agenda_plan_submission;
                 const deferredAssignmentAccepted = ['item_plan', 'storage_plan'].includes(deferredModelAssignment?.kind)
                     ? correlatedAgendaPlanSubmissionAccepted({
                         deferredAssignment: deferredModelAssignment,
                         commandName: command_name,
-                        previousGeneration: previousAgendaPlanSubmissionGeneration,
-                        submission: submittedAgendaPlan,
+                        requestContext: commandExecution?.requestContext,
+                        submission: durableSubmission,
                         agendaEntries: this.agenda_director?.entries,
                     })
-                    : correlatedPersistentJobSubmissionAccepted({
-                        deferredAssignment: deferredModelAssignment,
-                        commandName: command_name,
-                        previousGeneration: previousJobSubmissionGeneration,
-                        submission: submittedJob,
-                        activeOrder: this.job_director?.activeOrder,
-                    });
+                    : persistentJobAccepted;
                 if (deferredAssignmentAccepted) {
                     const acceptedAssignmentKind = deferredModelAssignment.kind;
                     if (acceptedAssignmentKind === 'construction' && deferredModelAssignment.agendaEntryId) {
@@ -1984,12 +2350,12 @@ export class Agent {
                         }
                     }
                 }
+                const commandResult = commandExecution?.result || null;
                 const terminalActionFailure = self_prompt
                     && isAction(command_name)
-                    && this.last_action_result?.actionId
-                    && this.last_action_result.actionId !== previousActionId
-                    && this.last_action_result.phase !== 'succeeded'
-                    && this.last_action_result.retryable === false;
+                    && commandResult?.actionId
+                    && commandResult.phase !== 'succeeded'
+                    && commandResult.retryable === false;
                 if (!execute_res || terminalActionFailure)
                     break;
             }
@@ -2066,8 +2432,8 @@ export class Agent {
                             // for the wrong thing, and it happened because the
                             // nudge described the request instead of repeating
                             // it. The words the player used are the standard.
-                            `This is what ${this.open_player_request?.source || source} asked for:`
-                            + ` "${String(this.open_player_request?.message || message || '').slice(0, 300)}".`
+                            `This is what ${this.open_player_request?.requester?.replySource || source} asked for:`
+                            + ` "${String(this.open_player_request?.interpretedRequest || message || '').slice(0, 300)}".`
                             + ' It is not finished and nothing is running.'
                             + ' If a step remains, issue the next command now.'
                             + ' If you are blocked, name exactly what is missing.'
@@ -2220,12 +2586,37 @@ export class Agent {
     }
 
     startEvents() {
+        const pendingDeath = this.memory_bank?.recallLatestDeath?.();
+        const pendingDeathRecordedAt = Number(pendingDeath?.recordedAt);
+        if (
+            pendingDeath
+            && !pendingDeath.recoveredAt
+            && Number.isSafeInteger(pendingDeathRecordedAt)
+            && Date.now() - pendingDeathRecordedAt <= 15 * 60_000
+        ) this._trackedDeathRecoveryRecordedAt = pendingDeathRecordedAt;
         const refreshAliveInventorySnapshot = () => {
             if (Number(this.bot.health) <= 0) return;
             const now = Date.now();
             if (now - this._lastAliveInventorySnapshotAt < 250) return;
             this._lastAliveInventorySnapshot = inventorySnapshot(this.bot);
             this._lastAliveInventorySnapshotAt = now;
+            if (
+                Number.isSafeInteger(this._trackedDeathRecoveryRecordedAt)
+                && now >= this._deathRecoveryObservationNotBefore
+            ) {
+                const recovery = this.memory_bank?.observeDeathRecoveryInventory?.(
+                    this._lastAliveInventorySnapshot,
+                    {
+                        recordedAt: this._trackedDeathRecoveryRecordedAt,
+                        dimension: this.bot.game?.dimension,
+                        observedAt: now,
+                        source: 'alive_inventory_observation',
+                    },
+                );
+                if (recovery?.complete || recovery?.code === 'death_not_pending') {
+                    this._trackedDeathRecoveryRecordedAt = null;
+                }
+            }
         };
         refreshAliveInventorySnapshot();
         this.bot.on('physicsTick', refreshAliveInventorySnapshot);
@@ -2355,6 +2746,12 @@ export class Agent {
                     code: 'death_position_missing',
                     record: null,
                 });
+            if (deathPersistence.stored && Number.isSafeInteger(Number(deathPersistence.record?.recordedAt))) {
+                this._trackedDeathRecoveryRecordedAt = Number(deathPersistence.record.recordedAt);
+                // Let Paper finish the respawn/inventory-clear edge before an
+                // alive snapshot is allowed to count as recovered material.
+                this._deathRecoveryObservationNotBefore = Date.now() + 1_000;
+            }
             this.goal_director?.reconcileDeath?.({
                 position,
                 dimension,

@@ -391,7 +391,10 @@ class Movements {
     // executor then jumps against its collision plane forever. Keep ordinary
     // horizontal door traversal, but make A* leave the doorway before it may
     // climb. Trapdoors retain their dedicated movement handling below.
-    if (block0.openable && !String(block0.name || '').includes('trapdoor')) return
+    if (
+      (block0.openable && !String(block0.name || '').includes('trapdoor')) ||
+      (blockC.openable && !String(blockC.name || '').includes('trapdoor'))
+    ) return
 
     let cost = 2 // move cost (move+jump)
     const toBreak = []
@@ -485,11 +488,24 @@ class Movements {
       cost += this.placeCost // additional cost for placing a block
     }
 
-    cost += this.safeOrBreak(blockB, toBreak)
-    if (!Number.isFinite(cost)) return
-
     // Open fence gates and doors
     const openableAction = this.openableAction(node, blockC)
+    // A two-block door opens as one fixture. Its upper half occupies the head
+    // cell but is not a separate obstruction to break; evaluating it before
+    // the lower-half openable action removes the ordinary horizontal doorway
+    // edge and makes A* prefer a synthetic climb over the door instead.
+    const pairedOpenableHead = Boolean(
+      openableAction &&
+      blockB.openable &&
+      blockB.name === blockC.name &&
+      blockB.position.x === blockC.position.x &&
+      blockB.position.z === blockC.position.z
+    )
+    if (!pairedOpenableHead) {
+      cost += this.safeOrBreak(blockB, toBreak)
+      if (!Number.isFinite(cost)) return
+    }
+
     if (openableAction) {
       toPlace.push(openableAction)
     } else {

@@ -97,6 +97,46 @@ const TERRAIN_CHAIN_STAIR_BREAKS = Object.freeze([
 const TERRAIN_CHAIN_DESCENT = Object.freeze({ fromY: 106, toY: 103, landingX: 1048 });
 const TERRAIN_CHAIN_WATER = Object.freeze({ x: 1050, y1: 103, y2: 106, z: 1008 });
 const TERRAIN_CHAIN_SCAFFOLD = Object.freeze({ item: 'dirt', count: 12 });
+// Phase 6B dynamic escape composition. Kevin initially owns a simple southbound
+// player route. Only after the delivery action has taken body ownership does
+// the fixture replace the unseen route ahead with a rotated mixed-workaround
+// chain. Production receives no checkpoints or per-segment commands: the one
+// GoalDirector delivery and native Pathfinder must absorb the world change,
+// traverse the chain, and still hand the original item to the player.
+const DYNAMIC_ESCAPE_COURSE = Object.freeze({ x1: 1005, x2: 1011, y1: 94, y2: 110, z1: 1025, z2: 1069 });
+const DYNAMIC_ESCAPE_START = Object.freeze({ x: 1008.5, y: 100, z: 1027.5 });
+const DYNAMIC_ESCAPE_TARGET = Object.freeze({ x: 1008.5, y: 100, z: 1067.5 });
+const DYNAMIC_ESCAPE_DIG = Object.freeze([
+  Object.freeze({ x: 1008, y: 100, z: 1036 }),
+  Object.freeze({ x: 1008, y: 101, z: 1036 }),
+]);
+const DYNAMIC_ESCAPE_PARKOUR_GAP = Object.freeze({ x: 1008, y: 99, z1: 1039, z2: 1040 });
+const DYNAMIC_ESCAPE_BRIDGE = Object.freeze({ x: 1008, y: 99, z1: 1043, z2: 1046 });
+const DYNAMIC_ESCAPE_TOWER = Object.freeze({ x: 1008, y1: 100, y2: 101, z: 1048 });
+const DYNAMIC_ESCAPE_STAIR_BREAKS = Object.freeze([
+  Object.freeze({ x: 1008, y: 105, z: 1049 }),
+  Object.freeze({ x: 1008, y: 104, z: 1050 }),
+  Object.freeze({ x: 1008, y: 105, z: 1050 }),
+  Object.freeze({ x: 1008, y: 106, z: 1050 }),
+  Object.freeze({ x: 1008, y: 105, z: 1051 }),
+  Object.freeze({ x: 1008, y: 106, z: 1051 }),
+  Object.freeze({ x: 1008, y: 107, z: 1051 }),
+  Object.freeze({ x: 1008, y: 106, z: 1052 }),
+  Object.freeze({ x: 1008, y: 107, z: 1052 }),
+]);
+const DYNAMIC_ESCAPE_WATER = Object.freeze({ x: 1008, y1: 103, y2: 106, z: 1055 });
+const DYNAMIC_ESCAPE_BANK = Object.freeze({ x1: 1007, x2: 1009, y: 106, z1: 1056, z2: 1058 });
+const DYNAMIC_ESCAPE_RETURN_STAIR = Object.freeze([
+  Object.freeze({ z: 1059, y: 105 }),
+  Object.freeze({ z: 1060, y: 104 }),
+  Object.freeze({ z: 1061, y: 103 }),
+  Object.freeze({ z: 1062, y: 102 }),
+  Object.freeze({ z: 1063, y: 101 }),
+  Object.freeze({ z: 1064, y: 100 }),
+  Object.freeze({ z: 1065, y: 99 }),
+]);
+const DYNAMIC_ESCAPE_SCAFFOLD = Object.freeze({ item: 'dirt', count: 12 });
+const DYNAMIC_ESCAPE_DELIVERY = Object.freeze({ item: 'cobblestone', count: 1 });
 const STANCE_COURSE = Object.freeze({ x1: 1026, x2: 1058, y1: 99, y2: 103, z1: 1006, z2: 1038 });
 const STANCE_TARGET = Object.freeze({ x: 1056, y: 100, z: 1008 });
 const STANCE_WALLS = Object.freeze([
@@ -154,6 +194,12 @@ const DELIVER_SOURCE = Object.freeze({ x1: 1029, x2: 1031, y: 100, z1: 1010, z2:
 // time from current Minecraft state, through exact verified delivery.
 const DELIVER_SPEC = Object.freeze({
   'deliver-item': Object.freeze({ item: 'dirt', quantity: 1, placeSource: true, waitMs: 120_000 }),
+  'dynamic-escape-delivery': Object.freeze({
+    item: DYNAMIC_ESCAPE_DELIVERY.item,
+    quantity: DYNAMIC_ESCAPE_DELIVERY.count,
+    placeSource: false,
+    waitMs: 360_000,
+  }),
   // 20 minutes. The 10-minute window ended with the furnace crafted and the
   // companion gathering logs to smelt -- three steps from done. This chain is
   // eight or nine physical stages, each with real travel and mining in it.
@@ -499,6 +545,37 @@ function orderedTerrainChainCheckpoints(samples) {
   return { complete: true, checkpoints, missing: null };
 }
 
+function orderedDynamicEscapeCheckpoints(samples) {
+  const observations = Array.isArray(samples) ? samples : [];
+  const definitions = [
+    ['dig_exit', position => position.z >= 1037.25 && position.y >= 99.5],
+    ['parkour_landing', position => position.z >= 1041.2 && position.y >= 99.5],
+    ['bridge_exit', position => position.z >= 1047.2 && position.y >= 99.5],
+    ['tower_top', position => position.z >= 1047.5 && position.z <= 1049.5 && position.y >= 102.75],
+    ['stair_top', position => position.z >= 1051.5 && position.y >= 105.65],
+    ['descent_landing', position => position.z >= 1052.5 && position.z <= 1054.25 && position.y <= 103.4],
+    ['swim_surface', position => Math.floor(position.z) === DYNAMIC_ESCAPE_WATER.z
+      && position.y >= DYNAMIC_ESCAPE_WATER.y2 + 0.45],
+    ['dry_bank', position => position.z >= 1056.5 && position.y >= 106.8],
+    ['returned_to_ground', position => position.z >= 1065.25 && position.y <= 100.4],
+    ['player_arrival', position => distance(position, DYNAMIC_ESCAPE_TARGET) <= 2.5],
+  ];
+  const checkpoints = [];
+  let cursor = 0;
+  for (const [name, predicate] of definitions) {
+    const relativeIndex = observations.slice(cursor).findIndex(sample => {
+      const position = sample?.position;
+      return [position?.x, position?.y, position?.z].every(Number.isFinite)
+        && predicate(position);
+    });
+    if (relativeIndex < 0) return { complete: false, checkpoints, missing: name };
+    const index = cursor + relativeIndex;
+    checkpoints.push({ name, index, ...observations[index] });
+    cursor = index + 1;
+  }
+  return { complete: true, checkpoints, missing: null };
+}
+
 function inventorySnapshot(bot) {
   return (bot?.inventory?.items?.() || [])
     .map(item => ({ name: item.name, count: Number(item.count) || 0, slot: Number(item.slot) }))
@@ -784,8 +861,10 @@ async function run() {
   const requestCompletionCourse = options.course === 'request-completion';
   const terrainSwimCourse = options.course === 'terrain-swim-exit';
   const terrainChainCourse = options.course === 'terrain-workaround-chain';
+  const dynamicEscapeCourse = options.course === 'dynamic-escape-delivery';
   const varianceCase = requestCompletionCourse ? requestCompletionCase(options.varianceCase) : null;
   const generatedFlatCourse = options.course === 'deliver-item'
+    || dynamicEscapeCourse
     || routeProbeCourse
     || interactionStanceCourse
     || requestCompletionCourse
@@ -793,6 +872,8 @@ async function run() {
     || terrainChainCourse;
   const activeCourse = requestCompletionCourse
     ? REQUEST_COMPLETION_COURSE
+    : dynamicEscapeCourse
+    ? DYNAMIC_ESCAPE_COURSE
     : interactionStanceCourse
     ? STANCE_COURSE
     : routeProbeCourse
@@ -804,11 +885,15 @@ async function run() {
     : playerRouteBestCourse ? PLAYER_ROUTE_BLOCKED_COURSE : COURSE;
   const botStart = terrainSwimCourse
     ? TERRAIN_SWIM_START
+    : dynamicEscapeCourse
+    ? DYNAMIC_ESCAPE_START
     : terrainChainCourse
     ? TERRAIN_CHAIN_START
     : BOT_START;
   const targetStart = terrainSwimCourse
     ? TERRAIN_SWIM_OBSERVER
+    : dynamicEscapeCourse
+    ? DYNAMIC_ESCAPE_TARGET
     : terrainChainCourse
     ? TERRAIN_CHAIN_OBSERVER
     : playerRouteBestCourse
@@ -821,7 +906,7 @@ async function run() {
     DELIVER_PLACE_SOURCE = spec.placeSource;
     DELIVER_WAIT_MS = spec.waitMs;
   }
-  const activeWaypoints = routeProbeCourse || interactionStanceCourse || terrainSwimCourse || terrainChainCourse || playerRouteCourse
+  const activeWaypoints = routeProbeCourse || interactionStanceCourse || terrainSwimCourse || terrainChainCourse || dynamicEscapeCourse || playerRouteCourse
     ? []
     : options.mode === 'stop' || options.course === 'full'
     ? WAYPOINTS
@@ -830,6 +915,8 @@ async function run() {
     schemaVersion: 1,
     scenario: requestCompletionCourse
       ? `phase-5-request-completion-${varianceCase.id}`
+      : dynamicEscapeCourse
+      ? 'phase-6b-dynamic-escape-delivery-resumption'
       : terrainSwimCourse
       ? 'phase-6-native-swim-exit-to-dry-bank'
       : terrainChainCourse
@@ -887,6 +974,22 @@ async function run() {
         descent: TERRAIN_CHAIN_DESCENT,
         water: TERRAIN_CHAIN_WATER,
         scaffold: TERRAIN_CHAIN_SCAFFOLD,
+      } : null,
+      dynamicEscape: dynamicEscapeCourse ? {
+        start: DYNAMIC_ESCAPE_START,
+        target: DYNAMIC_ESCAPE_TARGET,
+        dig: DYNAMIC_ESCAPE_DIG,
+        parkourGap: DYNAMIC_ESCAPE_PARKOUR_GAP,
+        bridge: DYNAMIC_ESCAPE_BRIDGE,
+        tower: DYNAMIC_ESCAPE_TOWER,
+        stairBreaks: DYNAMIC_ESCAPE_STAIR_BREAKS,
+        water: DYNAMIC_ESCAPE_WATER,
+        bank: DYNAMIC_ESCAPE_BANK,
+        returnStair: DYNAMIC_ESCAPE_RETURN_STAIR,
+        scaffold: DYNAMIC_ESCAPE_SCAFFOLD,
+        delivery: DYNAMIC_ESCAPE_DELIVERY,
+        mutationBoundary: 'after-action-ownership-before-arrival',
+        atomicMutationHold: 'temporary-slowness-without-position-change',
       } : null,
       interactionStanceTarget: interactionStanceCourse ? STANCE_TARGET : null,
       interactionStanceWalls: interactionStanceCourse ? STANCE_WALLS : null,
@@ -1205,6 +1308,109 @@ async function run() {
       && snapshot.bank === 'grass_block';
   };
 
+  const dynamicEscapeSnapshot = () => {
+    const nameAt = ({ x, y, z }) => target.blockAt(new Vec3(x, y, z))?.name || null;
+    const zLine = ({ x, y, z1, z2 }) => Array.from(
+      { length: z2 - z1 + 1 },
+      (_, offset) => ({ x, y, z: z1 + offset }),
+    );
+    const column = ({ x, y1, y2, z }) => Array.from(
+      { length: y2 - y1 + 1 },
+      (_, offset) => ({ x, y: y1 + offset, z }),
+    );
+    return {
+      dig: DYNAMIC_ESCAPE_DIG.map(nameAt),
+      parkourGap: zLine(DYNAMIC_ESCAPE_PARKOUR_GAP).map(nameAt),
+      bridge: zLine(DYNAMIC_ESCAPE_BRIDGE).map(nameAt),
+      tower: column(DYNAMIC_ESCAPE_TOWER).map(nameAt),
+      stairBreaks: DYNAMIC_ESCAPE_STAIR_BREAKS.map(nameAt),
+      water: column(DYNAMIC_ESCAPE_WATER).map(nameAt),
+      bank: nameAt({ x: 1008, y: DYNAMIC_ESCAPE_BANK.y, z: 1057 }),
+      returnStair: DYNAMIC_ESCAPE_RETURN_STAIR.map(({ y, z }) => nameAt({ x: 1008, y, z })),
+      openRoute: zLine({ x: 1008, y: 99, z1: 1026, z2: 1065 }).map(nameAt),
+      targetGround: nameAt({ x: 1008, y: 99, z: 1067 }),
+    };
+  };
+
+  const dynamicEscapeOpenFixtureReady = () => {
+    if (!dynamicEscapeCourse) return true;
+    const snapshot = dynamicEscapeSnapshot();
+    return snapshot.dig.every(name => name === 'air')
+      && snapshot.parkourGap.every(name => name === 'smooth_stone')
+      && snapshot.bridge.every(name => name === 'smooth_stone')
+      && snapshot.tower.every(name => name === 'air')
+      && snapshot.stairBreaks.every(name => name === 'air')
+      && snapshot.water.every(name => name === 'air')
+      && snapshot.openRoute.every(name => ['smooth_stone', 'grass_block'].includes(name))
+      && snapshot.targetGround === 'grass_block';
+  };
+
+  const dynamicEscapeMutatedFixtureReady = () => {
+    const snapshot = dynamicEscapeSnapshot();
+    return snapshot.dig.every(name => name === 'stone')
+      && snapshot.parkourGap.every(name => name === 'air')
+      && snapshot.bridge.every(name => name === 'air')
+      && snapshot.tower.every(name => name === 'air')
+      && snapshot.stairBreaks.every(name => name === 'stone')
+      && snapshot.water.every(name => name === 'water')
+      && snapshot.bank === 'grass_block'
+      && snapshot.returnStair.every(name => name === 'smooth_stone')
+      && snapshot.targetGround === 'grass_block';
+  };
+
+  const applyDynamicEscapeMutation = async () => {
+    // The first write closes the already-planned straight route while Kevin is
+    // still nine blocks away. Everything after it builds only beyond that
+    // barrier, so the body never occupies a cell while its support is replaced.
+    const commands = [
+      'fill 1008 100 1036 1008 101 1036 stone',
+      'fill 1008 99 1039 1008 99 1064 air',
+      'fill 1008 99 1026 1008 99 1038 smooth_stone',
+      'fill 1008 99 1041 1008 99 1042 smooth_stone',
+      'fill 1008 99 1047 1008 99 1048 smooth_stone',
+      'fill 1008 102 1026 1008 102 1036 bedrock',
+      'fill 1008 104 1026 1008 104 1047 bedrock',
+      'fill 1008 95 1049 1008 102 1049 bedrock',
+      'fill 1008 105 1047 1008 105 1048 bedrock',
+      'setblock 1008 105 1049 stone',
+      'setblock 1008 106 1049 bedrock',
+      'fill 1008 103 1050 1008 106 1050 stone',
+      'setblock 1008 103 1050 bedrock',
+      'setblock 1008 107 1050 bedrock',
+      'fill 1008 104 1051 1008 107 1051 stone',
+      'setblock 1008 104 1051 bedrock',
+      'setblock 1008 108 1051 bedrock',
+      'fill 1008 105 1052 1008 107 1052 stone',
+      'setblock 1008 105 1052 bedrock',
+      'setblock 1008 109 1052 bedrock',
+      'setblock 1008 102 1053 stone',
+      'setblock 1008 102 1054 stone',
+      'setblock 1008 102 1055 stone',
+      'fill 1008 105 1054 1008 106 1054 bedrock',
+      `fill ${DYNAMIC_ESCAPE_WATER.x} ${DYNAMIC_ESCAPE_WATER.y1} ${DYNAMIC_ESCAPE_WATER.z} `
+        + `${DYNAMIC_ESCAPE_WATER.x} ${DYNAMIC_ESCAPE_WATER.y2} ${DYNAMIC_ESCAPE_WATER.z} water`,
+      `fill ${DYNAMIC_ESCAPE_BANK.x1} ${DYNAMIC_ESCAPE_BANK.y} ${DYNAMIC_ESCAPE_BANK.z1} `
+        + `${DYNAMIC_ESCAPE_BANK.x2} ${DYNAMIC_ESCAPE_BANK.y} ${DYNAMIC_ESCAPE_BANK.z2} grass_block`,
+      'fill 1005 99 1065 1011 99 1069 grass_block',
+      ...DYNAMIC_ESCAPE_RETURN_STAIR.map(({ y, z }) => `fill 1007 ${y} ${z} 1009 ${y} ${z} smooth_stone`),
+    ];
+    activeAttempt.dynamicEscapeMutationHoldAppliedAt = Date.now();
+    await paperCommand(`effect give ${options.bot} minecraft:slowness 10 255 true`);
+    try {
+      for (const command of commands) await paperCommand(command);
+      await waitFor(
+        dynamicEscapeMutatedFixtureReady,
+        Boolean,
+        'controlled observer receipt of the post-ownership dynamic escape geometry',
+        5_000,
+      );
+      return dynamicEscapeSnapshot();
+    } finally {
+      await paperCommand(`effect clear ${options.bot} minecraft:slowness`);
+      activeAttempt.dynamicEscapeMutationHoldClearedAt = Date.now();
+    }
+  };
+
   const provisionFixture = async () => {
     await restoreFixture();
     fixtureMutated = true;
@@ -1237,6 +1443,8 @@ async function run() {
       // position" from inside it.
       ...(orchestrationCourse
         ? []
+        : dynamicEscapeCourse
+          ? [`fill ${DYNAMIC_ESCAPE_COURSE.x1} ${DYNAMIC_ESCAPE_COURSE.y1} ${DYNAMIC_ESCAPE_COURSE.z1} ${DYNAMIC_ESCAPE_COURSE.x2} ${DYNAMIC_ESCAPE_COURSE.y2} ${DYNAMIC_ESCAPE_COURSE.z2} air`]
         : terrainSwimCourse
           ? [`fill ${TERRAIN_SWIM_COURSE.x1} ${TERRAIN_SWIM_COURSE.y1} ${TERRAIN_SWIM_COURSE.z1} ${TERRAIN_SWIM_COURSE.x2} ${TERRAIN_SWIM_COURSE.y2} ${TERRAIN_SWIM_COURSE.z2} air`]
         : terrainChainCourse
@@ -1266,6 +1474,16 @@ async function run() {
             ...STANCE_WALLS.map(wall => (
               `fill ${wall.x1} ${wall.y1} ${wall.z1} ${wall.x2} ${wall.y2} ${wall.z2} bedrock`
             )),
+          ]
+        : dynamicEscapeCourse
+        ? [
+            `fill ${DYNAMIC_ESCAPE_COURSE.x1} ${DYNAMIC_ESCAPE_COURSE.y1} ${DYNAMIC_ESCAPE_COURSE.z1} `
+            + `${DYNAMIC_ESCAPE_COURSE.x2} ${DYNAMIC_ESCAPE_COURSE.y1} ${DYNAMIC_ESCAPE_COURSE.z2} bedrock`,
+            'fill 1007 95 1025 1007 110 1058 bedrock',
+            'fill 1009 95 1025 1009 110 1058 bedrock',
+            'fill 1007 95 1025 1009 110 1025 bedrock',
+            'fill 1008 99 1026 1008 99 1065 smooth_stone',
+            'fill 1005 99 1065 1011 99 1069 grass_block',
           ]
         : terrainSwimCourse
         ? [
@@ -1390,7 +1608,7 @@ async function run() {
             `fill ${WALL.x} ${WALL.y1} ${WALL.z1} ${WALL.x} ${WALL.y2} ${WALL.z2} stone_bricks`,
             `fill ${DOORWAY.x} ${DOORWAY.y1} ${DOORWAY.z} ${DOORWAY.x} ${DOORWAY.y2} ${DOORWAY.z} air`,
           ]),
-      ...(orchestrationCourse || routeProbeCourse || interactionStanceCourse || terrainSwimCourse || terrainChainCourse || playerRouteBestCourse
+      ...(orchestrationCourse || routeProbeCourse || interactionStanceCourse || terrainSwimCourse || terrainChainCourse || dynamicEscapeCourse || playerRouteBestCourse
         ? []
         : [`fill ${PLATFORM.x1} ${PLATFORM.y} ${PLATFORM.z1} ${PLATFORM.x2} ${PLATFORM.y} ${PLATFORM.z2} smooth_stone`]),
       // The acceptance fixture must not be preempted by a mob. Spawning is
@@ -1427,6 +1645,16 @@ async function run() {
             `give ${options.bot} minecraft:${TERRAIN_CHAIN_SCAFFOLD.item} ${TERRAIN_CHAIN_SCAFFOLD.count}`,
             `give ${options.bot} minecraft:iron_pickaxe 1`,
             `effect give ${options.bot} minecraft:water_breathing 60 0 true`,
+          ]
+        : []),
+      ...(dynamicEscapeCourse
+        ? [
+            `clear ${options.bot}`,
+            `clear ${TARGET_NAME}`,
+            `give ${options.bot} minecraft:${DYNAMIC_ESCAPE_DELIVERY.item} ${DYNAMIC_ESCAPE_DELIVERY.count}`,
+            `give ${options.bot} minecraft:${DYNAMIC_ESCAPE_SCAFFOLD.item} ${DYNAMIC_ESCAPE_SCAFFOLD.count}`,
+            `give ${options.bot} minecraft:iron_pickaxe 1`,
+            `effect give ${options.bot} minecraft:water_breathing 120 0 true`,
           ]
         : []),
       `gamemode survival ${options.bot}`,
@@ -1476,6 +1704,14 @@ async function run() {
         5_000,
       );
     }
+    if (dynamicEscapeCourse) {
+      await waitFor(
+        dynamicEscapeOpenFixtureReady,
+        Boolean,
+        'controlled observer receipt of the initial open delivery route',
+        5_000,
+      );
+    }
     target.pathfinder.stop();
     target.clearControlStates();
     await waitFor(
@@ -1503,6 +1739,12 @@ async function run() {
           && (!terrainChainCourse || (
             compact.traversalPolicy === 'full'
             && Number(compact.inventoryCounts?.[TERRAIN_CHAIN_SCAFFOLD.item]) === TERRAIN_CHAIN_SCAFFOLD.count
+            && Number(compact.inventoryCounts?.iron_pickaxe) === 1
+          ))
+          && (!dynamicEscapeCourse || (
+            compact.traversalPolicy === 'full'
+            && Number(compact.inventoryCounts?.[DYNAMIC_ESCAPE_DELIVERY.item]) === DYNAMIC_ESCAPE_DELIVERY.count
+            && Number(compact.inventoryCounts?.[DYNAMIC_ESCAPE_SCAFFOLD.item]) === DYNAMIC_ESCAPE_SCAFFOLD.count
             && Number(compact.inventoryCounts?.iron_pickaxe) === 1
           ))
           && distance(compact.position, botStart) <= 0.3;
@@ -1906,6 +2148,9 @@ async function run() {
       const terrainChainStateBefore = terrainChainCourse
         ? compactState(states[options.bot])
         : null;
+      const dynamicEscapeStateBefore = dynamicEscapeCourse
+        ? compactState(states[options.bot])
+        : null;
       const finiteBreakStateBefore = finiteBreakCostCourse
         ? compactState(states[options.bot])
         : null;
@@ -1940,6 +2185,15 @@ async function run() {
         terrainChainBefore: terrainChainCourse ? terrainChainSnapshot() : null,
         terrainChainInventoryBefore: terrainChainStateBefore?.inventoryCounts || null,
         terrainChainTraversalPolicy: terrainChainStateBefore?.traversalPolicy || null,
+        dynamicEscapeOpenBefore: dynamicEscapeCourse ? dynamicEscapeSnapshot() : null,
+        dynamicEscapeMutatedBeforeTraversal: null,
+        dynamicEscapeInventoryBefore: dynamicEscapeStateBefore?.inventoryCounts || null,
+        dynamicEscapeTraversalPolicy: dynamicEscapeStateBefore?.traversalPolicy || null,
+        dynamicEscapeMutationStartedAt: null,
+        dynamicEscapeMutationCompletedAt: null,
+        dynamicEscapeMutationHoldAppliedAt: null,
+        dynamicEscapeMutationHoldClearedAt: null,
+        dynamicEscapeOwnershipState: null,
         finiteBreakInventoryBefore: finiteBreakStateBefore?.inventoryCounts || null,
       };
       if (requestCompletionCourse) {
@@ -2214,7 +2468,10 @@ async function run() {
           // deliver), so it owns the body under changing labels rather than one
           // fixed follow action. Requiring a specific label here would make the
           // wait a test of the goal's internal command choice.
-          if (options.mode === 'deliver') return compact.idle === false;
+          if (options.mode === 'deliver') {
+            return compact.idle === false
+              && (!dynamicEscapeCourse || Boolean(compact.pathfinding));
+          }
           // A strict route probe computes without installing a Pathfinder goal,
           // so movement ownership is deliberately absent. Its correlated
           // failed terminal is the observable completion boundary.
@@ -2253,6 +2510,13 @@ async function run() {
       activeAttempt.activeAt = routeProbeCourse || terrainSwimCourse || terrainChainCourse || playerRouteCourse
         ? Number(activeAttempt.terminal?.startedAt) || Date.now()
         : Number(activeState?._meta?.sampledAt) || Date.now();
+
+      if (dynamicEscapeCourse) {
+        activeAttempt.dynamicEscapeOwnershipState = compactState(activeState);
+        activeAttempt.dynamicEscapeMutationStartedAt = Date.now();
+        activeAttempt.dynamicEscapeMutatedBeforeTraversal = await applyDynamicEscapeMutation();
+        activeAttempt.dynamicEscapeMutationCompletedAt = Date.now();
+      }
 
       if (options.mode === 'deliver') {
         // The whole acceptance: the item physically arrives in the recipient's
@@ -2641,6 +2905,98 @@ async function run() {
           && terrainChainScaffoldAccountingVerified === true
           && terrainChainCheckpoints?.complete === true
         : null;
+      const dynamicEscapeAfter = dynamicEscapeCourse ? dynamicEscapeSnapshot() : null;
+      const dynamicEscapeInventoryAfter = dynamicEscapeCourse
+        ? compactState(states[options.bot]).inventoryCounts
+        : null;
+      const dynamicEscapeTrajectory = dynamicEscapeCourse
+        ? [{ sampledAt: activeAttempt.issuedAt - 1, position: paperBefore.botPosition }, ...physicalBotSamples]
+        : [];
+      const dynamicEscapeCheckpoints = dynamicEscapeCourse
+        ? orderedDynamicEscapeCheckpoints(dynamicEscapeTrajectory)
+        : null;
+      const dynamicEscapeMutationAfterOwnershipVerified = dynamicEscapeCourse
+        ? Number.isFinite(activeAttempt.activeAt)
+          && Number.isFinite(activeAttempt.dynamicEscapeMutationStartedAt)
+          && Number.isFinite(activeAttempt.dynamicEscapeMutationCompletedAt)
+          && activeAttempt.dynamicEscapeMutationStartedAt >= activeAttempt.activeAt
+          && activeAttempt.dynamicEscapeMutationCompletedAt >= activeAttempt.dynamicEscapeMutationStartedAt
+          && Boolean(activeAttempt.dynamicEscapeOwnershipState?.pathfinding)
+          && activeAttempt.dynamicEscapeOpenBefore?.dig?.every(name => name === 'air')
+          && activeAttempt.dynamicEscapeOpenBefore?.parkourGap?.every(name => name === 'smooth_stone')
+          && activeAttempt.dynamicEscapeOpenBefore?.bridge?.every(name => name === 'smooth_stone')
+          && activeAttempt.dynamicEscapeMutatedBeforeTraversal?.dig?.every(name => name === 'stone')
+          && activeAttempt.dynamicEscapeMutatedBeforeTraversal?.parkourGap?.every(name => name === 'air')
+          && activeAttempt.dynamicEscapeMutatedBeforeTraversal?.bridge?.every(name => name === 'air')
+        : null;
+      const dynamicEscapeDigVerified = dynamicEscapeCourse
+        ? activeAttempt.dynamicEscapeMutatedBeforeTraversal?.dig?.every(name => name === 'stone')
+          && dynamicEscapeAfter?.dig?.every(name => name === 'air')
+        : null;
+      const dynamicEscapeParkourVerified = dynamicEscapeCourse
+        ? activeAttempt.dynamicEscapeMutatedBeforeTraversal?.parkourGap?.every(name => name === 'air')
+          && dynamicEscapeAfter?.parkourGap?.every(name => name === 'air')
+          && dynamicEscapeCheckpoints?.checkpoints?.some(entry => entry.name === 'parkour_landing')
+        : null;
+      const dynamicEscapeBridgeVerified = dynamicEscapeCourse
+        ? activeAttempt.dynamicEscapeMutatedBeforeTraversal?.bridge?.every(name => name === 'air')
+          && dynamicEscapeAfter?.bridge?.some(name => name === DYNAMIC_ESCAPE_SCAFFOLD.item)
+        : null;
+      const dynamicEscapeTowerVerified = dynamicEscapeCourse
+        ? activeAttempt.dynamicEscapeMutatedBeforeTraversal?.tower?.every(name => name === 'air')
+          && dynamicEscapeAfter?.tower?.every(name => name === DYNAMIC_ESCAPE_SCAFFOLD.item)
+        : null;
+      const dynamicEscapeStairTunnelVerified = dynamicEscapeCourse
+        ? activeAttempt.dynamicEscapeMutatedBeforeTraversal?.stairBreaks?.every(name => name === 'stone')
+          && dynamicEscapeAfter?.stairBreaks?.every(name => name === 'air')
+        : null;
+      const dynamicEscapeDescentVerified = dynamicEscapeCourse
+        ? dynamicEscapeCheckpoints?.checkpoints?.some(entry => entry.name === 'descent_landing')
+        : null;
+      const dynamicEscapeSwimExitVerified = dynamicEscapeCourse
+        ? dynamicEscapeAfter?.water?.every(name => name === 'water')
+          && dynamicEscapeAfter?.bank === 'grass_block'
+          && dynamicEscapeCheckpoints?.checkpoints?.some(entry => entry.name === 'swim_surface')
+          && dynamicEscapeCheckpoints?.checkpoints?.some(entry => entry.name === 'dry_bank')
+        : null;
+      const dynamicEscapeReturnVerified = dynamicEscapeCourse
+        ? dynamicEscapeAfter?.returnStair?.every(name => name === 'smooth_stone')
+          && dynamicEscapeCheckpoints?.checkpoints?.some(entry => entry.name === 'returned_to_ground')
+          && distance(paperAfter.botPosition, paperAfter.targetPosition) <= 3
+        : null;
+      const dynamicEscapePlacedBlocks = dynamicEscapeCourse
+        ? (dynamicEscapeAfter?.bridge || []).filter(name => name === DYNAMIC_ESCAPE_SCAFFOLD.item).length
+          + (dynamicEscapeAfter?.tower || []).filter(name => name === DYNAMIC_ESCAPE_SCAFFOLD.item).length
+        : null;
+      const dynamicEscapeScaffoldAccountingVerified = dynamicEscapeCourse
+        ? Number(activeAttempt.dynamicEscapeInventoryBefore?.[DYNAMIC_ESCAPE_SCAFFOLD.item])
+            - Number(dynamicEscapeInventoryAfter?.[DYNAMIC_ESCAPE_SCAFFOLD.item] || 0)
+            === dynamicEscapePlacedBlocks
+          && dynamicEscapePlacedBlocks
+            === (dynamicEscapeAfter?.bridge || []).filter(name => name === DYNAMIC_ESCAPE_SCAFFOLD.item).length
+              + (DYNAMIC_ESCAPE_TOWER.y2 - DYNAMIC_ESCAPE_TOWER.y1 + 1)
+          && Number(dynamicEscapeInventoryAfter?.iron_pickaxe) === 1
+        : null;
+      const dynamicEscapePathfinderAfterMutation = dynamicEscapeCourse
+        ? activeAttempt.samples.some(sample => (
+            Number(sample?.sampledAt) >= activeAttempt.dynamicEscapeMutationCompletedAt
+            && Boolean(sample?.pathfinding)
+          ))
+        : null;
+      const dynamicEscapeMixedChainVerified = dynamicEscapeCourse
+        ? dynamicEscapeDigVerified === true
+          && dynamicEscapeParkourVerified === true
+          && dynamicEscapeBridgeVerified === true
+          && dynamicEscapeTowerVerified === true
+          && dynamicEscapeStairTunnelVerified === true
+          && dynamicEscapeDescentVerified === true
+          && dynamicEscapeSwimExitVerified === true
+          && dynamicEscapeReturnVerified === true
+          && dynamicEscapeScaffoldAccountingVerified === true
+          && dynamicEscapePathfinderAfterMutation === true
+          && activeAttempt.dynamicEscapeTraversalPolicy === 'full'
+          && dynamicEscapeCheckpoints?.complete === true
+        : null;
       const routeProbeStatus = routeProbeCourse
         ? inconclusiveRouteProbeStatus(activeAttempt.terminal)
         : null;
@@ -2667,6 +3023,11 @@ async function run() {
           && terrainIntact === true
         : terrainChainCourse
         ? terrainChainFixtureVerified === true
+        : dynamicEscapeCourse
+        ? dynamicEscapeMutationAfterOwnershipVerified === true
+          && dynamicEscapeMixedChainVerified === true
+          && paperBefore.groundVerified === true
+          && paperBefore.dryLandVerified === true
         : orchestrationCourse
         ? paperBefore.groundVerified === true && paperBefore.dryLandVerified === true
         : deliverCourse
@@ -2716,6 +3077,15 @@ async function run() {
             ? activeAttempt.terminal?.label === 'action:givePlayer'
               && activeAttempt.terminal?.code === 'skill_delivered'
             : ['action:givePlayer', 'action:requestItemGoal'].includes(activeAttempt.terminal?.label))
+        : null;
+      const dynamicEscapeGoalResumedVerified = dynamicEscapeCourse
+        ? dynamicEscapeMutationAfterOwnershipVerified === true
+          && dynamicEscapeMixedChainVerified === true
+          && deliveryVerified === true
+          && deliveryTerminalVerified === true
+          && Number(activeAttempt.deliveryObservedAt) > activeAttempt.dynamicEscapeMutationCompletedAt
+          && activeAttempt.terminal?.evidence?.request?.routeOrigin === 'goal-director'
+          && activeAttempt.terminal?.phase === 'succeeded'
         : null;
       const routeProbeVerified = routeProbeCourse
         ? routeProbeStatus !== null
@@ -2772,6 +3142,11 @@ async function run() {
         : options.mode === 'deliver'
         ? deliveryVerified === true
           && deliveryTerminalVerified === true
+          && (!dynamicEscapeCourse || (
+            dynamicEscapeMutationAfterOwnershipVerified === true
+            && dynamicEscapeMixedChainVerified === true
+            && dynamicEscapeGoalResumedVerified === true
+          ))
           && stopQuiescenceMs <= 2_000
           && stable
           && fixtureVerified
@@ -2848,6 +3223,31 @@ async function run() {
           deliveryBaseline: activeAttempt.deliveryBaseline,
           deliveryFinal: activeAttempt.deliveryFinal,
           deliveryObservedAt: activeAttempt.deliveryObservedAt,
+          dynamicEscapeMutationAfterOwnershipVerified,
+          dynamicEscapeMixedChainVerified,
+          dynamicEscapeGoalResumedVerified,
+          dynamicEscapeDigVerified,
+          dynamicEscapeParkourVerified,
+          dynamicEscapeBridgeVerified,
+          dynamicEscapeTowerVerified,
+          dynamicEscapeStairTunnelVerified,
+          dynamicEscapeDescentVerified,
+          dynamicEscapeSwimExitVerified,
+          dynamicEscapeReturnVerified,
+          dynamicEscapeScaffoldAccountingVerified,
+          dynamicEscapePathfinderAfterMutation,
+          dynamicEscapeTraversalPolicy: activeAttempt.dynamicEscapeTraversalPolicy,
+          dynamicEscapeCheckpoints,
+          dynamicEscapeOpenBefore: activeAttempt.dynamicEscapeOpenBefore,
+          dynamicEscapeMutatedBeforeTraversal: activeAttempt.dynamicEscapeMutatedBeforeTraversal,
+          dynamicEscapeAfter,
+          dynamicEscapeInventoryBefore: activeAttempt.dynamicEscapeInventoryBefore,
+          dynamicEscapeInventoryAfter,
+          dynamicEscapeMutationStartedAt: activeAttempt.dynamicEscapeMutationStartedAt,
+          dynamicEscapeMutationCompletedAt: activeAttempt.dynamicEscapeMutationCompletedAt,
+          dynamicEscapeMutationHoldAppliedAt: activeAttempt.dynamicEscapeMutationHoldAppliedAt,
+          dynamicEscapeMutationHoldClearedAt: activeAttempt.dynamicEscapeMutationHoldClearedAt,
+          dynamicEscapeOwnershipState: activeAttempt.dynamicEscapeOwnershipState,
           routeProbeStatus,
           routeProbeConclusive,
           routeMovementAttempted,

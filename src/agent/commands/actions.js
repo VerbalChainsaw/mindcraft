@@ -27,11 +27,11 @@ import {
     createDesignedStructureOrder,
     designLanguageHelp,
 } from '../runtime/jobs/structure-design.js';
+import { bindSafeConstructionOrder } from '../runtime/jobs/construction-assignment.js';
 import {
-    selectConstructionSites,
-    selectOppositeLandmarkLayoutSites,
-} from '../runtime/jobs/structure-site-selector.js';
-import { bindStructureAccessoryMaterials } from '../runtime/jobs/structure-material-binder.js';
+    bindStructureAccessoryMaterials,
+} from '../runtime/jobs/structure-material-binder.js';
+import { isApprovedPrimaryConstructionMaterial } from '../runtime/jobs/structural-material-contract.js';
 import { resolvePlayerTarget } from '../player-target.js';
 import { normalizeRuntimeBehavior, runtimeBehaviorToProfile } from '../runtime/behavior-config.js';
 import { blockCanSupportPlacement } from '../runtime/block-placement-contract.js';
@@ -77,14 +77,21 @@ function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = f
     const request = agent.actions?.currentRequestContext?.() || null;
     const previousGeneration = Number(agent.last_agenda_plan_submission?.generation) || 0;
     const recordSubmission = ({ accepted, code, entryIds = [] }) => {
-        agent.last_agenda_plan_submission = Object.freeze({
+        const submissionReceipt = Object.freeze({
+            submissionKind: 'agenda_submission',
+            planKind: 'item_plan',
             generation: previousGeneration + 1,
             requestId: request?.requestId || null,
             selectedSkill: request?.selectedSkill || null,
+            routeOrigin: request?.routeOrigin || null,
+            missionId: request?.missionId || null,
+            activityId: request?.activityId || null,
             accepted: accepted === true,
             code,
             entryIds: Object.freeze(entryIds.slice(0, MAX_ORDERED_ITEM_PLAN_STEPS + 2)),
         });
+        agent.last_agenda_plan_submission = submissionReceipt;
+        agent.actions?.recordDurableSubmissionReceipt?.(submissionReceipt);
     };
     const reject = (code, message) => {
         recordSubmission({ accepted: false, code });
@@ -231,14 +238,21 @@ function queueStoragePlan(agent, encodedPlan, playerName, returnToPlayer = false
     const request = agent.actions?.currentRequestContext?.() || null;
     const previousGeneration = Number(agent.last_agenda_plan_submission?.generation) || 0;
     const recordSubmission = ({ accepted, code, entryIds = [] }) => {
-        agent.last_agenda_plan_submission = Object.freeze({
+        const submissionReceipt = Object.freeze({
+            submissionKind: 'agenda_submission',
+            planKind: 'storage_plan',
             generation: previousGeneration + 1,
             requestId: request?.requestId || null,
             selectedSkill: request?.selectedSkill || null,
+            routeOrigin: request?.routeOrigin || null,
+            missionId: request?.missionId || null,
+            activityId: request?.activityId || null,
             accepted: accepted === true,
             code,
             entryIds: Object.freeze(entryIds.slice(0, MAX_ORDERED_ITEM_PLAN_STEPS + 1)),
         });
+        agent.last_agenda_plan_submission = submissionReceipt;
+        agent.actions?.recordDurableSubmissionReceipt?.(submissionReceipt);
     };
     const reject = (code, message) => {
         recordSubmission({ accepted: false, code });
@@ -405,6 +419,27 @@ async function runCollectionAction(agent, operation) {
     return actionValue === true && receipt.accepted === true && receipt.valid === true;
 }
 
+async function runWorkstationAction(agent, expectedKind, operation) {
+    const actionValue = await operation();
+    const evidence = agent?.bot?.lastActionEvidence;
+    const valid = evidence
+        && evidence.kind === expectedKind
+        && typeof evidence.outcome === 'string'
+        && evidence.outcome.length > 0;
+    const terminal = valid
+        ? evidence
+        : {
+            kind: expectedKind,
+            outcome: 'workstation_terminal_receipt_invalid',
+            observedKind: evidence?.kind || null,
+            observedOutcome: evidence?.outcome || null,
+            retryable: false,
+        };
+    const recorded = recordActionTerminal(terminal);
+    if (recorded.accepted && agent?.bot) agent.bot.lastActionEvidence = recorded.snapshot;
+    return actionValue === true && recorded.accepted === true && valid;
+}
+
 function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = null, receiptMode = 'legacy', specialist = null) {
     let actionLabel = null;  // Will be set on first use
     
@@ -426,6 +461,7 @@ function runAsAction (actionFn, resume = false, timeout = -1, prepareAction = nu
             receiptMode,
             specialist,
         });
+        agent.actions.recordCommandExecutionResult?.(code_return.result);
         if (code_return.interrupted && !code_return.timedout)
             return;
         if (code_return.result?.phase && code_return.result.phase !== 'succeeded') {
@@ -521,15 +557,23 @@ function submitRoleOrderResult(agent, expectedRole, order) {
         : director.submit(order);
     const request = agent.actions?.currentRequestContext?.() || null;
     const previousGeneration = Number(agent.last_persistent_job_submission?.generation) || 0;
-    agent.last_persistent_job_submission = Object.freeze({
+    const submissionReceipt = Object.freeze({
+        submissionKind: 'job_submission',
         generation: previousGeneration + 1,
         requestId: request?.requestId || null,
         selectedSkill: request?.selectedSkill || null,
+        routeOrigin: request?.routeOrigin || null,
+        missionId: request?.missionId || null,
+        activityId: request?.activityId || null,
         submittedOrderId: order?.id || null,
         activeOrderId: director.activeOrder?.id || null,
         accepted: result?.accepted === true,
         code: result?.code || (result?.accepted === true ? 'job_accepted' : 'job_rejected'),
     });
+    // Retain the last receipt for telemetry/debugging, but bind control flow to
+    // the immutable receipt returned by this exact command execution envelope.
+    agent.last_persistent_job_submission = submissionReceipt;
+    agent.actions?.recordDurableSubmissionReceipt?.(submissionReceipt);
     if (result?.accepted !== true) {
         return {
             result,
@@ -573,99 +617,6 @@ function submitRememberedStructure(agent, order, {
         }
     }
     return submission.message;
-}
-
-function bindSafeConstructionOrder(agent, order, origin) {
-    const constructionIntent = agent.agenda_director
-        ?.activeConstructionIntent?.()
-        ?.constructionIntent || null;
-    const siteConstraint = constructionIntent?.siteConstraint || null;
-    const layoutConstraint = constructionIntent?.layoutConstraint || null;
-    const currentDimension = canonicalDimension(agent.bot?.game?.dimension);
-    const constrainedDimension = canonicalDimension(siteConstraint?.dimension);
-    if (siteConstraint && (!currentDimension || currentDimension !== constrainedDimension)) {
-        throw new TypeError(
-            `The named construction landmark ${siteConstraint.name.replaceAll('_', ' ')} is in ${constrainedDimension || 'an unknown dimension'}, not the bot's current dimension.`,
-        );
-    }
-    const isNaturalTerrain = block => skills.isClearableWorksiteBlock(agent.bot, block);
-    const relational = layoutConstraint?.arrangement === 'opposite_sides';
-    const selection = relational
-        ? selectOppositeLandmarkLayoutSites(agent.bot, order.blueprint, {
-            landmark: siteConstraint.position,
-            clearance: layoutConstraint.clearance,
-            isNaturalTerrain,
-        })
-        : selectConstructionSites(agent.bot, order.blueprint, {
-            origin: siteConstraint?.position || origin,
-            ...(siteConstraint ? { radius: siteConstraint.radius } : {}),
-            isNaturalTerrain,
-        });
-    const directions = {
-        north: { x: 0, y: 0, z: -1 },
-        south: { x: 0, y: 0, z: 1 },
-        east: { x: 1, y: 0, z: 0 },
-        west: { x: -1, y: 0, z: 0 },
-    };
-    const probed = selection.sites.map(site => {
-        if (!relational) {
-            return { site, routes: [skills.probeSafeNavigationStances(agent.bot, site.stances)] };
-        }
-        const routes = site.blueprint.fixtures.map(fixture => {
-            const anchor = new Vec3(
-                site.origin.x + fixture.anchor.x,
-                site.origin.y + fixture.anchor.y,
-                site.origin.z + fixture.anchor.z,
-            );
-            const stances = skills.fixtureOrientationStances(agent.bot, anchor, directions[fixture.facing]);
-            return skills.probeSafeNavigationStances(agent.bot, stances);
-        });
-        return { site, routes };
-    });
-    const selected = probed.find(candidate => candidate.routes.every(route => route.reachable));
-    const site = selected?.site;
-    if (!site) {
-        const methodRejected = route => (
-            route?.reachable !== true
-            && route?.conclusive === true
-            && route?.status === 'noPath'
-        );
-        const unproven = probed.filter(candidate => (
-            candidate.routes.some(route => route?.reachable !== true)
-            && candidate.routes.every(route => !methodRejected(route))
-        ));
-        if (unproven.length > 0) {
-            const statuses = [...new Set(unproven
-                .flatMap(candidate => candidate.routes)
-                .filter(route => route?.reachable !== true)
-                .map(route => route?.status || 'unknown'))];
-            throw new TypeError(
-                `Native Pathfinder route checks did not finish for ${unproven.length} geometrically safe construction candidate(s) (${statuses.join(', ')}). No construction site was bound; retry the request.`,
-            );
-        }
-        const routeSummary = probed.length > 0
-            ? ` Native Pathfinder completed route checks and rejected ${probed.length} geometrically safe candidate(s): ${[...new Set(probed
-                .flatMap(candidate => candidate.routes.map(route => route.status || 'unknown')))]
-                .join(', ')}.`
-            : '';
-        throw new TypeError(
-            relational
-                ? `No clear, supported, natively reachable opposite-side fixture layout is loaded around ${siteConstraint.name.replaceAll('_', ' ')} after checking ${selection.inspected} bounded axes (${selection.code}).${routeSummary}`
-                : siteConstraint
-                ? `No clear, naturally supported, non-destructively reachable construction footprint is loaded ${siteConstraint.relation} ${siteConstraint.name.replaceAll('_', ' ')} after checking ${selection.inspected} bounded candidates.${routeSummary}`
-                : `No clear, naturally supported, non-destructively reachable construction footprint is loaded near the bot after checking ${selection.inspected} bounded candidates.${routeSummary}`,
-        );
-    }
-    return createWorkOrder({
-        ...order,
-        blueprint: site.blueprint || order.blueprint,
-        target: {
-            ...order.target,
-            x: site.origin.x,
-            y: site.origin.y,
-            z: site.origin.z,
-        },
-    });
 }
 
 function persistFarmState(agent, farm, physicalOutcome) {
@@ -1306,7 +1257,7 @@ export const actionsList = [
     },
     {
         name: '!givePlayer',
-        description: 'Give the specified item to the given player.',
+        description: 'Perform the terminal atomic handoff for an already-owned goal or agenda activity. For a player-requested acquisition or delivery outcome, select !requestItemGoal instead so the whole promise remains resumable and verified.',
         params: { 
             'player_name': { type: 'string', description: 'The name of the player to give the item to.' }, 
             'item_name': { type: 'ItemName', description: 'The name of the item to give.' },
@@ -1731,13 +1682,13 @@ export const actionsList = [
             'workstation_dimension': { type: 'string', description: 'Optional deterministically verified exact crafting table dimension; never guess.', optional: true },
         },
         perform: runAsAction(async (agent, recipe_name, num, x, y, z, dimension) => {
-            return await skills.craftRecipe(
+            return await runWorkstationAction(agent, 'craft', () => skills.craftRecipe(
                 agent.bot,
                 recipe_name,
                 num,
                 workstationArgumentsForAction(agent, 'crafting_table', x, y, z, dimension),
-            );
-        })
+            ));
+        }, false, -1, null, 'composed', 'craft')
     },
     {
         name: '!requestItemGoal',
@@ -1803,6 +1754,23 @@ export const actionsList = [
                 workstationConstraint: workstationResolution.constraint,
             });
             const accepted = agent.goal_director?.submit?.(goal);
+            const request = agent.actions?.currentRequestContext?.() || null;
+            const previousGeneration = Number(agent.last_persistent_goal_submission?.generation) || 0;
+            const submissionReceipt = Object.freeze({
+                submissionKind: 'goal_submission',
+                generation: previousGeneration + 1,
+                requestId: request?.requestId || null,
+                selectedSkill: request?.selectedSkill || null,
+                routeOrigin: request?.routeOrigin || null,
+                missionId: request?.missionId || null,
+                activityId: request?.activityId || null,
+                submittedGoalId: goal.id,
+                activeGoalId: agent.goal_director?.activeGoal?.id || null,
+                accepted: accepted?.accepted === true,
+                code: accepted?.code || (accepted?.accepted === true ? 'goal_accepted' : 'goal_rejected'),
+            });
+            agent.last_persistent_goal_submission = submissionReceipt;
+            agent.actions?.recordDurableSubmissionReceipt?.(submissionReceipt);
             if (!accepted?.accepted) {
                 return `Typed item goal was not accepted: ${accepted?.detail || accepted?.code || 'goal director unavailable'}.`;
             }
@@ -1932,8 +1900,8 @@ export const actionsList = [
                 const material = String(wall_material || '').trim().toLowerCase();
                 const block = agent.bot?.registry?.blocksByName?.[material];
                 const item = agent.bot?.registry?.itemsByName?.[material];
-                if (!block || !item || block.boundingBox !== 'block') {
-                    return `Functional shelter work order was not accepted: ${material || 'the requested material'} is not a carried/placeable full support block in the connected registry.`;
+                if (!block || !item || !isApprovedPrimaryConstructionMaterial(material)) {
+                    return `Functional shelter work order was not accepted: ${material || 'the requested material'} is not an approved primary construction material. Use dirt, stone, cobblestone, or planks.`;
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Functional shelter work order was not accepted: Minecraft spawn state is unavailable.';
@@ -1995,8 +1963,8 @@ export const actionsList = [
                 const canonicalMaterial = String(material || '').trim().toLowerCase();
                 const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
                 const item = agent.bot?.registry?.itemsByName?.[canonicalMaterial];
-                if (!block || !item || block.boundingBox !== 'block') {
-                    return `Construction work order was not accepted: ${canonicalMaterial || 'the requested material'} is not a placeable full support block in the connected registry.`;
+                if (!block || !item || !isApprovedPrimaryConstructionMaterial(canonicalMaterial)) {
+                    return `Construction work order was not accepted: ${canonicalMaterial || 'the requested material'} is not an approved primary construction material. Use dirt, stone, cobblestone, or planks.`;
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Construction work order was not accepted: Minecraft spawn state is unavailable.';
@@ -2020,18 +1988,19 @@ export const actionsList = [
     },
     {
         name: '!buildStructure',
-        description: `Build one complete named building beside the bot. Use this when the player asks for a building by what it is rather than by its shape - a tower, a house, somewhere to store things, a pen for the animals. Known structures: ${describeStructureCatalog()}`,
+        description: `Build one complete named building beside the bot. Use material auto unless the player named a material; Builder binds an approved feasible primary material and separately binds fixtures such as fences, gates, doors, and glass. Known structures: ${describeStructureCatalog()}`,
         params: {
             'structure': { type: 'string', description: `Structure to build: ${STRUCTURE_NAMES.join(', ')}.` },
-            'material': { type: 'BlockName', description: 'Canonical full support block for the walls, floor, and roof. Doors, glass, fences, chests, and torches are chosen by the structure.' },
+            'material': { type: 'string', description: 'Use auto unless the player named dirt, stone, cobblestone, or a canonical *_planks primary material. Fixtures are chosen by the structure.' },
         },
         perform: persistentJobCommand(function (agent, structure, material) {
             try {
-                const canonicalMaterial = String(material || '').trim().toLowerCase();
+                const requestedMaterial = String(material || '').trim().toLowerCase();
+                const canonicalMaterial = requestedMaterial === 'auto' ? 'oak_planks' : requestedMaterial;
                 const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
                 const item = agent.bot?.registry?.itemsByName?.[canonicalMaterial];
-                if (!block || !item || block.boundingBox !== 'block') {
-                    return `Structure work order was not accepted: ${canonicalMaterial || 'the requested material'} is not a placeable full support block in the connected registry.`;
+                if (!block || !item || !isApprovedPrimaryConstructionMaterial(canonicalMaterial)) {
+                    return `Structure work order was not accepted: ${canonicalMaterial || 'the requested material'} is not an approved primary construction material. Use auto, dirt, stone, cobblestone, or planks.`;
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Structure work order was not accepted: Minecraft spawn state is unavailable.';
@@ -2044,7 +2013,9 @@ export const actionsList = [
                     requester: 'player',
                 });
                 const order = bindSafeConstructionOrder(agent, provisional, position);
-                return submitRememberedStructure(agent, order);
+                return submitRememberedStructure(agent, order, {
+                    structuralMaterialAlternatives: requestedMaterial === 'auto',
+                });
             } catch (error) {
                 return `Structure work order was not accepted: ${String(error?.message || error).slice(0, 180)}.`;
             }
@@ -2075,8 +2046,8 @@ export const actionsList = [
                     : requestedMaterial;
                 const block = agent.bot?.registry?.blocksByName?.[canonicalMaterial];
                 const item = agent.bot?.registry?.itemsByName?.[canonicalMaterial];
-                if (!block || !item || block.boundingBox !== 'block') {
-                    return `Design was not accepted: ${canonicalMaterial || 'the requested material'} is not a placeable full support block in the connected registry.`;
+                if (!block || !item || !isApprovedPrimaryConstructionMaterial(canonicalMaterial)) {
+                    return `Design was not accepted: ${canonicalMaterial || 'the requested material'} is not an approved primary construction material. Use auto, dirt, stone, cobblestone, or planks.`;
                 }
                 const position = agent.bot?.entity?.position;
                 if (!position) return 'Design was not accepted: Minecraft spawn state is unavailable.';
@@ -2100,6 +2071,18 @@ export const actionsList = [
                 // corrected instead of guessed at again.
                 return `Design was not accepted: ${String(error?.message || error).slice(0, 220)} Use the exact !designStructure DSL shown in the command contract; descriptive prose is not design data.`;
             }
+        }),
+    },
+    {
+        name: '!resumeLastJob',
+        description: 'Revalidate and resume the exact last failed or completed persistent work order after its blocker was repaired or its completed world outcome changed. Preserves verified checkpoints; do not use as an unchanged blind retry.',
+        params: {},
+        perform: persistentJobCommand(function (agent) {
+            const result = agent.job_director?.resumeLastOrder?.();
+            if (result?.accepted !== true) {
+                return `Terminal work was not resumed: ${result?.code || 'job director unavailable'}.`;
+            }
+            return `Revalidating work order ${result.id}; current Minecraft state will be audited before execution.`;
         }),
     },
     {
@@ -2329,14 +2312,13 @@ export const actionsList = [
             'workstation_dimension': { type: 'string', description: 'Optional exact furnace dimension.', optional: true },
         },
         perform: runAsAction(async (agent, item_name, num, x, y, z, dimension) => {
-            let success = await skills.smeltItem(
+            return await runWorkstationAction(agent, 'smelt', () => skills.smeltItem(
                 agent.bot,
                 item_name,
                 num,
                 workstationArgumentsForAction(agent, 'furnace', x, y, z, dimension),
-            );
-            return success;
-        })
+            ));
+        }, false, -1, null, 'composed', 'furnace')
     },
     {
         name: '!brewPotion',
@@ -2364,7 +2346,7 @@ export const actionsList = [
         perform: runAsAction(async (agent, type) => {
             let pos = agent.bot.entity.position;
             return await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
-        })
+        }, false, -1, null, 'legacy', 'placement')
     },
     {
         name: '!placeBlockAt',
@@ -2377,7 +2359,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, type, x, y, z) => {
             return await skills.placeBlock(agent.bot, type, x, y, z, 'bottom', true, false);
-        })
+        }, false, -1, null, 'legacy', 'placement')
     },
     {
         name: '!placeFixtureAt',
@@ -2392,7 +2374,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, type, x, y, z, kind, facing) => {
             return await skills.placeFixture(agent.bot, type, x, y, z, kind, facing);
-        })
+        }, false, -1, null, 'legacy', 'placement')
     },
     {
         name: '!buildNetherPortal',
@@ -2552,6 +2534,44 @@ export const actionsList = [
             'return_to_player': { type: 'boolean', description: 'Whether to return to the requesting player after every item outcome completes.' },
         },
         perform: queueOrderedItemPlan,
+    },
+    {
+        name: '!requestResourceProject',
+        description: 'Compile and atomically start one complete home-bound resource project through the existing deterministic Agenda: explore a cave, retain explicitly requested mined outputs, return to the bound home position, manufacture every listed output, deposit each output in one bound loaded chest or barrel, and return to the named player. The ordinary-language request must state all of those phases; this command never starts only a partial project.',
+        compactDescription: 'Start one complete cave-to-workshop project from an ordinary-language contract. Syntax: !requestResourceProject("PlayerName", "find and explore a cave, mine eight iron ore and three coal, return here, make one iron pickaxe, one shield, and one bucket using this furnace and crafting table, store all three in this chest, then return to me", true). The current position becomes home and the loaded chest is bound before any phase starts.',
+        params: {
+            'player_name': { type: 'string', description: 'Canonical online player who requested the project and receives the final return.' },
+            'request': { type: 'string', description: 'Complete ordinary-language cave, resource, return, manufacture, storage, and requester-return contract.' },
+            'replace_current': { type: 'boolean', description: 'Replace unfinished agenda work atomically before starting this project.', optional: true, default: true },
+        },
+        perform: async function (agent, playerName, request, replaceCurrent = true) {
+            const resolution = resolvePlayerTarget(agent.bot, playerName);
+            if (!resolution?.canonical || !resolution.entity?.position) {
+                return `Resource project was not started: ${playerName} is not a uniquely resolved online player.`;
+            }
+            const normalizedRequest = String(request || '').trim();
+            if (!normalizedRequest) return 'Resource project was not started: the complete project request is empty.';
+            const routedRequest = replaceCurrent === true
+                ? `Now, ${normalizedRequest}`
+                : normalizedRequest;
+            const handled = await agent.dispatchPlayerAgenda(
+                resolution.canonical,
+                resolution.canonical,
+                routedRequest,
+                resolution.entity.position,
+                {
+                    historyMessage: normalizedRequest,
+                    bypassModelSequencing: true,
+                },
+            );
+            if (!handled) {
+                return 'Resource project was not started: the complete request did not compile into the typed resource-project contract.';
+            }
+            const snapshot = agent.agenda_director?.snapshot?.();
+            return snapshot?.remaining > 0
+                ? `Resource project accepted as ${snapshot.remaining} durable Agenda phase(s); execution is starting from the bound home base.`
+                : 'Resource project was handled, but no unfinished Agenda phases remain.';
+        },
     },
     {
         name: '!queueStoragePlan',
@@ -2714,6 +2734,20 @@ export const actionsList = [
             return result.cleared
                 ? `Cleared ${result.cleared} agenda step(s).`
                 : 'My agenda was already empty.';
+        }
+    },
+    {
+        name: '!resumeAgenda',
+        description: 'Resume the exact failed Agenda entry and every linked unattempted continuation after a material repair. Preserves the original entry identities and does not create a replacement plan.',
+        params: {},
+        perform: function (agent) {
+            const result = agent.agenda_director?.resumeFailedChain?.(
+                'Explicit player authority resumed the linked chain after its owning mechanism changed.',
+            );
+            if (!result) return 'The agenda is unavailable on this bot.';
+            return result.resumed > 0
+                ? `Resumed ${result.resumed} linked agenda step(s) from ${result.rootId}.`
+                : 'There is no failed agenda chain to resume.';
         }
     },
     {

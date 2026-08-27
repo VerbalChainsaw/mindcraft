@@ -68,6 +68,8 @@ const CONSTRUCTION_SITE_RELATIONS = new Set(['beside', 'near', 'around']);
 const CONSTRUCTION_LAYOUT_ARRANGEMENTS = new Set(['opposite_sides']);
 const CONSTRUCTION_LAYOUT_ORIENTATIONS = new Set(['inward']);
 const SCOUT_FINDINGS = new Set(['cave', 'animal', 'village']);
+const LIVESTOCK_ANIMALS = new Set(['cow', 'sheep', 'pig', 'chicken', 'rabbit']);
+const CATALOGUE_STRUCTURES = new Set(['lookout_tower', 'storage_room', 'animal_pen', 'house']);
 
 export const AGENDA_KINDS = Object.freeze({
   acquire: Object.freeze({ executor: 'goal', needsTarget: true, needsQuantity: true }),
@@ -427,6 +429,46 @@ function normalizePenConstraint(raw) {
   });
 }
 
+function normalizeLivestockSourceSelector(raw, animal) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda livestock source selector must be an object.');
+  }
+  const kind = canonical(raw.kind);
+  const memoryName = canonical(raw.memoryName);
+  const dimension = canonical(raw.dimension);
+  if (
+    kind !== 'remembered_scout'
+    || memoryName !== 'useful_animals'
+    || !LIVESTOCK_ANIMALS.has(animal)
+    || !CANONICAL_NAME.test(dimension)
+  ) throw new TypeError('Agenda livestock source selector is invalid.');
+  return Object.freeze({
+    kind,
+    memoryName,
+    dimension,
+    animal,
+    minimumCount: finiteInteger(raw.minimumCount, 2, 2, 8),
+  });
+}
+
+function normalizeLivestockPenSelector(raw, animal) {
+  if (raw == null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Agenda livestock pen selector must be an object.');
+  }
+  const kind = canonical(raw.kind);
+  const structure = canonical(raw.structure);
+  const dimension = canonical(raw.dimension);
+  if (
+    kind !== 'remembered_structure'
+    || structure !== 'animal_pen'
+    || !LIVESTOCK_ANIMALS.has(animal)
+    || !CANONICAL_NAME.test(dimension)
+  ) throw new TypeError('Agenda livestock pen selector is invalid.');
+  return Object.freeze({ kind, structure, dimension, animal });
+}
+
 function normalizeAccessRepairConstraint(raw) {
   if (raw == null) return null;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -631,10 +673,13 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
   }
   if (requester && knownPlayers && !knownPlayers.has(requester.toLowerCase())) requester = '';
 
-  const point = spec.needsPoint
+  const livestockSourceSelector = kind === 'settle_livestock'
+    ? normalizeLivestockSourceSelector(raw.sourceSelector, target)
+    : null;
+  const point = spec.needsPoint && !livestockSourceSelector
     ? { x: finiteInteger(raw.x, NaN, -30e6, 30e6), y: finiteInteger(raw.y, NaN, -256, 512), z: finiteInteger(raw.z, NaN, -30e6, 30e6) }
     : null;
-  if (spec.needsPoint && [point.x, point.y, point.z].some((value) => !Number.isFinite(value))) {
+  if (spec.needsPoint && !livestockSourceSelector && [point.x, point.y, point.z].some((value) => !Number.isFinite(value))) {
     throw new TypeError('A visit step needs finite coordinates.');
   }
   const state = ENTRY_STATES.has(String(raw.state)) ? String(raw.state) : 'pending';
@@ -680,17 +725,31 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
   if (['prepare_food', 'cook_fish'].includes(kind) && !normalizedWorkstation) {
     throw new TypeError('A food preparation step needs one exact furnace.');
   }
+  const transactionCheckpoint = ['craft', 'smelt'].includes(kind)
+    ? normalizeWorkstationTransactionCheckpoint(raw.transactionCheckpoint, {
+        kind,
+        target,
+        requestedQuantity: quantity,
+        workstation: normalizedWorkstation,
+      })
+    : null;
+  if (raw.transactionCheckpoint != null && !transactionCheckpoint) {
+    throw new TypeError('An agenda workstation transaction checkpoint is invalid.');
+  }
   const containerConstraint = ['inspect_container', 'deposit', 'deposit_family', 'storage_plan', 'explore'].includes(kind)
     ? normalizeContainerConstraint(raw.containerConstraint)
     : null;
   const penConstraint = kind === 'settle_livestock'
     ? normalizePenConstraint(raw.penConstraint)
     : null;
+  const livestockPenSelector = kind === 'settle_livestock'
+    ? normalizeLivestockPenSelector(raw.penSelector, target)
+    : null;
   const accessRepairConstraint = kind === 'repair_access'
     ? normalizeAccessRepairConstraint(raw.accessRepairConstraint)
     : null;
-  if (kind === 'settle_livestock' && !penConstraint) {
-    throw new TypeError('A livestock settlement step needs one exact pen.');
+  if (kind === 'settle_livestock' && !penConstraint && !livestockPenSelector) {
+    throw new TypeError('A livestock settlement step needs one exact pen or one typed completed-pen selector.');
   }
   if (kind === 'repair_access' && !accessRepairConstraint) {
     throw new TypeError('An access repair step needs one exact existing doorway gap.');
@@ -761,6 +820,18 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
       .map(canonical)
       .filter(value => CONSTRUCTION_FUNCTIONS.has(value)))]
     : [];
+  const catalogueStructure = kind === 'construction'
+    ? canonical(raw.constructionIntent?.catalogueStructure)
+    : '';
+  if (catalogueStructure && !CATALOGUE_STRUCTURES.has(catalogueStructure)) {
+    throw new TypeError('A catalogue construction entry names an unsupported structure.');
+  }
+  const structuralMaterial = kind === 'construction' && catalogueStructure
+    ? canonical(raw.constructionIntent?.structuralMaterial || 'auto')
+    : '';
+  if (structuralMaterial && structuralMaterial !== 'auto' && !CANONICAL_NAME.test(structuralMaterial)) {
+    throw new TypeError('A catalogue construction entry needs auto or one canonical primary material.');
+  }
   const constructionSiteConstraint = kind === 'construction'
     ? normalizeConstructionSiteConstraint(raw.constructionIntent?.siteConstraint)
     : null;
@@ -792,6 +863,15 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
   if (kind === 'scout' && scoutFindings.length === 0) {
     throw new TypeError('A scout step needs at least one supported finding.');
   }
+  const scoutAnimal = kind === 'scout' && scoutFindings.includes('animal')
+    ? canonical(raw.animal)
+    : '';
+  if (scoutAnimal && !LIVESTOCK_ANIMALS.has(scoutAnimal)) {
+    throw new TypeError('A scout animal target is unsupported.');
+  }
+  const scoutAnimalMinimumCount = scoutAnimal
+    ? finiteInteger(raw.minimumAnimalCount, 1, 1, 8)
+    : 0;
   const scoutGuideFinding = kind === 'scout' ? canonical(raw.guideFinding) : '';
   if (scoutGuideFinding && !scoutFindings.includes(scoutGuideFinding)) {
     throw new TypeError('A scout guide target must belong to its requested findings.');
@@ -855,6 +935,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
     ...(kind === 'explore' && raw.retainResults === true ? { retainResults: true } : {}),
     ...(requiredOutputs.length > 0 ? { requiredOutputs } : {}),
     ...(scoutFindings.length > 0 ? { findings: scoutFindings } : {}),
+    ...(scoutAnimal ? { animal: scoutAnimal, minimumAnimalCount: scoutAnimalMinimumCount } : {}),
     ...(scoutGuideFinding ? { guideFinding: scoutGuideFinding } : {}),
     ...(scoutSearchLimit !== null ? { searchLimit: scoutSearchLimit } : {}),
     ...(scoutRememberedFinding ? { rememberedFinding: scoutRememberedFinding } : {}),
@@ -871,8 +952,11 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
     workstationConstraint: normalizedWorkstation
       ? Object.freeze({ ...normalizedWorkstation, sourceEntryId })
       : null,
+    ...(transactionCheckpoint ? { transactionCheckpoint } : {}),
     ...(containerConstraint ? { containerConstraint } : {}),
     ...(penConstraint ? { penConstraint } : {}),
+    ...(livestockSourceSelector ? { sourceSelector: livestockSourceSelector } : {}),
+    ...(livestockPenSelector ? { penSelector: livestockPenSelector } : {}),
     ...(accessRepairConstraint ? { accessRepairConstraint } : {}),
     dependsOnEntryId,
     dependencyPolicy,
@@ -881,6 +965,10 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
     constructionIntent: kind === 'construction'
       ? Object.freeze({
           requiredFunctions: Object.freeze(requiredFunctions),
+          ...(catalogueStructure ? {
+            catalogueStructure,
+            structuralMaterial,
+          } : {}),
           ...(constructionSiteConstraint ? { siteConstraint: constructionSiteConstraint } : {}),
           ...(constructionLayoutConstraint ? { layoutConstraint: constructionLayoutConstraint } : {}),
         })
@@ -1043,3 +1131,4 @@ export class AgendaStore {
 }
 
 export const AGENDA_LIMITS = Object.freeze({ maxEntries: MAX_ENTRIES, maxQuantity: MAX_QUANTITY });
+import { normalizeWorkstationTransactionCheckpoint } from './workstation-transaction.js';

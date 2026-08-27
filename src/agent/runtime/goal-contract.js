@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { inspectGameObject } from '../library/game_knowledge.js';
 import * as mc from '../../utils/mcdata.js';
+import { normalizeWorkstationTransactionReceipt } from './workstation-transaction.js';
 
 const GOAL_KINDS = new Set(['acquire', 'deliver']);
 const COMPLETION_KINDS = new Set(['inventory', 'main_hand', 'off_hand', 'delivery']);
@@ -729,11 +730,17 @@ export function normalizeGoalContract(raw) {
     ? raw.checkpoint
     : {};
   const miningReturnCheckpoint = normalizeMiningReturnCheckpoint(checkpointSource);
+  const workstationTransaction = normalizeWorkstationTransactionReceipt(
+    checkpointSource.workstationTransaction,
+  );
   const checkpoint = Object.freeze({
     baselineInventory: finiteInteger(checkpointSource.baselineInventory, 0, 0, 100_000),
     targetInventory: finiteInteger(checkpointSource.targetInventory, quantity, 0, 100_000),
     delivered: finiteInteger(checkpointSource.delivered, 0, 0, quantity),
     ...miningReturnCheckpoint,
+    ...(workstationTransaction?.remainingQuantity > 0
+      ? { workstationTransaction }
+      : {}),
   });
   const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
   return Object.freeze({

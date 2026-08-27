@@ -41,7 +41,7 @@ this plan was reconciled:
   re-inspected before each implementation change; supporting docs avoid binding
   claims to mutable line offsets.
 
-### 2.1 Current phase and proof ledger (2026-08-19)
+### 2.1 Current phase and proof ledger (2026-08-26)
 
 Only the states below are current. `docs/CAMPAIGN-RECORD.md` owns the detailed
 physical evidence and accepted non-regression outcomes; `docs/HANDOFF.md` owns the
@@ -61,10 +61,15 @@ one active tranche, if any.
 | Phase 5 `1-give`, trial 1, recorded trace, telemetry off, advisory preflight | `ACCEPTED / CLOSED` | One isolated real-Minecraft observation physically delivered exactly four of eight starting oak logs, matched the single recorded provider request to runtime input/output fingerprints, settled under Hold, restored the fixture/runtime, disconnected the test player, and left no managed Java or provider process. |
 | Phase 6 controlled swim-exit | `ACCEPTED / CLOSED` | Both isolated explicit-command transports climbed from the generated water basin to the dry bank through real Pathfinder under `full` traversal, ended `skill_arrived`, preserved terrain and empty scaffold inventory, settled under Hold, restored the fixture/runtime, and produced complete evidence with zero retries or safety violations. |
 | Phase 6 composed terrain workarounds | `ACCEPTED / CLOSED` | One uninterrupted real Pathfinder action composed dig-through, three-block parkour, two-block horizontal bridge, two-block 1x1 tower, nine-stone stair-tunnel excavation across three rises, controlled descent, contained-column swim exit, and dry arrival with exact scaffold and terrain accounting. |
+| Dynamic escape selection and Mission resumption | `ACCEPTED / CLOSED` | A DeepSeek-interpreted one-cobblestone Mission crossed previously unencoded survival-world confinement from y=17 to the requester at y=91 through hostile interruptions, changed-route support restoration, supported corridor excavation, surface recovery, and native best-frontier continuation. Paper confirmed the player received the item. The exact receipt race and mixed-offset canopy handoff exposed at the end were repaired at their owners and re-exercised once on current source with an exact one-granite delivery, one successful subgoal, and no blind replay. |
 | Autonomous village expedition and player guidance | `ACCEPTED / CLOSED` | Kevin found and verified a taiga village, remembered its bell at `(781,66,-775)`, returned to the requester, and completed the saved guide continuation with both bodies at the village. The roughly 590-block final guidance leg physically composed forest travel, slopes, repeated step-ups, deep-water traversal, shoreline ascent, catch-up, and chained recoveries. |
 | Phase 7 Container specialist and village supply cache | `ACTIVE` | Native chest/barrel actions now carry Container Activity ownership across Pathfinder approach, window progress, halt, close, and settlement. Kevin physically stored six oak logs in the exact village chest at `(796,67,-774)`, returned, later worked around an unreachable first withdrawal stance, retrieved exactly two from the same chest, returned, retained custody after correction, and durably remembered `village_supply_cache`. The chest ended with four logs and Kevin with eight. Other Phase 7 specialists and Container interruption-in-window behavior remain open. |
+| Phase 7 Placement specialist and compounded survival shelter | `ACCEPTED / CLOSED` | In the continuously running survival world, one shelter promise survived hostile preemptions, death displacement, a 56-block persistent return with chained self-preservation recoveries, stale surface-access state, partial construction, material rebinding, and post-occupancy world change. Placement Activity ownership covered verified block effects and settlement; Builder reused the existing spruce shell instead of restarting or clearing it. The final order re-audited after Kevin entered and ended `blueprint_complete` at 23/23, with Paper confirming all 23 spruce cells, the four required air cells, and Kevin grounded inside. |
 | Outcome-directed confidence coverage across new and old mechanics | `ACTIVE` | Saved accepted evidence remains valid. Controlled runs are authorized when they can change a mechanic owner, repair, composition verdict, or significant risk; fixed-count and reassurance-only reruns are not. |
-| Remaining Phase 5 and later work | `PENDING` | The stopped API-routed Phase 5 attempt preserved four local reports but used the wrong frozen-model provider. The corrected `codex/gpt-5.6-luna` OAuth matrix has not started and has no variance verdict; the Director explicitly authorized the corrected matrix on 2026-08-21 without another authorization ceremony. Phase 6 and the autonomous village expedition are closed; Phase 7 specialist adapters remain later work. |
+| Phase 5 controlled variance matrix | `PENDING` | The stopped API-routed attempt preserved four local reports but used the wrong frozen-model provider. The corrected `codex/gpt-5.6-luna` OAuth matrix has not started and has no variance verdict; it remains separately authorized and does not displace current gameplay work. |
+| Phase 7 composition strengthening through the operational workshop expedition | `ACTIVE — PARTIAL` | Saved current state now outranks the earlier active-Explorer cursor: the cave/resource entry, iron-pickaxe goal, and shield goal completed; the bucket goal failed `inventory_capacity_blocked`; the three deposits and requester return were later cancelled by the player. The project is preserved incomplete evidence, not the current gameplay cursor and not acceptance. `CS-1` through `CS-5` have forward source implementations with static syntax/module evidence only; `CS-6` remains physically open. |
+| Phase 7B deterministic compound livestock project | `ACTIVE` | The newest player-valued outcome is one ordinary request: build and secure a catalogue animal pen, scout and remember at least two requested adult animals, return and guide the requester to them, prepare the exact attraction food, move and breed the animals, close the gate, and return. Saved gameplay proves the old language path fell through to improvised commands and the first pen Builder order stopped at 37/49 on `spruce_fence`; the typed Agenda/compiler, requested-population scout contract, exact deferred pen/source binding, and unchanged-placement containment are the active owning seams below. |
+| Remaining Phase 7 specialist boundaries | `PENDING` | Craft, Furnace, PvP, Vehicle, and Container's open-window interruption boundary close only when their package-specific cancellation, physical settlement, partial-effect truth, and composed player-visible behavior are actually traversed. Placement remains closed. |
 
 The Scenario Lab catalog describes registered scenario definitions and executor
 availability. Its static `not-run` values are not an acceptance ledger and must
@@ -334,6 +339,13 @@ similarly consequential choices may wait when authority is unresolved.
 Lifecycle, verified effect, reason, retryability, and evidence are orthogonal:
 
 ```ts
+type ContinuationKind =
+  | 'resume_same'
+  | 'replan_current'
+  | 'retry_after_material_change'
+  | 'disengage_then_resume'
+  | 'terminal'
+
 type ActivityOutcome = {
   lifecycle: ActivityLifecycle
   effect: {
@@ -346,6 +358,11 @@ type ActivityOutcome = {
   reasonClass: 'ENGINE' | 'POLICY' | 'BUDGET' | 'CANCEL' | 'SETTLEMENT' | 'UNKNOWN'
   reasonCode: string
   retryable: boolean
+  continuation: {
+    kind: ContinuationKind
+    incidentId?: string
+    preemptorActivityId?: string
+  }
   evidence: EvidenceRef[]
 }
 ```
@@ -357,6 +374,28 @@ collapse timeout, cancellation, policy, partial progress, or unsettled ownership
 into "unreachable" or generic failure. Gameplay capability implementations use
 the typed outcome; legacy `{ ok, why }` primitives may be adapted during migration
 but are not the final Activity contract.
+
+The exact settled `ActionResult` produced by `ActivityExecutive` travels back to
+its dispatching consumer in the same execution envelope. `agent.last_action_result`
+may remain a bounded telemetry and migration projection, but Agenda, Job, Goal,
+Capability, and Survival consumers must not rediscover their own result from that
+shared mutable field. Preserve the public command value for conversation and
+parse/argument errors; internal callers receive both the legacy value and the
+correlated result rather than changing every command into a new public API.
+
+`continuation.kind` is finalized after physical-effect and capability verification,
+so a reconciled success cannot retain a stale failure continuation. It expresses
+orchestration meaning only; successful planner progression remains owned by the
+planner's verified `nextPhase`. Legacy codes may be translated in one compatibility
+mapper during migration, but migrated consumers do not independently regex-match
+reason strings to decide whether to resume, replan, change method, disengage, or
+terminate.
+
+`terminal` means no permitted causal method can satisfy a remaining Mission
+predicate, or physical settlement is unproven and the body must be quarantined. A
+failed route, target, region, tactic, job, or workstation stance is not terminal
+while an allowed materially different method remains. `retryable` keeps its
+method-level meaning and is never a substitute for the continuation contract.
 
 ## 7. Persistence
 
@@ -387,6 +426,16 @@ but are not the final Activity contract.
 12. Durable knowledge and Operator Hold survive every migration and deletion.
 13. No causal/director deletion occurs before equivalent player-visible outcomes
     repeatedly pass.
+14. The consumer that dispatched an Activity settles the exact correlated result
+    returned by that execution; a later global telemetry write cannot replace it.
+15. Every verified settled outcome has exactly one post-verification continuation
+    kind; individual directors do not reinterpret failure strings independently.
+16. A local target, route, region, tactic, job, or workstation failure cannot
+    cascade into Mission failure while a permitted materially different causal
+    method remains.
+17. A repeated-action circuit breaker is scoped to the owning Activity, Job, Goal,
+    or safety incident. It never manufactures Operator Hold when body settlement
+    remains proven.
 
 ## 9. Canonical migration order
 
@@ -690,6 +739,75 @@ Phases 1–2 interruption evidence remains authoritative because its ownership d
 not change; another interruption run would add no material delta. Phase 6 is
 `ACCEPTED / CLOSED`.
 
+### Phase 6B — dynamic escape and Mission resumption
+
+**State: `ACCEPTED / CLOSED` — 2026-08-26.** The controlled Phase 6 course first
+established that the owned Pathfinder can execute the required movement vocabulary
+and can compose it when a course exposes the sequence. The later non-course run
+closed the separate live-selection and Mission-resumption boundary below.
+
+The required outcome was for Kevin to encounter previously unencoded live confinement
+while pursuing a player Mission, use the effective `Movements` profile and native
+Pathfinder search to select and revise whatever dig, parkour, bridge, tower,
+stair-excavation, descent, swim, or shoreline-exit combination the observed
+geometry requires, reach a stable supported exterior stance, and then resume the
+same Mission from current reality. Material block changes and partial progress
+must feed native replanning; they must not become a scripted microstep list,
+project-computed escape route, duplicate topology planner, or blind repetition of
+the last failed action. ActionManager retains the one body lease through escape,
+settlement, and Mission handback. Protected or intentionally sealed terrain must
+remain intact and produce a truthful remaining-problem outcome rather than false
+arrival or an infinite retry.
+
+Acceptance requires a player-valued, non-course composition in which the escape
+sequence is selected from live geometry, uses multiple required workaround modes,
+settles safely with terrain and scaffold custody accounted for, and resumes or
+completes the interrupted Mission. Replaying the accepted Phase 6 obstacle course,
+adding another verifier, or demonstrating isolated movement primitives cannot
+close this boundary.
+
+**Accepted controlled sub-boundary — 2026-08-26.** A generated delivery fixture
+began with an open route, accepted one durable `deliver 1 cobblestone` Mission,
+and rewrote the route only after GoalDirector's terminal `givePlayer` Activity had
+Pathfinder ownership. Both the explicit typed request and ordinary “Bring me one
+cobblestone” request then completed dig-through, parkour, bridge, tower, stair
+excavation, descent, swim exit, ground return, and the original delivery under one
+native `GoalFollow` search with material replanning. The natural arm reached Luna
+first, selected `!requestItemGoal`, and its terminal handoff carried
+`routeOrigin: goal-director`; no second model request occurred. All ten physical
+checkpoints, exact one-item custody, four-block scaffold consumption, stable
+settlement, fixture restoration, and runtime cleanup passed. Evidence is preserved
+under `validation-output/dynamic-escape-delivery-2026-08-26T15-00-09-649` and
+`validation-output/dynamic-escape-natural-goal-promotion-20260826-01`. Because the
+geometry is a generated controlled course, it did not by itself close the required
+player-valued non-course live-world composition.
+
+**Accepted non-course live-world boundary — 2026-08-26.** In the continuously
+running saved survival world, DirectorTest asked naturally for one cobblestone while
+Kevin was confined at y=17 below the requester at y=91 in a natural cave/trial-
+chamber region. DeepSeek selected the typed delivery Goal once. The same Mission
+survived repeated Breeze, Creeper, Skeleton, and other hostile preemptions; restored
+the missing support beneath a preserved mining-return cell; opened successive
+supported corridor legs toward the surface; consumed native closest-explored
+progress instead of treating it as terminal; reached the requester on the spruce
+canopy; and physically transferred the cobblestone. Paper inventory truth confirmed
+the requester held exactly one cobblestone.
+
+That run also exposed two terminal-boundary defects rather than justifying a replay.
+The exact collect packet could arrive while Kevin began reclaiming the drop, so the
+recipient received it while the Mission falsely reported `skill_pickup_unverified`;
+the handoff selector also searched only four perfectly cardinal cells and could not
+use the live canopy's safe one-by-two offset. The receipt owner now honors that
+verified collector immediately after reclaim, the bounded stance selector searches
+supported near-cardinal block-grid lanes, and GoalDirector no longer repeats an
+unchanged `skill_drop_stance_unreachable` Activity. After a Kevin-only restart, one
+current-source delivery Goal moved to a supported leaf stance 2.2 blocks from the
+stationary requester, completed its only `givePlayer` subgoal as `skill_delivered`,
+and closed `delivery_verified`; Paper showed Kevin's granite count 42 -> 41 and
+DirectorTest's 0 -> 1. The saved server, world, and controlled players stayed up.
+The natural chain plus the direct re-exercise of its repaired terminal boundary
+closes Phase 6B without replaying the completed journey.
+
 ### Phase 6A — autonomous expedition and player guidance
 
 **Village expedition accepted — 2026-08-25.** The natural-language request was
@@ -720,9 +838,12 @@ or intentionally sealed terrain.
 
 ### Phase 7 — remaining specialist adapters
 
-Add Craft, Furnace, PvP, Placement, Vehicle, and Container adapters. Each requires
-package-specific cancellation acknowledgement, settlement evidence, partial-effect
-handling, and player-visible campaign coverage.
+Phase 7 covers Craft, Furnace, PvP, Placement, Vehicle, and Container ownership.
+Placement is now `ACCEPTED / CLOSED`; Container has an accepted custody chain but
+remains `ACTIVE` at its open-window interruption boundary. Craft, Furnace, PvP, and
+Vehicle remain open. Each requires package-specific cancellation acknowledgement,
+settlement evidence, partial-effect handling, and player-visible campaign coverage,
+preferably inside a compound gameplay outcome rather than as an isolated demo.
 
 **Container baseline active — 2026-08-25.** Exact chest/barrel deposit, retained-
 inventory storage, withdrawal, and inspection commands now enter a Container
@@ -742,8 +863,222 @@ zero on the controlled player, and Kevin beside the player at `(779.5,64.94,-773
 container. The model briefly over-interpreted “come back to me with them” as a
 delivery request; the player's correction was honored and no logs were dropped.
 Container is `ACTIVE`, not globally closed: this run did not interrupt a live
-window transaction, and Craft, Furnace, PvP, Placement, and Vehicle adapters remain
-unimplemented.
+window transaction, and Craft, Furnace, PvP, and Vehicle adapters remain open.
+
+**Placement compounded shelter accepted — 2026-08-26.** `placeBlockAt`,
+`placeHere`, and fixture placement now enter a native Placement Activity adapter.
+The adapter observes the exact material-binding-through-world-confirmation interval,
+keeps its body lease while a placement is active, and requires both placement and
+Pathfinder settlement before release. The existing JobDirector, Builder blueprint,
+site selection, and Mineflayer placement remain the mechanical owners.
+
+The live outcome was one continuous survival-world chain, not an isolated placement
+probe. A partially built spruce emergency shelter survived repeated hostile
+preemptions and checkpointed progress. Repairs cleared stale worksite-surface state,
+made completed work re-audit after occupancy movement, allowed explicit revalidation
+of terminal work, and rebound both automatic and explicit 3x3 shelter retries to the
+dominant non-natural material already present in their footprint. Kevin was later
+displaced roughly 56 blocks; a persistent follow automatically resumed after several
+self-preservation interruptions, returned him to the requester and original worksite,
+and Builder repaired only the changed roof cells. The final revalidation completed
+23/23 after Kevin entered. Paper directly confirmed all 23 spruce cells, both open
+door cells, both open interior cells, and Kevin grounded inside at
+`(215.5,84,-382.5)`. Health was 18, hunger 16, no path or body hold remained, and
+the same Paper world and controlled players stayed live throughout. This Placement
+boundary is `ACCEPTED / CLOSED`; do not reopen it with standalone block-placement
+runs. Future compositions may traverse it when a larger outcome materially depends
+on it.
+
+**Functional-base commissioning accepted — 2026-08-26.** In the continuously
+running saved survival world, the explicit Builder order
+`builder-e4fc91b9-ce7b-4801-b76d-fa5c34566352` selected and completed a 5x5
+cobblestone shelter at `(765,65,-767)`. The order preserved its site and progress
+through hostile interruptions, death and exact inventory recovery, underground
+material acquisition, return-route excavation, an occupied interior, a blocked
+interaction stance, and a failed distant coal search. The final causal workaround
+used the already installed furnace at `(768,66,-764)` and carried spruce to make
+charcoal, crafted sticks and four torches, placed the required interior torch at
+`(766,66,-765)`, and closed `blueprint_complete` with checkpoint `85/85`.
+
+Kevin then used the installed chest at `(768,66,-766)` as an actual base cache in
+one exact retained-inventory transaction: 69 dirt, 26 granite, 10 diorite, and 32
+clay balls were stored while the requested carried set was preserved. Paper
+directly confirmed those 137 items, the chest, furnace, crafting table, torch,
+spruce door, cleared interior cell, and opposite roof corners after the transfer.
+Difficulty was restored to Easy; Paper and Kevin remained live. No provider call
+was used for the terminal smelt, craft, placement, or storage chain. Functional-
+base commissioning is `ACCEPTED / CLOSED`; it does not close the still-unexercised
+Craft/Furnace cancellation boundaries or Container's open-window interruption.
+
+The Phase 7A workshop outcome is an **operational workshop expedition**, not isolated
+Craft, Furnace, or Container demonstrations. From the accepted base, Kevin must
+bind home and its exact fixtures, prepare for and survive a cave expedition,
+acquire enough iron and fuel for multiple durable upgrades, return to the same
+base, smelt and manufacture the requested kit, cache it in the installed chest,
+return to the requester, and settle with inventory, terrain, and base truth
+accounted for. The existing resource-project Agenda, GoalDirector prerequisite
+planner, jobs, and specialist adapters own the chain; do not script its phases as
+independent admin actions.
+
+#### Phase 7A — composition strengthening through the operational workshop
+
+**State: `ACTIVE — PARTIAL`; path retained from 2026-08-26.** This is one architecture-completion
+tranche and one player-valued acceptance outcome. No isolated specialist demo,
+confidence matrix, new orchestrator, Phase 8 lane collapse, branch cleanup, or
+later gameplay mechanism may displace it unless the Director explicitly changes
+priority. Do not restart the accepted base, reissue the project as a new Agenda,
+or manually drive its phases.
+
+The canonical transition is:
+
+```text
+ordinary request
+  -> one Mission and persisted resource-project Agenda
+  -> next outcome-level Activity
+  -> request-first arbitration
+  -> one ActivityExecutive / ActionManager body lease
+  -> package-owned specialist mechanics
+  -> exact correlated result plus physical settlement
+  -> verified effect, checkpoint, custody, negative knowledge, and continuation
+  -> atomic project transition
+  -> replan the same Mission from current reality
+```
+
+No layer may replay a stale command, discover its own result from a later global
+telemetry write, independently reinterpret the same failure, advance a dependent
+Agenda entry before the transition commits, or report success before the physical
+acceptance predicate is true.
+
+“Atomic project transition” is an execution-order contract, not a new database or
+receipt ledger. One immutable correlated transition input is delivered to the
+existing owners; each owner updates its own projection; no next Activity may
+dispatch until the required Job/Agenda/Mission projections acknowledge that same
+transition. Do not add gameplay evidence envelopes or a universal transaction
+store.
+
+##### Locked implementation chain
+
+Complete these actions in order. They are one coherent tranche; a later action
+may expose a defect in an earlier one and send work back to its owning boundary,
+but it does not authorize a parallel mechanism.
+
+`CS-1` and `CS-2` may be coded sequentially but are accepted together: typed
+continuation carried over shared mutable result state would preserve the race it is
+supposed to remove. Each later action depends on that exact-result foundation.
+
+| ID | Required action and owner | Acceptance criteria |
+|---|---|---|
+| `CS-1` | **Deliver the exact result directly.** Preserve the existing public command value while carrying an internal `{ value, result }` execution envelope from `ActionManager.runAction` through command execution to Capability, Survival, Job, Goal, and Agenda. `last_action_result` becomes telemetry and compatibility only. | The initiating consumer receives the exact `actionId` returned by its dispatch; a later reflex/survival result cannot replace it; request, Mission, Activity, order, and dispatch-generation correlation remain intact; stale callbacks are still rejected; player-facing strings and parse/argument failures remain compatible; every workshop-path consumer stops reading `last_action_result` to discover its own result. |
+| `CS-2` | **Finalize one typed continuation and commit one checkpoint.** Extend the existing result/outcome contract with `continuation.kind`; finalize it only after capability and physical-effect verification; atomically merge verified physical delta, partial custody, world revision, negative target/region/method knowledge, source WorkOrder checkpoint, Agenda state, and remaining Mission predicates before replanning. One mapper in `action-result.js` may adapt legacy codes. | A settled higher-priority interruption yields `resume_same` without spending productive attempts; verified partial progress yields `replan_current` with its checkpoint preserved; an unchanged failed method may yield `retry_after_material_change`; a failed response to the same safety incident may yield `disengage_then_resume`; unproven body settlement yields `terminal` and quarantine; a reconciled success cannot carry a stale failure continuation; migrated consumers do not regex-match codes to choose continuation. |
+| `CS-3` | **Contain local failure and localize the loop breaker.** Make Mission acceptance, not a child status, authoritative. Agenda dependency failure becomes terminal only after causal alternatives are exhausted. Enrich the repeated-action signature with durable owner/order identity, phase/checkpoint, target, and a material-progress token; return the scoped continuation to that owner instead of calling global `holdPosition`. | A repeated automatic launch is prevented; the body is settled; Operator Hold remains false; the same Agenda entry and Job/Goal identity remain persisted; scheduler delay alone cannot reopen the circuit; a changed checkpoint, target, phase, verified effect, materially different method, or fresh player command can reopen it; productive attempts and preemption budgets are not spent by the circuit; global Hold remains reserved for explicit Operator authority or genuinely unproven body settlement. |
+| `CS-4` | **Escalate the existing safety incident and resume durable work.** Extend the existing SurvivalIncident/arbiter path; do not create a second recovery system. Correlate a settled failed tactic to the incident. After one retryable melee failure against the same continuing threat, latch the failed response and select the existing `objective: 'disengage'`; verified safety then returns control to the exact interrupted WorkOrder. | Cancellation or higher-priority preemption is censored rather than counted as a tactical failure; fresh damage from the same threat cannot erase the escalation latch; the next response to that incident is disengagement, not identical melee; a different hostile retains an independent decision; verified retreat advances the incident to recovery; reflex cannot reacquire the same threat while Survival owns cover/rendezvous; closure requires verified clearance, cover/line-of-sight break, requester rendezvous, unloaded calm, or a truthful blocked wait; the original order resumes with the same ID, phase, checkpoint, and productive-attempt budget. |
+| `CS-5` | **Settle the workshop transactions.** Preserve the generic Container window/body contract, then add a thin Craft transaction specialist and a thin Furnace transaction specialist. Do not build a universal transaction engine and do not pretend closing a window rolls server state back. | Generic Container releases only after `currentWindow == null`, cursor truth is reconciled, and Pathfinder is idle. Craft reconciles ingredients, grid, cursor, authoritative open-window inventory, completed output, remaining quantity, and exact table across interruption without duplication. Furnace preserves the exact bound furnace and reconciles carried inventory, input, fuel, output, in-progress burn, already-collected output, and remaining quantity; server-side continued smelting counts as observed partial progress. Unsettled window closure quarantines instead of becoming a retryable job failure. |
+| `CS-6` | **Complete the same persisted workshop project.** Resume the existing eight-entry Agenda only after the owning repair is ready. Use its complete ordinary-language contract and the continuously preserved world as the integration surface. | The player-visible chain below completes under one project identity. Every newly changed boundary is directly re-exercised inside this project where the composed outcome can isolate it. No new test suite, broad verifier, standalone coal delivery, or accepted-travel replay substitutes for the physical outcome. |
+
+Primary code seams, to be re-inspected by symbol before editing rather than bound
+to mutable line numbers:
+
+- `CS-1`: `ActionManager.runAction`, the `runAsAction`/`executeCommand` internal
+  envelope, and the Agenda, Job, Goal, Capability, and Survival dispatch consumers;
+- `CS-2`: `createActionResult`, post-capability verification, WorkOrder reduction,
+  and the one legacy continuation mapper;
+- `CS-3`: `actionAttemptSignature`/`recordActionAttempt`, ActionManager circuit
+  settlement, and Agenda dependency/terminal classification;
+- `CS-4`: `selfDefenseReflexEligibility`, failed-tactical receipts, the existing
+  SurvivalIncident stages, combat `objective: 'disengage'`, and WorkOrder handback;
+- `CS-5`: Activity adapter selection, `ContainerActivityAdapter`, `craftRecipe`,
+  `smeltItem`, and their exact workstation/window reconciliation.
+
+##### Locked player-visible action chain
+
+The live persisted predicates, not an invented replacement script, define the
+workshop outcome:
+
+| Order | Physical action | Owner | Step acceptance |
+|---|---|---|---|
+| 1 | Retain the existing request, requester, home, furnace, crafting table, exact chest, quantities, outputs, and final return predicate. | Mission plus resource-project Agenda | The existing Agenda remains the one project; its eight entries and bindings are preserved rather than recompiled or manually replaced. |
+| 2 | Prepare expedition prerequisites and leave the accepted base for a live cave/search region. | Causal planner, Explorer, Pathfinder Activity | Kevin has the required usable tool, lighting, food/safety state, working inventory capacity, and one settled outbound route. Accepted base construction is not repeated. |
+| 3 | Acquire eight `raw_iron` from iron ore and three `coal` from coal ore while preserving every verified partial acquisition. | Explorer target selection, Pathfinder, CollectBlock | Exact family counts advance the same Explorer checkpoint. An exhausted cave is excluded; an inconclusive cave route changes physical vantage; bounded cave relocation can fall through to the existing deterministic mining-corridor strategy. No unchanged location or action is replayed. |
+| 4 | Resolve bodily danger and return to the same expedition obligation. | Hard-band reflex/survival, existing SafetyIncident, PvP/Combat Activity | The chain contains at least one real interruption and one compound recovery with at least two materially different decisions. A failed tactic changes to disengagement/retreat or another justified response; verified safety settles; the same Explorer order resumes without a new player command or lost checkpoint. |
+| 5 | Return with acquired custody to the exact bound base and fixtures. | Pathfinder Activity plus Mission checkpoint | Kevin reaches the bound workshop; required ore/fuel remains accounted for; route work, terrain effects, scaffolds, death recovery if any, and remaining prerequisites are truthful. |
+| 6 | Smelt the required iron in the exact installed furnace. | Furnace Activity using Mineflayer furnace mechanics | The bound furnace, input, fuel, burn progress, output, carried inventory, and remaining quantity reconcile; eight required iron ingots become available without duplication or false loss. |
+| 7 | Craft one additional iron pickaxe, one shield, and one bucket at the exact installed table. | Craft Activity using Mineflayer/recipe-book mechanics | The three exact outputs exist once, workstation and ingredient effects reconcile, partial output survives interruption, and unrelated inventory remains accounted for. |
+| 8 | Store exactly those three requested outputs in the installed chest at `(768,66,-766)` while preserving unrelated contents and leftovers. | Container Activity | Paper/window truth confirms one iron pickaxe, one shield, and one bucket added to the bound chest; cursor is empty or reconciled; no unrelated stack is lost or substituted. |
+| 9 | Return to the exact requester and settle the project. | Pathfinder Activity followed by Mission acceptance | Kevin returns to `DirectorTest`; the Agenda is complete; inventory, chest, terrain/scaffold, fixture, threat, health, position, and remaining-material truth agree; no action, path, combat, collection, window, delayed callback, or body lease remains active. |
+
+##### Continue, stop, acceptance, and definition of done
+
+**Continue** while the body is settled and another permitted action can change a
+remaining predicate, recover custody, resolve a threat, choose a materially
+different method, or verify an owning repair. A timeout is inconclusive. Death,
+displacement, hostile preemption, exhausted source/region, partial mining, failed
+route, or recoverable workstation stance causes settlement and replanning from
+current reality; it does not erase completed effects or restart the project.
+
+**Stop** only for explicit Operator Stop/Hold, unproven physical settlement that
+requires quarantine, provider authentication/quota/routing failure, lost
+consequential authority, runtime/world integrity risk, or an exhausted named
+permission/resource/method boundary that makes a remaining Mission predicate
+impossible. A terminal stop preserves every verified partial effect and names the
+exact remaining problem. Never blind-retry the same failure.
+
+**Tranche acceptance** requires one continuous player-valued composition under the
+existing ordinary-language project: base departure; live iron/fuel acquisition;
+real interruption; a compound changed-method recovery; exact project resumption;
+base return; furnace, Craft, and Container handoffs; exact cache contents; requester
+return; and truthful settlement. Accepted movement, escape, Placement, and prior
+Container custody evidence may be traversed but is not replayed alone.
+
+**Definition of done:** all `CS-1` through `CS-6` acceptance criteria are true;
+one project identity remains authoritative from its existing checkpoint through
+completion; no local failure causes an unchanged action loop, false terminal
+cascade, or global Hold; verified partial effects and custody survive every
+handoff; Paper/world truth confirms the exact three outputs in the bound chest and
+Kevin back with the requester; Mission and Agenda are complete; Job/Goal are idle;
+the SafetyIncident is resolved; ActionManager is physically settled; no window or
+path remains active; and no unexplained inventory or terrain delta remains. Then
+mark this Phase 7A workshop composition `ACCEPTED / CLOSED` in this architecture,
+the campaign record, and the handoff together.
+
+Closure applies only to boundaries physically traversed. Vehicle, Container
+open-window interruption, or any Craft/Furnace/PvP cancellation case not actually
+exercised remains `ACTIVE` or `PENDING`; it cannot block the completed workshop
+promise and cannot inherit acceptance by prose.
+
+#### Phase 7B — deterministic compound livestock project
+
+**State: `ACTIVE`; current gameplay frontier locked 2026-08-26.** The Director's
+newest gameplay request supersedes the workshop as the execution cursor without
+erasing its verified partial results. This is one compound outcome, not separate
+pen, cow-search, wheat, breeding, gate, and return demonstrations. Use the existing
+Agenda, JobDirector, GoalDirector, Capability catalogue, Builder, livestock
+specialist, and ActionManager. Do not add another planner, scheduler, command
+script, provider-specific prompt, or monolithic livestock mega-skill.
+
+The required chain is:
+
+| ID | Required action and owner | Acceptance criteria |
+|---|---|---|
+| `LB-1` | **Deterministic language ownership.** The ordinary sentence is owned by the typed livestock compiler even when model sequencing is enabled. | The whole request produces one five-entry Agenda—catalogue construction, requested-animal scout/return/guide, attraction-food acquisition, livestock settlement, requester return. It cannot fall through to zero-argument `!settleLivestockAtPen`, malformed structure names/materials, clarification churn, or a partial single command. |
+| `LB-2` | **Resume or assign one catalogue pen.** Agenda construction uses the existing `animal_pen` catalogue and shared safe-site/material binder. | If the exact latest compatible partial animal-pen WorkOrder exists, resume its ID/checkpoint instead of selecting a new site. Otherwise bind one safe loaded site and one approved feasible primary material. Builder verifies containment and access; no model-authored blueprint is required. |
+| `LB-3` | **Scout the requested population.** Extend the existing Scout/Explorer capability request with the requested adult animal and minimum count. | A cow request cannot settle from a pig, sheep, or one cow. Capability binding and verification both observe at least the requested number of adults in the bounded source region; the exact selected source point and animal name enter the existing scout checkpoint and durable `useful_animals` memory; return and player guidance complete under the same Scout order. |
+| `LB-4` | **Bind produced inputs at the consumer boundary.** Keep unresolved source and pen as typed selectors until their producing steps finish. | Immediately before settlement, Agenda resolves the exact completed remembered animal-pen WorkOrder and the exact remembered scout source in the current dimension, physically validates the closed enclosure, persists concrete source coordinates and the complete pen constraint, and only then dispatches the livestock specialist. A restart cannot substitute the nearest unrelated pen or a stale cross-dimension source. |
+| `LB-5` | **Contain Builder placement failure at its owner.** Preserve exact interaction-stage evidence and the durable material-change circuit already installed in WorkOrder/JobDirector. | The old fence-cell failure cannot consume three identical retries from a generic `skill_unreachable` string. Exact `no_legal_stance` evidence terminalizes the impossible cell; a route/environment failure retains its causal stage and cannot reopen from scheduler delay alone; a fresh request may resume the same compatible partial Builder order after a material code/world change. No cell-specific or spruce-specific geometry patch is allowed without discriminating evidence. |
+| `LB-6` | **Complete the player outcome.** Run only after explicit runtime resumption. | The exact pen completes; at least two requested adults are scouted and remembered; Kevin returns and guides the requester; the exact breeding food is carried; the adults enter the bound pen; one pair breeds; Kevin exits; the exact gate is closed; final animal count is verified; Kevin returns; all Agenda/Job/Goal/Activity/ActionManager ownership settles. |
+
+The source implementation of `LB-1` through `LB-5` currently has syntax and module-
+load evidence only. That is forward implementation evidence, not physical
+acceptance. Kevin and Paper remain preserved under the Director's pause; do not
+restart or mutate the world from documentation work.
+
+**Definition of done:** one persisted project identity owns the complete five-step
+chain; the partial pen is resumed rather than discarded when compatible; exact
+requested-animal population, memory, pen, food, breeding, closed-gate, return, and
+settlement predicates are directly observed on current source; no dependent step
+runs before its producer settles; no unchanged failure is redispatched; no stale
+or nearest-object fallback can satisfy a binding; no unexplained inventory, entity,
+gate, path, window, terrain, or body lease remains. Then and only then mark Phase
+7B `ACCEPTED / CLOSED` in this file, the campaign record, and the handoff together.
 
 ### Phase 8 — demote directors and collapse lanes
 
@@ -834,10 +1169,17 @@ delta. A failure requires classification before the next run; never blind-retry.
 Use the existing Scenario Lab, saved campaign evidence, focused checks, and direct
 runtime observations. Do not create a confidence scheduler, statistical assurance
 engine, parallel verifier framework, or broad certification course. Phase 6
-movement composition and the autonomous village expedition are closed. Finish the
-bounded Phase 5 variance question, add the real Phase 7 specialist adapters, then
-begin Phase 8 collapse of legacy directors and lanes as replacement evidence
-covers their player-visible deeds.
+movement composition, Phase 6B dynamic escape, the autonomous village expedition,
+the Phase 7 compounded Placement shelter, and functional-base commissioning are
+closed. Phase 7B deterministic compound livestock is the active technical/gameplay
+tranche. Its single acceptance vehicle resumes or completes one catalogue pen,
+verifies and remembers the requested adult-animal population, returns and guides,
+acquires attraction food, moves and breeds the animals, closes the exact gate,
+returns to the requester, and settles. The Phase 7A workshop's partial results,
+Container custody chain, and bounded Phase 5 question remain preserved; none should
+be replayed merely to delay this compound gameplay outcome.
+Begin Phase 8 collapse only as replacement evidence covers the specialists'
+player-visible deeds.
 
 ## 12. Risks
 
@@ -1001,8 +1343,9 @@ thin-adapter magic (9).
 ### 13.3 Open — measure, do not prematurely close
 
 "Open" means not proven by evidence yet; it is not permission for speculative
-redesign. The canonical variance matrix and the Phase 6-7 terrain and specialist
-probes are the measurement path.
+redesign. The separately authorized variance matrix answers only its bounded Phase
+5 question. The current Phase 7 measurement path is the compound livestock outcome
+and the smallest owning-boundary observation needed after a material repair.
 
 - The source of the 3/7 → 5/7 → different-5/7 → 4/7 run-to-run variance across
   fixed cases. Model sampling, lifecycle, fixture cleanliness, timing, and
@@ -1016,5 +1359,10 @@ probes are the measurement path.
   quarantine is scoped correctly rather than assumed.
 - Whether specific Baritone mechanisms or Pathfinder macro edges are actually
   missing — answer by probe before any fork or port.
-- Whether MissionStore and causal-planner boundaries need adjustment after the
-  first charcoal-family evidence.
+- Which non-workshop callers still depend on shared `last_action_result` after the
+  workshop's Agenda, Job, Goal, Capability, and Survival path receives exact direct
+  results; migrate them only when Phase 8 or a player-valued composition reaches
+  them.
+- Which Craft, Furnace, PvP, and Container cancellation variants the workshop
+  physically traverses. Close only those observed boundaries; leave untraversed
+  variants explicit rather than inferring acceptance.

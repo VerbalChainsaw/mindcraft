@@ -21,6 +21,18 @@ export const DELIVER_FIELD_EVIDENCE = Object.freeze([
   'terminal-quiescence-confirmed',
 ]);
 
+export const DYNAMIC_ESCAPE_DELIVERY_EVIDENCE = Object.freeze([
+  'request-correlation',
+  'instrumentation-mode-confirmed',
+  'goal-action-lifecycle',
+  'dry-land-fixture-confirmed',
+  'dynamic-route-change-confirmed',
+  'mixed-workaround-chain-confirmed',
+  'item-delivered-to-recipient',
+  'goal-resumption-confirmed',
+  'terminal-quiescence-confirmed',
+]);
+
 export const ROUTE_PROBE_EVIDENCE = Object.freeze([
   'request-correlation',
   'instrumentation-mode-confirmed',
@@ -661,9 +673,13 @@ const PLAYER_ROUTE_SKILL = '!goToPlayer';
 const PLAYER_ROUTE_ARGS = Object.freeze(['FollowTarget', 3]);
 
 function deliveryContract(course) {
-  return course === 'orchestrate-charcoal'
-    ? Object.freeze({ routeOrigin: 'mission-director', item: 'charcoal', quantity: 8, mission: true })
-    : Object.freeze({ routeOrigin: 'goal-director', item: 'dirt', quantity: 1, mission: false });
+  if (course === 'orchestrate-charcoal') {
+    return Object.freeze({ routeOrigin: 'mission-director', item: 'charcoal', quantity: 8, mission: true, requiresAcquisition: false });
+  }
+  if (course === 'dynamic-escape-delivery') {
+    return Object.freeze({ routeOrigin: 'goal-director', item: 'cobblestone', quantity: 1, mission: false, requiresAcquisition: false });
+  }
+  return Object.freeze({ routeOrigin: 'goal-director', item: 'dirt', quantity: 1, mission: false, requiresAcquisition: true });
 }
 
 /** Which course a report describes. Reads the fixture block first because it
@@ -723,7 +739,9 @@ function deliverLifecycleComplete(attempt, course) {
     && terminal?.phase === 'succeeded'
     && (contract.mission
       ? terminal?.evidence?.activity?.lifecycle === 'SUCCEEDED'
-      : acquisition?.phase === 'succeeded' && Number(acquisition?.startedAt) >= issuedAt);
+      : contract.requiresAcquisition === false
+        ? true
+        : acquisition?.phase === 'succeeded' && Number(acquisition?.startedAt) >= issuedAt);
 }
 
 // The fixture premise. On the captured follow world every one of these is false
@@ -762,6 +780,50 @@ function deliverItemHandedOver(attempt, course) {
     && Number.isFinite(final)
     && final >= baseline + contract.quantity
     && Number.isFinite(physical?.deliveryObservedAt);
+}
+
+function dynamicEscapeRouteChanged(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  const open = physical?.dynamicEscapeOpenBefore;
+  const mutated = physical?.dynamicEscapeMutatedBeforeTraversal;
+  return physical?.dynamicEscapeMutationAfterOwnershipVerified === true
+    && Number.isFinite(physical?.dynamicEscapeMutationStartedAt)
+    && Number.isFinite(physical?.dynamicEscapeMutationCompletedAt)
+    && physical.dynamicEscapeMutationCompletedAt >= physical.dynamicEscapeMutationStartedAt
+    && open?.dig?.every(name => name === 'air')
+    && open?.parkourGap?.every(name => name === 'smooth_stone')
+    && open?.bridge?.every(name => name === 'smooth_stone')
+    && mutated?.dig?.every(name => name === 'stone')
+    && mutated?.parkourGap?.every(name => name === 'air')
+    && mutated?.bridge?.every(name => name === 'air');
+}
+
+function dynamicEscapeMixedChain(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.dynamicEscapeMixedChainVerified === true
+    && physical?.dynamicEscapeDigVerified === true
+    && physical?.dynamicEscapeParkourVerified === true
+    && physical?.dynamicEscapeBridgeVerified === true
+    && physical?.dynamicEscapeTowerVerified === true
+    && physical?.dynamicEscapeStairTunnelVerified === true
+    && physical?.dynamicEscapeDescentVerified === true
+    && physical?.dynamicEscapeSwimExitVerified === true
+    && physical?.dynamicEscapeReturnVerified === true
+    && physical?.dynamicEscapeScaffoldAccountingVerified === true
+    && physical?.dynamicEscapePathfinderAfterMutation === true
+    && physical?.dynamicEscapeTraversalPolicy === 'full'
+    && physical?.dynamicEscapeCheckpoints?.complete === true;
+}
+
+function dynamicEscapeGoalResumed(attempt) {
+  const physical = attempt?.physicalAcceptance;
+  return physical?.dynamicEscapeGoalResumedVerified === true
+    && dynamicEscapeRouteChanged(attempt)
+    && dynamicEscapeMixedChain(attempt)
+    && physical?.deliveryVerified === true
+    && Number(physical?.deliveryObservedAt) > Number(physical?.dynamicEscapeMutationCompletedAt)
+    && attempt?.terminal?.phase === 'succeeded'
+    && attempt?.terminal?.evidence?.request?.routeOrigin === 'goal-director';
 }
 
 function routeProbeStatus(terminal) {
@@ -1170,7 +1232,8 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
   const attempts = Array.isArray(harness?.attempts) ? harness.attempts : [];
   const attempt = attempts.length === 1 ? attempts[0] : null;
   const course = courseOf(report);
-  const deliverCourse = course === 'deliver-item' || course === 'orchestrate-charcoal';
+  const dynamicEscapeCourse = course === 'dynamic-escape-delivery';
+  const deliverCourse = course === 'deliver-item' || dynamicEscapeCourse || course === 'orchestrate-charcoal';
   const routeProbeCourse = course === 'route-probe-inconclusive';
   const terrainSwimCourse = course === 'terrain-swim-exit';
   const playerRouteFiniteCostCourse = course === 'pathfinding-finite-break-cost';
@@ -1237,6 +1300,18 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
         'route-probe-inconclusive-confirmed': routeProbeInconclusive(attempt),
         'no-unproven-movement-confirmed': routeProbeDidNotMove(attempt),
         'terrain-preserved-confirmed': routeProbeTerrainPreserved(attempt),
+        'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
+      }
+    : dynamicEscapeCourse
+    ? {
+        'request-correlation': correlated,
+        'instrumentation-mode-confirmed': instrumentationConfirmed,
+        'goal-action-lifecycle': deliverLifecycleComplete(attempt, course),
+        'dry-land-fixture-confirmed': deliverFixtureDry(attempt),
+        'dynamic-route-change-confirmed': dynamicEscapeRouteChanged(attempt),
+        'mixed-workaround-chain-confirmed': dynamicEscapeMixedChain(attempt),
+        'item-delivered-to-recipient': deliverItemHandedOver(attempt, course),
+        'goal-resumption-confirmed': dynamicEscapeGoalResumed(attempt),
         'terminal-quiescence-confirmed': terminalQuiescent(attempt, harness),
       }
     : deliverCourse
@@ -1325,6 +1400,8 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
           ? 'terrain-swim-exit-verified'
           : routeProbeCourse
           ? 'route-probe-inconclusive-verified'
+          : dynamicEscapeCourse
+          ? 'dynamic-escape-delivery-verified'
           : deliverCourse ? 'deliver-item-goal-verified' : 'doorway-corridor-follow-verified')
       : String(report?.error || attempt?.terminal?.code || 'follow-field-failed').slice(0, 240),
     // Which evidence contract this observation was judged against. The aggregate
@@ -1340,6 +1417,8 @@ export function observeFollowFieldRun(report, timeoutMs = 180000, instrumentatio
       ? TERRAIN_SWIM_EVIDENCE
       : routeProbeCourse
       ? ROUTE_PROBE_EVIDENCE
+      : dynamicEscapeCourse
+      ? DYNAMIC_ESCAPE_DELIVERY_EVIDENCE
       : deliverCourse ? DELIVER_FIELD_EVIDENCE : FOLLOW_FIELD_EVIDENCE,
     elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : 0,
     actionId: attempt?.terminal?.actionId || null,

@@ -43,7 +43,7 @@ param(
     # scenario. 'obstruction-follow' spans the wall across the full course width
     # and plugs the doorway with a breakable block, so following the player
     # REQUIRES breaking it -- the case the registered course does not exercise.
-    [ValidateSet('doorway-corridor', 'obstruction-follow', 'player-route-obstruction', 'pathfinding-finite-break-cost', 'player-route-best-reachable', 'deliver-item', 'orchestrate-charcoal', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion', 'terrain-swim-exit', 'terrain-workaround-chain')]
+    [ValidateSet('doorway-corridor', 'obstruction-follow', 'player-route-obstruction', 'pathfinding-finite-break-cost', 'player-route-best-reachable', 'deliver-item', 'dynamic-escape-delivery', 'orchestrate-charcoal', 'route-probe-inconclusive', 'interaction-stance-inconclusive', 'request-completion', 'terrain-swim-exit', 'terrain-workaround-chain')]
     [string]$Course = 'doorway-corridor',
 
     [string]$FixtureRoot = '',
@@ -882,7 +882,7 @@ try {
         # waiting for follow ownership that a charcoal task never produces.
         '--mode', $(if ($Course -eq 'request-completion') {
             'request-completion'
-        } elseif ($Course -in @('deliver-item', 'orchestrate-charcoal')) {
+        } elseif ($Course -in @('deliver-item', 'dynamic-escape-delivery', 'orchestrate-charcoal')) {
             'deliver'
         } elseif ($Course -eq 'route-probe-inconclusive') {
             'route-probe'
@@ -1099,13 +1099,18 @@ try {
             $attempt.stop.stableForTenSeconds -eq $true -and
             [double]$attempt.stop.quiescenceMs -le 2000
         )
-    } elseif ($Course -eq 'deliver-item' -or $Course -eq 'orchestrate-charcoal') {
+    } elseif ($Course -in @('deliver-item', 'dynamic-escape-delivery', 'orchestrate-charcoal')) {
         (
             $null -ne $attempt -and
             $attempt.passed -eq $true -and
             $attempt.physicalAcceptance.fixtureVerified -eq $true -and
             $attempt.physicalAcceptance.deliveryVerified -eq $true -and
             ($Course -ne 'deliver-item' -or $attempt.physicalAcceptance.deliverySourcePresent -eq $true) -and
+            ($Course -ne 'dynamic-escape-delivery' -or (
+                $attempt.physicalAcceptance.dynamicEscapeMutationAfterOwnershipVerified -eq $true -and
+                $attempt.physicalAcceptance.dynamicEscapeMixedChainVerified -eq $true -and
+                $attempt.physicalAcceptance.dynamicEscapeGoalResumedVerified -eq $true
+            )) -and
             $attempt.physicalAcceptance.deliveryGroundPresent -eq $true -and
             $attempt.physicalAcceptance.deliveryDryLandVerified -eq $true -and
             $attempt.stop.stableForTenSeconds -eq $true -and

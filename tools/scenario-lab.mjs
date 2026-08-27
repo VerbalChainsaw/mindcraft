@@ -15,6 +15,10 @@ export const FAMILIES = Object.freeze([
   // Runs on a generated flat world; the captured follow world is an island and
   // acquisition drowns in it. See tools/scenario-lab/fixtures/.
   'deliver-item-goal',
+  // A player delivery goal whose native player route changes after body
+  // ownership begins. The same GoalDirector action must traverse a rotated
+  // mixed-workaround chain and still complete the physical handoff.
+  'dynamic-escape-delivery',
   'doorway-corridor-follow',
   'elevation-follow',
   // Following a player when terrain is in the way. The doorway-corridor family

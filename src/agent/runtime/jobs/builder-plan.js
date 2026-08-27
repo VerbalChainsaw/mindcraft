@@ -1,5 +1,10 @@
 import { createWorkOrder } from '../work-order.js';
 import { EMERGENCY_SHELTER_BLUEPRINT } from '../emergency-shelter.js';
+import { isApprovedPrimaryConstructionMaterial } from './structural-material-contract.js';
+
+const MATERIAL_SEARCH_RELOCATION_DISTANCE = 32;
+const MATERIAL_SEARCH_RELOCATION_LIMIT = 4;
+const MATERIAL_REGION_MISS = /(?:resource|source)_not_found/;
 
 const PLAYER_SHELTER_BLUEPRINT = Object.freeze({
   id: 'player_shelter_3x3',
@@ -21,6 +26,9 @@ function canonicalBuildingMaterial(value) {
     .replace(/[\s-]+/g, '_');
   if (!/^[a-z0-9_]{1,64}$/.test(material)) {
     throw new TypeError('Building material must be a canonical block name.');
+  }
+  if (!isApprovedPrimaryConstructionMaterial(material)) {
+    throw new TypeError('Building material must be an approved primary construction material.');
   }
   return material;
 }
@@ -253,6 +261,53 @@ function collectCommand(material, amount, range=64) {
   return `!prepareMaterial(${JSON.stringify(material)}, ${bounded}, ${boundedRange})`;
 }
 
+function carriedCharcoalLog(snapshot) {
+  const inventory = Object.entries(snapshot?.inventory || {})
+    .map(([name, amount]) => [name, Math.max(0, Number(amount) || 0)])
+    .filter(([, amount]) => amount > 0);
+  const logs = inventory
+    .filter(([name]) => name.endsWith('_log'))
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  if (logs.length === 0) return null;
+  if (logs[0][1] >= 2) return logs[0][0];
+  const hasSeparateWoodFuel = inventory.some(([name]) => (
+    name.endsWith('_planks') || name.endsWith('_slab') || name === 'stick'
+  ));
+  return hasSeparateWoodFuel ? logs[0][0] : null;
+}
+
+function functionalShelterCharcoalStep(order, snapshot, requirement) {
+  if (
+    requirement?.target !== 'torch'
+    || order.checkpoint?.acquisitionVariantCommitted === true
+    || count(snapshot, 'coal') > 0
+    || count(snapshot, 'charcoal') > 0
+    || !String(order.blueprint?.id || '').startsWith('functional_shelter_')
+    || ![order.target?.x, order.target?.y, order.target?.z].every(Number.isFinite)
+  ) return null;
+  const input = carriedCharcoalLog(snapshot);
+  const furnace = order.blueprint.cells.find(cell => (
+    cell.function === 'smelting' && cell.material === 'furnace'
+  ));
+  if (!input || !furnace) return null;
+  const x = Math.floor(order.target.x) + furnace.x;
+  const y = Math.floor(order.target.y) + furnace.y;
+  const z = Math.floor(order.target.z) + furnace.z;
+  return {
+    command: `!smeltItem(${JSON.stringify(input)}, 1, ${x}, ${y}, ${z})`,
+    nextPhase: 'acquire',
+    code: 'functional_shelter_local_charcoal',
+    target: { name: 'charcoal', x, y, z },
+    keepAnchor: true,
+    checkpoint: {
+      ...order.checkpoint,
+      acquisitionRequirement: requirement,
+      acquisitionVariantCommitted: true,
+    },
+    reason: 'Use the shelter furnace and carried wood to make its final torch instead of leaving the completed worksite to search for coal.',
+  };
+}
+
 export function createBuilderStockpileOrder({
   quota = 64,
   material = 'planks',
@@ -452,6 +507,8 @@ function toolPrerequisiteStep(order, snapshot, priorSkill, planItem) {
 }
 
 function materialAcquisitionStep(order, snapshot, priorSkill, requirement, planItem) {
+  const localCharcoal = functionalShelterCharcoalStep(order, snapshot, requirement);
+  if (localCharcoal) return localCharcoal;
   if (typeof planItem !== 'function') {
     return {
       terminal: true,
@@ -483,11 +540,16 @@ function materialAcquisitionStep(order, snapshot, priorSkill, requirement, planI
     allowEntityAlternatives: order.checkpoint?.acquisitionVariantCommitted !== true,
   });
   if (plan?.status === 'complete') {
+    const {
+      materialSearchTarget: _materialSearchTarget,
+      materialSearchRelocations: _materialSearchRelocations,
+      ...checkpoint
+    } = order.checkpoint;
     return {
       phase: 'execute',
       code: 'materials_ready',
       checkpoint: {
-        ...order.checkpoint,
+        ...checkpoint,
         acquisitionRequirement: null,
         acquisitionVariantCommitted: null,
       },
@@ -518,6 +580,38 @@ function materialAcquisitionStep(order, snapshot, priorSkill, requirement, planI
   };
 }
 
+function materialSearchRelocationStep(order, lastResult, requirement) {
+  if (
+    order.phase !== 'recover'
+    || !requirement?.target
+    || !MATERIAL_REGION_MISS.test(`${lastResult?.code || ''} ${lastResult?.evidence?.skill?.outcome || ''}`)
+  ) return null;
+  const completed = order.checkpoint?.materialSearchTarget === requirement.target
+    ? Math.max(0, Number(order.checkpoint?.materialSearchRelocations) || 0)
+    : 0;
+  if (completed >= MATERIAL_SEARCH_RELOCATION_LIMIT) {
+    return {
+      terminal: true,
+      code: 'material_search_regions_exhausted',
+      detail: `No ${requirement.target} source was found after ${completed + 1} distinct loaded-region scans.`,
+      retryable: false,
+    };
+  }
+  return {
+    command: `!moveAway(${MATERIAL_SEARCH_RELOCATION_DISTANCE}, true)`,
+    nextPhase: 'acquire',
+    code: 'material_search_relocation',
+    target: { name: requirement.target },
+    keepAnchor: true,
+    recoveryAction: true,
+    checkpointOnSuccess: {
+      materialSearchTarget: requirement.target,
+      materialSearchRelocations: completed + 1,
+    },
+    reason: `The current loaded region has no ${requirement.target}; bind a physically distinct safe region, then retry the same acquisition method.`,
+  };
+}
+
 export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planItem = null } = {}) {
   if (order.kind === 'build' && order.source !== 'player') {
     return { terminal: true, code: 'construction_not_authorized', retryable: false };
@@ -543,17 +637,24 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
   const acquisitionRequirement = order.checkpoint?.acquisitionRequirement;
   const toolStep = toolPrerequisiteStep(order, snapshot, priorSkill, planItem);
   if (toolStep) return toolStep;
+  const materialRelocation = materialSearchRelocationStep(order, lastResult, acquisitionRequirement);
+  if (materialRelocation) return materialRelocation;
   if (
     ['acquire', 'recover'].includes(order.phase)
     && acquisitionRequirement
     && snapshot.blueprintAudit?.code === 'unloaded'
   ) {
     if (count(snapshot, acquisitionRequirement.target) >= acquisitionRequirement.quantity) {
+      const {
+        materialSearchTarget: _materialSearchTarget,
+        materialSearchRelocations: _materialSearchRelocations,
+        ...checkpoint
+      } = order.checkpoint;
       return {
         phase: 'execute',
         code: 'remote_materials_ready',
         checkpoint: {
-          ...order.checkpoint,
+          ...checkpoint,
           acquisitionRequirement: null,
           acquisitionVariantCommitted: null,
         },
@@ -735,11 +836,16 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
   }
   if (order.phase === 'acquire') {
     if (carriedBuildCell) {
+      const {
+        materialSearchTarget: _materialSearchTarget,
+        materialSearchRelocations: _materialSearchRelocations,
+        ...checkpoint
+      } = order.checkpoint;
       return {
         phase: 'execute',
         code: 'carried_material_ready',
         checkpoint: {
-          ...order.checkpoint,
+          ...checkpoint,
           acquisitionRequirement: null,
           acquisitionVariantCommitted: null,
         },
@@ -754,11 +860,16 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
       .map(([material, required]) => ({ material, missing: Math.max(0, required - count(snapshot, material)) }))
       .find(entry => entry.missing > 0);
     if (!needed) {
+      const {
+        materialSearchTarget: _materialSearchTarget,
+        materialSearchRelocations: _materialSearchRelocations,
+        ...checkpoint
+      } = order.checkpoint;
       return {
         phase: 'execute',
         code: 'materials_ready',
         checkpoint: {
-          ...order.checkpoint,
+          ...checkpoint,
           acquisitionRequirement: null,
           acquisitionVariantCommitted: null,
         },
@@ -804,12 +915,19 @@ export function nextBuilderStep(order, snapshot = {}, lastResult = null, { planI
     return { phase: 'execute', code: 'cell_verified' };
   }
   if (order.phase === 'deliver') {
+    // Entering the completed shelter is itself physical work. Pathfinder may
+    // legitimately open a route by changing one of the just-built cells, so a
+    // prior complete audit is no longer authority after occupancy movement.
+    // This branch is reached only when the fresh audit above found a missing
+    // cell; return to execution and repair that exact world delta before the
+    // order can complete.
     return {
-      complete: true,
-      code: 'blueprint_complete',
+      phase: 'execute',
+      code: 'blueprint_changed_after_occupancy',
       checkpoint: {
+        ...order.checkpoint,
         verifiedCount: Math.max(0, Number(audit.correct) || 0),
-        nextCell: Math.max(0, Number(audit.correct) || 0),
+        nextCell: Math.max(0, Number(missing[0]?.index) || 0),
       },
     };
   }

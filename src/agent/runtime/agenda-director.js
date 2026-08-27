@@ -1,8 +1,15 @@
+import { createHash } from 'node:crypto';
+
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import { classifyMethodOutcome, isPreemption } from './action-result.js';
 import { createWorkOrder } from './work-order.js';
 import { createBuilderShelterOrder } from './jobs/builder-plan.js';
+import { bindSafeConstructionOrder } from './jobs/construction-assignment.js';
+import { createStructureOrder } from './jobs/structure-catalog.js';
+import { bindStructureAccessoryMaterials } from './jobs/structure-material-binder.js';
+import { isApprovedPrimaryConstructionMaterial } from './jobs/structural-material-contract.js';
 import { createAccessRepairWorkOrder } from './access-repair.js';
+import { animalPenConstraintFromOrder, canonicalLivestockDimension } from './livestock-contract.js';
 import { miningOutputName } from './jobs/miner-plan.js';
 import { logInventoryCount } from './jobs/lumberjack-plan.js';
 import {
@@ -25,6 +32,10 @@ import {
   evaluateMaterialChange,
   receiptShowsMaterialProgress,
 } from './obligation-settlement.js';
+import {
+  advanceWorkstationTransactionCheckpoint,
+  normalizeWorkstationTransactionReceipt,
+} from './workstation-transaction.js';
 
 // The agenda deliberately does not act. It decides what comes next and hands it
 // to goal_director or job_director, which already own dispatch, verification,
@@ -37,6 +48,10 @@ const MAX_ENTRY_ATTEMPTS = 2;
 const MAX_ENTRY_PREEMPTIONS = 24;
 const MAX_INVENTORY_RECONCILIATIONS = 12;
 const WAITABLE_DIRECT_OUTCOMES = new Set(['skill_not_sleep_time']);
+const PRODUCTIVE_ROUTE_OUTCOMES = new Set([
+  'skill_closest_explored',
+  'skill_closest_reachable',
+]);
 const LEGACY_REARMABLE_SLEEP_OUTCOMES = new Set([
   ...WAITABLE_DIRECT_OUTCOMES,
   'skill_sleep_not_confirmed',
@@ -65,6 +80,66 @@ function boundedText(value, maximum = 240) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maximum);
+}
+
+function resolveDeferredLivestockBindings(agent, entry) {
+  const bot = agent?.bot;
+  if (!bot || entry?.kind !== 'settle_livestock') {
+    return { accepted: false, code: 'livestock_binding_context_missing', detail: 'Minecraft livestock binding context is unavailable.' };
+  }
+  const currentDimension = canonicalLivestockDimension(bot.game?.dimension);
+  let source = null;
+  if (entry.sourceSelector) {
+    source = agent.memory_bank?.recallUserPlaceDetails?.(entry.sourceSelector.memoryName);
+    if (
+      !source
+      || ![source.x, source.y, source.z].every(Number.isFinite)
+      || canonicalLivestockDimension(source.dimension) !== entry.sourceSelector.dimension
+      || currentDimension !== entry.sourceSelector.dimension
+    ) {
+      return {
+        accepted: false,
+        code: 'livestock_source_binding_missing',
+        detail: `The completed scout did not leave an exact ${entry.target} source in ${entry.sourceSelector.dimension}.`,
+      };
+    }
+  }
+  let penConstraint = entry.penConstraint || null;
+  if (entry.penSelector) {
+    const order = agent.home_state?.snapshot?.().structureOrder;
+    penConstraint = animalPenConstraintFromOrder(
+      bot,
+      order,
+      entry.target,
+      entry.penSelector.dimension,
+    );
+    if (!penConstraint) {
+      return {
+        accepted: false,
+        code: 'livestock_pen_binding_missing',
+        detail: 'The completed Builder order does not currently resolve to its exact closed animal pen.',
+      };
+    }
+  }
+  return {
+    accepted: true,
+    patch: {
+      ...(source ? {
+        x: Math.floor(source.x),
+        y: Math.floor(source.y),
+        z: Math.floor(source.z),
+        sourceSelector: null,
+      } : {}),
+      ...(penConstraint ? {
+        penConstraint,
+        penSelector: null,
+      } : {}),
+      evidence: {
+        code: 'livestock_inputs_bound',
+        detail: 'Persisted the exact completed pen and remembered livestock source before settlement dispatch.',
+      },
+    },
+  };
 }
 
 function isResumableSafetyPreemption(result) {
@@ -202,6 +277,164 @@ function agendaMaterialBlocker(agent, entry, settled) {
     holdMs: AGENDA_RETRY_HOLD_MS,
     createdAt: Date.now(),
   });
+}
+
+function agendaDirectMaterialToken(entry) {
+  const materialState = JSON.stringify([
+    entry.kind,
+    entry.state,
+    entry.target,
+    entry.quantity,
+    entry.materialChangeBlocker?.code || null,
+    entry.transactionCheckpoint || null,
+  ]);
+  return `agenda:v1:${createHash('sha256').update(materialState).digest('hex')}`;
+}
+
+function navigationReceiptProgress(receipt) {
+  const progress = receipt?.progress;
+  const distance = Number(progress?.distance);
+  if (Number.isFinite(distance) && distance >= 1) return distance;
+
+  const startMetric = Number(progress?.startMetric);
+  const lastMetric = Number(progress?.lastMetric);
+  const start = observedPosition(progress?.startPosition);
+  const last = observedPosition(progress?.lastPosition);
+  const moved = start && last
+    ? Math.hypot(last.x - start.x, last.y - start.y, last.z - start.z)
+    : 0;
+  return Number.isFinite(startMetric)
+    && Number.isFinite(lastMetric)
+    && lastMetric < startMetric
+    && moved >= 1
+    ? moved
+    : 0;
+}
+
+function productiveDirectRouteProgress(result, entry) {
+  if (
+    entry?.kind !== 'goto'
+    || result?.phase !== 'failed'
+    || result?.retryable !== true
+    || !PRODUCTIVE_ROUTE_OUTCOMES.has(result?.code)
+  ) return null;
+  const skill = result?.evidence?.skill;
+  if (
+    skill?.receiptSchemaVersion !== 1
+    || skill?.source !== 'action_context'
+    || skill?.contract?.valid !== true
+  ) return null;
+  const navigationReceipts = Array.isArray(skill?.children?.navigation)
+    ? skill.children.navigation
+    : [];
+  const verified = navigationReceipts.findLast(receipt => (
+    ['closest_explored', 'closest_reachable'].includes(receipt?.outcome)
+    && receipt?.retryable === true
+    && navigationReceiptProgress(receipt) >= 1
+  ));
+  if (!verified) return null;
+  return {
+    distance: Math.round(navigationReceiptProgress(verified) * 100) / 100,
+    outcome: verified.outcome,
+    position: observedPosition(verified?.progress?.lastPosition),
+  };
+}
+
+function sameWorkstation(expected, observed) {
+  if (!expected) return true;
+  return Boolean(
+    observed
+    && observed.name === expected.name
+    && observed.dimension === expected.dimension
+    && observed.position?.x === expected.position?.x
+    && observed.position?.y === expected.position?.y
+    && observed.position?.z === expected.position?.z
+  );
+}
+
+function directWorkstationSettlement(result, entry, now) {
+  if (!['craft', 'smelt'].includes(entry?.kind)) return null;
+  const skill = result?.evidence?.skill;
+  if (!skill || !['craft', 'smelt'].includes(skill.kind)) return null;
+  const transaction = normalizeWorkstationTransactionReceipt(skill.transaction);
+  if (!transaction || transaction.kind !== entry.kind || transaction.target !== entry.target) {
+    return {
+      state: 'failed',
+      code: 'workstation_transaction_receipt_invalid',
+      detail: 'The workstation action ended without a valid exact progress and remaining-quantity receipt.',
+      retryable: false,
+      continuationKind: 'terminal',
+    };
+  }
+  if (!sameWorkstation(entry.workstationConstraint, transaction.workstation)) {
+    return {
+      state: 'failed',
+      code: 'workstation_transaction_binding_changed',
+      detail: 'The workstation receipt does not belong to the exact fixture bound to this agenda entry.',
+      retryable: false,
+      continuationKind: 'terminal',
+    };
+  }
+  const transactionCheckpoint = advanceWorkstationTransactionCheckpoint(
+    entry.transactionCheckpoint,
+    transaction,
+    {
+      kind: entry.kind,
+      target: entry.target,
+      requestedQuantity: entry.quantity,
+      workstation: entry.workstationConstraint,
+      now,
+    },
+  );
+  if (!transactionCheckpoint) {
+    return {
+      state: 'failed',
+      code: 'workstation_transaction_checkpoint_conflict',
+      detail: 'The workstation result does not continue the exact remaining quantity persisted by this agenda entry.',
+      retryable: false,
+      continuationKind: 'terminal',
+    };
+  }
+  const activitySettled = result?.evidence?.activity?.settlement?.settled === true;
+  if (transactionCheckpoint.remainingQuantity === 0 && activitySettled) {
+    return {
+      state: 'complete',
+      code: `${entry.kind}_transaction_complete`,
+      detail: result.detail || `The exact ${entry.kind} transaction completed and settled.`,
+      retryable: false,
+      productiveProgress: transaction.materialChanged,
+      transactionCheckpoint,
+      settlementSchemaVersion: 1,
+      sampleClass: 'success',
+      materialChanged: transaction.materialChanged,
+    };
+  }
+  if (transaction.materialChanged) {
+    return {
+      state: 'progressed',
+      code: `${entry.kind}_transaction_progress`,
+      detail: `${transactionCheckpoint.completedQuantity} of ${transactionCheckpoint.requestedQuantity} ${entry.kind} operation${transactionCheckpoint.requestedQuantity === 1 ? '' : 's'} are durably reconciled; ${transactionCheckpoint.remainingQuantity} remain.`,
+      retryable: true,
+      productiveProgress: true,
+      continuationKind: 'replan_current',
+      transactionCheckpoint,
+      settlementSchemaVersion: 1,
+      sampleClass: result?.phase === 'interrupted' ? 'censored' : 'method_failure',
+      materialChanged: true,
+    };
+  }
+  return {
+    state: 'failed',
+    code: result?.code || `${entry.kind}_transaction_incomplete`,
+    detail: result?.detail || `The ${entry.kind} transaction made no verified material progress.`,
+    retryable: result?.retryable === true,
+    continuationKind: result?.continuation?.kind || null,
+    preempted: isResumableSafetyPreemption(result),
+    transactionCheckpoint,
+    settlementSchemaVersion: 1,
+    sampleClass: classifyMethodOutcome(result),
+    materialChanged: false,
+  };
 }
 
 export class AgendaDirector {
@@ -749,6 +982,57 @@ export class AgendaDirector {
     return { skipped: describeAgendaEntry(entry) };
   }
 
+  resumeFailedChain(reason = 'Explicitly resumed after a material repair.') {
+    const rootIndex = this.entries.findIndex(entry => entry.state === 'failed');
+    if (rootIndex < 0) return { resumed: 0, rootId: null };
+    const failedJobReceipt = this.agent.job_director?.lastReceipt;
+    const resumableJobId = failedJobReceipt?.phase === 'failed'
+      ? failedJobReceipt.orderId
+      : null;
+    const resumableIds = new Set([this.entries[rootIndex].id]);
+    for (const entry of this.entries.slice(rootIndex + 1)) {
+      if (entry.dependsOnEntryId && resumableIds.has(entry.dependsOnEntryId)) {
+        resumableIds.add(entry.id);
+      }
+    }
+    this.directDispatchGeneration += 1;
+    this.dispatching = false;
+    this.entries = this.entries.map(entry => (
+      resumableIds.has(entry.id)
+        ? normalizeAgendaEntry({
+            ...entry,
+            state: 'pending',
+            executorId: entry.id === this.entries[rootIndex].id
+              && entry.executor === 'job'
+              && entry.executorId === resumableJobId
+              ? entry.executorId
+              : '',
+            startedAt: null,
+            finishedAt: null,
+            attempts: 0,
+            preemptions: 0,
+            materialChangeBlocker: null,
+            evidence: {
+              code: 'agenda_chain_explicitly_resumed',
+              detail: boundedText(reason),
+              retryable: true,
+            },
+          })
+        : entry
+    ));
+    this.persist();
+    this.nextEligibleAt = 0;
+    const root = this.entries[rootIndex];
+    this.setStatus(
+      'recovering',
+      'agenda_chain_explicitly_resumed',
+      `Resuming ${resumableIds.size} linked step(s) from ${describeAgendaEntry(root)} after a material repair.`,
+      root.id,
+    );
+    this.agent.behavior_arbiter?.wake?.('agenda_chain_explicitly_resumed');
+    return { resumed: resumableIds.size, rootId: root.id };
+  }
+
   replace(id, patch) {
     this.entries = this.entries.map(entry => (
       entry.id === id ? normalizeAgendaEntry({ ...entry, ...patch }) : entry
@@ -1136,6 +1420,20 @@ export class AgendaDirector {
           materialChanged: receiptShowsMaterialProgress(skillReceipt),
         }
       : {};
+    const workstationSettlement = directWorkstationSettlement(result, entry, this.now());
+    if (workstationSettlement) return workstationSettlement;
+    const routeProgress = productiveDirectRouteProgress(result, entry);
+    if (routeProgress) {
+      return {
+        state: 'progressed',
+        code: 'agenda_route_frontier_advanced',
+        detail: result.detail || `Advanced ${routeProgress.distance} blocks along the verified route frontier.`,
+        retryable: true,
+        productiveProgress: true,
+        routeProgress,
+        ...sharedSettlement,
+      };
+    }
     if (result?.phase !== 'succeeded' && WAITABLE_DIRECT_OUTCOMES.has(result?.code)) {
       return {
         state: 'waiting',
@@ -1210,6 +1508,7 @@ export class AgendaDirector {
       code: result?.code || 'action_ended',
       detail: result?.detail || '',
       retryable: result?.retryable === true,
+      continuationKind: result?.continuation?.kind || null,
       // Stop, death, and owner replacement are censored too, but they do not
       // authorize automatic continuation. Only the shared structured code for
       // a higher-priority lane borrowing ActionManager is resumable here.
@@ -1383,7 +1682,14 @@ export class AgendaDirector {
         retryable: false,
       };
     }
-    const obligationDecision = settled.settlementSchemaVersion === 1
+    const productiveProgress = settled.productiveProgress === true
+      && settled.state === 'progressed';
+    const continuationKind = settled.continuationKind || null;
+    const typedCensored = ['resume_same', 'disengage_then_resume'].includes(continuationKind);
+    const typedWaiting = continuationKind === 'retry_after_material_change';
+    const obligationDecision = !productiveProgress
+      && !continuationKind
+      && settled.settlementSchemaVersion === 1
       ? classifyObligationSettlement({
           sampleClass: settled.sampleClass,
           externalWait: settled.state === 'waiting',
@@ -1397,16 +1703,26 @@ export class AgendaDirector {
     // changes. A censored sample says nothing about the attempted method and
     // therefore cannot consume that budget. Successful legacy settlements keep
     // their historical accounting until the metrics schema is split explicitly.
-    const attempts = active.attempts + (
-      preemptionExhausted || obligationDecision?.state === 'censored' ? 0 : 1
-    );
-    const censored = obligationDecision?.state === 'censored';
-    const waitingForMaterialChange = obligationDecision?.state === 'waiting_for_material_change';
-    const retryable = obligationDecision
+    const attempts = productiveProgress
+      // A verified frontier advance proves that the current route method is
+      // making new physical progress again. Its bounded budget is for
+      // consecutive no-progress method failures, not a lifetime charge that
+      // can later kill a healthy multi-frontier journey.
+      ? 0
+      : active.attempts + (
+          preemptionExhausted || typedCensored || typedWaiting || obligationDecision?.state === 'censored' ? 0 : 1
+        );
+    const censored = typedCensored || obligationDecision?.state === 'censored';
+    const waitingForMaterialChange = typedWaiting || obligationDecision?.state === 'waiting_for_material_change';
+    const retryable = productiveProgress
+      || (continuationKind === 'replan_current'
+        && settled.retryable === true
+        && attempts < MAX_ENTRY_ATTEMPTS)
+      || (obligationDecision
       ? obligationDecision.state === 'retry_authorized'
       : settled.state === 'failed'
         && settled.retryable === true
-        && attempts < MAX_ENTRY_ATTEMPTS;
+        && attempts < MAX_ENTRY_ATTEMPTS);
     const materialChangeBlocker = waitingForMaterialChange
       ? agendaMaterialBlocker(this.agent, active, settled)
       : null;
@@ -1425,6 +1741,9 @@ export class AgendaDirector {
             detail: settled.detail || 'Action ownership changed before the method could be evaluated.',
             retryable: true,
           },
+          ...(settled.transactionCheckpoint
+            ? { transactionCheckpoint: settled.transactionCheckpoint }
+            : {}),
         }
       : retryable
       ? {
@@ -1437,6 +1756,9 @@ export class AgendaDirector {
           ...assignmentPatch,
           ...(settled.acquisitionCheckpoint
             ? { acquisitionCheckpoint: settled.acquisitionCheckpoint }
+            : {}),
+          ...(settled.transactionCheckpoint
+            ? { transactionCheckpoint: settled.transactionCheckpoint }
             : {}),
         }
       : waitingForMaterialChange && materialChangeBlocker
@@ -1453,6 +1775,9 @@ export class AgendaDirector {
               detail: settled.detail || settled.code,
               retryable: true,
             },
+            ...(settled.transactionCheckpoint
+              ? { transactionCheckpoint: settled.transactionCheckpoint }
+              : {}),
           }
       : {
           state: settled.state,
@@ -1462,6 +1787,9 @@ export class AgendaDirector {
           evidence: settled,
           ...assignmentPatch,
           ...(appliesTerminalHold ? { terminalDispositionApplied: true } : {}),
+          ...(settled.transactionCheckpoint
+            ? { transactionCheckpoint: settled.transactionCheckpoint }
+            : {}),
         };
     // Persist the terminal step and its dependent exact-workstation handoff in
     // one store write. A restart can therefore never observe arrival complete
@@ -1469,30 +1797,8 @@ export class AgendaDirector {
     // A retryable failure returns the parent to pending. Its dependents must
     // remain pending too; only the committed terminal parent state can make a
     // requires-success dependency impossible.
-    const parentTerminallyFailed = !censored
-      && !retryable
-      && activePatch.state !== 'complete'
-      && isTerminalAgendaState(activePatch.state);
-    const blockedDependents = parentTerminallyFailed
-      ? new Set(this.entries.filter(entry => (
-        entry.state === 'pending'
-        && entry.dependsOnEntryId === active.id
-        && entry.dependencyPolicy === 'requires_success'
-      )).map(entry => entry.id))
-      : new Set();
     this.entries = this.entries.map(entry => {
       if (entry.id === active.id) return normalizeAgendaEntry({ ...entry, ...activePatch });
-      if (blockedDependents.has(entry.id)) {
-        return normalizeAgendaEntry({
-          ...entry,
-          state: 'failed',
-          finishedAt: this.now(),
-          evidence: {
-            code: 'agenda_dependency_failed',
-            detail: `Dependent work was not attempted because ${describeAgendaEntry(active)} did not complete.`,
-          },
-        });
-      }
       if (bindingConstraint && entry.id === dependentEntryId) {
         return normalizeAgendaEntry({
           ...entry,
@@ -1524,11 +1830,22 @@ export class AgendaDirector {
         : waitingForMaterialChange
           ? 'waiting'
           : retryable ? 'recovering' : 'failed',
-      censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.code,
+      productiveProgress
+        ? 'agenda_route_frontier_advanced'
+        : censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.code,
       `${describeAgendaEntry(active)}: ${settled.state === 'complete' ? 'done' : settled.detail || settled.code}`,
     );
-    this.nextEligibleAt = this.now() + (settled.state === 'complete' ? DISPATCH_COOLDOWN_MS : REJECTED_COOLDOWN_MS);
-    if (censored) {
+    this.nextEligibleAt = this.now() + (
+      settled.state === 'complete' || productiveProgress
+        ? DISPATCH_COOLDOWN_MS
+        : REJECTED_COOLDOWN_MS
+    );
+    if (productiveProgress) {
+      const progress = settled.routeProgress;
+      const progressMessage = `I advanced ${progress?.distance || 'along'} blocks through the next verified route frontier toward ${active.recipient}. The same trip remains active and is continuing from this new stance.`;
+      void Promise.resolve(this.agent.openChat?.(progressMessage))
+        .catch(() => { /* chat is best effort */ });
+    } else if (censored) {
       const censoredMessage = `I had to pause ${describeAgendaEntry(active)} before its method could be evaluated. The obligation is still queued and its failure budget is unchanged.`;
       void Promise.resolve(this.agent.openChat?.(censoredMessage))
         .catch(() => { /* chat is best effort */ });
@@ -1569,9 +1886,13 @@ export class AgendaDirector {
     }
     return {
       settled: true,
-      state: censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.state,
+      state: productiveProgress
+        ? 'progressed'
+        : censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.state,
       retryable,
-      code: censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.code,
+      code: productiveProgress
+        ? 'agenda_route_frontier_advanced'
+        : censored ? 'censored' : waitingForMaterialChange ? 'waiting_for_material_change' : settled.code,
     };
   }
 
@@ -1675,9 +1996,88 @@ export class AgendaDirector {
     }
 
     if (entry.executor === 'job') {
+      if (entry.executorId) {
+        const resumed = this.agent.job_director?.resumeLastOrder?.(entry.executorId);
+        if (resumed?.accepted === true) {
+          return { accepted: true, executorId: resumed.id || entry.executorId };
+        }
+        if (resumed?.code !== 'terminal_job_receipt_missing') {
+          return {
+            accepted: false,
+            code: resumed?.code || 'job_resume_failed',
+            detail: resumed?.detail || 'The exact failed job checkpoint could not be resumed.',
+          };
+        }
+      }
+      if (entry.kind === 'construction' && entry.constructionIntent?.catalogueStructure) {
+        const remembered = this.agent.home_state?.snapshot?.().structureOrder;
+        const requestedMaterial = entry.constructionIntent.structuralMaterial || 'auto';
+        const expectedBlueprintPrefix = `${entry.constructionIntent.catalogueStructure}_`;
+        const exactMaterial = requestedMaterial === 'auto'
+          || String(remembered?.blueprint?.id || '') === `${expectedBlueprintPrefix}${requestedMaterial}`;
+        if (
+          remembered?.role === 'builder'
+          && remembered.kind === 'build'
+          && remembered.phase === 'failed'
+          && String(remembered.blueprint?.id || '').startsWith(expectedBlueprintPrefix)
+          && exactMaterial
+        ) {
+          const resumed = this.agent.job_director?.resumeLastOrder?.(remembered.id);
+          return resumed?.accepted === true
+            ? { accepted: true, executorId: resumed.id || remembered.id }
+            : {
+                accepted: false,
+                code: resumed?.code || 'construction_resume_failed',
+                detail: resumed?.detail || `The exact partial ${entry.constructionIntent.catalogueStructure} order could not be resumed.`,
+              };
+        }
+      }
       let order;
       try {
-        if (entry.kind === 'shelter') {
+        if (entry.kind === 'construction' && entry.constructionIntent?.catalogueStructure) {
+          const position = this.agent.bot?.entity?.position;
+          if (!position) {
+            return { accepted: false, code: 'spawn_state_unavailable', detail: 'Minecraft position is not available yet.' };
+          }
+          const requestedMaterial = entry.constructionIntent.structuralMaterial || 'auto';
+          const primaryMaterial = requestedMaterial === 'auto' ? 'oak_planks' : requestedMaterial;
+          const block = this.agent.bot?.registry?.blocksByName?.[primaryMaterial];
+          const item = this.agent.bot?.registry?.itemsByName?.[primaryMaterial];
+          if (!block || !item || !isApprovedPrimaryConstructionMaterial(primaryMaterial)) {
+            return {
+              accepted: false,
+              code: 'construction_material_unsupported',
+              detail: `${primaryMaterial} is not an available approved primary construction material.`,
+            };
+          }
+          const provisional = createStructureOrder({
+            name: entry.constructionIntent.catalogueStructure,
+            x: 0,
+            y: 0,
+            z: 0,
+            material: primaryMaterial,
+            requester: entry.requester || 'player',
+          });
+          const assigned = bindSafeConstructionOrder(
+            this.agent,
+            provisional,
+            position,
+            entry.constructionIntent,
+          );
+          order = bindStructureAccessoryMaterials(assigned, this.agent.bot, {
+            structuralMaterialAlternatives: requestedMaterial === 'auto',
+          });
+          const functions = new Set(order.blueprint?.cells?.map(cell => cell?.function).filter(Boolean));
+          const missing = (entry.constructionIntent.requiredFunctions || [])
+            .filter(required => !functions.has(required));
+          if (missing.length > 0) {
+            return {
+              accepted: false,
+              code: 'construction_intent_incomplete',
+              detail: `The catalogue blueprint is missing required function(s): ${missing.join(', ')}.`,
+            };
+          }
+        } else if (entry.kind === 'shelter') {
           // A shelter is a blueprint anchored to where the bot stands, so it
           // uses the same builder the explicit command does rather than a bare
           // work order.
@@ -1743,6 +2143,10 @@ export class AgendaDirector {
                 homeDimension: entry.homeDimension,
                 scoutFindings: entry.findings,
                 scoutGuideFinding: entry.guideFinding,
+                ...(entry.animal ? {
+                  scoutAnimalTarget: entry.animal,
+                  scoutAnimalMinimumCount: entry.minimumAnimalCount,
+                } : {}),
                 ...(entry.searchLimit ? { scoutSearchLimit: entry.searchLimit } : {}),
                 ...(rememberedScoutPrefix ? {
                   [`${rememberedScoutPrefix}X`]: rememberedScout.x,
@@ -1799,6 +2203,9 @@ export class AgendaDirector {
     // Direct steps build their command in code from already-validated fields.
     // Every interpolated value has passed `normalizeAgendaEntry`: coordinates are
     // numbers, names match the canonical pattern. No stored text is executed.
+    const transactionRemaining = ['craft', 'smelt'].includes(entry.kind)
+      ? entry.transactionCheckpoint?.remainingQuantity ?? entry.quantity
+      : entry.quantity;
     const DIRECT_COMMANDS = {
       pickup_item: () => `!pickupItem(${JSON.stringify(entry.target)}, ${entry.quantity}, 12, ${entry.acquisitionCheckpoint.baselineInventory})`,
       consume_item: () => `!consume(${JSON.stringify(entry.target)})`,
@@ -1806,11 +2213,11 @@ export class AgendaDirector {
       visit: () => `!goToCoordinates(${entry.x}, ${entry.y}, ${entry.z}, 2)`,
       verify_access: () => `!goToCoordinates(${entry.x}, ${entry.y}, ${entry.z}, 0.75)`,
       craft: () => entry.workstationConstraint
-        ? `!craftRecipe("${entry.target}", ${entry.quantity}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
-        : `!craftRecipe("${entry.target}", ${entry.quantity})`,
+        ? `!craftRecipe("${entry.target}", ${transactionRemaining}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
+        : `!craftRecipe("${entry.target}", ${transactionRemaining})`,
       smelt: () => entry.workstationConstraint
-        ? `!smeltItem("${entry.target}", ${entry.quantity}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
-        : `!smeltItem("${entry.target}", ${entry.quantity})`,
+        ? `!smeltItem("${entry.target}", ${transactionRemaining}, ${entry.workstationConstraint.position.x}, ${entry.workstationConstraint.position.y}, ${entry.workstationConstraint.position.z}, ${JSON.stringify(entry.workstationConstraint.dimension)})`
+        : `!smeltItem("${entry.target}", ${transactionRemaining})`,
       goto: () => `!goToPlayer("${entry.recipient}", 3)`,
       follow_until: () => `!followPlayerUntilNearBlock("${entry.recipient}", "${entry.target}", ${entry.radius})`,
       farm_visit: () => '!goToFarm',
@@ -1848,22 +2255,25 @@ export class AgendaDirector {
       };
     }
     const command = commandBuilder();
-    const previousActionId = this.agent.last_action_result?.actionId || null;
     const dispatchGeneration = this.directDispatchGeneration + 1;
     this.directDispatchGeneration = dispatchGeneration;
     this.dispatching = true;
     void Promise.resolve(this.executeAgendaCommand(this.agent, command, {
       owner: 'player',
       routeOrigin: 'agenda-director',
+      missionId: entry.parentId || entry.id,
+      activityId: entry.id,
+      materialToken: agendaDirectMaterialToken(entry),
+      returnExecution: true,
     }))
-      .then(() => {
+      .then(execution => {
         if (this.directDispatchGeneration !== dispatchGeneration) return;
-        let result = this.agent.last_action_result;
-        if (
-          !result?.actionId
-          || result.actionId === previousActionId
-          || result.evidence?.request?.routeOrigin !== 'agenda-director'
-        ) {
+        const hasExecutionEnvelope = execution
+          && typeof execution === 'object'
+          && Object.hasOwn(execution, 'value')
+          && Object.hasOwn(execution, 'result');
+        let result = hasExecutionEnvelope ? execution.result || null : null;
+        if (!result?.actionId || result.evidence?.request?.routeOrigin !== 'agenda-director') {
           result = {
             actionId: `missing-${this.now()}`,
             phase: 'failed',
@@ -1936,7 +2346,7 @@ export class AgendaDirector {
         dependentEntryId: bindingConstraint ? dependent.id : '',
         bindingConstraint,
       });
-      if (active.executor === 'job') {
+      if (active.executor === 'job' && settled.state === 'complete') {
         this.agent.job_director?.acknowledgeTerminalReceipt?.(active.executorId);
       }
       return;
@@ -2003,11 +2413,12 @@ export class AgendaDirector {
         && predecessor.state !== 'complete'
       ) {
         if (isTerminalAgendaState(predecessor.state)) {
-          this.replace(next.id, {
-            state: 'failed',
-            finishedAt: this.now(),
-            evidence: { code: 'agenda_dependency_failed', detail: 'The required predecessor did not complete.' },
-          });
+          this.setStatus(
+            'waiting',
+            'agenda_dependency_blocked',
+            `${describeAgendaEntry(next)} remains queued behind failed prerequisite: ${describeAgendaEntry(predecessor)}.`,
+            next.id,
+          );
         } else {
           this.setStatus('waiting', 'agenda_dependency_pending', `Waiting for: ${describeAgendaEntry(predecessor)}.`, next.id);
         }
@@ -2126,7 +2537,40 @@ export class AgendaDirector {
       return;
     }
 
-    if (next.kind === 'construction' && !next.executorId) {
+    if (
+      next.kind === 'settle_livestock'
+      && (next.sourceSelector || next.penSelector)
+    ) {
+      const binding = resolveDeferredLivestockBindings(this.agent, next);
+      if (binding.accepted !== true) {
+        this.replace(next.id, {
+          state: 'failed',
+          finishedAt: this.now(),
+          evidence: { code: binding.code, detail: binding.detail },
+        });
+        this.setStatus('failed', binding.code, binding.detail, next.id);
+        return;
+      }
+      this.replace(next.id, binding.patch);
+      if (this.store?.lastError) {
+        this.setStatus('failed', 'livestock_binding_persist_failed', this.store.lastError, next.id);
+        return;
+      }
+      this.nextEligibleAt = 0;
+      this.setStatus(
+        'waiting',
+        'livestock_inputs_bound',
+        'The exact completed pen and remembered source are durable; settlement is next.',
+        next.id,
+      );
+      return;
+    }
+
+    if (
+      next.kind === 'construction'
+      && !next.executorId
+      && !next.constructionIntent?.catalogueStructure
+    ) {
       this.setStatus(
         'waiting',
         'construction_assignment_pending',
@@ -2152,7 +2596,12 @@ export class AgendaDirector {
       this.setStatus('failed', outcome.code, `${describeAgendaEntry(next)}: ${outcome.detail || outcome.code}`);
       return;
     }
-    this.replace(next.id, { state: 'active', startedAt: this.now(), executorId: outcome.executorId || '' });
+    this.replace(next.id, {
+      state: 'active',
+      startedAt: this.now(),
+      executorId: outcome.executorId || '',
+      ...(next.kind === 'construction' ? { assignmentState: 'accepted_and_bound' } : {}),
+    });
     this.setStatus('acting', 'agenda_step_started', `Starting: ${describeAgendaEntry(next)}.`, next.id);
     if (next.preemptions > 0 || next.attempts > 0) {
       const resumeMessage = next.preemptions > 0

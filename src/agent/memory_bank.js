@@ -256,6 +256,7 @@ export class MemoryBank {
 			position: { ...death.position },
 			dimension: death.dimension,
 			inventory: { ...death.inventory },
+			recoveredInventory: { ...(death.recoveredInventory || {}) },
 			recordedAt: death.recordedAt,
 			recoveredAt: death.recoveredAt,
 		};
@@ -270,9 +271,115 @@ export class MemoryBank {
 			position: { ...death.position },
 			dimension: death.dimension,
 			inventory: { ...death.inventory },
+			recoveredInventory: { ...(death.recoveredInventory || {}) },
 			recordedAt: death.recordedAt,
 			recoveredAt: death.recoveredAt,
 		};
+	}
+
+	observeDeathRecoveryInventory(inventory = {}, {
+		recordedAt = null,
+		dimension = '',
+		observedAt = Date.now(),
+		source = 'alive_inventory_observation',
+	} = {}) {
+		const ledger = this.personal.recallDeathRecoveryLedger();
+		const identity = Number(recordedAt);
+		if (!ledger.initialized || !Number.isSafeInteger(identity) || identity <= 0) {
+			return Object.freeze({ stored: false, complete: false, code: 'death_identity_missing' });
+		}
+		const pendingIndex = ledger.pending.findIndex(entry => Number(entry.recordedAt) === identity);
+		const death = ledger.pending[pendingIndex];
+		if (!death) {
+			return Object.freeze({ stored: false, complete: false, code: 'death_not_pending' });
+		}
+		if (dimension && death.dimension && String(dimension) !== String(death.dimension)) {
+			return Object.freeze({ stored: false, complete: false, code: 'death_dimension_mismatch' });
+		}
+		const observationTime = Number(observedAt);
+		if (!Number.isFinite(observationTime) || observationTime < Number(death.recordedAt)) {
+			return Object.freeze({ stored: false, complete: false, code: 'death_observation_stale' });
+		}
+
+		const recoveredInventory = {};
+		let recovered = 0;
+		let expected = 0;
+		let progressed = false;
+		for (const [name, expectedCountRaw] of Object.entries(death.inventory || {})) {
+			const expectedCount = Math.max(0, Math.floor(Number(expectedCountRaw) || 0));
+			const priorCount = Math.max(0, Math.min(
+				expectedCount,
+				Math.floor(Number(death.recoveredInventory?.[name]) || 0),
+			));
+			const observedCount = Math.max(0, Math.min(
+				expectedCount,
+				Math.floor(Number(inventory?.[name]) || 0),
+			));
+			const recoveredCount = Math.max(priorCount, observedCount);
+			if (recoveredCount > 0) recoveredInventory[name] = recoveredCount;
+			if (recoveredCount > priorCount) progressed = true;
+			recovered += recoveredCount;
+			expected += expectedCount;
+		}
+		const complete = expected > 0 && recovered >= expected;
+		if (!progressed && !complete) {
+			return Object.freeze({
+				stored: true,
+				complete: false,
+				code: 'death_recovery_unchanged',
+				recovered,
+				expected,
+			});
+		}
+
+		const recoverySource = String(source || 'alive_inventory_observation').slice(0, 80);
+		const observedDeath = {
+			...death,
+			recoveredInventory,
+			recoveryObservedAt: observationTime,
+			recoverySource,
+		};
+		const pending = complete
+			? ledger.pending.filter((entry, index) => index !== pendingIndex)
+			: ledger.pending.map((entry, index) => index === pendingIndex ? observedDeath : entry);
+		const settled = complete
+			? {
+				...observedDeath,
+				recoveredAt: observationTime,
+				recovered,
+			}
+			: ledger.lastSettled;
+		const stored = this.personal.replaceDeathRecoveryLedger({
+			initialized: true,
+			pending,
+			lastSettled: settled,
+			lastDisplaced: ledger.lastDisplaced,
+		});
+		if (!stored) {
+			return Object.freeze({
+				stored: false,
+				complete: false,
+				code: 'death_recovery_persistence_rejected',
+				recovered,
+				expected,
+			});
+		}
+		if (complete) {
+			this._rememberLegacyDeathProjection(pending[0] || settled);
+			this.rememberFact('death_recovery_verified', JSON.stringify({
+				recoveredAt: observationTime,
+				recovered,
+				source: recoverySource,
+			}));
+		}
+		return Object.freeze({
+			stored: true,
+			complete,
+			code: complete ? 'death_recovery_observed_complete' : 'death_recovery_progress_observed',
+			recovered,
+			expected,
+			recordedAt: identity,
+		});
 	}
 
 	markDeathRecovered(evidence = {}, recordedAt = null) {

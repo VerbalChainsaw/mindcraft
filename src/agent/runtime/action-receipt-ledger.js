@@ -59,7 +59,20 @@ function normalizeValue(value, depth, ancestors, inArray = false) {
     return Object.freeze(result);
   }
 
-  if (!isPlainObject(value)) return inArray ? null : OMIT;
+  if (!isPlainObject(value)) {
+    // Mineflayer and vec3 expose physical coordinates through small class
+    // instances. They are evidence, not arbitrary executable objects. Preserve
+    // only their finite coordinate payload so command-scoped receipts can
+    // verify the exact stance without admitting prototype state.
+    if (
+      Number.isFinite(value?.x)
+      && Number.isFinite(value?.y)
+      && Number.isFinite(value?.z)
+    ) {
+      return Object.freeze({ x: value.x, y: value.y, z: value.z });
+    }
+    return inArray ? null : OMIT;
+  }
   const nextAncestors = new Set(ancestors);
   nextAncestors.add(value);
   const result = {};

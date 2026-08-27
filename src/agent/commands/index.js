@@ -48,6 +48,7 @@ export function createCommandRequestContext({
     agendaDisposition = 'append',
     missionId = null,
     activityId = null,
+    materialToken = null,
 } = {}) {
     const normalizedArgs = Object.freeze((Array.isArray(args) ? args : [])
         .slice(0, MAX_COMMAND_REQUEST_ARGS)
@@ -62,6 +63,7 @@ export function createCommandRequestContext({
         agendaDisposition: agendaDisposition === 'interrupt' ? 'interrupt' : 'append',
         missionId: boundedRequestText(missionId, 96) || null,
         activityId: boundedRequestText(activityId, 128) || null,
+        materialToken: boundedRequestText(materialToken, 240) || null,
     });
 }
 
@@ -382,10 +384,15 @@ export async function executeCommand(agent, message, {
     agendaDisposition = 'append',
     missionId = null,
     activityId = null,
+    materialToken = null,
+    returnExecution = false,
 } = {}) {
     let parsed = parseCommandMessage(message);
-    if (typeof parsed === 'string')
-        return parsed; //The command was incorrectly formatted or an invalid input was given.
+    if (typeof parsed === 'string') {
+        return returnExecution
+            ? Object.freeze({ value: parsed, result: null, requestContext: null, durableSubmission: null })
+            : parsed; //The command was incorrectly formatted or an invalid input was given.
+    }
     else {
         console.log('parsed command:', parsed);
         const command = getCommand(parsed.commandName);
@@ -393,8 +400,12 @@ export async function executeCommand(agent, message, {
         if (parsed.args) {
             numArgs = parsed.args.length;
         }
-        if (!acceptsArgumentCount(command, numArgs))
-            return argumentCountError(command, numArgs);
+        if (!acceptsArgumentCount(command, numArgs)) {
+            const value = argumentCountError(command, numArgs);
+            return returnExecution
+                ? Object.freeze({ value, result: null, requestContext: null, durableSubmission: null })
+                : value;
+        }
         else {
             const requestContext = createCommandRequestContext({
                 routeOrigin,
@@ -403,15 +414,28 @@ export async function executeCommand(agent, message, {
                 agendaDisposition,
                 missionId,
                 activityId,
+                materialToken,
             });
             const perform = () => command.perform(agent, ...parsed.args);
             const performWithRequestContext = typeof agent.actions?.runWithRequestContext === 'function'
                 ? () => agent.actions.runWithRequestContext(requestContext, perform)
                 : perform;
-            const result = typeof agent.actions?.runWithOwner === 'function'
-                ? await agent.actions.runWithOwner(owner, performWithRequestContext)
-                : await performWithRequestContext();
-            return result;
+            const performWithOwner = typeof agent.actions?.runWithOwner === 'function'
+                ? () => agent.actions.runWithOwner(owner, performWithRequestContext)
+                : performWithRequestContext;
+            if (typeof agent.actions?.runWithCommandExecution === 'function') {
+                const execution = await agent.actions.runWithCommandExecution(performWithOwner, requestContext);
+                return returnExecution ? execution : execution.value;
+            }
+            const value = await performWithOwner();
+            return returnExecution
+                ? Object.freeze({
+                    value,
+                    result: null,
+                    requestContext,
+                    durableSubmission: null,
+                  })
+                : value;
         }
     }
 }

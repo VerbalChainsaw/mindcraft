@@ -3,6 +3,14 @@ import { normalizeActionReceiptValue } from './action-receipt-ledger.js';
 
 const MAX_DETAIL_LENGTH = 1_200;
 const ACTION_PHASES = new Set(['succeeded', 'requested', 'failed', 'blocked', 'interrupted', 'cancelled']);
+export const ACTION_CONTINUATION_KINDS = Object.freeze([
+  'resume_same',
+  'replan_current',
+  'retry_after_material_change',
+  'disengage_then_resume',
+  'terminal',
+]);
+const ACTION_CONTINUATIONS = new Set(ACTION_CONTINUATION_KINDS);
 
 function text(value, fallback = '') {
   if (typeof value !== 'string') return fallback;
@@ -73,6 +81,27 @@ function actionReceiptTelemetry(value) {
   });
 }
 
+function normalizeContinuation(value, { phase, code, retryable }) {
+  let kind = ACTION_CONTINUATIONS.has(value?.kind) ? value.kind : null;
+
+  // Physical verification is authoritative over any pre-verification failure
+  // suggestion carried by a copied result. This is why capability reconciliation
+  // can safely spread a failed executor result and promote it to success.
+  if (phase === 'succeeded' || phase === 'requested') kind = 'replan_current';
+  else if (phase === 'interrupted' || phase === 'cancelled') kind = 'resume_same';
+  else if (code === 'action_pattern_detected') kind = 'retry_after_material_change';
+  else if (['activity_unsettled', 'previous_action_unresponsive'].includes(code)) kind = 'terminal';
+  else if (!kind) kind = retryable === true ? 'replan_current' : 'terminal';
+
+  const incidentId = text(value?.incidentId).slice(0, 96);
+  const preemptorActivityId = text(value?.preemptorActivityId).slice(0, 128);
+  return Object.freeze({
+    kind,
+    ...(incidentId ? { incidentId } : {}),
+    ...(preemptorActivityId ? { preemptorActivityId } : {}),
+  });
+}
+
 export function createActionResult({
   actionId = null,
   label = '',
@@ -82,20 +111,29 @@ export function createActionResult({
   target = null,
   evidence = null,
   retryable = false,
+  continuation = null,
   startedAt = null,
   finishedAt = Date.now(),
 } = {}) {
+  const normalizedPhase = ACTION_PHASES.has(phase) ? phase : 'failed';
+  const normalizedCode = text(code, 'unknown').slice(0, 80);
+  const normalizedRetryable = retryable === true;
   return Object.freeze({
     actionId: typeof actionId === 'string' ? actionId.slice(0, 80) : null,
     label: text(label),
-    phase: ACTION_PHASES.has(phase) ? phase : 'failed',
-    code: text(code, 'unknown').slice(0, 80),
+    phase: normalizedPhase,
+    code: normalizedCode,
     detail: text(detail),
     target: normalizeActionReceiptValue(safeTarget(target)),
     evidence: evidence && typeof evidence === 'object' && !Array.isArray(evidence)
       ? normalizeActionReceiptValue(evidence)
       : null,
-    retryable: retryable === true,
+    retryable: normalizedRetryable,
+    continuation: normalizeContinuation(continuation, {
+      phase: normalizedPhase,
+      code: normalizedCode,
+      retryable: normalizedRetryable,
+    }),
     startedAt: Number.isFinite(startedAt) ? startedAt : null,
     finishedAt: Number.isFinite(finishedAt) ? finishedAt : Date.now(),
   });
@@ -301,6 +339,11 @@ export function actionResultToTelemetry(result) {
     detail: text(result.detail).slice(0, 280),
     target: safeTarget(result.target),
     retryable: result.retryable === true,
+    continuation: normalizeContinuation(result.continuation, {
+      phase,
+      code: text(result.code, 'unknown').slice(0, 80),
+      retryable: result.retryable === true,
+    }),
     durationMs: Number.isFinite(result.startedAt) && Number.isFinite(result.finishedAt)
       ? Math.max(0, result.finishedAt - result.startedAt)
       : null,

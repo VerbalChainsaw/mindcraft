@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 
 import { isStaleActivityState, staleActivityReason } from './activity-freshness.js';
@@ -37,6 +38,7 @@ import {
   deliberateEntityHarvestCombatEnvironment,
   deliberateEntityHarvestTargetQualification,
 } from '../library/skills.js';
+import { normalizeWorkstationTransactionReceipt } from './workstation-transaction.js';
 
 const STORE_VERSION = 1;
 const MAX_STORE_BYTES = 512 * 1024;
@@ -271,7 +273,13 @@ function verifiedSurfaceRecoveryProgress(kind, skill) {
     kind === 'recover'
     && skill?.kind === 'surface_navigation'
     && skill?.supported === true
-    && Number(skill?.verticalProgress) >= 1
+    && (
+      Number(skill?.verticalProgress) >= 1
+      || (
+        skill?.routeDigging === true
+        && Number(skill?.excavated) > 0
+      )
+    )
   );
 }
 
@@ -481,6 +489,11 @@ function needsSurfaceRecovery(goal, bot) {
     && targetY >= SURFACE_ACCESS_TARGET_Y
     && targetAboveLocalInteraction
   );
+  const undergroundDeliveryRouteBlocked = Boolean(
+    goal?.kind === 'deliver'
+    && y < UNDERGROUND_SURFACE_RECOVERY_Y
+    && /(?:unreachable|no_path|path_|stuck)/.test(code)
+  );
   return dimension === 'overworld'
     && Number.isFinite(y)
     && (
@@ -491,6 +504,7 @@ function needsSurfaceRecovery(goal, bot) {
         && /(?:resource_not_found|search_exhausted)/.test(code)
       )
       || failedAboveGroundAccess
+      || undergroundDeliveryRouteBlocked
     );
 }
 
@@ -769,12 +783,25 @@ function prerequisitePlannerOptions(agent, goal, quantity) {
     workstationRequirement: goal.memory?.workstationRequirement,
     accessRequirement: goal.memory?.accessRequirement,
     workstationConstraint: goal.workstationConstraint,
+    workstationTransaction: goal.checkpoint?.workstationTransaction,
     // One retry after a region change is useful evidence. Repeating the same
     // no-progress method after that is not: temporarily exclude it for this
     // goal so the catalogue must bind a genuinely different method or report
     // that none exists.
     excludedMethods: repeatedFailedPlannerMethods(goal),
   };
+}
+
+function goalMaterialToken(goal, kind, step) {
+  const materialState = JSON.stringify([
+    goal.phase || null,
+    kind,
+    goal.checkpoint || null,
+    step?.checkpoint || null,
+    step?.target || goal.target || null,
+    budgetedSubgoalCount(goal),
+  ]);
+  return `goal:v1:${createHash('sha256').update(materialState).digest('hex')}`;
 }
 
 function unavailableMethodFrontier(reasonCode, blockerCodes = []) {
@@ -2037,6 +2064,9 @@ export class GoalDirector {
       ? plannedInventoryCount(this.agent.bot, actingSubgoal.targetName, actingSubgoal.targetFamily)
       : 0;
     const skillBeforeFinish = actionResultEvidence(result);
+    const workstationTransaction = normalizeWorkstationTransactionReceipt(
+      skillBeforeFinish?.transaction,
+    );
     const transferredBeforeFinish = Math.max(0, Math.floor(Number(skillBeforeFinish?.transferred) || 0));
     let effectiveResult = result;
     if (
@@ -2076,7 +2106,8 @@ export class GoalDirector {
     ) || (
       kind === 'deliver'
       && transferredBeforeFinish > 0
-    ) || miningRouteProgress;
+    ) || miningRouteProgress
+      || workstationTransaction?.materialChanged === true;
     const completionBlocked = actionResultEvidence(effectiveResult)?.completionBlocked === true;
     if (verifiedStepProgress && effectiveResult.phase === 'failed' && !completionBlocked) {
       // A bounded adapter can produce only part of its requested inventory
@@ -2107,6 +2138,15 @@ export class GoalDirector {
       effectiveResult,
       actingSubgoal,
     );
+    if (workstationTransaction) {
+      const { workstationTransaction: _previousTransaction, ...checkpointWithoutTransaction } = durableActionCheckpoint;
+      durableActionCheckpoint = {
+        ...checkpointWithoutTransaction,
+        ...(workstationTransaction.remainingQuantity > 0
+          ? { workstationTransaction }
+          : {}),
+      };
+    }
     if (durableActionCheckpoint !== this.activeGoal.checkpoint) {
       // Persist the route or its completed cell before ActionManager releases
       // the physical action. A restart may re-verify the world, but it must
@@ -2252,9 +2292,21 @@ export class GoalDirector {
       ? currentInventory >= Math.max(0, goal.quantity - checkpoint.delivered)
       : currentInventory >= checkpoint.targetInventory;
     const delivered = goal.kind === 'deliver' && checkpoint.delivered >= goal.quantity;
+    // Player navigation emits this result only after native Pathfinder has
+    // consumed a best-frontier path and strictly improved the goal metric. It
+    // is productive Mission progress, not a failed handoff and not a reason to
+    // relocate away from the bound recipient. Re-dispatch delivery from the new
+    // physical stance; a later no-progress result remains an ordinary failure.
+    const partialDeliveryRouteProgress = Boolean(
+      kind === 'deliver'
+      && effectiveResult.phase === 'failed'
+      && effectiveResult.retryable === true
+      && effectiveResult.code === 'skill_closest_explored'
+    );
     const madeProgress = verifiedStepProgress
       || surfaceRecoveryProgress
       || transferredProgress(skill)
+      || partialDeliveryRouteProgress
       || (
         ['acquire', 'plan'].includes(kind)
         && effectiveResult.phase === 'succeeded'
@@ -2305,7 +2357,9 @@ export class GoalDirector {
         continueSurfaceRecovery ? 'recover' : 'assess',
         continueSurfaceRecovery ? 'verified_surface_progress' : effectiveResult.code || 'subgoal_succeeded',
         continueSurfaceRecovery
-          ? `Surface recovery advanced ${Math.round(Number(skill.verticalProgress) * 10) / 10} vertical blocks on safe support; continuing toward the bound surface stance.`
+          ? Number(skill.verticalProgress) >= 1
+            ? `Surface recovery advanced ${Math.round(Number(skill.verticalProgress) * 10) / 10} vertical blocks on safe support; continuing toward the bound surface stance.`
+            : `Surface recovery opened ${Math.max(1, Math.floor(Number(skill.excavated) || 0))} verified corridor block${Number(skill.excavated) === 1 ? '' : 's'} while retaining safe support; continuing the same escape.`
           : effectiveResult.detail || 'Verified subgoal completed.',
         true,
       );
@@ -2315,6 +2369,19 @@ export class GoalDirector {
     const preemptionRecovery = isPreemption(effectiveResult);
     const miningReturnFailure = kind === 'recover'
       && actingSubgoal?.commandName === '!traverseMiningRouteCell';
+    const surfaceRecoveryFailure = kind === 'recover'
+      && actingSubgoal?.commandName === '!goToSurface'
+      && needsSurfaceRecovery(goal, this.agent.bot);
+    const dynamicDeliveryReturnFailure = miningReturnFailure
+      && goal.kind === 'deliver'
+      && [
+        'skill_return_route_support_changed',
+        'skill_return_route_support_repair_failed',
+        'skill_return_route_changed',
+        'skill_return_route_liquid_risk',
+        'skill_return_route_settlement_changed',
+        'skill_route_step_not_reached',
+      ].includes(effectiveResult.code);
     const relocationFailure = kind === 'recover';
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
@@ -2398,6 +2465,47 @@ export class GoalDirector {
       );
       return;
     }
+    if (dynamicDeliveryReturnFailure) {
+      // The exact mined corridor is evidence, not a prison. Once its live
+      // geometry changes and the cell-level repair cannot restore it, discard
+      // only that stale route. The still-active delivery then returns to the
+      // broader player-bound Pathfinder action from the body's current stance.
+      const rerouteCheckpoint = {
+        ...checkpoint,
+        miningReturnRoute: [],
+        miningReturnIndex: -1,
+        miningReturnDimension: null,
+        miningReturnInvalidation: {
+          code: effectiveResult.code,
+          target: effectiveResult.target || null,
+          at: this.now(),
+        },
+      };
+      this.persist({
+        ...goal,
+        checkpoint: rerouteCheckpoint,
+        attempts,
+        phase: 'deliver',
+        evidence: {
+          actionId: effectiveResult.actionId || '',
+          phase: 'deliver',
+          code: 'mining_return_dynamic_reroute',
+          detail: effectiveResult.detail
+            || 'The preserved mining route changed; continuing the player-bound delivery from live position.',
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus(
+        'deliver',
+        'mining_return_dynamic_reroute',
+        'The exact return cell changed; continuing the same delivery through a fresh live route.',
+        true,
+      );
+      return;
+    }
     if (miningReturnFailure) {
       // Route traversal already performs bounded debris settlement and exact
       // stance verification. Reissuing the identical blocked cell would be a
@@ -2412,6 +2520,26 @@ export class GoalDirector {
       this.fail(
         'mining_return_failed',
         effectiveResult.detail || 'The preserved mining return route could not be traversed safely.',
+      );
+      return;
+    }
+    if (surfaceRecoveryFailure) {
+      // Surface escape is a multi-leg body objective. A retryable leg can end
+      // after settling or changing corridor geometry without gaining height.
+      // Returning to delivery here drives the body into the same blocked edge.
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        phase: 'recover',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+      this.setStatus(
+        'recover',
+        effectiveResult.code || 'surface_recovery_leg_failed',
+        effectiveResult.detail || 'The current surface leg did not settle; rebinding the next escape leg from live position.',
+        true,
       );
       return;
     }
@@ -2465,7 +2593,7 @@ export class GoalDirector {
       return;
     }
     const deliveryRecovery = kind === 'deliver'
-      && /(?:lost_target|not_received|delivery_unverified)/.test(String(effectiveResult.code || ''));
+      && /(?:lost_target|not_received|pickup_unverified|delivery_unverified)/.test(String(effectiveResult.code || ''));
     if (
       (effectiveResult.retryable === true || deliveryRecovery || preemptionRecovery)
       && attempts < goal.maxAttempts
@@ -2518,7 +2646,6 @@ export class GoalDirector {
       return false;
     }
 
-    const previousActionId = this.agent.last_action_result?.actionId || null;
     this.appendActingSubgoal(kind, capabilityCommand(capability) || command, step);
     const goalAtDispatch = this.activeGoal;
     const dispatchToken = Object.freeze({
@@ -2529,23 +2656,40 @@ export class GoalDirector {
     this.activeDispatch = dispatchToken;
     this.inFlight = true;
     this.setStatus('acting', `goal_${kind}`, `Executing ${selectedName} through the deterministic command path.`, true);
+    const materialToken = goalMaterialToken(goalAtDispatch, kind, step);
     const execution = capability
       ? executeCapabilityAction(capability, {
         agent: this.agent,
         executeCommand: this.executeGoalCommand,
         owner: 'player',
         routeOrigin: 'goal-director',
+        missionId: goalAtDispatch.id,
+        activityId: `${kind}:${selectedName}`,
+        materialToken,
       })
       : Promise.resolve(this.executeGoalCommand(this.agent, command, {
         owner: 'player',
         routeOrigin: 'goal-director',
-      }))
-        .then(value => ({ value, verification: null, result: null }));
+        missionId: goalAtDispatch.id,
+        activityId: `${kind}:${selectedName}`,
+        materialToken,
+        returnExecution: true,
+      })).then(commandExecution => {
+        const hasExecutionEnvelope = commandExecution
+          && typeof commandExecution === 'object'
+          && Object.hasOwn(commandExecution, 'value')
+          && Object.hasOwn(commandExecution, 'result');
+        return {
+          value: hasExecutionEnvelope ? commandExecution.value : commandExecution,
+          verification: null,
+          result: hasExecutionEnvelope ? commandExecution.result || null : null,
+        };
+      });
     void Promise.resolve(execution)
       .then(outcome => {
         if (!this.canSettleDispatch(dispatchToken)) return;
-        let result = outcome?.result || this.agent.last_action_result;
-        if (!result?.actionId || result.actionId === previousActionId) {
+        let result = outcome?.result || null;
+        if (!result?.actionId) {
           result = {
             actionId: `missing-${this.now()}`,
             phase: 'failed',
@@ -2948,28 +3092,12 @@ export class GoalDirector {
           );
           return;
         }
-        const latestSubgoal = goal.subgoals.at(-1);
-        if (
-          latestSubgoal?.kind === 'deliver'
-          && latestSubgoal.state === 'failed'
-          && latestSubgoal.code === 'skill_drop_stance_unreachable'
-          && goal.evidence?.code === 'skill_drop_stance_unreachable'
-        ) {
-          // The delivery skill already reached the recipient and owns local
-          // stance selection. A moving recipient can invalidate that stance,
-          // but acquisition-region relocation would abandon the handoff area.
-          // Preserve the charged delivery attempt and let the next bounded
-          // action rebind the recipient from current Minecraft state.
-          this.persist({ ...goal, phase: 'deliver', updatedAt: this.now() });
-          this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
-          this.setStatus(
-            'waiting',
-            'delivery_stance_rebind',
-            'The local drop stance changed; rebinding the current recipient before the next bounded delivery attempt.',
-            true,
-          );
-          return;
-        }
+        // `giveToPlayer` already rebinds the live recipient and replans its
+        // local stance twice before reporting `skill_drop_stance_unreachable`.
+        // Replaying the same Activity here has no changed input and previously
+        // burned the complete Goal budget in four identical attempts. Let the
+        // normal deterministic-recovery decision below settle that unchanged
+        // geometry truthfully instead.
         // A death can move the companion further than the goal would ever
         // travel of its own accord. Resuming from there turns "get me some
         // wood" into a cross-country march to a recipient it cannot reach --
@@ -3003,7 +3131,7 @@ export class GoalDirector {
           this.setStatus('waiting', 'preemption_cleared', 'Deterministic goal will resume after the higher-priority action releases ownership.', true);
           return;
         }
-        if (/delivery_player_(?:absent|ambiguous)|skill_(?:lost_target|missing_item|family_missing)|delivery_unverified/.test(String(goal.evidence?.code || ''))) {
+        if (/delivery_player_(?:absent|ambiguous)|skill_(?:lost_target|missing_item|family_missing|pickup_unverified)|delivery_unverified/.test(String(goal.evidence?.code || ''))) {
           this.persist({ ...goal, phase: 'deliver', updatedAt: this.now() });
           this.nextAttemptAt = this.now() + PLAYER_WAIT_MS;
           return;

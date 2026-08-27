@@ -115,6 +115,7 @@ if (!fixtureRoot) {
   } else {
     const registrations = [
       ['deliver-item-goal', registeredFixtureHash('deliver-item-goal')],
+      ['dynamic-escape-delivery', registeredFixtureHash('dynamic-escape-delivery')],
       ['route-probe-inconclusive', registeredFixtureHash('route-probe-inconclusive')],
     ];
     const actual = sha256(recipe);
@@ -207,6 +208,7 @@ try {
     'pathfinding-finite-break-cost',
     'player-route-best-reachable',
     'deliver-item-goal',
+    'dynamic-escape-delivery',
     'orchestration-charcoal',
     'route-probe-inconclusive',
   ]);

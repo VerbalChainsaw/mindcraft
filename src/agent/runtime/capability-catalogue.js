@@ -224,11 +224,19 @@ function executeBoundCommand(binding, {
   routeOrigin = 'internal',
   missionId = null,
   activityId = null,
+  materialToken = null,
 } = {}) {
   if (!agent || typeof executeCommand !== 'function') {
     throw new TypeError('Capability execution requires the active agent and deterministic command executor.');
   }
-  return executeCommand(agent, binding.command, { owner, routeOrigin, missionId, activityId });
+  return executeCommand(agent, binding.command, {
+    owner,
+    routeOrigin,
+    missionId,
+    activityId,
+    materialToken,
+    returnExecution: true,
+  });
 }
 
 const DEFINITIONS = new Map();
@@ -390,9 +398,12 @@ function bindNearbyCave(context, args) {
 function bindUsefulAnimal(context, args) {
   const bot = context?.bot;
   const origin = context?.snapshot?.position;
+  const animal = canonicalName(args.animal);
+  const minimumCount = Math.max(1, Math.min(8, Math.floor(Number(args.minimumCount) || 1)));
   const candidates = Object.values(bot?.entities || {})
     .filter(entity => (
       isHuntable(entity)
+      && (!animal || canonicalName(entity.name) === animal)
       && entity?.position
       && [entity.position.x, entity.position.y, entity.position.z].every(Number.isFinite)
       && Math.hypot(
@@ -413,12 +424,14 @@ function bindUsefulAnimal(context, args) {
       )
     ));
   const entity = candidates[0];
-  if (!entity) {
+  if (!entity || candidates.length < minimumCount) {
     return immutable({
       ok: false,
       code: 'source_not_found',
-      detail: 'No useful adult animal is currently observed in the bounded scout region.',
-      target: { name: 'useful_animal' },
+      detail: animal
+        ? `Observed ${candidates.length}/${minimumCount} required adult ${animal} in the bounded scout region.`
+        : 'No useful adult animal is currently observed in the bounded scout region.',
+      target: { name: animal || 'useful_animal' },
     });
   }
   const target = {
@@ -433,6 +446,11 @@ function bindUsefulAnimal(context, args) {
     commandName: '!searchForEntity',
     command: `!searchForEntity(${commandString(target.name)}, ${args.range})`,
     target,
+    animal: animal || target.name,
+    minimumCount,
+    observedCount: candidates.length,
+    home: args.home,
+    range: args.range,
   });
 }
 
@@ -687,6 +705,16 @@ function verifyCaveSurvey(_before, after, binding, { result } = {}) {
 function verifyUsefulAnimal(_before, _after, binding, { agent, result } = {}) {
   const skill = result?.evidence?.skill;
   const observed = agent?.bot?.entities?.[binding.target?.id];
+  const population = Object.values(agent?.bot?.entities || {}).filter(entity => (
+    isHuntable(entity)
+    && canonicalName(entity?.name) === binding.animal
+    && entity?.position
+    && Math.hypot(
+      entity.position.x - binding.home.x,
+      entity.position.y - binding.home.y,
+      entity.position.z - binding.home.z,
+    ) <= binding.range
+  ));
   const target = observed?.position
     ? {
         name: canonicalName(observed.name),
@@ -703,14 +731,17 @@ function verifyUsefulAnimal(_before, _after, binding, { agent, result } = {}) {
     && ['arrived', 'already_at_target'].includes(skill.outcome)
     && Number(skill?.target?.id) === Number(binding.target?.id)
     && [target.x, target.y, target.z].every(Number.isFinite)
+    && population.length >= binding.minimumCount
   );
   return immutable({
     ok: verified,
     code: verified ? 'useful_animal_observation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
     detail: verified
-      ? `Minecraft confirmed the observed ${target.name} and its current location.`
-      : 'Minecraft did not confirm the bound useful animal at settlement.',
+      ? `Minecraft confirmed ${population.length} observed adult ${target.name} in the bounded source region and the selected source location.`
+      : `Minecraft did not confirm the bound ${binding.animal} population (${population.length}/${binding.minimumCount}) at settlement.`,
     target,
+    observedCount: population.length,
+    minimumCount: binding.minimumCount,
   });
 }
 
@@ -1160,10 +1191,14 @@ defineCapability({
   parameters: {
     home: { type: 'point' },
     range: { type: 'integer', minimum: 16, maximum: 128 },
+    animal: { type: 'string', optional: true },
+    minimumCount: { type: 'integer', minimum: 1, maximum: 8 },
   },
   normalizeArguments: args => immutable({
     home: normalizePoint(args?.home),
     range: boundedInteger(args?.range, 64, 16, 128),
+    animal: canonicalName(args?.animal),
+    minimumCount: boundedInteger(args?.minimumCount, 1, 1, 8),
   }),
   preconditions: (snapshot, args) => preconditionReport([
     { requirement: 'finite scout origin', satisfied: [args.home.x, args.home.y, args.home.z].every(Number.isFinite) },
@@ -2122,6 +2157,7 @@ export async function executeCapabilityAction(capability, {
   signal = null,
   missionId = null,
   activityId = null,
+  materialToken = null,
 } = {}) {
   const definition = getCapabilityDefinition(capability?.id);
   if (!definition) {
@@ -2161,8 +2197,7 @@ export async function executeCapabilityAction(capability, {
     };
   }
   try {
-    const previousActionId = agent?.last_action_result?.actionId || null;
-    const value = await definition.execute({ ...binding, expectedEffects }, {
+    const execution = await definition.execute({ ...binding, expectedEffects }, {
       agent,
       executeCommand,
       owner,
@@ -2170,15 +2205,26 @@ export async function executeCapabilityAction(capability, {
       signal,
       missionId,
       activityId,
+      materialToken,
     });
+    const hasExecutionEnvelope = execution
+      && typeof execution === 'object'
+      && Object.hasOwn(execution, 'value')
+      && Object.hasOwn(execution, 'result');
+    const value = hasExecutionEnvelope
+      ? execution.value
+      : execution;
     const after = captureCapabilitySnapshot(agent?.bot);
-    const executorResult = agent?.last_action_result;
+    // The capability owns only the result returned by this exact command
+    // execution. `last_action_result` remains observability state and can be
+    // replaced by another owner before this async continuation settles.
+    const executorResult = hasExecutionEnvelope ? execution.result || null : null;
     const verification = definition.verify(before, after, { ...binding, expectedEffects }, {
       agent,
       value,
       result: executorResult,
     });
-    const result = executorResult?.actionId && executorResult.actionId !== previousActionId
+    const result = executorResult?.actionId
       ? reconcileCapabilityResult(
         executorResult,
         verification,

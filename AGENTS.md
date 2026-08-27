@@ -19,6 +19,16 @@ Supporting documents and saved artifacts are evidence, not work orders.
 `docs/archive/` is history. Do not create another architecture, roadmap, master
 plan, review packet, session handoff, or parallel ruleset.
 
+The three authorities are one permanent live ledger, not periodic prose. Whenever
+the Director materially changes gameplay priority or a tranche materially advances,
+update them in the same working change: `ARCHITECTURE.md` owns the phase/proof
+state, `docs/CAMPAIGN-RECORD.md` owns durable accepted evidence, and
+`docs/HANDOFF.md` must state `DONE`, `NOW`, `NEXT ACCEPTANCE`, and `NOT NEXT`.
+Before recommending another mechanism, reconcile those fields with the newest
+explicit Director direction and current source. If the documents lag the Director,
+repair the documents; never use a stale tranche sentence to override the newer
+direction or jump to a later numbered phase.
+
 Work only within the user-authorized tranche and the smallest seam required to complete it. Preserve all dirty, staged, untracked, and concurrent work. Never reset, stash, clean, checkout, revert, commit, push, change dependencies, launch the game, or mutate runtime or world data unless explicitly authorized.
 
 Current source, runtime observation, and discriminating probes outrank summaries and static speculation. Tests and audits support evidence; they do not replace the requested physical outcome. Never claim success without direct support. Stop when the requested outcome and required verification are materially complete.

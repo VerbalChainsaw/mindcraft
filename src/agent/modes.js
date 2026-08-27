@@ -628,12 +628,20 @@ function dispatchAttributedProtection(mode, agent, proposal) {
         return { scheduled: false, code: 'safety_incident_unavailable' };
     }
     mode.failed_tactical_trigger = null;
+    const tacticalObjective = agent.survival_director?.tacticalObjectiveForThreat?.(threat) || null;
     say(agent, proposal.threat.attribution === 'protected_player'
         ? `Protecting ${agent.companion_context?.canonicalUsername || 'the guarded player'} from ${threat.name}!`
-        : `Fighting ${threat.name}!`);
+        : tacticalObjective === 'disengage'
+            ? `Breaking contact with ${threat.name}, then resuming your order!`
+            : `Fighting ${threat.name}!`);
     void execute(mode, agent, async () => {
         try {
-            return await skills.resolveTacticalCombat(agent.bot, SELF_DEFENSE_RANGE, threat.id);
+            return await skills.resolveTacticalCombat(
+                agent.bot,
+                SELF_DEFENSE_RANGE,
+                threat.id,
+                tacticalObjective ? { objective: tacticalObjective } : {},
+            );
         } finally {
             if (proposal.threat.attribution === 'protected_player') {
                 agent.companion_context?.clearProtection?.('engagement_finished');
@@ -820,9 +828,17 @@ const modes_list = [
             if (!blockAbove) blockAbove = {name: 'air'};
             const oxygen = Number(bot.oxygenLevel);
             const health = Number(bot.health);
+            const managedNavigationActive = (Number(bot.mindcraftManagedNavigationDepth) || 0) > 0;
             const criticalWaterExposure = bot.entity.isInWater
                 && Number.isFinite(health)
-                && health <= LOW_HEALTH_RETREAT_THRESHOLD;
+                && health <= LOW_HEALTH_RETREAT_THRESHOLD
+                // A managed Pathfinder route owns ordinary swimming and still
+                // remains subject to the oxygen emergency immediately below.
+                // Treating every low-health water frame as a separate escape
+                // made a durable trip oscillate between the same dry bank and
+                // its intentional first swim cell until its interruption
+                // budget was exhausted.
+                && !managedNavigationActive;
             const isFalling = !bot.entity.onGround
                 && !bot.entity.isInWater
                 && !bot.entity.isInLava
@@ -1081,25 +1097,42 @@ const modes_list = [
             if (selfDefenseRecoveryOwnsSameThreat(agent, enemy)) {
                 return { code: 'survival_incident_recovery_owns_same_threat' };
             }
+            const tacticalObjective = agent.survival_director?.tacticalObjectiveForThreat?.(enemy) || null;
             const eligibility = selfDefenseReflexEligibility(
                 agent,
                 enemy,
                 this.failed_tactical_trigger,
             );
-            if (!eligibility.eligible) return { code: eligibility.code };
+            if (!tacticalObjective && !eligibility.eligible) return { code: eligibility.code };
             this.failed_tactical_trigger = null;
+            // Every tactical response needs one stable incident identity, even
+            // when the hostile was selected by ambient proximity before it
+            // landed a hit. Without this, a failed melee pursuit had nowhere
+            // to store its required disengage continuation and the next mode
+            // tick could replay the same attack forever.
+            agent.survival_director?.observeSafetySource?.(Object.freeze({
+                kind: 'hostile',
+                id: Number(enemy.id),
+                name: String(enemy.name || enemy.username || 'hostile').slice(0, 64),
+                username: null,
+                type: String(enemy.type || '').slice(0, 32) || null,
+                observedAt: Date.now(),
+            }));
             // Threat relevance is independent from whether pathfinder can walk
             // beside the nearest hostile. The tactical selector evaluates all
             // loaded threats and chooses melee, range, or retreat itself.
             say(agent, protectionThreat
                 ? `Protecting ${agent.companion_context?.canonicalUsername || 'the guarded player'} from ${enemy.name}!`
-                : `Fighting ${enemy.name}!`);
+                : tacticalObjective === 'disengage'
+                    ? `Breaking contact with ${enemy.name}, then resuming your order!`
+                    : `Fighting ${enemy.name}!`);
             void execute(this, agent, async () => {
                 try {
                     return await skills.resolveTacticalCombat(
                         agent.bot,
                         SELF_DEFENSE_RANGE,
                         enemy.id,
+                        tacticalObjective ? { objective: tacticalObjective } : {},
                     );
                 } finally {
                     if (protectionThreat) agent.companion_context?.clearProtection?.('engagement_finished');

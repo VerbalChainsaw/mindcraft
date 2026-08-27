@@ -52,7 +52,14 @@ const INTERRUPT_REISSUE_MS = 120;
 
 function inferActivitySpecialist(_actionLabel, requestedSpecialist = null) {
     const requested = String(requestedSpecialist || '').trim().toLowerCase();
-    if (requested === 'pathfinder' || requested === 'collectblock' || requested === 'container') return requested;
+    if (
+        requested === 'pathfinder'
+        || requested === 'collectblock'
+        || requested === 'container'
+        || requested === 'craft'
+        || requested === 'furnace'
+        || requested === 'placement'
+    ) return requested;
     return null;
 }
 
@@ -321,7 +328,9 @@ class ContainerActivityAdapter extends PathfinderActivityAdapter {
     }
 
     isSettled() {
-        return this.bot?.currentWindow == null && super.isSettled();
+        return this.bot?.currentWindow == null
+            && this.bot?.inventory?.selectedItem == null
+            && super.isSettled();
     }
 
     async waitForSettlement(timeoutMs) {
@@ -329,6 +338,204 @@ class ContainerActivityAdapter extends PathfinderActivityAdapter {
         return settlement?.settled === true
             ? { settled: true, evidence: 'container_closed_pathfinder_idle' }
             : { settled: false, evidence: 'container_settlement_timeout' };
+    }
+}
+
+class WindowTransactionActivityAdapter extends ContainerActivityAdapter {
+    constructor(bot, onProgress, transactionKind) {
+        super(bot, onProgress);
+        this.transactionKind = transactionKind;
+        this.activeTransactions = new Set();
+    }
+
+    start() {
+        super.start();
+        this.listen(`${this.transactionKind}_transaction_start`, transaction => {
+            const transactionId = String(transaction?.transactionId || 'unknown');
+            this.activeTransactions.add(transactionId);
+            this.onProgress(`${this.transactionKind}_transaction_started`, {
+                transactionId,
+                target: transaction?.target || null,
+            });
+        });
+        this.listen(`${this.transactionKind}_transaction_end`, transaction => {
+            const transactionId = String(transaction?.transactionId || 'unknown');
+            this.activeTransactions.delete(transactionId);
+            this.onProgress(`${this.transactionKind}_transaction_ended`, {
+                transactionId,
+                target: transaction?.target || null,
+                outcome: transaction?.outcome || null,
+            });
+        });
+    }
+
+    isSettled() {
+        return this.activeTransactions.size === 0 && super.isSettled();
+    }
+
+    waitForSettlement(timeoutMs) {
+        if (this.isSettled()) {
+            return Promise.resolve({
+                settled: true,
+                evidence: `${this.transactionKind}_transaction_closed_cursor_clear_pathfinder_idle`,
+            });
+        }
+        return new Promise(resolve => {
+            let finished = false;
+            const events = [
+                `${this.transactionKind}_transaction_end`,
+                'windowClose',
+                'path_update',
+                'path_reset',
+                'path_stop',
+                'goal_reached',
+                'goal_updated',
+                'physicsTick',
+            ];
+            const cleanup = () => {
+                for (const event of events) this.bot.removeListener(event, check);
+                clearTimeout(timer);
+            };
+            const finish = result => {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve(result);
+            };
+            const check = () => {
+                if (this.isSettled()) finish({
+                    settled: true,
+                    evidence: `${this.transactionKind}_transaction_closed_cursor_clear_pathfinder_idle`,
+                });
+            };
+            for (const event of events) this.bot.on(event, check);
+            const timer = setTimeout(
+                () => finish({
+                    settled: false,
+                    evidence: `${this.transactionKind}_transaction_settlement_timeout`,
+                }),
+                timeoutMs,
+            );
+            check();
+        });
+    }
+}
+
+class PlacementActivityAdapter extends PathfinderActivityAdapter {
+    constructor(bot, onProgress) {
+        super(bot, onProgress);
+        this.activePlacements = new Set();
+    }
+
+    start() {
+        super.start();
+        this.listen('placement_start', operation => {
+            const operationId = String(operation?.operationId || 'unknown');
+            this.activePlacements.add(operationId);
+            this.onProgress('placement_started', {
+                operationId,
+                target: operation?.target || null,
+                item: operation?.item || null,
+            });
+        });
+        this.listen('placement_verified', operation => {
+            this.onProgress('placement_verified', {
+                operationId: String(operation?.operationId || 'unknown'),
+                target: operation?.target || null,
+                observed: operation?.observed || null,
+            });
+        });
+        this.listen('placement_end', operation => {
+            const operationId = String(operation?.operationId || 'unknown');
+            this.activePlacements.delete(operationId);
+            this.onProgress('placement_ended', {
+                operationId,
+                target: operation?.target || null,
+                outcome: operation?.outcome || null,
+            });
+        });
+    }
+
+    async requestHalt() {
+        const pathfinder = await super.requestHalt();
+        if (this.isSettled()) {
+            return { acknowledged: true, evidence: 'placement_idle_pathfinder_idle' };
+        }
+        return new Promise(resolve => {
+            const events = [
+                'placement_end',
+                'path_update',
+                'path_reset',
+                'path_stop',
+                'goal_reached',
+                'goal_updated',
+                'diggingAborted',
+                'diggingCompleted',
+                'physicsTick',
+            ];
+            const check = () => {
+                if (!this.isSettled()) return;
+                for (const event of events) this.bot.removeListener(event, check);
+                resolve({
+                    acknowledged: true,
+                    evidence: pathfinder?.acknowledged === true
+                        ? 'placement_finished_pathfinder_halt_acknowledged'
+                        : 'placement_finished_pathfinder_idle',
+                });
+            };
+            for (const event of events) this.bot.on(event, check);
+            check();
+        });
+    }
+
+    async forceHalt() {
+        await super.forceHalt();
+        const acknowledged = this.isSettled();
+        return {
+            acknowledged,
+            evidence: acknowledged ? 'placement_force_halted_idle' : 'placement_force_halt_pending',
+        };
+    }
+
+    isSettled() {
+        return this.activePlacements.size === 0 && super.isSettled();
+    }
+
+    waitForSettlement(timeoutMs) {
+        if (this.isSettled()) return Promise.resolve({ settled: true, evidence: 'placement_idle_pathfinder_idle' });
+        return new Promise(resolve => {
+            let finished = false;
+            const events = [
+                'placement_end',
+                'path_update',
+                'path_reset',
+                'path_stop',
+                'goal_reached',
+                'goal_updated',
+                'diggingAborted',
+                'diggingCompleted',
+                'physicsTick',
+            ];
+            const cleanup = () => {
+                for (const event of events) this.bot.removeListener(event, check);
+                clearTimeout(timer);
+            };
+            const finish = result => {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve(result);
+            };
+            const check = () => {
+                if (this.isSettled()) finish({ settled: true, evidence: 'placement_idle_pathfinder_idle' });
+            };
+            for (const event of events) this.bot.on(event, check);
+            const timer = setTimeout(
+                () => finish({ settled: false, evidence: 'placement_settlement_timeout' }),
+                timeoutMs,
+            );
+            check();
+        });
     }
 }
 
@@ -384,6 +591,11 @@ const REQUEST_ROUTE_ORIGINS = new Set([
     'job-director',
     'internal',
 ]);
+const DURABLE_SUBMISSION_KINDS = new Set([
+    'goal_submission',
+    'job_submission',
+    'agenda_submission',
+]);
 
 function boundedRequestText(value, maxLength = MAX_REQUEST_TEXT) {
     return String(value || '')
@@ -417,6 +629,7 @@ function normalizeRequestContext(value) {
         agendaDisposition: value.agendaDisposition === 'interrupt' ? 'interrupt' : 'append',
         missionId: boundedRequestText(value.missionId, 96) || null,
         activityId: boundedRequestText(value.activityId, 128) || null,
+        materialToken: boundedRequestText(value.materialToken, 240) || null,
     });
 }
 
@@ -483,6 +696,9 @@ function normalizeReceiptMode(mode) {
 
 function actionAttemptSignature(actionLabel, requestContext = null) {
     return JSON.stringify([
+        String(requestContext?.missionId || ''),
+        String(requestContext?.activityId || ''),
+        String(requestContext?.materialToken || ''),
         String(actionLabel || ''),
         String(requestContext?.selectedSkill || ''),
         Array.isArray(requestContext?.args) ? requestContext.args : [],
@@ -531,6 +747,8 @@ export class ActionManager {
         this.stopTimedOutAt = null;
         this.ownerContext = new AsyncLocalStorage();
         this.requestContext = new AsyncLocalStorage();
+        this.commandExecutionContext = new AsyncLocalStorage();
+        this.actionCircuits = new Map();
     }
 
     activitySnapshot() {
@@ -586,6 +804,14 @@ export class ActionManager {
             })
             : selectedSpecialist === 'container'
             ? new ContainerActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            })
+            : selectedSpecialist === 'craft' || selectedSpecialist === 'furnace'
+            ? new WindowTransactionActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            }, selectedSpecialist)
+            : selectedSpecialist === 'placement'
+            ? new PlacementActivityAdapter(this.agent.bot, (kind, evidence) => {
                 this.observeActivityProgress(kind, evidence);
             })
             : null;
@@ -694,6 +920,19 @@ export class ActionManager {
         ++this.activityWorldRevision;
         const settlement = await this.currentActivityAdapter.waitForSettlement(this.settlementTimeoutMs);
         if (
+            settlement?.settled === true
+            && this.currentActivity.cancelRequestedAt !== null
+            && this.currentActivity.cancelAcknowledgedAt === null
+        ) {
+            // Cancellation and normal completion can cross in the same event
+            // turn. A specialist that has closed its transaction/window,
+            // cleared the cursor, and stopped pathfinding has physically
+            // yielded; waiting for the parallel halt promise to repeat that
+            // fact creates a false ABORTED_UNSETTLED lease. Join the cancel to
+            // the stronger settlement proof before evaluating release.
+            this.acknowledgeCancellation(`settled:${settlement.evidence || 'specialist_idle'}`);
+        }
+        if (
             settlement?.settled !== true
             || (this.currentActivity.cancelRequestedAt !== null && this.currentActivity.cancelAcknowledgedAt === null)
         ) {
@@ -756,6 +995,47 @@ export class ActionManager {
         return this.requestContext.getStore() || null;
     }
 
+    async runWithCommandExecution(operation, requestContext = null) {
+        if (typeof operation !== 'function') throw new TypeError('Command execution operation must be a function.');
+        const envelope = {
+            result: null,
+            requestContext: normalizeRequestContext(requestContext),
+            durableSubmission: null,
+        };
+        const value = await this.commandExecutionContext.run(envelope, operation);
+        return Object.freeze({
+            value,
+            result: envelope.result,
+            requestContext: envelope.requestContext,
+            durableSubmission: envelope.durableSubmission,
+        });
+    }
+
+    recordCommandExecutionResult(result) {
+        const envelope = this.commandExecutionContext.getStore();
+        if (!envelope || !result || typeof result !== 'object') return false;
+        envelope.result = result;
+        return true;
+    }
+
+    recordDurableSubmissionReceipt(receipt) {
+        const envelope = this.commandExecutionContext.getStore();
+        const requestContext = envelope?.requestContext;
+        if (!envelope || !requestContext || !receipt || typeof receipt !== 'object') return false;
+        if (
+            envelope.durableSubmission !== null
+            || !requestContext.requestId
+            || !DURABLE_SUBMISSION_KINDS.has(receipt.submissionKind)
+            || receipt.requestId !== requestContext.requestId
+            || receipt.selectedSkill !== requestContext.selectedSkill
+            || receipt.routeOrigin !== requestContext.routeOrigin
+            || (receipt.missionId || null) !== requestContext.missionId
+            || (receipt.activityId || null) !== requestContext.activityId
+        ) return false;
+        envelope.durableSubmission = Object.freeze({ ...receipt });
+        return true;
+    }
+
     ownerPriority(owner) {
         return ACTION_OWNER_PRIORITY[normalizeActionOwner(owner)];
     }
@@ -787,19 +1067,25 @@ export class ActionManager {
         // struggling with an automatic task at the same location.
         if (actionOwner === 'player') {
             this.recentActionAttempts = [];
+            this.actionCircuits.clear();
             return null;
         }
         if (this.isCriticalReflexAction(actionOwner, actionLabel)) return null;
 
         const position = actionPosition(this.agent);
         const signature = actionAttemptSignature(actionLabel, requestContext);
+        const circuitKey = JSON.stringify([actionOwner, signature]);
+        const openCircuit = this.actionCircuits.get(circuitKey);
+        if (openCircuit) return { ...openCircuit, circuitKey };
         const repeats = this.recentActionAttempts.filter(attempt => (
             attempt.owner === actionOwner
             && attempt.signature === signature
             && isSameActionArea(attempt.position, position)
         ));
         if (repeats.length >= ACTION_PATTERN_MAX_REPEATS) {
-            return { repeats: repeats.length + 1, position };
+            const circuit = { repeats: repeats.length + 1, position, openedAt: now };
+            this.actionCircuits.set(circuitKey, circuit);
+            return { ...circuit, circuitKey };
         }
 
         this.recentActionAttempts.push({
@@ -829,6 +1115,7 @@ export class ActionManager {
         this.recentActionAttempts = this.recentActionAttempts.filter(attempt => (
             attempt.owner !== actionOwner
         ));
+        this.actionCircuits.delete(key);
         return true;
     }
 
@@ -1159,22 +1446,25 @@ export class ActionManager {
             const repeatedPattern = this.recordActionAttempt(actionLabel, actionOwner, commandRequest);
             if (repeatedPattern) {
                 console.warn(`Repeated action pattern detected for '${actionLabel}' (${repeatedPattern.repeats} starts within ${ACTION_PATTERN_WINDOW_MS}ms).`);
-                this.cancelResume();
-                this.agent.holdPosition?.('repeated action pattern safety');
                 const result = createActionResult({
                     actionId,
                     label: actionLabel,
                     phase: 'blocked',
                     code: 'action_pattern_detected',
-                    detail: 'The same automatic action kept restarting in the same area, so the bot stopped to avoid looping. Give it a fresh player command after checking the obstruction.',
+                    detail: 'This owner repeated the same automatic action without a material state change. Its checkpoint is preserved until the owning Director changes the target, phase, or recovery state.',
                     evidence: {
                         repeats: repeatedPattern.repeats,
                         windowMs: ACTION_PATTERN_WINDOW_MS,
                         position: repeatedPattern.position,
                         selectedSkill: commandRequest?.selectedSkill || null,
                         args: commandRequest?.args || [],
+                        missionId: commandRequest?.missionId || null,
+                        activityId: commandRequest?.activityId || null,
+                        materialToken: commandRequest?.materialToken || null,
+                        circuitOpenedAt: repeatedPattern.openedAt || null,
                     },
-                    retryable: false,
+                    retryable: true,
+                    continuation: { kind: 'retry_after_material_change' },
                     startedAt,
                 });
                 this.lastResult = result;
@@ -1330,6 +1620,17 @@ export class ActionManager {
                 return { success: false, message: result.detail, interrupted, timedout, unsettled: true, result };
             }
             const activityEvidence = this.activitySnapshot();
+            const tacticalDecision = Array.isArray(skillEvidence?.decisions)
+                ? skillEvidence.decisions.at(-1)
+                : null;
+            const failedMeleeContinuation = phase === 'failed'
+                && skillEvidence?.kind === 'tactical_combat'
+                && ['melee', 'shield_melee'].includes(tacticalDecision?.response)
+                ? {
+                    kind: 'disengage_then_resume',
+                    incidentId: this.agent.survival_director?.safetyIncident?.id || undefined,
+                  }
+                : null;
             const result = createActionResult({
                 actionId,
                 label: actionLabel,
@@ -1352,6 +1653,7 @@ export class ActionManager {
                 retryable: receiptContractFailure
                     ? false
                     : interrupted || timedout || skillRetryable || requestedRetryable,
+                continuation: failedMeleeContinuation,
                 startedAt,
             });
             this.releaseBodyLease(actionId, actionOwner);

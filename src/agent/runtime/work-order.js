@@ -55,6 +55,11 @@ function acquisitionStrategyFailureKey(method) {
   return match ? `${match[1]}:*->${match[2]}` : method;
 }
 
+function physicalTargetKey(target) {
+  if (![target?.x, target?.y, target?.z].every(Number.isFinite)) return null;
+  return `${target.name || ''}:${Math.floor(target.x)}:${Math.floor(target.y)}:${Math.floor(target.z)}`;
+}
+
 function normalizeTarget(target) {
   if (target == null) return null;
   if (!target || typeof target !== 'object' || Array.isArray(target)) {
@@ -251,6 +256,8 @@ function normalizeCheckpoint(checkpoint) {
     'miningRegionRelocations',
     'corridorSearchLegs',
     'corridorRequirementProgress',
+    'materialSearchRelocations',
+    'safetyDetours',
   ]) {
     if (Number.isFinite(checkpoint[key])) normalized[key] = finiteInteger(checkpoint[key], 0, 0, 4096);
   }
@@ -295,6 +302,16 @@ function normalizeCheckpoint(checkpoint) {
   const scoutGuideFinding = boundedText(checkpoint.scoutGuideFinding, 32);
   if (scoutFindings.includes(scoutGuideFinding)) {
     normalized.scoutGuideFinding = scoutGuideFinding;
+  }
+  const scoutAnimalTarget = boundedText(checkpoint.scoutAnimalTarget, 64);
+  if (scoutFindings.includes('animal') && CANONICAL_NAME.test(scoutAnimalTarget)) {
+    normalized.scoutAnimalTarget = scoutAnimalTarget;
+    normalized.scoutAnimalMinimumCount = finiteInteger(
+      checkpoint.scoutAnimalMinimumCount,
+      1,
+      1,
+      8,
+    );
   }
   for (const [prefix, includeName] of [['scoutCave', false], ['scoutAnimal', true], ['scoutVillage', false]]) {
     const coordinates = ['X', 'Y', 'Z'].map(axis => Number(checkpoint[`${prefix}${axis}`]));
@@ -434,6 +451,10 @@ function normalizeCheckpoint(checkpoint) {
   }
   if (checkpoint.acquisitionVariantCommitted === true) {
     normalized.acquisitionVariantCommitted = true;
+  }
+  const materialSearchTarget = boundedText(checkpoint.materialSearchTarget, 64);
+  if (CANONICAL_NAME.test(materialSearchTarget)) {
+    normalized.materialSearchTarget = materialSearchTarget;
   }
   if (Array.isArray(checkpoint.failedMethods)) {
     normalized.failedMethods = Object.freeze([...new Set(checkpoint.failedMethods
@@ -588,12 +609,143 @@ function normalizeConstraints(constraints) {
   });
 }
 
+function normalizeInteractionFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  try {
+    const target = normalizeTarget(value.target);
+    const kind = boundedText(value.kind, 40);
+    const method = boundedText(value.method, 80);
+    const failureStage = boundedText(value.failureStage, 80);
+    if (!kind || !method || !failureStage || !target) return null;
+    const material = boundedText(value.material, 64);
+    return Object.freeze({
+      kind,
+      method,
+      failureStage,
+      candidateCount: finiteInteger(value.candidateCount, 0, 0, 65_536),
+      target,
+      ...(CANONICAL_NAME.test(material) ? { material } : {}),
+    });
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMaterialBlocker(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const missionId = boundedText(value.missionId, 96);
+  const activityId = boundedText(value.activityId, 128);
+  const materialToken = boundedText(value.materialToken, 240);
+  const selectedSkill = boundedText(value.selectedSkill, 80);
+  if (!missionId || !activityId || !materialToken || !selectedSkill) return null;
+  const args = Object.freeze((Array.isArray(value.args) ? value.args : [])
+    .slice(0, 16)
+    .map(argument => {
+      if (argument === null || typeof argument === 'boolean') return argument;
+      if (typeof argument === 'number') return Number.isFinite(argument) ? argument : null;
+      if (typeof argument === 'string') return boundedText(argument, 240);
+      return null;
+    }));
+  const position = (() => {
+    try {
+      return normalizeTarget(value.position);
+    } catch {
+      return null;
+    }
+  })();
+  return Object.freeze({
+    missionId,
+    activityId,
+    materialToken,
+    selectedSkill,
+    args,
+    ...(position ? { position } : {}),
+    openedAt: Number.isFinite(Number(value.openedAt))
+      ? Math.max(0, Math.floor(Number(value.openedAt)))
+      : null,
+  });
+}
+
+function materialBlockerFromResult(result) {
+  if (
+    result?.code !== 'action_pattern_detected'
+    || result?.continuation?.kind !== 'retry_after_material_change'
+  ) return null;
+  const evidence = result.evidence;
+  return normalizeMaterialBlocker({
+    missionId: evidence?.missionId,
+    activityId: evidence?.activityId,
+    materialToken: evidence?.materialToken,
+    selectedSkill: evidence?.selectedSkill,
+    args: evidence?.args,
+    position: evidence?.position,
+    openedAt: evidence?.circuitOpenedAt,
+  });
+}
+
+function interactionFailureFromResult(result) {
+  const skill = result?.evidence?.skill;
+  const stance = skill?.interactionStance;
+  const request = result?.evidence?.request;
+  if (
+    !stance
+    || stance.status !== 'failed'
+    || !stance.failureStage
+    || !request?.selectedSkill
+  ) return null;
+  const target = stance.target || skill?.target || result?.target;
+  if (!target) return null;
+  return normalizeInteractionFailure({
+    kind: skill?.kind || stance.kind || 'interaction',
+    method: request.selectedSkill,
+    material: typeof request.args?.[0] === 'string' ? request.args[0] : '',
+    target,
+    failureStage: stance.failureStage,
+    candidateCount: stance.candidateCount,
+  });
+}
+
+function exhaustiveBuilderPlacementFailure(order, result) {
+  if (order?.role !== 'builder' || result?.phase === 'succeeded') return null;
+  const failure = interactionFailureFromResult(result);
+  const request = result?.evidence?.request;
+  const args = request?.args;
+  if (
+    failure?.kind !== 'place'
+    || failure.method !== '!placeBlockAt'
+    || failure.failureStage !== 'no_legal_stance'
+    || failure.candidateCount !== 0
+    || !Array.isArray(args)
+    || ![args[1], args[2], args[3]].every(Number.isFinite)
+    || failure.target.x !== Math.floor(args[1])
+    || failure.target.y !== Math.floor(args[2])
+    || failure.target.z !== Math.floor(args[3])
+    || failure.material !== args[0]
+  ) return null;
+  return failure;
+}
+
 function normalizeEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return null;
+  const target = (() => {
+    try {
+      return normalizeTarget(evidence.target);
+    } catch {
+      return null;
+    }
+  })();
+  const interactionFailure = normalizeInteractionFailure(evidence.interactionFailure);
+  const materialBlocker = normalizeMaterialBlocker(evidence.materialBlocker);
   return Object.freeze({
     code: boundedText(evidence.code, 80),
     detail: boundedText(evidence.detail, 280),
     actionId: boundedText(evidence.actionId, 96),
+    ...(target ? { target } : {}),
+    ...(interactionFailure ? { interactionFailure } : {}),
+    ...(materialBlocker ? { materialBlocker } : {}),
+    ...(boundedText(evidence.continuationKind, 40)
+      ? { continuationKind: boundedText(evidence.continuationKind, 40) }
+      : {}),
     ...(evidence.inconclusive === true ? { inconclusive: true } : {}),
   });
 }
@@ -606,6 +758,10 @@ function actionResultEvidence(result) {
     code: result?.code,
     detail: result?.detail,
     actionId: result?.actionId,
+    target: result?.evidence?.skill?.target || result?.target || null,
+    interactionFailure: interactionFailureFromResult(result),
+    materialBlocker: materialBlockerFromResult(result),
+    continuationKind: result?.continuation?.kind,
     ...(inconclusive ? { inconclusive: true } : {}),
   };
 }
@@ -824,6 +980,38 @@ export function advanceWorkOrder(order, result, {
       updatedAt: now,
     });
   }
+  const continuationKind = result?.continuation?.kind || null;
+  if (['resume_same', 'disengage_then_resume'].includes(continuationKind)) {
+    return normalizeWorkOrder({
+      ...current,
+      preemptions: isPreemption(result)
+        ? Math.min(MAX_PREEMPTIONS, current.preemptions + 1)
+        : current.preemptions,
+      evidence: actionResultEvidence(result),
+      updatedAt: now,
+    });
+  }
+  if (continuationKind === 'retry_after_material_change') {
+    return normalizeWorkOrder({
+      ...current,
+      evidence: actionResultEvidence(result),
+      updatedAt: now,
+    });
+  }
+  const exhaustivePlacementFailure = exhaustiveBuilderPlacementFailure(current, result);
+  if (exhaustivePlacementFailure) {
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'failed',
+      resumePhase: null,
+      evidence: {
+        ...actionResultEvidence(result),
+        code: 'builder_placement_no_legal_stance',
+        detail: `No legal placement stance exists for ${exhaustivePlacementFailure.material || 'the selected block'} at ${exhaustivePlacementFailure.target.x},${exhaustivePlacementFailure.target.y},${exhaustivePlacementFailure.target.z}; the unchanged Builder action will not be redispatched.`,
+      },
+      updatedAt: now,
+    });
+  }
   if (isPreemption(result) && current.preemptions < MAX_PREEMPTIONS) {
     // Hold the phase and the attempt budget. The next tick re-derives the same
     // step against fresh world state, which is what "resume what I was doing"
@@ -899,18 +1087,22 @@ export function advanceWorkOrder(order, result, {
       const method = boundedText(failedMethod, 160);
       const sourceFailureCounts = new Map();
       for (const previous of current.checkpoint.failedTargets || []) {
-        sourceFailureCounts.set(previous.name, (sourceFailureCounts.get(previous.name) || 0) + 1);
+        const key = physicalTargetKey(previous);
+        if (!key) continue;
+        sourceFailureCounts.set(key, (sourceFailureCounts.get(key) || 0) + 1);
       }
       let repeatedSourceFailure = false;
       for (const target of incomingFailedTargets) {
-        const priorCount = sourceFailureCounts.get(target.name) || 0;
+        const key = physicalTargetKey(target);
+        if (!key) continue;
+        const priorCount = sourceFailureCounts.get(key) || 0;
         if (priorCount >= 1) repeatedSourceFailure = true;
-        sourceFailureCounts.set(target.name, priorCount + 1);
+        sourceFailureCounts.set(key, priorCount + 1);
       }
-      // A second no-progress target from the same physical source is evidence
-      // that candidate ranking is not enough. Exclude that deterministic
-      // method for this order so the existing planner must bind a genuinely
-      // different strategy (or report that none exists).
+      // One action may report several distinct blocks of the same type. Keep
+      // each as a concrete exclusion; only failure at the exact same physical
+      // coordinate again is evidence that target ranking cannot recover this
+      // acquisition strategy.
       const failedMethods = method && repeatedSourceFailure
         ? [...new Set([
             ...(current.checkpoint.failedMethods || []),
@@ -1008,9 +1200,12 @@ export function reconcileWorkOrder(order, currentSnapshot = {}, now = Date.now()
   });
 }
 
-export function resumeFailedWorkOrder(order, now = Date.now()) {
+export function resumeFailedWorkOrder(order, now = Date.now(), { allowAutomatic = false } = {}) {
   const current = normalizeWorkOrder(order);
-  if (current.phase !== 'failed' || current.source !== 'player') return current;
+  if (
+    current.phase !== 'failed'
+    || (current.source !== 'player' && allowAutomatic !== true)
+  ) return current;
   const {
     failedMethods: _failedMethods,
     miningSearchNoProgress: _miningSearchNoProgress,
@@ -1030,8 +1225,10 @@ export function resumeFailedWorkOrder(order, now = Date.now()) {
     // disappear before the repaired executor is tried.
     checkpoint,
     evidence: {
-      code: 'player_resume_requested',
-      detail: 'The player explicitly resumed this exact failed work order; Minecraft state must be reassessed before execution.',
+      code: current.source === 'player' ? 'player_resume_requested' : 'operator_resume_requested',
+      detail: current.source === 'player'
+        ? 'The player explicitly resumed this exact failed work order; Minecraft state must be reassessed before execution.'
+        : 'The operator explicitly resumed this exact failed automatic work order after repairing its blocker; Minecraft state must be reassessed before execution.',
       actionId: '',
     },
     updatedAt: now,

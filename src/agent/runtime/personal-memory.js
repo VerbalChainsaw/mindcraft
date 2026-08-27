@@ -54,6 +54,14 @@ function normalizeDeathRecovery(value, { settled = false } = {}) {
     .filter(([name, count]) => name && count > 0)
     .slice(0, MAX_DEATH_INVENTORY_TYPES));
   if (Object.keys(inventory).length === 0) return null;
+  const recoveredInventory = Object.fromEntries(Object.entries(value.recoveredInventory || {})
+    .map(([rawName, rawCount]) => {
+      const name = deathItemName(rawName);
+      const expected = Math.max(0, Number(inventory[name]) || 0);
+      return [name, Math.max(0, Math.min(expected, Math.floor(Number(rawCount) || 0)))];
+    })
+    .filter(([name, count]) => name && count > 0 && Object.hasOwn(inventory, name))
+    .slice(0, MAX_DEATH_INVENTORY_TYPES));
   const recoveredAt = settled ? finite(value.recoveredAt) : null;
   if (settled && recoveredAt === null) return null;
   return {
@@ -65,6 +73,9 @@ function normalizeDeathRecovery(value, { settled = false } = {}) {
     recovered: settled
       ? Math.max(0, Math.min(1_000_000, Math.floor(Number(value.recovered) || 0)))
       : 0,
+    recoveredInventory,
+    recoveryObservedAt: finite(value.recoveryObservedAt),
+    recoverySource: text(value.recoverySource, 80),
   };
 }
 

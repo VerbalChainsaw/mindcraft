@@ -20,6 +20,95 @@ const { plugin: collectblock } = collectBlockRuntime;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
 let Item = null;
+const RECIPE_BOOK_INDEX = new WeakMap();
+
+const SLOT_DISPLAY_TYPES = Object.freeze({
+    2: 'item',
+    3: 'item_stack',
+    6: 'with_remainder',
+    7: 'composite',
+});
+const RECIPE_DISPLAY_TYPES = Object.freeze({
+    0: 'crafting_shapeless',
+    1: 'crafting_shaped',
+});
+
+function mappedTypeName(value, numericTypes) {
+    if (typeof value === 'string') return value;
+    return numericTypes[Number(value)] || '';
+}
+
+function slotDisplayItemId(display) {
+    const type = mappedTypeName(display?.type, SLOT_DISPLAY_TYPES);
+    const data = display?.data;
+    if (type === 'item') return Number.isInteger(Number(data)) ? Number(data) : null;
+    if (type === 'item_stack') {
+        const itemId = Number(data?.itemId ?? data?.item?.id ?? data?.id);
+        return Number.isInteger(itemId) ? itemId : null;
+    }
+    if (type === 'with_remainder') return slotDisplayItemId(data?.input);
+    if (type === 'composite') {
+        for (const candidate of Array.isArray(data) ? data : []) {
+            const itemId = slotDisplayItemId(candidate);
+            if (itemId !== null) return itemId;
+        }
+    }
+    return null;
+}
+
+function craftingRecipeDisplayRecord(recipe) {
+    const display = recipe?.display;
+    const type = mappedTypeName(display?.type, RECIPE_DISPLAY_TYPES);
+    if (type !== 'crafting_shaped' && type !== 'crafting_shapeless') return null;
+    const displayId = Number(recipe?.displayId);
+    const outputItemId = slotDisplayItemId(display?.data?.result);
+    if (!Number.isSafeInteger(displayId) || !Number.isInteger(outputItemId)) return null;
+    const requiresTable = type === 'crafting_shaped'
+        ? Number(display?.data?.width) > 2 || Number(display?.data?.height) > 2
+        : (Array.isArray(display?.data?.ingredients) ? display.data.ingredients.length : 0) > 4;
+    return Object.freeze({
+        displayId,
+        outputItemId,
+        type,
+        requiresTable,
+    });
+}
+
+function installRecipeBookIndex(bot) {
+    const records = new Map();
+    RECIPE_BOOK_INDEX.set(bot, records);
+
+    const onAdd = packet => {
+        if (packet?.replace === true) records.clear();
+        for (const entry of Array.isArray(packet?.entries) ? packet.entries : []) {
+            const record = craftingRecipeDisplayRecord(entry?.recipe);
+            if (record) records.set(record.displayId, record);
+        }
+    };
+    const onRemove = packet => {
+        for (const displayId of Array.isArray(packet?.recipeIds) ? packet.recipeIds : []) {
+            records.delete(Number(displayId));
+        }
+    };
+    bot._client.on('recipe_book_add', onAdd);
+    bot._client.on('recipe_book_remove', onRemove);
+    bot.once('end', () => {
+        bot._client.removeListener('recipe_book_add', onAdd);
+        bot._client.removeListener('recipe_book_remove', onRemove);
+    });
+}
+
+export function unlockedCraftingRecipeDisplays(bot, itemName, { requiresTable = null } = {}) {
+    const itemId = Number(bot?.registry?.itemsByName?.[String(itemName || '').trim()]?.id);
+    const records = RECIPE_BOOK_INDEX.get(bot);
+    if (!Number.isInteger(itemId) || !(records instanceof Map)) return Object.freeze([]);
+    return Object.freeze([...records.values()]
+        .filter(record => (
+            record.outputItemId === itemId
+            && (requiresTable === null || record.requiresTable === Boolean(requiresTable))
+        ))
+        .sort((left, right) => left.displayId - right.displayId));
+}
 const FUEL_SMELT_OUTPUT = Object.freeze({
     coal: 8,
     charcoal: 8,
@@ -156,6 +245,7 @@ export function initBot(username) {
     }
 
     const bot = createBot(options);
+    installRecipeBookIndex(bot);
 
     // Suppress PartialReadError for non-critical packets
     // Paper servers sometimes send packets that node-minecraft-protocol
