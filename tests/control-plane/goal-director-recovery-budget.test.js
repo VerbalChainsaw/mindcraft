@@ -2617,6 +2617,45 @@ test('a bot below an unreachable surface resource recovers before retrying it', 
   assert.equal(director.activeGoal.attempts, 1);
 });
 
+test('an interrupted mining-region surface staging resumes instead of terminalizing the goal', () => {
+  const director = createDirector();
+  const commands = [];
+  director.agent.bot.game = { dimension: 'overworld' };
+  director.agent.bot.entity = { position: { y: -5 } };
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'recover',
+    attempts: 0,
+    evidence: {
+      actionId: 'surface-reflex-preemption',
+      phase: 'interrupted',
+      code: 'interrupted',
+      detail: 'Self-defense briefly took ownership.',
+      verified: false,
+      at: Date.now(),
+    },
+    subgoals: [{
+      ...subgoal('recover', 1, 'failed'),
+      commandName: '!goToSurface',
+      learningKey: 'mining-region-surface:diamond-pickaxe-expedition',
+      code: 'interrupted',
+      detail: 'Self-defense briefly took ownership.',
+    }],
+  });
+
+  director.update();
+
+  assert.deepEqual(commands, ['!goToSurface']);
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'acting');
+  assert.equal(director.status.code, 'goal_recover');
+});
+
 test('a safety-owned interruption suspends the goal without spending or learning a failure', () => {
   const director = createDirector();
   let learned = 0;

@@ -113,6 +113,7 @@ test('surface recovery does not classify corridor planning when native movement 
             height: 1.8,
         },
         game: { minY: -64, height: 384 },
+        inventory: { items: () => [] },
         blockAt(position) {
             return blocks.get(key(position)) || {
                 name: 'air',
@@ -145,6 +146,112 @@ test('surface recovery does not classify corridor planning when native movement 
     assert.equal(bot.lastActionEvidence.outcome, 'surface_settlement_unverified');
     assert.equal(bot.lastActionEvidence.settlement, 'no_stable_stance');
     assert.equal(bot.lastActionEvidence.routeDigging, false);
+});
+
+test('surface recovery preserves supported upward progress when the next corridor tool cannot be prepared', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        const block = {
+            name,
+            boundingBox,
+            shapes: [],
+            position,
+            canHarvest: () => name !== 'stone',
+        };
+        blocks.set(key(position), block);
+        return block;
+    };
+    put(4, 26, -3, 'stone');
+    put(4, 30, -3, 'stone');
+    put(4, 63, -3, 'stone');
+    const bot = {
+        interrupt_code: false,
+        entity: {
+            position: new Vec3(4.5, 27, -2.5),
+            width: 0.6,
+            height: 1.8,
+            eyeHeight: 1.62,
+        },
+        game: { minY: -64, height: 384 },
+        inventory: { items: () => [], slots: [] },
+        registry: {
+            itemsByName: {
+                wooden_pickaxe: { id: 1 },
+                stone_pickaxe: { id: 2 },
+                iron_pickaxe: { id: 3 },
+                diamond_pickaxe: { id: 4 },
+            },
+        },
+        blockAt(position) {
+            return blocks.get(key(position.floored())) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+        output: '',
+    };
+    const corridorStone = {
+        name: 'stone',
+        position: new Vec3(5, 31, -3),
+        canHarvest: type => [1, 2, 3, 4].includes(type),
+    };
+    let navigationCalls = 0;
+    let bindingCalls = 0;
+    let preparationCalls = 0;
+
+    const reached = await goToSurface(bot, {
+        async navigateGoal() {
+            navigationCalls += 1;
+            if (navigationCalls === 1) bot.entity.position = new Vec3(4.5, 31, -2.5);
+            bot.lastActionEvidence = { kind: 'movement', outcome: 'unreachable' };
+            return false;
+        },
+        async settleSupportedStandingCell() {
+            return new Vec3(4, 31, -3);
+        },
+        bindSurfaceCorridor() {
+            bindingCalls += 1;
+            return {
+                ok: true,
+                excavationBlocks: [corridorStone],
+                durability: { unharvestedBreaks: 1 },
+            };
+        },
+        async prepareSurfaceTool(_bot, toolName) {
+            preparationCalls += 1;
+            assert.equal(toolName, 'stone_pickaxe');
+            return false;
+        },
+        probeSurfaceEgress() {
+            return {
+                reachable: false,
+                conclusive: true,
+                status: 'noPath',
+                pathLength: 0,
+            };
+        },
+    });
+
+    assert.equal(reached, false);
+    assert.equal(navigationCalls, 2);
+    assert.equal(bindingCalls, 1);
+    assert.equal(preparationCalls, 1);
+    assert.equal(bot.lastActionEvidence.kind, 'surface_navigation');
+    assert.equal(bot.lastActionEvidence.outcome, 'surface_progress_incomplete');
+    assert.equal(bot.lastActionEvidence.verticalProgress, 4);
+    assert.equal(bot.lastActionEvidence.supported, true);
+    assert.deepEqual(bot.lastActionEvidence.progress, {
+        verified: true,
+        kind: 'surface_route_cell',
+        position: { x: 4, y: 31, z: -3 },
+    });
+    assert.deepEqual(bot.lastActionEvidence.toolRequirement, {
+        name: 'stone_pickaxe',
+        minimumUsableDurability: 1,
+    });
 });
 
 test('surface recovery recognizes covered ground-level access from a complete native egress proof', async () => {

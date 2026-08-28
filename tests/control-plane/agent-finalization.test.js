@@ -40,6 +40,7 @@ function createActiveProcess() {
     connectionToken: 'active-process-capability',
     stopCalls: 0,
     forceRestartCalls: 0,
+    handleControlDisconnectCalls: 0,
     start() {
       return Promise.resolve(this);
     },
@@ -53,6 +54,10 @@ function createActiveProcess() {
     },
     forceRestart() {
       this.forceRestartCalls += 1;
+      return Promise.resolve(this);
+    },
+    handleControlDisconnect() {
+      this.handleControlDisconnectCalls += 1;
       return Promise.resolve(this);
     },
     markReady() {
@@ -384,6 +389,41 @@ test('Given owner settings enable a viewer, when the agent becomes in-game, then
       viewerAvailable: true,
       viewerPort: 3901,
     });
+  } finally {
+    socket.disconnect();
+    await activeProcess.resolveExit();
+    Mindcraft.destroyAgent(agentName);
+    await closeMindServer(mindServer);
+  }
+});
+
+test('Given an authenticated in-game agent, when its control socket disconnects unexpectedly, then MindServer delegates recovery to the lifecycle owner', async () => {
+  const agentName = 'DisconnectBot';
+  const activeProcess = createActiveProcess();
+  const mindServer = await createMindServer(false, 0);
+  await createActiveAgent(agentName, activeProcess);
+  const socket = connect(`http://localhost:${mindServer.address().port}`, {
+    auth: {
+      role: 'agent',
+      agentName,
+      token: activeProcess.connectionToken,
+    },
+  });
+
+  try {
+    await once(socket, 'connect');
+    socket.emit('connect-agent-process', agentName);
+    socket.emit('login-agent', agentName);
+    const ready = await new Promise((resolve) => socket.emit('ready-agent', agentName, resolve));
+    assert.deepEqual(ready, { success: true, error: null });
+
+    socket.disconnect();
+    const deadline = Date.now() + 1_000;
+    while (activeProcess.handleControlDisconnectCalls === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.equal(activeProcess.handleControlDisconnectCalls, 1);
   } finally {
     socket.disconnect();
     await activeProcess.resolveExit();

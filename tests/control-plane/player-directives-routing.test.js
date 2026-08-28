@@ -59,6 +59,8 @@ test('a spoken status request cannot authorize movement named only in its words 
     'Confirm you are online by saying DeepSeek Flash online. Do not move or start a task.',
     'Say "follow me". Do not move.',
     'Tell me your current status.',
+    'Status only: keep the existing expedition and keep moving. When you finish getting to safety, continue the exact plan. Do not start over.',
+    'Kevin, status only: keep the existing expedition and keep moving. When you finish getting to safety, continue the exact plan. Do not start over.',
   ]) {
     assert.equal(classifyPlayerSpeechAuthority(message), 'response_only', message);
     assert.equal(commandFor(message), null, message);

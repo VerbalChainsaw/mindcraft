@@ -860,6 +860,11 @@ test('player movement excludes ambient combat while fresh damage remains separat
   agent.actions.executing = false;
   agent.actions.currentActionOwner = 'player';
   assert.equal(ambientSelfDefensePermitted(agent), true);
+  assert.equal(
+    ambientSelfDefensePermitted(agent, { durablePlayerCommitment: true }),
+    false,
+    'typed player work keeps ownership between serialized action turns',
+  );
 
   agent.companion_context = { snapshot: () => ({ directive: 'follow' }) };
   assert.equal(durablePlayerAccompanimentActive(agent), true);
@@ -1361,6 +1366,46 @@ test('Given one explicit restart request, when the current child exits, then exa
   assert.deepEqual(firstChild.killCalls, ['SIGINT']);
   assert.equal(factory.calls.length, 2);
   assert.equal(agentProcess.state, 'running');
+});
+
+test('Given a running owned child, when its authenticated control socket is lost, then the lifecycle owner performs one bounded restart', async () => {
+  // Given
+  const firstChild = new FakeChildProcess();
+  const restartedChild = new FakeChildProcess();
+  const factory = createChildFactory([firstChild, restartedChild]);
+  const agentProcess = new AgentProcess('control-socket-recovery', 8080, factory);
+  await startFakeAgent(agentProcess, firstChild);
+
+  // When
+  const restart = agentProcess.handleControlDisconnect();
+  firstChild.emit('exit', null, 'SIGINT');
+  restartedChild.emit('spawn');
+  agentProcess.markReady();
+  await restart;
+
+  // Then
+  assert.deepEqual(firstChild.killCalls, ['SIGINT']);
+  assert.equal(factory.calls.length, 2);
+  assert.equal(agentProcess.state, 'running');
+});
+
+test('Given an intentional stop already owns the child, when its control socket closes, then disconnect recovery does not restart it', async () => {
+  // Given
+  const child = new FakeChildProcess();
+  const factory = createChildFactory([child]);
+  const agentProcess = new AgentProcess('intentional-control-close', 8080, factory);
+  await startFakeAgent(agentProcess, child);
+  agentProcess.stop();
+
+  // When
+  const recovery = agentProcess.handleControlDisconnect();
+  child.emit('exit', null, 'SIGINT');
+
+  // Then
+  assert.equal(recovery, false);
+  assert.deepEqual(child.killCalls, ['SIGINT']);
+  assert.equal(factory.calls.length, 1);
+  assert.equal(agentProcess.state, 'stopped');
 });
 
 test('Given a post-spawn child error during an explicit restart, when the old child has not exited, then restart ownership remains with that child', async () => {

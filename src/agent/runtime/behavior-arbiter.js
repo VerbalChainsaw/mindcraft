@@ -1193,7 +1193,15 @@ export class BehaviorArbiter {
         );
       }
       const sharedAccompanimentOwnsThreat = accompanimentProposal?.applicable === true;
-      const migratedModeOptions = { skipAttributedAccompaniment: sharedAccompanimentOwnsThreat };
+      const durablePlayerCommitment = this.playerCommitment(this.actionState());
+      const migratedModeOptions = {
+        skipAttributedAccompaniment: sharedAccompanimentOwnsThreat,
+        // A typed Goal, Agenda, Mission, Job, Follow, or Guard promise owns the
+        // idle gap between its serialized ActionManager turns. Protection modes
+        // still inspect attributed threats and fresh damage before consulting
+        // this ambient-autonomy gate.
+        suppressAmbientSelfDefense: Boolean(durablePlayerCommitment?.obligationId),
+      };
       let selected = await this.evaluateModeBand(
         'emergency_self_preservation',
         EMERGENCY_MODES,
@@ -1242,7 +1250,12 @@ export class BehaviorArbiter {
           });
         }
       } else {
-        selected = await this.evaluateModeBand('attributed_protection', PROTECTION_MODES, perception);
+        selected = await this.evaluateModeBand(
+          'attributed_protection',
+          PROTECTION_MODES,
+          perception,
+          migratedModeOptions,
+        );
         if (selected) return selected;
       }
 

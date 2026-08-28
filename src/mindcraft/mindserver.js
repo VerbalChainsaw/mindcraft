@@ -2290,7 +2290,14 @@ async function createMindServerAtPort(port, dependencies = {}) {
                 resetAgentStateCache(agent_connections[curAgentName]);
                 delete lastAgentStates[curAgentName];
                 publishAgentStates(currentLiveAgentStates());
+                const recovery = mindcraft.getAgentProcess(curAgentName)?.handleControlDisconnect?.();
                 agentsStatusUpdate();
+                if (recovery && typeof recovery.catch === 'function') {
+                    void recovery.catch((error) => {
+                        console.error(`Control-socket recovery failed for ${curAgentName}:`, error?.message || error);
+                        agentsStatusUpdate();
+                    });
+                }
             }
             if (agent_listeners.includes(socket)) {
                 removeListener(socket);

@@ -198,8 +198,9 @@ export function selfDefenseReflexEligibility(agent, threat, failedReceipt = null
  * longer than a short startup grace period. Fresh damage and attributed
  * protection are selected before this gate and remain valid reflex authority.
  */
-export function ambientSelfDefensePermitted(agent) {
-    return !durablePlayerAccompanimentActive(agent)
+export function ambientSelfDefensePermitted(agent, { durablePlayerCommitment = false } = {}) {
+    return durablePlayerCommitment !== true
+        && !durablePlayerAccompanimentActive(agent)
         && !(agent?.actions?.executing === true
             && agent.actions.currentActionOwner === 'player');
 }
@@ -1195,13 +1196,18 @@ const modes_list = [
         on: true,
         active: false,
         failed_tactical_trigger: null,
-        update: function (agent, { skipAttributedAccompaniment = false } = {}) {
+        update: function (agent, {
+            skipAttributedAccompaniment = false,
+            suppressAmbientSelfDefense = false,
+        } = {}) {
             if (skipAttributedAccompaniment) return { code: 'shared_accompaniment_policy_owns_threat' };
             const protectionThreat = getAttributedProtectionThreat(agent);
             const damageReceipt = freshReceivedDamageReceipt(agent);
             const enemy = protectionThreat || (damageReceipt
                 ? getRecentDamageCombatThreat(agent)
-                : agent.runtime?.autonomy === 'command' || !ambientSelfDefensePermitted(agent)
+                : agent.runtime?.autonomy === 'command' || !ambientSelfDefensePermitted(agent, {
+                    durablePlayerCommitment: suppressAmbientSelfDefense,
+                })
                     ? null
                     : world.getNearestEntityWhere(
                         agent.bot,

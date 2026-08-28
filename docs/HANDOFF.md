@@ -2,16 +2,21 @@
 
 **Updated 2026-08-27. The Phase 7C continuity/recovery tranche is
 `ACCEPTED / CLOSED`; the cross-dimensional expedition remains `ACTIVE — PARTIAL`.
+Kevin's owner-issued startup capability is restored and `ACCEPTED / CLOSED`.
+Current-source Kevin is `world_ready` with coherent control and Paper sockets.
 Explicit `!resumeAgenda` restored the saved promise. Current Goal
 `goal-9d151ab6-1166-4ded-8492-96cfd3640551` is in `acquire` at attempts `0/4`,
 with 54 subgoals, a verified 154-cell mining-return spine ending at
 `(955,-32,-473)`, and 15 distinct failed diamond targets. Safety offline-player
 continuity, cumulative death recovery, operator-only process commands, and causal
 mining-return handoff are repaired, focused-tested, and physically composed. The
-Director explicitly paused during an acting three-diamond collection; Kevin then
-stopped cleanly while Paper and the control plane stayed running. Agenda semantic
-deduplication and temporary-workstation custody remain open. No obsidian, portal,
-Nether, quartz, or requester return is claimed.**
+Director explicitly paused during an acting three-diamond collection. After the
+owner-issued restart, Kevin retreated, crafted, collected, yielded through grouped
+hostiles, resumed, died, respawned, and preserved the same Goal at attempts `0`.
+Surface-progress preservation and fail-closed control-socket recovery are
+implemented and focused-proven but await ordinary composed terminal-branch proof.
+Agenda semantic deduplication and temporary-workstation custody remain open. No
+obsidian, portal, Nether, quartz, or requester return is claimed.**
 
 `ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
 governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
@@ -70,16 +75,29 @@ governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
 - **DONE:** Mining segments preserve their causal protected/hazard/geometry
   result. A live protected return cell retired the stale spine, `!goToSurface`
   climbed y61 -> y66, and the same Goal resumed.
-- **NOW:** Kevin is intentionally stopped. Paper and the control plane remain
-  running. The persisted Goal is paused during a three-diamond collection after
-  154 verified route cells and 15 distinct candidate exclusions; this was changing
-  search state, not a stall. Operator Hold remains false.
-- **NEXT ACCEPTANCE:** Restart Kevin on current source, resume the exact persisted
-  Agenda/Goal owner, finish diamond custody, and continue the same dependency chain
-  through obsidian and portal construction while preserving Safety/death recovery.
-  Classify and repair Agenda semantic deduplication or temporary-workstation
-  custody only when they materially block or corrupt that composed outcome.
-- **OPEN VERIFICATION GAP:** The fresh focused closeout set is `40/40`, but the
+- **DONE:** Direct `init_agent` launch correctly rejects a missing private
+  `MINDCRAFT_AGENT_TOKEN`; MindServer's existing `start-agent` owner supplies it.
+  That route restored Kevin, the exact Goal at attempts `0`, and Agenda root
+  `agenda-1787806981974-1` without replacement state.
+- **DONE:** `goToSurface` preserves supported upward progress when a later tool
+  preparation blocks the next corridor. Unexpected authenticated control-socket
+  loss now enters the existing bounded `AgentProcess` restart path; intentional
+  stop remains terminal. Focused results are surface `22/22`, disconnect lifecycle
+  `2/2`, and MindServer finalization `7/7`.
+- **NOW:** Kevin is running on current source, `world_ready`, and socket-coherent.
+  The same Goal survived retreat, crafting, iron collection, two grouped hostile
+  responses, resumed collection, death, respawn, and renewed critical-health
+  Safety at attempts `0`. Operator Hold remains false.
+- **NEXT ACCEPTANCE:** Let the current Safety/death recovery settle, resume the
+  exact persisted Goal/Agenda, finish diamond custody, and continue through
+  obsidian and portal construction. If ordinary composition reaches a blocked
+  post-ascent tool preparation or authenticated socket loss, directly confirm the
+  new terminal branch; do not manufacture either as a standalone comfort run.
+  Classify Agenda semantic deduplication or temporary-workstation custody only when
+  either materially blocks or corrupts the composed outcome.
+- **OPEN VERIFICATION GAP:** The prior focused closeout set is `40/40`; the new
+  owner slices add surface `22/22`, disconnect lifecycle `2/2`, and MindServer
+  finalization `7/7`. The
   broad sweep across all 22 modified/new test files is `409/469`; 60 failures remain
   outside the closed owner slice. They cluster in legacy Agenda/result fixtures,
   incomplete Agent test doubles, older Survival sleep/action-result expectations,

@@ -29517,6 +29517,7 @@ export async function goToSurface(bot, {
     settleSupportedStandingCell = waitForStableSupportedStandingCell,
     prepareSurfaceTool = prepareTool,
     probeSurfaceEgress = probeSafeNavigationStances,
+    bindSurfaceCorridor = bindSurfaceCorridorPlan,
     requireOpenSurface = false,
 } = {}) {
     const origin = bot.entity.position.clone();
@@ -29573,6 +29574,52 @@ export async function goToSurface(bot, {
             retryable: true,
         });
         log(bot, 'The ordinary surface-egress route search did not finish; no new excavation method was started.');
+        return false;
+    };
+
+    const finishBlockedAfterProgress = ({
+        failureOutcome,
+        toolRequirement = null,
+    } = {}) => {
+        const observed = bot.entity?.position;
+        const supported = observedSupportedStandingCell(bot);
+        const verticalProgress = observed ? observed.y - origin.y : 0;
+        const verifiedProgress = Boolean(
+            !bot.interrupt_code
+            && observed
+            && supported
+            && verticalProgress > 0
+        );
+        const normalizedFailure = String(
+            failureOutcome
+            || bot.lastActionEvidence?.outcome
+            || 'surface_recovery_blocked',
+        );
+        setActionEvidence(bot, {
+            kind: 'surface_navigation',
+            outcome: verifiedProgress ? 'surface_progress_incomplete' : normalizedFailure,
+            ...(lastTarget ? { target: { x: lastTarget.x, y: lastTarget.y, z: lastTarget.z } } : {}),
+            ...(observed ? { observed: { x: observed.x, y: observed.y, z: observed.z } } : {}),
+            legs: completedLegs,
+            verticalProgress,
+            supported: Boolean(supported),
+            failureOutcome: normalizedFailure,
+            ...(toolRequirement ? { toolRequirement } : {}),
+            ...(verifiedProgress ? {
+                progress: {
+                    verified: true,
+                    kind: 'surface_route_cell',
+                    position: { x: supported.x, y: supported.y, z: supported.z },
+                },
+            } : {}),
+            retryable: !bot.interrupt_code,
+        });
+        log(
+            bot,
+            verifiedProgress
+                ? `Surface recovery preserved ${verticalProgress.toFixed(1)} blocks of supported upward progress before ${normalizedFailure.replace(/_/g, ' ')}.`
+                : `Surface recovery stopped before verified upward progress (${normalizedFailure.replace(/_/g, ' ')}).`,
+        );
         return false;
     };
 
@@ -29707,7 +29754,7 @@ export async function goToSurface(bot, {
 
         let corridorOriginKey = miningCellKey(settledStance);
         let rejectedFromOrigin = rejectedCorridorStances.get(corridorOriginKey) || new Set();
-        let plan = bindSurfaceCorridorPlan(
+        let plan = bindSurfaceCorridor(
             bot,
             target,
             minY,
@@ -29722,7 +29769,14 @@ export async function goToSurface(bot, {
                 `The verified surface corridor requires ${corridorToolRequirement.minimumUsableDurability} pickaxe break${corridorToolRequirement.minimumUsableDurability === 1 ? '' : 's'}; preparing a responsive stone pickaxe before excavation.`,
             );
             const prepared = await prepareSurfaceTool(bot, corridorToolRequirement.name);
-            if (!prepared || bot.interrupt_code) return false;
+            if (!prepared || bot.interrupt_code) {
+                return finishBlockedAfterProgress({
+                    failureOutcome: bot.interrupt_code
+                        ? 'interrupted'
+                        : bot.lastActionEvidence?.outcome || 'surface_tool_preparation_failed',
+                    toolRequirement: corridorToolRequirement,
+                });
+            }
 
             // Crafting may place/recover a table or move to an interaction
             // stance. Reconcile one fresh supported cell and rebuild the route;
@@ -29765,7 +29819,7 @@ export async function goToSurface(bot, {
             if (arrival.arrived) return finishReached(arrival, leg);
             corridorOriginKey = miningCellKey(settledStance);
             rejectedFromOrigin = rejectedCorridorStances.get(corridorOriginKey) || new Set();
-            plan = bindSurfaceCorridorPlan(
+            plan = bindSurfaceCorridor(
                 bot,
                 target,
                 minY,

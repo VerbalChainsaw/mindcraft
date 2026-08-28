@@ -264,6 +264,12 @@ export class AgentProcess {
         return restartPromise;
     }
 
+    handleControlDisconnect() {
+        if (!this.process || this._stopRequested || this._restartRequested) return false;
+        console.warn(`Agent ${this.name} lost its authenticated control socket; restarting the owned process.`);
+        return this.forceRestart();
+    }
+
     isActive() {
         return this.process !== null || ['starting', 'running', 'stopping', 'restarting'].includes(this.state);
     }

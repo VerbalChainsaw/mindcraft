@@ -134,6 +134,58 @@ test('a safety incident suspends and releases the exact durable player commitmen
   assert.equal(arbiter.releaseSafetySuspension(incident), false, 'release is idempotent');
 });
 
+test('a durable player commitment excludes ambient defense during idle handoff without suppressing fresh damage', async () => {
+  const { agent, calls } = fakeAgent();
+  let freshDamage = false;
+  let defenseRuns = 0;
+  let goalUpdates = 0;
+  const protectionOptions = [];
+  agent.goal_director = {
+    activeGoal: { id: 'goal-idle-handoff', phase: 'recover' },
+    status: { code: 'goal_recovery_ready' },
+    update() { goalUpdates += 1; },
+  };
+  agent.bot.modes.updateBand = (names, options = {}) => {
+    calls.push(`modes:${names.join(',')}`);
+    if (!names.includes('self_defense')) {
+      return { active: false, scheduled: false, code: 'inactive' };
+    }
+    protectionOptions.push(options);
+    if (!freshDamage && options.suppressAmbientSelfDefense === true) {
+      return { active: false, scheduled: false, code: 'ambient_defense_suppressed' };
+    }
+    defenseRuns += 1;
+    return {
+      active: true,
+      scheduled: true,
+      mode: 'self_defense',
+      code: freshDamage ? 'fresh_damage_defense' : 'ambient_defense',
+    };
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    trace: { enabled: true, retention: 4 },
+    commitmentProviders: [action => ({
+      owner: 'player_goal',
+      obligationId: agent.goal_director.activeGoal.id,
+      phase: agent.goal_director.activeGoal.phase,
+      ownsCurrentAction: action.owner === 'player',
+    })],
+  });
+  agent.behavior_arbiter = arbiter;
+
+  const resumed = await arbiter.update(25);
+  assert.equal(resumed.selectedLane, 'player_goal');
+  assert.equal(goalUpdates, 1, 'the exact durable goal owns its idle executor handoff');
+  assert.equal(defenseRuns, 0, 'ambient hostile proximity cannot steal the durable commitment');
+  assert.equal(protectionOptions.at(-1)?.suppressAmbientSelfDefense, true);
+
+  freshDamage = true;
+  const defended = await arbiter.update(25);
+  assert.equal(defended.selectedLane, 'attributed_protection');
+  assert.equal(defended.code, 'fresh_damage_defense');
+  assert.equal(defenseRuns, 1, 'fresh damage remains valid preemption authority');
+});
+
 test('durable player work is suspended even when Survival already owns the transient lease', () => {
   const agent = {
     name: 'LeaseTransferBot',

@@ -2,6 +2,7 @@ const SELF_ASSIGNED_INTENT = /^(?:well[, ]+)?(?:(?:please\s+)?let\s+me\b|(?:i|we
 const CONVERSATIONAL_WISH = /^(?:well[, ]+)?(?:i|we)\s+(?:hope|wish)\b/i;
 const SERVER_AUTHORITY_REQUEST = /\b(?:(?:give|grant|make|set|promote)\s+(?:me|us)\s+(?:(?:server|operator)\s+)?(?:admin(?:istrator)?|operator|op)(?:\s+(?:access|permissions?|rights?|privileges?))?|(?:op|deop|ban|kick|whitelist)\s+(?:me|us))\b/i;
 const SPOKEN_RESPONSE_REQUEST = /^(?:please\s+)?(?:confirm\b|say\b|repeat\b|(?:reply|respond)\b|tell\s+(?:me|us)\b|report\s+(?:your|the|current)\b|(?:describe|explain|answer)\b)/i;
+const STATUS_ONLY_REQUEST = /^(?:status|update|progress)\s+only\b/i;
 
 export const PLAYER_PHYSICAL_ACTION_PATTERN = /\b(?:attack|break|brew|build|chop|collect|come|craft|dig|drop|eat|equip|explore|fight|find|follow|gather|give|go|harvest|jump|kill|look|mine|move|place|plant|recover|retrieve|run|search|stay|stop|turn|use|walk|wait)\b/i;
 
@@ -23,11 +24,13 @@ export function classifyPlayerSpeechAuthority(message) {
     .replace(/^(well[, ]+)?we['’]ll\b/i, '$1we will')
     .replace(/^(well[, ]+)?we['’]re\b/i, '$1we are');
   if (!text) return 'none';
+  const addressedText = text.replace(/^[A-Za-z0-9_]{3,16}\s*[,!]\s*/i, '');
   if (SERVER_AUTHORITY_REQUEST.test(text)) return 'response_only';
+  if (STATUS_ONLY_REQUEST.test(addressedText)) return 'response_only';
   // A request to speak is not authority to move merely because the requested
   // words or a safety clause name a gameplay verb. Preserve a genuine compound
   // order such as "confirm, then follow me" as action-eligible.
-  if (SPOKEN_RESPONSE_REQUEST.test(text) && !FOLLOW_ON_PHYSICAL_ACTION.test(text)) {
+  if (SPOKEN_RESPONSE_REQUEST.test(addressedText) && !FOLLOW_ON_PHYSICAL_ACTION.test(addressedText)) {
     return 'response_only';
   }
   return SELF_ASSIGNED_INTENT.test(text)

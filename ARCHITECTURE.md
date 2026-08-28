@@ -1143,6 +1143,30 @@ and a later Zombie/Skeleton episode recovered health 1.9 -> 17 before the same G
 resumed. These are accepted owner boundaries and must not be replayed as isolated
 demonstrations without a material new question.
 
+The next current-source continuation restored Kevin only through MindServer's
+owned `start-agent` route. A direct `init_agent` launch correctly rejected the
+missing private `MINDCRAFT_AGENT_TOKEN`; the capability had not disappeared, and
+the owner-supplied launch restored the exact Goal and Agenda at attempts `0`.
+That run exposed two narrower owner defects. First, `!goToSurface` could physically
+climb several supported cells and then return only the later tool-preparation
+failure, hiding usable route progress. The capability owner now publishes
+`surface_progress_incomplete` with the supported cell and causal failure; its
+focused geometry suite passes `22/22`. Second, Kevin's MindServer socket entered
+`CLOSE_WAIT` while his Paper connection and child process stayed live. A lost
+authenticated control socket now delegates to the existing bounded
+`AgentProcess` restart path; an intentional stop is excluded. The new lifecycle
+cases pass `2/2`, and the full MindServer finalization suite passes `7/7`.
+
+After loading current source, Kevin again restored Goal
+`goal-9d151ab6-1166-4ded-8492-96cfd3640551` at attempts `0`, retreated, crafted a
+fresh stone pickaxe, began iron collection, yielded one physical stream through
+two grouped hostile responses, resumed collection, died, respawned, and preserved
+the Goal through post-death Safety recovery. Socket, world, Goal, and Agenda
+ownership remained coherent. The repaired surface terminal branch and repaired
+control-socket-loss terminal branch have focused current-source proof but were not
+artificially replayed in the live world; close them physically only when ordinary
+composition reaches those exact branches.
+
 The Director explicitly paused the run while the Goal was acting on
 `!collectBlocksInRange` for three diamonds. Kevin was stopped cleanly through the
 control plane; Paper and the control plane remained running, and Operator Hold

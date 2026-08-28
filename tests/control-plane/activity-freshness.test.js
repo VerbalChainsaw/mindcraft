@@ -10,7 +10,7 @@ import {
 } from '../../src/agent/runtime/activity-freshness.js';
 import { CompanionDirectiveStateStore } from '../../src/agent/runtime/companion-directive-state.js';
 import { JobStateStore } from '../../src/agent/runtime/job-state-store.js';
-import { GoalStateStore } from '../../src/agent/runtime/goal-director.js';
+import { GoalDirector, GoalStateStore } from '../../src/agent/runtime/goal-director.js';
 import { createItemGoalContract } from '../../src/agent/runtime/goal-contract.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import { AgendaStore, normalizeAgendaEntry } from '../../src/agent/runtime/agenda.js';
@@ -135,6 +135,212 @@ test('GoalStateStore restores one stale active goal only for an explicit lifecyc
     assert.equal(explicitRestart.lastError, null);
   } finally {
     cleanup();
+  }
+});
+
+test('lifecycle restart preserves the exact Goal and Agenda identities after a misclassified surface preemption', () => {
+  const now = Date.now();
+  const root = mkdtempSync(path.join(tmpdir(), 'surface-preemption-recovery-'));
+  mkdirSync(path.join(root, BOT), { recursive: true });
+  const goal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DirectorOps',
+    target: {
+      requestedName: 'diamond_pickaxe',
+      canonicalName: 'diamond_pickaxe',
+      inventoryName: 'diamond_pickaxe',
+      acquisitionName: 'diamond_pickaxe',
+      acquisitionKind: 'prepare_tool',
+    },
+    quantity: 1,
+    quantityMode: 'minimum',
+  });
+  const failedGoal = {
+    ...goal,
+    phase: 'failed',
+    attempts: 0,
+    subgoals: [{
+      id: `${goal.id}:subgoal-1`,
+      kind: 'recover',
+      state: 'failed',
+      commandName: '!goToSurface',
+      attempt: 1,
+      actionId: 'surface-interrupted',
+      code: 'interrupted',
+      detail: 'Self-defense briefly took ownership.',
+      learningKey: 'mining-region-surface:diamond-expedition',
+      startedAt: now - 500,
+      finishedAt: now - 100,
+    }],
+    evidence: {
+      actionId: '',
+      phase: 'failed',
+      code: 'mining_region_surface_staging_failed',
+      detail: 'Self-defense briefly took ownership.',
+      verified: false,
+      retryable: false,
+      at: now - 100,
+    },
+    updatedAt: now - 100,
+  };
+  const agendaEntry = normalizeAgendaEntry({
+    id: 'agenda-surface-preemption',
+    kind: 'inventory_checklist',
+    executor: 'goal',
+    requester: 'DirectorOps',
+    inventoryRequirements: [{ target: 'diamond_pickaxe', quantity: 1 }],
+    state: 'failed',
+    executorId: goal.id,
+    startedAt: now - 1_000,
+    finishedAt: now - 50,
+    attempts: 1,
+    evidence: {
+      code: 'mining_region_surface_staging_failed',
+      detail: 'Self-defense briefly took ownership.',
+      retryable: false,
+    },
+  }, { now: () => now });
+  writeFileSync(path.join(root, BOT, 'goal-state.json'), JSON.stringify({
+    version: 1,
+    activeGoal: null,
+    lastGoal: failedGoal,
+    protectedGoalId: null,
+    savedAt: now,
+  }), 'utf8');
+  writeFileSync(path.join(root, BOT, 'agenda.json'), JSON.stringify({
+    version: 1,
+    entries: [agendaEntry],
+    savedAt: now,
+  }), 'utf8');
+
+  try {
+    const agent = {
+      name: BOT,
+      lifecycle_restart: true,
+      job_director: { activeOrder: null, lastOrder: null },
+    };
+    agent.goal_director = new GoalDirector(agent, {
+      store: new GoalStateStore(BOT, { root }),
+      procedures: { find() { return null; } },
+      now: () => now,
+    });
+    agent.agenda_director = new AgendaDirector(agent, {
+      store: new AgendaStore(BOT, { root }),
+      now: () => now,
+    });
+
+    assert.equal(agent.goal_director.activeGoal?.id, goal.id);
+    assert.equal(agent.goal_director.activeGoal?.phase, 'recover');
+    assert.equal(agent.goal_director.activeGoal?.attempts, 0);
+    assert.equal(agent.goal_director.lastGoal, null);
+    assert.equal(agent.agenda_director.entries[0].state, 'active');
+    assert.equal(agent.agenda_director.entries[0].executorId, goal.id);
+    assert.equal(agent.agenda_director.entries[0].attempts, 1);
+    assert.equal(agent.agenda_director.entries[0].evidence.code, 'agenda_goal_preemption_recovered');
+
+    const persistedGoal = JSON.parse(readFileSync(path.join(root, BOT, 'goal-state.json'), 'utf8'));
+    const persistedAgenda = JSON.parse(readFileSync(path.join(root, BOT, 'agenda.json'), 'utf8'));
+    assert.equal(persistedGoal.activeGoal.id, goal.id);
+    assert.equal(persistedGoal.lastGoal, null);
+    assert.equal(persistedAgenda.entries[0].state, 'active');
+    assert.equal(persistedAgenda.entries[0].executorId, goal.id);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('explicit Agenda resume reactivates the exact cancelled Goal without minting a fresh budget', () => {
+  const now = Date.now();
+  const root = mkdtempSync(path.join(tmpdir(), 'cancelled-goal-resume-'));
+  mkdirSync(path.join(root, BOT), { recursive: true });
+  try {
+    const agent = {
+      name: BOT,
+      lifecycle_restart: true,
+      job_director: { activeOrder: null, lastOrder: null, lastReceipt: null },
+      behavior_arbiter: { wake() {} },
+    };
+    agent.goal_director = new GoalDirector(agent, {
+      store: new GoalStateStore(BOT, { root }),
+      procedures: { find() { return null; } },
+      now: () => now,
+    });
+    const goal = createItemGoalContract({
+      kind: 'acquire',
+      requester: 'DirectorOps',
+      target: {
+        requestedName: 'diamond_pickaxe',
+        canonicalName: 'diamond_pickaxe',
+        inventoryName: 'diamond_pickaxe',
+        acquisitionName: 'diamond_pickaxe',
+        acquisitionKind: 'prepare_tool',
+      },
+      quantity: 1,
+      quantityMode: 'minimum',
+    });
+    assert.equal(agent.goal_director.submit(goal).accepted, true);
+    agent.goal_director.persist({
+      ...agent.goal_director.activeGoal,
+      phase: 'recover',
+      attempts: 0,
+      subgoals: [{
+        id: `${goal.id}:subgoal-1`,
+        kind: 'recover',
+        state: 'acting',
+        commandName: '!goToSurface',
+        attempt: 1,
+        actionId: 'surface-active',
+        code: null,
+        detail: '',
+        learningKey: 'mining-region-surface:diamond-expedition',
+        startedAt: now - 500,
+        finishedAt: null,
+      }],
+    });
+    assert.equal(
+      agent.goal_director.cancel('Superseded by a player-requested command.'),
+      true,
+    );
+    const agendaEntry = normalizeAgendaEntry({
+      id: 'agenda-cancelled-goal',
+      kind: 'inventory_checklist',
+      executor: 'goal',
+      requester: 'DirectorOps',
+      inventoryRequirements: [{ target: 'diamond_pickaxe', quantity: 1 }],
+      state: 'failed',
+      executorId: goal.id,
+      startedAt: now - 1_000,
+      finishedAt: now,
+      attempts: 2,
+      evidence: {
+        code: 'goal_cancelled',
+        detail: 'Superseded by a player-requested command.',
+        retryable: false,
+      },
+    }, { now: () => now });
+    writeFileSync(path.join(root, BOT, 'agenda.json'), JSON.stringify({
+      version: 1,
+      entries: [agendaEntry],
+      savedAt: now,
+    }), 'utf8');
+    agent.agenda_director = new AgendaDirector(agent, {
+      store: new AgendaStore(BOT, { root }),
+      now: () => now,
+    });
+
+    const result = agent.agenda_director.resumeFailedChain('The command-routing owner was repaired.');
+
+    assert.deepEqual(result, { resumed: 1, rootId: agendaEntry.id });
+    assert.equal(agent.goal_director.activeGoal?.id, goal.id);
+    assert.equal(agent.goal_director.activeGoal?.phase, 'recover');
+    assert.equal(agent.goal_director.activeGoal?.attempts, 0);
+    assert.equal(agent.goal_director.lastGoal, null);
+    assert.equal(agent.agenda_director.entries[0].state, 'active');
+    assert.equal(agent.agenda_director.entries[0].executorId, goal.id);
+    assert.equal(agent.agenda_director.entries[0].attempts, 2);
+    assert.equal(agent.agenda_director.entries[0].evidence.code, 'agenda_goal_explicitly_resumed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -580,6 +580,37 @@ function restoredGoal(goal) {
   });
 }
 
+function recoverMisclassifiedSurfacePreemption(goal, now = Date.now()) {
+  if (
+    goal?.phase !== 'failed'
+    || goal.evidence?.code !== 'mining_region_surface_staging_failed'
+    || Number(goal.attempts) >= Number(goal.maxAttempts)
+  ) return null;
+  const interruptedSurface = [...(goal.subgoals || [])].reverse().find(subgoal => (
+    subgoal.kind === 'recover'
+    && subgoal.commandName === '!goToSurface'
+    && String(subgoal.learningKey || '').startsWith('mining-region-surface:')
+  ));
+  if (
+    interruptedSurface?.state !== 'failed'
+    || !isPreemption({ phase: 'failed', code: interruptedSurface.code })
+  ) return null;
+  return normalizeGoalContract({
+    ...goal,
+    phase: 'recover',
+    evidence: {
+      actionId: interruptedSurface.actionId || '',
+      phase: 'recover',
+      code: 'restart_preemption_recovered',
+      detail: 'The prior surface staging was interrupted by higher-priority control, not terminally failed; resuming the exact Goal from fresh Minecraft state.',
+      verified: false,
+      retryable: true,
+      at: now,
+    },
+    updatedAt: now,
+  });
+}
+
 function preferredProcedureCommand(procedure, kind) {
   return procedure?.steps?.find(step => step.kind === kind && isSafeProcedureCommand(step.commandName))?.commandName || null;
 }
@@ -862,7 +893,10 @@ function pendingMiningRegionRecovery(goal) {
     subgoal.kind === 'recover'
     && String(subgoal.learningKey || '').startsWith('mining-region-surface:')
   ));
-  if (lastSurfaceStaging?.state === 'failed') {
+  if (
+    lastSurfaceStaging?.state === 'failed'
+    && !isPreemption({ phase: 'failed', code: lastSurfaceStaging.code })
+  ) {
     return { state: 'surface_failed', failure: lastSurfaceStaging };
   }
   let regionalFailureIndex = -1;
@@ -1447,8 +1481,12 @@ export class GoalDirector {
       // requires that same executor id before its stale queue can follow.
       allowStaleActiveGoal: this.agent.lifecycle_restart === true,
     });
-    this.activeGoal = restoredGoal(persisted.activeGoal);
-    this.lastGoal = persisted.lastGoal;
+    const recoveredSurfacePreemption = this.agent.lifecycle_restart === true
+      && !persisted.activeGoal
+      ? recoverMisclassifiedSurfacePreemption(persisted.lastGoal, this.now())
+      : null;
+    this.activeGoal = restoredGoal(persisted.activeGoal) || recoveredSurfacePreemption;
+    this.lastGoal = recoveredSurfacePreemption ? null : persisted.lastGoal;
     this.protectedGoalId = persisted.protectedGoalId === this.lastGoal?.id
       ? persisted.protectedGoalId
       : null;
@@ -1456,8 +1494,10 @@ export class GoalDirector {
       this.store.save(this.activeGoal, this.lastGoal, this.protectedGoalId);
       this.setStatus(
         this.activeGoal.phase,
-        'restart_revalidation',
-        this.activeGoal.phase === 'recover'
+        recoveredSurfacePreemption ? 'restart_preemption_recovered' : 'restart_revalidation',
+        recoveredSurfacePreemption
+          ? 'Restored the exact typed Goal after correcting a misclassified higher-priority surface-staging interruption.'
+          : this.activeGoal.phase === 'recover'
           ? 'Restored typed goal is resuming its deterministic recovery from fresh Minecraft state.'
           : 'Restored typed goal is waiting for fresh Minecraft state.',
         true,
@@ -1654,6 +1694,47 @@ export class GoalDirector {
     this.store.save(null, cancelled, null);
     this.setStatus('cancelled', 'goal_cancelled', reason, false);
     return true;
+  }
+
+  resumeLastCancelled(goalId, reason = 'Explicit player authority resumed the cancelled Goal.') {
+    const cancelled = this.lastGoal;
+    if (
+      this.activeGoal
+      || cancelled?.phase !== 'cancelled'
+      || cancelled.id !== boundedText(goalId, 96)
+      || Number(cancelled.attempts) >= Number(cancelled.maxAttempts)
+    ) return { resumed: false, id: null };
+    const latestSubgoal = cancelled.subgoals.at(-1);
+    const phase = latestSubgoal?.kind === 'recover' ? 'recover' : 'assess';
+    const resumed = normalizeGoalContract({
+      ...cancelled,
+      phase,
+      evidence: {
+        actionId: '',
+        phase,
+        code: 'explicit_goal_resume',
+        detail: boundedText(reason, 280),
+        verified: false,
+        retryable: true,
+        at: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    this.activeGoal = resumed;
+    this.lastGoal = null;
+    this.protectedGoalId = null;
+    this.nextAttemptAt = 0;
+    this.lastPlan = null;
+    this.lastPlanSignature = '';
+    this.invalidateDispatch();
+    this.store.save(resumed, null, null);
+    this.setStatus(
+      phase,
+      'explicit_goal_resume',
+      'Resumed the exact cancelled Goal identity from fresh Minecraft state.',
+      true,
+    );
+    return { resumed: true, id: resumed.id };
   }
 
   reconcileDeath({

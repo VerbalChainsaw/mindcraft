@@ -596,6 +596,30 @@ export class AgendaDirector {
         const inferred = inferredLegacyDependency(entries[index - 1], entry);
         return inferred ? normalizeAgendaEntry({ ...entry, ...inferred }) : entry;
       });
+      const recoveredGoal = this.agent.goal_director?.activeGoal;
+      let repairedGoalPreemption = false;
+      this.entries = this.entries.map(entry => {
+        if (
+          recoveredGoal?.evidence?.code !== 'restart_preemption_recovered'
+          || recoveredGoal.phase !== 'recover'
+          || entry.state !== 'failed'
+          || entry.executor !== 'goal'
+          || entry.executorId !== recoveredGoal.id
+          || entry.evidence?.code !== 'mining_region_surface_staging_failed'
+        ) return entry;
+        repairedGoalPreemption = true;
+        return normalizeAgendaEntry({
+          ...entry,
+          state: 'active',
+          finishedAt: null,
+          evidence: {
+            code: 'agenda_goal_preemption_recovered',
+            detail: 'The same bound Goal resumed after its surface-staging interruption was correctly reclassified.',
+            retryable: true,
+          },
+        });
+      });
+      if (repairedGoalPreemption) this.store.save(this.entries);
       // Older versions treated daylight as a failed sleep action and could
       // persist an otherwise valid bound step as terminal. Re-arm only that
       // exact legacy outcomes. Its predecessor and bed binding stay intact.
@@ -1179,7 +1203,16 @@ export class AgendaDirector {
     const resumableJobId = failedJobReceipt?.phase === 'failed'
       ? failedJobReceipt.orderId
       : null;
-    const resumableIds = new Set([this.entries[rootIndex].id]);
+    const rootEntry = this.entries[rootIndex];
+    const resumedGoal = rootEntry.executor === 'goal' && rootEntry.executorId
+      ? this.agent.goal_director?.resumeLastCancelled?.(
+          rootEntry.executorId,
+          reason,
+        )
+      : null;
+    const resumedExactGoal = resumedGoal?.resumed === true
+      && resumedGoal.id === rootEntry.executorId;
+    const resumableIds = new Set([rootEntry.id]);
     for (const entry of this.entries.slice(rootIndex + 1)) {
       if (entry.dependsOnEntryId && resumableIds.has(entry.dependsOnEntryId)) {
         resumableIds.add(entry.id);
@@ -1189,18 +1222,22 @@ export class AgendaDirector {
     this.dispatching = false;
     this.entries = this.entries.map(entry => (
       resumableIds.has(entry.id)
-        ? normalizeAgendaEntry({
+          ? normalizeAgendaEntry({
             ...entry,
-            state: 'pending',
-            executorId: entry.id === this.entries[rootIndex].id
-              && entry.executor === 'job'
-              && entry.executorId === resumableJobId
+            state: entry.id === rootEntry.id && resumedExactGoal ? 'active' : 'pending',
+            executorId: entry.id === rootEntry.id
+              && (
+                (resumedExactGoal && entry.executor === 'goal')
+                || (entry.executor === 'job' && entry.executorId === resumableJobId)
+              )
               ? entry.executorId
               : '',
-            startedAt: null,
+            startedAt: entry.id === rootEntry.id && resumedExactGoal
+              ? entry.startedAt || this.now()
+              : null,
             finishedAt: null,
-            attempts: 0,
-            preemptions: 0,
+            attempts: entry.id === rootEntry.id && resumedExactGoal ? entry.attempts : 0,
+            preemptions: entry.id === rootEntry.id && resumedExactGoal ? entry.preemptions : 0,
             materialChangeBlocker: null,
             ...(entry.kind === 'inventory_checklist' ? {
               // This counter bounds one causal correction campaign. An explicit
@@ -1211,7 +1248,9 @@ export class AgendaDirector {
               reconciliations: 0,
             } : {}),
             evidence: {
-              code: 'agenda_chain_explicitly_resumed',
+              code: entry.id === rootEntry.id && resumedExactGoal
+                ? 'agenda_goal_explicitly_resumed'
+                : 'agenda_chain_explicitly_resumed',
               detail: boundedText(reason),
               retryable: true,
             },
