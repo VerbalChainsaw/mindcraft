@@ -18,10 +18,12 @@ import {
   Agent,
   boundedChatSegments,
   configureSurvivalOwnership,
+  correlatedAgendaPlanSubmissionAccepted,
   correlatedPersistentGoalAssignmentAccepted,
   correlatedPersistentJobSubmissionAccepted,
   emitStartupMilestone,
   hasPendingDeathRecovery,
+  idleSignalMayReleaseBody,
   modelCommandAwaitsPlayerConfirmation,
   shouldSeedLegacyDefaultGoal,
 } from '../../src/agent/agent.js';
@@ -29,6 +31,22 @@ import * as Mindcraft from '../../src/mindcraft/mindcraft.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import { Prompter } from '../../src/models/prompter.js';
 import { AgentProcess, sanitizeAgentDiagnostic } from '../../src/process/agent_process.js';
+
+test('a stale idle signal cannot clear a body leased to an action or managed navigation', () => {
+  const agent = {
+    actions: { executing: true },
+    bot: { mindcraftManagedNavigationDepth: 0 },
+  };
+
+  assert.equal(idleSignalMayReleaseBody(agent), false);
+  agent.actions.executing = false;
+  agent.bot.mindcraftManagedNavigationDepth = 1;
+  assert.equal(idleSignalMayReleaseBody(agent), false);
+  agent.bot.mindcraftManagedNavigationDepth = 0;
+  assert.equal(idleSignalMayReleaseBody(agent), true);
+  assert.equal(idleSignalMayReleaseBody(null), false);
+});
+
 class FakeChildProcess extends EventEmitter {
   constructor(killResults = [true]) {
     super();
@@ -917,6 +935,56 @@ test('a protection reflex names the attacked player and resumes a standing follo
   });
   await Promise.resolve();
   assert.equal(resumes, 1, 'failed safety settlement cannot resume a standing directive');
+});
+
+test('a settled drowning reflex hands the hazard to the interrupted durable owner before resuming it', async () => {
+  const commitment = {
+    owner: 'player_job',
+    obligationId: 'miner-river-return',
+    phase: 'recover',
+    ownsCurrentAction: true,
+  };
+  const handoffs = [];
+  let resumes = 0;
+  const result = {
+    success: true,
+    interrupted: false,
+    result: {
+      actionId: 'reflex-drowning-1',
+      phase: 'succeeded',
+      code: 'skill_drowning_escape_stable',
+      label: 'mode:self_preservation',
+      evidence: {
+        skill: { kind: 'survival', outcome: 'drowning_escape_stable' },
+      },
+    },
+  };
+  const agent = {
+    bot: {},
+    actions: {
+      currentActionLabel: 'action:goToCoordinates',
+      async runAction(_label, action) {
+        await action();
+        return result;
+      },
+    },
+    companion_context: { snapshot: () => ({ directive: null }) },
+    self_prompter: { isActive: () => false, stopLoop() {} },
+    behavior_arbiter: {
+      playerCommitment: () => commitment,
+      handoffHazardSettlement(captured, settlement) {
+        handoffs.push({ captured, settlement });
+      },
+      requestDirectiveResume() { resumes += 1; },
+    },
+  };
+
+  await executeModeAction({ name: 'self_preservation', active: false }, agent, () => true);
+
+  assert.equal(handoffs.length, 1);
+  assert.deepEqual(handoffs[0].captured, commitment);
+  assert.equal(handoffs[0].settlement.evidence.skill.outcome, 'drowning_escape_stable');
+  assert.equal(resumes, 1);
 });
 
 test('pending death inventory blocks stale companion continuation after respawn', () => {
@@ -2301,6 +2369,46 @@ test('deferred construction accepts only a new exact correlated job submission',
       accepted: true,
     },
   }), true);
+});
+
+test('a direct resource project ends its model loop only after its exact Agenda phases are durable', () => {
+  const requestContext = {
+    requestId: 'request-resource-project',
+    selectedSkill: '!requestResourceProject',
+    routeOrigin: 'model-selected',
+    missionId: null,
+    activityId: null,
+  };
+  const submission = {
+    submissionKind: 'agenda_submission',
+    planKind: 'resource_project',
+    requestId: requestContext.requestId,
+    selectedSkill: requestContext.selectedSkill,
+    routeOrigin: requestContext.routeOrigin,
+    missionId: null,
+    activityId: null,
+    accepted: true,
+    entryIds: ['agenda-resource-1', 'agenda-resource-2'],
+  };
+
+  assert.equal(correlatedAgendaPlanSubmissionAccepted({
+    commandName: '!requestResourceProject',
+    requestContext,
+    submission,
+    agendaEntries: [{ id: 'agenda-resource-1' }, { id: 'agenda-resource-2' }],
+  }), true);
+  assert.equal(correlatedAgendaPlanSubmissionAccepted({
+    commandName: '!requestResourceProject',
+    requestContext,
+    submission,
+    agendaEntries: [{ id: 'agenda-resource-1' }],
+  }), false, 'every phase named by the receipt must actually exist');
+  assert.equal(correlatedAgendaPlanSubmissionAccepted({
+    commandName: '!requestResourceProject',
+    requestContext,
+    submission: { ...submission, requestId: 'stale-request' },
+    agendaEntries: [{ id: 'agenda-resource-1' }, { id: 'agenda-resource-2' }],
+  }), false, 'an older project receipt cannot terminate this request loop');
 });
 
 test('a model-selected typed goal ends its command loop only after a new durable goal is accepted', () => {

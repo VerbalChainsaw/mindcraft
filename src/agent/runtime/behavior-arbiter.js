@@ -669,6 +669,55 @@ export class BehaviorArbiter {
     return true;
   }
 
+  handoffHazardSettlement(commitment, result) {
+    const owner = boundedText(commitment?.owner);
+    const obligationId = boundedText(commitment?.obligationId);
+    if (!owner || !obligationId || !isDirectiveHazardSettlementEvidence(result)) return false;
+    const outcome = resultSkillOutcome(result);
+    const positionValue = this.agent?.bot?.entity?.position;
+    const position = [positionValue?.x, positionValue?.y, positionValue?.z].every(Number.isFinite)
+      ? Object.freeze({
+          x: Math.floor(positionValue.x),
+          y: Math.floor(positionValue.y),
+          z: Math.floor(positionValue.z),
+        })
+      : null;
+    const hazard = Object.freeze({
+      kind: 'drowning',
+      outcome,
+      actionId: boundedText(result?.actionId) || null,
+      position,
+      dimension: boundedText(this.agent?.bot?.game?.dimension).replace(/^minecraft:/, '') || null,
+      settledAt: this.now(),
+    });
+
+    for (const provider of this.controlCommitmentProviders) {
+      if (typeof provider?.observeControlHazard !== 'function') continue;
+      let current;
+      try {
+        current = provider.currentControlCommitment?.(this.actionState());
+      } catch (error) {
+        console.warn(`[arbiter] Hazard commitment provider failed safely: ${boundedText(error?.message || error)}`);
+        continue;
+      }
+      if (
+        boundedText(current?.owner) !== owner
+        || boundedText(current?.obligationId) !== obligationId
+      ) continue;
+      try {
+        return provider.observeControlHazard(hazard, {
+          owner,
+          obligationId,
+          phase: boundedText(commitment?.phase) || null,
+        }) === true;
+      } catch (error) {
+        console.warn(`[arbiter] Hazard settlement handoff failed safely: ${boundedText(error?.message || error)}`);
+        return false;
+      }
+    }
+    return false;
+  }
+
   beginSafetySuspension(incident = this.agent?.survival_director?.safetyIncident) {
     const incidentId = boundedText(incident?.id);
     if (this.stopped || incident?.active !== true || !incidentId) return null;

@@ -1251,7 +1251,15 @@ export class ActionManager {
         const signature = actionAttemptSignature(actionLabel, requestContext);
         const circuitKey = JSON.stringify([actionOwner, signature]);
         const openCircuit = this.actionCircuits.get(circuitKey);
-        if (openCircuit) return { ...openCircuit, circuitKey };
+        if (openCircuit) {
+            if (isSameActionArea(openCircuit.position, position)) {
+                return { ...openCircuit, circuitKey };
+            }
+            // The guard arrests a repeated action on one unchanged patch of
+            // ground. Once another owner has physically displaced the body,
+            // that old circuit is no longer evidence about the new region.
+            this.actionCircuits.delete(circuitKey);
+        }
         const repeats = this.recentActionAttempts.filter(attempt => (
             attempt.owner === actionOwner
             && attempt.signature === signature

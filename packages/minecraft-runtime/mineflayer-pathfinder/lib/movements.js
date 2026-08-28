@@ -146,6 +146,21 @@ class Movements {
 
   openableAction (node, block) {
     if (!this.canOpenDoors || !block.openable || block._properties?.open === true) return null
+    // An open door or fence gate is not empty space: activation rotates its
+    // collision plane. It is traversable only front-to-back along the axis
+    // named by its facing. Approaching laterally can rotate the fixture into
+    // the requested step, leaving Pathfinder jumping beside the hinge while
+    // its close/reopen lifecycle repeatedly services an edge that never
+    // existed physically.
+    const facing = block._properties?.facing
+    const dx = Math.sign(block.position.x - node.x)
+    const dz = Math.sign(block.position.z - node.z)
+    const crossesFixturePlane = ['north', 'south'].includes(facing)
+      ? dx === 0 && dz !== 0
+      : ['east', 'west'].includes(facing)
+          ? dz === 0 && dx !== 0
+          : false
+    if (!crossesFixturePlane) return null
     return {
       x: block.position.x,
       y: block.position.y,
@@ -454,6 +469,12 @@ class Movements {
     if (openableAction) {
       toPlace.push(openableAction)
     } else {
+      // A closed fixture rejected by openableAction is being approached from
+      // an axis its opened collision plane would block. Do not let the generic
+      // openable shortcut in safeOrBreak recreate that impossible edge. An
+      // already-open fixture remains eligible only when its actual shape is
+      // safe for the candidate body cell.
+      if (blockB.openable && !blockB.safe) return
       cost += this.safeOrBreak(blockB, toBreak)
       if (!Number.isFinite(cost)) return
     }
@@ -503,6 +524,7 @@ class Movements {
       blockB.position.z === blockC.position.z
     )
     if (!pairedOpenableHead) {
+      if (blockB.openable && !blockB.safe && !openableAction) return
       cost += this.safeOrBreak(blockB, toBreak)
       if (!Number.isFinite(cost)) return
     }
@@ -510,6 +532,7 @@ class Movements {
     if (openableAction) {
       toPlace.push(openableAction)
     } else {
+      if (blockC.openable && !blockC.safe) return
       cost += this.safeOrBreak(blockC, toBreak)
       if (!Number.isFinite(cost)) return
     }

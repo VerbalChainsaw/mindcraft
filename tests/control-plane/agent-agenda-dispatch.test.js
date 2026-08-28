@@ -137,6 +137,70 @@ test('an ordered item plan is validated and persisted atomically before executio
   assert.equal(JSON.stringify(director.entries), before, 'a malformed later step must not publish a partial plan');
 });
 
+test('a resource project publishes one exact durable Agenda submission receipt', async () => {
+  const requestContext = {
+    requestId: 'resource-project-request',
+    selectedSkill: '!requestResourceProject',
+    routeOrigin: 'model-selected',
+    missionId: null,
+    activityId: null,
+  };
+  const durableReceipts = [];
+  const existing = [{ id: 'agenda-old', state: 'cancelled' }];
+  const playerEntity = {
+    type: 'player',
+    username: 'DirectorOps',
+    position: { x: 766.5, y: 66, z: -765.5 },
+  };
+  const agent = {
+    bot: {
+      username: 'Kevin',
+      players: { DirectorOps: { username: 'DirectorOps', entity: playerEntity } },
+      entities: { 1: playerEntity },
+    },
+    actions: {
+      currentRequestContext: () => requestContext,
+      recordDurableSubmissionReceipt(receipt) { durableReceipts.push(receipt); },
+    },
+    agenda_director: {
+      entries: existing,
+      snapshot() { return { remaining: 2 }; },
+    },
+    async dispatchPlayerAgenda() {
+      this.agenda_director.entries.push(
+        { id: 'agenda-resource-explore', state: 'active' },
+        { id: 'agenda-resource-return', state: 'pending' },
+      );
+      return true;
+    },
+  };
+
+  const command = getCommand('!requestResourceProject');
+  const result = await command.perform(
+    agent,
+    'DirectorOps',
+    'find and explore a cave, mine eight iron ore and three coal, return here, make one iron pickaxe, store it in this chest, then return to me',
+    true,
+  );
+
+  assert.match(result, /accepted as 2 durable Agenda phase/i);
+  assert.equal(durableReceipts.length, 1);
+  assert.deepEqual(durableReceipts[0], {
+    submissionKind: 'agenda_submission',
+    planKind: 'resource_project',
+    generation: 1,
+    requestId: requestContext.requestId,
+    selectedSkill: requestContext.selectedSkill,
+    routeOrigin: requestContext.routeOrigin,
+    missionId: null,
+    activityId: null,
+    accepted: true,
+    code: 'resource_project_accepted',
+    entryIds: ['agenda-resource-explore', 'agenda-resource-return'],
+  });
+  assert.deepEqual(agent.last_agenda_plan_submission, durableReceipts[0]);
+});
+
 test('an interrupting model-compiled item plan replaces the whole unfinished agenda atomically', () => {
   const cancellations = [];
   const agent = {

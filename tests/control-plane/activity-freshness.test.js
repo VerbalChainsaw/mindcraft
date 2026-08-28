@@ -344,6 +344,86 @@ test('explicit Agenda resume reactivates the exact cancelled Goal without mintin
   }
 });
 
+test('explicit Agenda resume binds the exact already-active Explorer regardless of resume order', () => {
+  const now = Date.now();
+  for (const alreadyClearedExecutorId of [false, true]) {
+    const root = mkdtempSync(path.join(tmpdir(), 'active-job-agenda-resume-'));
+    mkdirSync(path.join(root, BOT), { recursive: true });
+    try {
+      const order = {
+        id: 'miner-exact-resume',
+        role: 'miner',
+        kind: 'explore',
+        source: 'player',
+        requester: 'DirectorOps',
+        target: { name: 'ores', x: 166, y: 79, z: -380 },
+        quota: 11,
+        phase: 'assess',
+        checkpoint: {
+          homeDimension: 'overworld',
+          retainResults: true,
+          requiredOutputs: [
+            { source: 'iron_ore', item: 'raw_iron', quantity: 8 },
+            { source: 'coal_ore', item: 'coal', quantity: 3 },
+          ],
+        },
+      };
+      const agendaEntry = normalizeAgendaEntry({
+        id: 'agenda-exact-job-resume',
+        kind: 'explore',
+        executor: 'job',
+        target: 'ores',
+        quantity: 11,
+        retainResults: true,
+        requiredOutputs: order.checkpoint.requiredOutputs,
+        requester: 'DirectorOps',
+        x: 166,
+        y: 79,
+        z: -380,
+        homeDimension: 'overworld',
+        state: alreadyClearedExecutorId ? 'pending' : 'failed',
+        executorId: alreadyClearedExecutorId ? '' : order.id,
+        startedAt: now - 1_000,
+        finishedAt: alreadyClearedExecutorId ? null : now,
+        attempts: alreadyClearedExecutorId ? 0 : 1,
+        evidence: {
+          code: alreadyClearedExecutorId
+            ? 'agenda_chain_explicitly_resumed'
+            : 'recovery_action_exhausted',
+          detail: 'The recovery route timed out.',
+          retryable: true,
+        },
+      }, { now: () => now });
+      writeFileSync(path.join(root, BOT, 'agenda.json'), JSON.stringify({
+        version: 1,
+        entries: [agendaEntry],
+        savedAt: now,
+      }), 'utf8');
+      const wakes = [];
+      const agent = {
+        name: BOT,
+        goal_director: { activeGoal: null, lastGoal: null },
+        job_director: { activeOrder: order, lastOrder: null, lastReceipt: null },
+        behavior_arbiter: { wake(reason) { wakes.push(reason); } },
+      };
+      const director = new AgendaDirector(agent, {
+        store: new AgendaStore(BOT, { root }),
+        now: () => now,
+      });
+
+      const result = director.resumeFailedChain('The movement owner was repaired.');
+
+      assert.deepEqual(result, { resumed: 1, rootId: agendaEntry.id });
+      assert.equal(director.entries[0].state, 'active');
+      assert.equal(director.entries[0].executorId, order.id);
+      assert.equal(director.entries[0].evidence.code, 'agenda_job_explicitly_resumed');
+      assert.deepEqual(wakes, ['agenda_chain_explicitly_resumed']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('explicit Agenda resume rehydrates only the exact stale failed dependency chain', () => {
   const savedAt = Date.now() - (ACTIVITY_STATE_MAX_AGE_MS + 60_000);
   const failed = normalizeAgendaEntry({

@@ -369,8 +369,22 @@ export function collectionExclusionsForAgent(agent, requestedName = null) {
     // Match GoalDirector's compact source-region exclusion: an unsafe mining
     // stance is evidence about the local vein/approach, not one block face.
     exclusions.push(...workOrderCollectionExclusions(agent?.job_director?.activeOrder, requestedName));
-    const worksite = builderWorksiteCollectionExclusion(agent?.job_director?.activeOrder);
+    const worksite = builderWorksiteCollectionExclusion(
+        agent?.job_director?.activeOrder,
+        { protectRouteStances: true },
+    );
     if (worksite) exclusions.push(worksite);
+    const rememberedWorksite = builderWorksiteCollectionExclusion(
+        agent?.home_state?.snapshot?.().structureOrder,
+        {
+            includeFailed: true,
+            protectRouteStances: true,
+            reason: 'remembered_builder_worksite',
+        },
+    );
+    if (rememberedWorksite && rememberedWorksite.orderId !== worksite?.orderId) {
+        exclusions.push(rememberedWorksite);
+    }
     const protectedRegion = workOrderProtectedRegionExclusion(agent?.job_director?.activeOrder);
     if (protectedRegion) exclusions.push(protectedRegion);
     const requesterName = agent?.goal_director?.activeGoal?.requester
@@ -381,6 +395,23 @@ export function collectionExclusionsForAgent(agent, requestedName = null) {
     const requesterArea = requesterTerrainCollectionExclusion(requestedName, requesterPosition);
     if (requesterArea) exclusions.push(requesterArea);
     return exclusions;
+}
+
+function builderProtectedNavigationRegions(agent) {
+    const worksite = builderWorksiteCollectionExclusion(agent?.job_director?.activeOrder);
+    return worksite ? [worksite] : [];
+}
+
+function activeJobNavigationStepExclusions(agent) {
+    const request = agent?.actions?.currentRequestContext?.();
+    if (request?.routeOrigin !== 'job-director') return [];
+    const exclusions = agent?.job_director?.activeOrder?.checkpoint?.navigationStepExclusions;
+    return Array.isArray(exclusions) ? exclusions : [];
+}
+
+function builderPlacementOptions(agent) {
+    const protectedNavigationRegions = builderProtectedNavigationRegions(agent);
+    return protectedNavigationRegions.length > 0 ? { protectedNavigationRegions } : {};
 }
 
 /**
@@ -976,10 +1007,17 @@ export const actionsList = [
             'z': {type: 'float', description: 'The z coordinate.', domain: [-Infinity, Infinity]},
             'closeness': {type: 'float', description: 'How close to get to the location.', domain: [0, Infinity]},
             'dry_only': {type: 'boolean', description: 'Require a complete Pathfinder route that does not enter water.', optional: true, default: false},
+            'progressive_journey': {type: 'boolean', description: 'Allow distant travel to settle at a verified closer Pathfinder frontier and continue from there.', optional: true, default: false},
+            'local_recovery': {type: 'boolean', description: 'Allow a bounded Pathfinder-proved local escape before retrying a stalled route.', optional: true, default: false},
         },
-        perform: runAsAction(async (agent, x, y, z, closeness, dry_only = false) => {
+        perform: runAsAction(async (agent, x, y, z, closeness, dry_only = false, progressive_journey = false, local_recovery = false) => {
             return await skills.goToPosition(agent.bot, x, y, z, closeness, {
                 dryOnly: dry_only === true,
+                allowSegmentedJourney: progressive_journey === true,
+                allowBestReachable: progressive_journey === true,
+                allowLocalRecovery: local_recovery === true,
+                protectedNavigationRegions: builderProtectedNavigationRegions(agent),
+                excludedNavigationSteps: activeJobNavigationStepExclusions(agent),
             });
         })
     },
@@ -2417,7 +2455,19 @@ export const actionsList = [
             'z': { type: 'float', description: 'The validated z coordinate.' },
         },
         perform: runAsAction(async (agent, type, x, y, z) => {
-            return await skills.placeBlock(agent.bot, type, x, y, z, 'bottom', true, false);
+            return await skills.placeBlock(
+                agent.bot,
+                type,
+                x,
+                y,
+                z,
+                'bottom',
+                true,
+                false,
+                null,
+                null,
+                builderPlacementOptions(agent),
+            );
         }, false, -1, null, 'legacy', 'placement')
     },
     {
@@ -2432,7 +2482,16 @@ export const actionsList = [
             'facing': { type: 'string', description: 'Persisted horizontal facing.' },
         },
         perform: runAsAction(async (agent, type, x, y, z, kind, facing) => {
-            return await skills.placeFixture(agent.bot, type, x, y, z, kind, facing);
+            return await skills.placeFixture(
+                agent.bot,
+                type,
+                x,
+                y,
+                z,
+                kind,
+                facing,
+                builderPlacementOptions(agent),
+            );
         }, false, -1, null, 'legacy', 'placement')
     },
     {
@@ -2604,12 +2663,46 @@ export const actionsList = [
             'replace_current': { type: 'boolean', description: 'Replace unfinished agenda work atomically before starting this project.', optional: true, default: true },
         },
         perform: async function (agent, playerName, request, replaceCurrent = true) {
+            const requestContext = agent.actions?.currentRequestContext?.() || null;
+            const previousGeneration = Number(agent.last_agenda_plan_submission?.generation) || 0;
+            const entriesBefore = new Set(
+                (agent.agenda_director?.entries || []).map(entry => entry?.id).filter(Boolean),
+            );
+            const recordSubmission = ({ accepted, code, entryIds = [] }) => {
+                const submissionReceipt = Object.freeze({
+                    submissionKind: 'agenda_submission',
+                    planKind: 'resource_project',
+                    generation: previousGeneration + 1,
+                    requestId: requestContext?.requestId || null,
+                    selectedSkill: requestContext?.selectedSkill || null,
+                    routeOrigin: requestContext?.routeOrigin || null,
+                    missionId: requestContext?.missionId || null,
+                    activityId: requestContext?.activityId || null,
+                    accepted: accepted === true,
+                    code,
+                    entryIds: Object.freeze(entryIds.slice(0, 16)),
+                });
+                agent.last_agenda_plan_submission = submissionReceipt;
+                agent.actions?.recordDurableSubmissionReceipt?.(submissionReceipt);
+            };
+            const reject = (code, message) => {
+                recordSubmission({ accepted: false, code });
+                return message;
+            };
             const resolution = resolvePlayerTarget(agent.bot, playerName);
             if (!resolution?.canonical || !resolution.entity?.position) {
-                return `Resource project was not started: ${playerName} is not a uniquely resolved online player.`;
+                return reject(
+                    'resource_project_requester_unresolved',
+                    `Resource project was not started: ${playerName} is not a uniquely resolved online player.`,
+                );
             }
             const normalizedRequest = String(request || '').trim();
-            if (!normalizedRequest) return 'Resource project was not started: the complete project request is empty.';
+            if (!normalizedRequest) {
+                return reject(
+                    'resource_project_request_empty',
+                    'Resource project was not started: the complete project request is empty.',
+                );
+            }
             const routedRequest = replaceCurrent === true
                 ? `Now, ${normalizedRequest}`
                 : normalizedRequest;
@@ -2624,8 +2717,25 @@ export const actionsList = [
                 },
             );
             if (!handled) {
-                return 'Resource project was not started: the complete request did not compile into the typed resource-project contract.';
+                return reject(
+                    'resource_project_not_compiled',
+                    'Resource project was not started: the complete request did not compile into the typed resource-project contract.',
+                );
             }
+            const entryIds = (agent.agenda_director?.entries || [])
+                .map(entry => entry?.id)
+                .filter(id => id && !entriesBefore.has(id));
+            if (entryIds.length === 0) {
+                return reject(
+                    'resource_project_not_installed',
+                    'Resource project was handled, but no new durable Agenda phases were installed.',
+                );
+            }
+            recordSubmission({
+                accepted: true,
+                code: 'resource_project_accepted',
+                entryIds,
+            });
             const snapshot = agent.agenda_director?.snapshot?.();
             return snapshot?.remaining > 0
                 ? `Resource project accepted as ${snapshot.remaining} durable Agenda phase(s); execution is starting from the bound home base.`

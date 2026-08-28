@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { isPreemption } from './action-result.js';
+import { loopEraseMiningRouteCells } from './mining-corridor-planner.js';
 
 const ROLES = new Set(['builder', 'miner', 'lumberjack', 'scout']);
 const KINDS = new Set(['stockpile', 'build', 'emergency_shelter', 'mine', 'harvest', 'explore', 'scout']);
@@ -25,6 +26,7 @@ const MAX_BLUEPRINT_FIXTURES = 64;
 const MAX_FAILED_METHODS = 24;
 const MAX_FAILED_TARGETS = 24;
 const MAX_MINING_RETURN_CELLS = 512;
+const MAX_NAVIGATION_STEP_EXCLUSIONS = 16;
 const DEFAULT_MAX_RECOVERIES = 8;
 const FIXTURE_KINDS = new Set(['bed', 'door', 'stair']);
 const HORIZONTAL_FACINGS = new Set(['north', 'south', 'east', 'west']);
@@ -272,6 +274,12 @@ function normalizeCheckpoint(checkpoint) {
       MAX_MINING_RETURN_CELLS - 1,
     );
   }
+  const deathRecoveryRecordedAt = Number(checkpoint.deathRecovery?.recordedAt);
+  if (Number.isSafeInteger(deathRecoveryRecordedAt) && deathRecoveryRecordedAt > 0) {
+    normalized.deathRecovery = Object.freeze({
+      recordedAt: deathRecoveryRecordedAt,
+    });
+  }
   if (checkpoint.caveLit === true) normalized.caveLit = true;
   if (checkpoint.caveLightingComplete === true) normalized.caveLightingComplete = true;
   if (checkpoint.scoutReturned === true) normalized.scoutReturned = true;
@@ -279,6 +287,32 @@ function normalizeCheckpoint(checkpoint) {
   if (checkpoint.bestEffort === true) normalized.bestEffort = true;
   if (checkpoint.retainResults === true) normalized.retainResults = true;
   if (checkpoint.miningRelocationPending === true) normalized.miningRelocationPending = true;
+  if (checkpoint.worksiteReturnPending === true) normalized.worksiteReturnPending = true;
+  if (checkpoint.worksiteReturnDryOnly === true) normalized.worksiteReturnDryOnly = true;
+  if (Array.isArray(checkpoint.navigationStepExclusions)) {
+    const exclusions = new Map();
+    for (const value of checkpoint.navigationStepExclusions.slice(-MAX_NAVIGATION_STEP_EXCLUSIONS)) {
+      if (![value?.x, value?.y, value?.z].every(Number.isFinite)) continue;
+      const exclusion = {
+        x: Math.floor(value.x),
+        y: Math.floor(value.y),
+        z: Math.floor(value.z),
+      };
+      if ([value?.source?.x, value?.source?.y, value?.source?.z].every(Number.isFinite)) {
+        exclusion.source = Object.freeze({
+          x: Math.floor(value.source.x),
+          y: Math.floor(value.source.y),
+          z: Math.floor(value.source.z),
+        });
+      }
+      const locomotion = boundedText(value?.locomotion, 32);
+      if (locomotion) exclusion.locomotion = locomotion;
+      exclusions.set(`${exclusion.x}:${exclusion.y}:${exclusion.z}`, Object.freeze(exclusion));
+    }
+    if (exclusions.size > 0) {
+      normalized.navigationStepExclusions = Object.freeze([...exclusions.values()]);
+    }
+  }
   const lastFailedTargetActionId = boundedText(checkpoint.lastFailedTargetActionId, 96);
   if (lastFailedTargetActionId) normalized.lastFailedTargetActionId = lastFailedTargetActionId;
   if (['exposed_cave', 'mining_corridor'].includes(checkpoint.acquisitionStrategy)) {
@@ -392,19 +426,19 @@ function normalizeCheckpoint(checkpoint) {
       .filter(value => typeof value === 'string' && value.length <= 32));
   }
   if (Array.isArray(checkpoint.miningReturnRoute)) {
-    const route = [];
-    for (const rawCell of checkpoint.miningReturnRoute.slice(0, MAX_MINING_RETURN_CELLS)) {
-      if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
-      const cell = Object.freeze({
-        x: Math.floor(rawCell.x),
-        y: Math.floor(rawCell.y),
-        z: Math.floor(rawCell.z),
-      });
-      const previous = route.at(-1);
-      if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
-      route.push(cell);
+    const route = loopEraseMiningRouteCells(
+      checkpoint.miningReturnRoute,
+      { limit: MAX_MINING_RETURN_CELLS },
+    ).map(cell => Object.freeze(cell));
+    if (route.length > 0) {
+      normalized.miningReturnRoute = Object.freeze(route);
+      if (Number.isFinite(normalized.miningReturnIndex)) {
+        normalized.miningReturnIndex = Math.min(
+          route.length - 1,
+          normalized.miningReturnIndex,
+        );
+      }
     }
-    if (route.length > 0) normalized.miningReturnRoute = Object.freeze(route);
   }
   const miningSearchNoProgress = checkpoint.miningSearchNoProgress;
   const miningSearchMethod = boundedText(miningSearchNoProgress?.method, 120);
@@ -479,6 +513,20 @@ function normalizeCheckpoint(checkpoint) {
     if (targets.size > 0) normalized.failedTargets = Object.freeze([...targets.values()]);
   }
   return Object.freeze(normalized);
+}
+
+export function checkpointAfterControlHazard(order, hazard) {
+  const checkpoint = normalizeCheckpoint(order?.checkpoint);
+  if (
+    order?.role !== 'miner'
+    || checkpoint.worksiteReturnPending !== true
+    || hazard?.kind !== 'drowning'
+    || !String(hazard?.outcome || '').startsWith('drowning_escape_')
+  ) return checkpoint;
+  return normalizeCheckpoint({
+    ...checkpoint,
+    worksiteReturnDryOnly: true,
+  });
 }
 
 function discoveredPrerequisiteCheckpoint(result, currentCheckpoint) {
@@ -565,6 +613,72 @@ function surfaceRecoveryObservation(result) {
       skill.supported === true
       && Number(skill.verticalProgress) >= 1
     ),
+  });
+}
+
+function movementRecoveryObservation(result) {
+  const skill = result?.evidence?.skill;
+  const progress = skill?.progress;
+  if (
+    result?.phase !== 'failed'
+    || result?.retryable !== true
+    || skill?.kind !== 'movement'
+  ) return null;
+
+  if (
+    progress?.progressed === true
+    && progress?.supported === true
+    && Number.isFinite(progress?.startMetric)
+    && Number.isFinite(progress?.lastMetric)
+    && progress.lastMetric < progress.startMetric
+    && ['x', 'y', 'z'].every(axis => (
+      Number.isFinite(progress?.startPosition?.[axis])
+      && Number.isFinite(progress?.lastPosition?.[axis])
+    ))
+  ) {
+    const displacement = Math.hypot(
+      progress.lastPosition.x - progress.startPosition.x,
+      progress.lastPosition.y - progress.startPosition.y,
+      progress.lastPosition.z - progress.startPosition.z,
+    );
+    return Object.freeze({
+      progressed: displacement >= 0.75,
+      displacement,
+    });
+  }
+
+  const segmentedProgress = Number(skill.progressed);
+  const verifiedSegment = Array.isArray(skill.segments)
+    && skill.segments.some(segment => (
+      segment?.executed === true
+      && ['progress_verified', 'detour_verified'].includes(segment?.outcome)
+      && segment?.safety?.supported === true
+      && segment?.safety?.nonHazardous === true
+      && ['x', 'y', 'z'].every(axis => Number.isFinite(segment?.terminal?.[axis]))
+    ));
+  if (!verifiedSegment || !Number.isFinite(segmentedProgress) || segmentedProgress < 0.75) {
+    return null;
+  }
+  return Object.freeze({
+    progressed: true,
+    displacement: segmentedProgress,
+  });
+}
+
+function checkpointWithNavigationStepExclusion(result, checkpoint) {
+  const skill = result?.evidence?.skill;
+  const excludedStep = skill?.kind === 'movement'
+    ? skill?.recovery?.excludedStep
+    : null;
+  if (![excludedStep?.x, excludedStep?.y, excludedStep?.z].every(Number.isFinite)) {
+    return checkpoint;
+  }
+  return normalizeCheckpoint({
+    ...checkpoint,
+    navigationStepExclusions: [
+      ...(checkpoint?.navigationStepExclusions || []),
+      excludedStep,
+    ],
   });
 }
 
@@ -837,11 +951,16 @@ export function createWorkOrder(input = {}) {
   });
 }
 
+function collectionTargetFamily(name) {
+  const canonical = boundedText(name, 64);
+  return canonical.startsWith('deepslate_') ? canonical.slice('deepslate_'.length) : canonical;
+}
+
 export function workOrderCollectionExclusions(order, requestedName = null) {
-  const canonicalRequested = boundedText(requestedName, 64);
+  const requestedFamily = collectionTargetFamily(requestedName);
   const targets = (order?.checkpoint?.failedTargets || [])
     .filter(target => [target?.x, target?.y, target?.z].every(Number.isFinite))
-    .filter(target => !canonicalRequested || target.name === canonicalRequested);
+    .filter(target => !requestedFamily || collectionTargetFamily(target.name) === requestedFamily);
   // One rejected block excludes its compact vein. Two repeat rejections are
   // evidence that the local approach/region is unsuitable only when their
   // coordinates actually describe the same local region. A global count of
@@ -914,6 +1033,10 @@ export function advanceWorkOrder(order, result, {
     ? (current.resumePhase || 'assess')
     : current.phase;
   if (!result?.actionId || result.actionId === previousActionId) return current;
+  const navigationRecoveryCheckpoint = checkpointWithNavigationStepExclusion(
+    result,
+    current.checkpoint,
+  );
   if (safetySuspended === true) {
     return normalizeWorkOrder({
       ...current,
@@ -926,6 +1049,37 @@ export function advanceWorkOrder(order, result, {
       // Unlike generic repeated preemption, a named Safety incident has an
       // owning terminal condition. It therefore spends neither productive nor
       // anti-spin budgets; the arbiter releases this same order when safe.
+      updatedAt: now,
+    });
+  }
+  const dryRouteMethodRejected = (
+    recoveryAction === true
+    && current.checkpoint?.worksiteReturnPending === true
+    && current.checkpoint?.worksiteReturnDryOnly === true
+    && result?.phase === 'failed'
+    && result?.evidence?.skill?.kind === 'movement'
+    && result.evidence.skill.outcome === 'segmented_journey_no_safe_waypoint'
+  );
+  if (dryRouteMethodRejected) {
+    const {
+      worksiteReturnDryOnly: _rejectedDryRoute,
+      ...checkpoint
+    } = navigationRecoveryCheckpoint;
+    // Drowning makes dry travel the first recovery method, not a permanent
+    // declaration that swimming is forbidden everywhere. Once Pathfinder has
+    // proved there is no supported dry waypoint from this settled stance, retire
+    // only that method and continue ordinary progressive travel under Safety.
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'recover',
+      resumePhase: recoveryResumePhase,
+      recoveries: 0,
+      checkpoint,
+      evidence: {
+        code: 'dry_route_method_rejected',
+        detail: 'No supported dry waypoint exists from the settled stance; continuing with ordinary progressive navigation under Safety supervision.',
+        actionId: result.actionId,
+      },
       updatedAt: now,
     });
   }
@@ -1066,6 +1220,29 @@ export function advanceWorkOrder(order, result, {
       updatedAt: now,
     });
   }
+  const movementRecovery = recoveryAction
+    ? movementRecoveryObservation(result)
+    : null;
+  if (movementRecovery?.progressed) {
+    // A recovery route that times out after materially converging is an
+    // unfinished recovery leg, not a failed recovery decision. Rebind the
+    // same owner from the newly occupied supported stance. Recovery limits
+    // bound consecutive failures at one frontier, not the lifetime of a long
+    // productive journey, so verified progress opens a fresh bounded segment.
+    return normalizeWorkOrder({
+      ...current,
+      phase: 'recover',
+      resumePhase: recoveryResumePhase,
+      recoveries: 0,
+      checkpoint: navigationRecoveryCheckpoint,
+      evidence: {
+        code: 'capability_verified_partial_progress',
+        detail: result.detail || `Recovery movement advanced ${movementRecovery.displacement.toFixed(2)} blocks toward its bound target.`,
+        actionId: result.actionId,
+      },
+      updatedAt: now,
+    });
+  }
   if (recoveryAction && result.retryable === true) {
     if (current.recoveries < current.maxRecoveries) {
       return normalizeWorkOrder({
@@ -1073,6 +1250,7 @@ export function advanceWorkOrder(order, result, {
         phase: 'recover',
         resumePhase: recoveryResumePhase,
         recoveries: current.recoveries + 1,
+        checkpoint: navigationRecoveryCheckpoint,
         evidence: actionResultEvidence(result),
         updatedAt: now,
       });
@@ -1081,6 +1259,7 @@ export function advanceWorkOrder(order, result, {
       ...current,
       phase: 'failed',
       resumePhase: null,
+      checkpoint: navigationRecoveryCheckpoint,
       evidence: {
         code: 'recovery_action_exhausted',
         detail: result.detail || 'The bounded recovery action made no verified progress.',
@@ -1223,6 +1402,11 @@ export function resumeFailedWorkOrder(order, now = Date.now(), { allowAutomatic 
     || (current.source !== 'player' && allowAutomatic !== true)
   ) return current;
   const {
+    caveSearchRelocations: _caveSearchRelocations,
+    miningRegionRelocations: _miningRegionRelocations,
+    corridorSearchLegs: _corridorSearchLegs,
+    miningRelocationPending: _miningRelocationPending,
+    lastFailedTargetActionId: _lastFailedTargetActionId,
     failedMethods: _failedMethods,
     miningSearchNoProgress: _miningSearchNoProgress,
     ...checkpoint
@@ -1235,10 +1419,11 @@ export function resumeFailedWorkOrder(order, now = Date.now(), { allowAutomatic 
     recoveries: 0,
     preemptions: 0,
     // An explicit player resume is a new bounded attempt against freshly
-    // audited Minecraft state. Preserve concrete failed targets so the bot
-    // does not revisit known-bad blocks, but re-arm method selection; keeping
-    // the old method blacklist can make the only valid acquisition source
-    // disappear before the repaired executor is tried.
+    // audited Minecraft state. Preserve verified outputs, baselines, exact
+    // failed targets, and the physical return route, but re-arm method and
+    // region-exhaustion budgets. Those counters describe the retired tactic,
+    // not player-visible progress; keeping them can terminalize the repaired
+    // executor before it receives one fresh bounded attempt.
     checkpoint,
     evidence: {
       code: current.source === 'player' ? 'player_resume_requested' : 'operator_resume_requested',

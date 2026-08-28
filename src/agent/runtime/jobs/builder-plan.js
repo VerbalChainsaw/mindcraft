@@ -5,6 +5,8 @@ import { isApprovedPrimaryConstructionMaterial } from './structural-material-con
 const MATERIAL_SEARCH_RELOCATION_DISTANCE = 32;
 const MATERIAL_SEARCH_RELOCATION_LIMIT = 4;
 const MATERIAL_REGION_MISS = /(?:resource|source)_not_found/;
+const BUILDER_WORKSITE_ROUTE_HORIZONTAL_MARGIN = 5;
+const BUILDER_WORKSITE_ROUTE_VERTICAL_MARGIN = 2;
 
 const PLAYER_SHELTER_BLUEPRINT = Object.freeze({
   id: 'player_shelter_3x3',
@@ -172,7 +174,16 @@ function createFunctionalShelterBlueprint(material) {
     }
   }
   // Access and utilities are world predicates, not narration.
-  cells.push({ x: 0, y: 1, z: doorZ, material: 'oak_door', stage: 3, function: 'access' });
+  cells.push({
+    x: 0,
+    y: 1,
+    z: doorZ,
+    material: 'oak_door',
+    stage: 3,
+    function: 'access',
+    fixtureId: 'access_door',
+    facing: 'east',
+  });
   // Roof last so the builder retains an open vertical escape during assembly.
   for (let x = 0; x < width; x += 1) {
     for (let z = 0; z < depth; z += 1) {
@@ -202,7 +213,54 @@ function createFunctionalShelterBlueprint(material) {
       'smelting',
     ]),
     cells: Object.freeze(cells.map(cell => Object.freeze(cell))),
+    fixtures: Object.freeze([Object.freeze({
+      id: 'access_door',
+      kind: 'door',
+      material: 'oak_door',
+      function: 'access',
+      facing: 'east',
+      anchor: Object.freeze({ x: 0, y: 1, z: doorZ }),
+      occupiedOffsets: Object.freeze([
+        Object.freeze({ x: 0, y: 0, z: 0, part: 'lower' }),
+        Object.freeze({ x: 0, y: 1, z: 0, part: 'upper' }),
+      ]),
+      supportOffsets: Object.freeze([
+        Object.freeze({ x: 0, y: -1, z: 0 }),
+      ]),
+    })]),
   });
+}
+
+export function inferredAccessDoorFixture(blueprint, cell) {
+  if (
+    cell?.function !== 'access'
+    || !String(cell?.material || '').endsWith('_door')
+    || String(cell?.material || '') === 'iron_door'
+    || !Number.isInteger(blueprint?.width)
+    || !Number.isInteger(blueprint?.depth)
+    || ![cell?.x, cell?.y, cell?.z].every(Number.isInteger)
+  ) return null;
+
+  let facing = null;
+  if (cell.x === 0) facing = 'east';
+  else if (cell.x === blueprint.width - 1) facing = 'west';
+  else if (cell.z === 0) facing = 'south';
+  else if (cell.z === blueprint.depth - 1) facing = 'north';
+  if (!facing) return null;
+
+  return {
+    id: 'inferred_access_door',
+    kind: 'door',
+    material: cell.material,
+    function: 'access',
+    facing,
+    anchor: { x: cell.x, y: cell.y, z: cell.z },
+    occupiedOffsets: [
+      { x: 0, y: 0, z: 0, part: 'lower' },
+      { x: 0, y: 1, z: 0, part: 'upper' },
+    ],
+    supportOffsets: [{ x: 0, y: -1, z: 0 }],
+  };
 }
 
 function count(snapshot, name) {
@@ -413,17 +471,24 @@ export function createBuilderConstructionOrder({
 }
 
 /**
- * Describe the active blueprint as one compact no-collection region. Builder
+ * Describe a live blueprint as one compact no-collection region. Builder
  * placement and clearance remain authoritative inside this box; generic
- * resource gathering must look elsewhere.
+ * resource gathering and ambient utility behavior must look elsewhere. A
+ * remembered failed structure can opt into the same protection until its
+ * explicit resume or replacement resolves the unfinished footprint.
  */
-export function builderWorksiteCollectionExclusion(order) {
+export function builderWorksiteCollectionExclusion(order, {
+  includeFailed = false,
+  reason = 'active_builder_worksite',
+  protectRouteStances = false,
+} = {}) {
   const cells = order?.blueprint?.cells;
   const anchor = order?.target;
   if (
     order?.role !== 'builder'
     || !['build', 'emergency_shelter'].includes(order?.kind)
-    || ['complete', 'failed', 'cancelled'].includes(order?.phase)
+    || ['complete', 'cancelled'].includes(order?.phase)
+    || (order?.phase === 'failed' && includeFailed !== true)
     || !Array.isArray(cells)
     || cells.length === 0
     || ![anchor?.x, anchor?.y, anchor?.z].every(Number.isFinite)
@@ -434,14 +499,20 @@ export function builderWorksiteCollectionExclusion(order) {
     y: anchor.y + cell.y,
     z: anchor.z + cell.z,
   }));
+  const horizontalMargin = protectRouteStances
+    ? BUILDER_WORKSITE_ROUTE_HORIZONTAL_MARGIN
+    : 0;
+  const verticalMargin = protectRouteStances
+    ? BUILDER_WORKSITE_ROUTE_VERTICAL_MARGIN
+    : 0;
   return Object.freeze({
-    minX: Math.min(...absolute.map(position => position.x)),
-    maxX: Math.max(...absolute.map(position => position.x)),
-    minY: Math.min(...absolute.map(position => position.y)),
-    maxY: Math.max(...absolute.map(position => position.y)),
-    minZ: Math.min(...absolute.map(position => position.z)),
-    maxZ: Math.max(...absolute.map(position => position.z)),
-    reason: 'active_builder_worksite',
+    minX: Math.min(...absolute.map(position => position.x)) - horizontalMargin,
+    maxX: Math.max(...absolute.map(position => position.x)) + horizontalMargin,
+    minY: Math.min(...absolute.map(position => position.y)) - verticalMargin,
+    maxY: Math.max(...absolute.map(position => position.y)) + verticalMargin,
+    minZ: Math.min(...absolute.map(position => position.z)) - horizontalMargin,
+    maxZ: Math.max(...absolute.map(position => position.z)) + horizontalMargin,
+    reason,
     orderId: order.id,
   });
 }

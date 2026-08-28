@@ -58,6 +58,28 @@ function explorerOrder({ evidence, checkpoint = {} }) {
   });
 }
 
+test('search-region relocation stays incomplete until the bound region is reached', () => {
+  const definition = getCapabilityDefinition('relocate_search_region');
+  const args = definition.normalizeArguments({
+    x: 166,
+    y: 79,
+    z: -332,
+    closeness: 8,
+    minimumDisplacement: 16,
+    dimension: 'overworld',
+  });
+  const binding = definition.bind({}, args);
+  const verification = definition.verify(
+    { position: { x: 807, y: 63, z: -487 }, dimension: 'overworld' },
+    { position: { x: 782, y: 63, z: -480 }, dimension: 'overworld' },
+    binding,
+  );
+
+  assert.equal(verification.changedRegion, true);
+  assert.equal(verification.reachedTarget, false);
+  assert.equal(verification.ok, false);
+});
+
 test('cave binding preserves an unfinished round-trip route as inconclusive', async () => {
   const home = new Vec3(0, 70, 0);
   const cave = new Vec3(20, 60, 0);

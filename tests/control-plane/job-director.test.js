@@ -1188,6 +1188,147 @@ test('Given corrupt persisted job state, JobDirector surfaces the load error wit
   assert.deepEqual(store.saved, []);
 });
 
+test('death recovery owns a Miner work order before its preserved route resumes', async () => {
+  const recordedAt = 12_345;
+  const commands = [];
+  let position = { x: 867, y: 66, z: -523 };
+  let returnLeg = 0;
+  const agent = createAgent('miner');
+  agent.memory_bank = {
+    recallDeath: identity => identity === recordedAt
+      ? { recordedAt, recoveredAt: null, inventory: { iron_pickaxe: 1, raw_iron: 5 } }
+      : null,
+  };
+  const director = new JobDirector(agent, {
+    store: memoryStore(),
+    getSnapshot: () => ({
+      ...safeMiningSnapshot({ iron_pickaxe: 1, raw_iron: 5 }),
+      ...position,
+      resourceFound: false,
+    }),
+    now: () => 20_000,
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      if (command.startsWith('!goToCoordinates')) {
+        returnLeg += 1;
+        const startPosition = position;
+        position = returnLeg === 1
+          ? { x: 848, y: 66, z: -516 }
+          : { x: 223, y: 20, z: -308 };
+        return returnLeg === 1
+          ? {
+            value: 'Moved materially toward the worksite before the path stalled.',
+            result: {
+              actionId: 'worksite-return-1',
+              phase: 'failed',
+              code: 'skill_path_stalled',
+              detail: 'The long return leg advanced before Pathfinder stalled.',
+              retryable: true,
+              evidence: {
+                skill: {
+                  kind: 'movement',
+                  progress: {
+                    progressed: true,
+                    supported: true,
+                    startMetric: 700,
+                    lastMetric: 650,
+                    startPosition,
+                    lastPosition: position,
+                  },
+                },
+              },
+            },
+          }
+          : {
+            value: 'Reached the worksite.',
+            result: {
+              actionId: 'worksite-return-2',
+              phase: 'succeeded',
+              code: 'skill_arrived',
+              detail: 'Reached the saved worksite.',
+              retryable: false,
+            },
+          };
+      }
+      return {
+        value: 'Recovered the recorded inventory.',
+        result: {
+          actionId: 'death-recovery-1',
+          phase: 'succeeded',
+          code: 'skill_items_recovered',
+          detail: 'Recovered the exact recorded death inventory.',
+          retryable: false,
+        },
+      };
+    },
+  });
+  director.submit(createWorkOrder({
+    id: 'miner-cave-expedition',
+    role: 'miner',
+    kind: 'explore',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    quota: 11,
+    phase: 'execute',
+    attempts: 2,
+    anchor: { x: 223, y: 20, z: -308 },
+    checkpoint: {
+      miningReturnRoute: [{ x: 223, y: 20, z: -308 }],
+      miningReturnIndex: 0,
+    },
+  }));
+
+  assert.equal(director.reconcileDeath({
+    recoverableItems: 6,
+    deathRecord: { recordedAt, inventory: { iron_pickaxe: 1, raw_iron: 5 } },
+    deathPersistenceCode: 'death_recorded',
+  }), true);
+  assert.equal(director.activeOrder.phase, 'recover');
+  assert.equal(director.activeOrder.resumePhase, 'execute');
+  assert.equal(director.activeOrder.attempts, 2, 'death does not spend a productive attempt');
+  assert.equal(director.activeOrder.checkpoint.deathRecovery.recordedAt, recordedAt);
+  assert.equal(director.activeOrder.checkpoint.worksiteReturnPending, true);
+
+  director.nextAttemptAt = 0;
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, [`!recoverDeathItems(${recordedAt})`]);
+  assert.equal(director.activeOrder.phase, 'execute');
+  assert.equal(director.activeOrder.attempts, 0);
+  assert.equal(director.activeOrder.checkpoint.deathRecovery, undefined);
+  assert.equal(director.activeOrder.checkpoint.worksiteReturnPending, true);
+  assert.equal(director.activeOrder.checkpoint.miningReturnIndex, 0);
+
+  director.nextAttemptAt = 0;
+  director.update();
+  await settle();
+
+  assert.equal(commands[1], '!goToCoordinates(223, 20, -308, 2, false, true, true)');
+  assert.equal(director.activeOrder.phase, 'recover');
+  assert.equal(director.activeOrder.resumePhase, 'execute');
+  assert.equal(director.activeOrder.attempts, 0);
+  assert.equal(director.activeOrder.recoveries, 0);
+  assert.equal(director.activeOrder.checkpoint.worksiteReturnPending, true);
+
+  director.nextAttemptAt = 0;
+  director.update();
+  await settle();
+
+  assert.equal(commands[2], '!goToCoordinates(223, 20, -308, 2, false, true, true)');
+  assert.equal(director.activeOrder.phase, 'execute');
+  assert.equal(director.activeOrder.checkpoint.worksiteReturnPending, true);
+
+  director.nextAttemptAt = 0;
+  director.update();
+  await settle();
+
+  const resumedOrder = director.activeOrder || director.lastOrder;
+  assert.equal(resumedOrder.checkpoint.worksiteReturnPending, undefined);
+  assert.notEqual(commands[3], '!goToCoordinates(223, 20, -308, 2, false, true, true)');
+});
+
 test('Given manual command grace, JobDirector suppresses job scheduling', () => {
   const agent = createAgent();
   const commands = [];
@@ -1251,7 +1392,7 @@ test('Given a fight that dragged the bot off its worksite, the job walks back be
 
   director.update();
   await settle();
-  assert.equal(commands[0], '!goToCoordinates(0, 12, 0, 2)');
+  assert.equal(commands[0], '!goToCoordinates(0, 12, 0, 2, false, true, true)');
   // The return step must not reanchor the order to where the fight ended.
   assert.deepEqual(director.activeOrder.anchor, { x: 0, y: 12, z: 0 });
 });

@@ -87,6 +87,68 @@ test('open-water breathing retains emergency retry authority ahead of combat', (
   assert.equal(rearmOpenWaterDrowningEscape(mode, agent, execution), false);
 });
 
+test('open-water breathing yields to the exact active Miner return route', () => {
+  const mode = { next_retry_at: 8_000 };
+  const agent = {
+    bot: {
+      entity: { isInWater: true, position: { x: 224, y: 62, z: -323 } },
+      game: { dimension: 'overworld' },
+      health: 20,
+      oxygenLevel: 20,
+      blockAt: () => ({ name: 'water' }),
+    },
+    goal_director: { activeGoal: null },
+    job_director: {
+      activeOrder: {
+        id: 'miner-cave-expedition',
+        role: 'miner',
+        phase: 'execute',
+        checkpoint: {
+          miningReturnRoute: [{ x: 223, y: 20, z: -308 }],
+          miningReturnIndex: 0,
+        },
+      },
+    },
+    behavior_arbiter: { wake: () => {} },
+  };
+  const execution = {
+    interrupted: false,
+    result: {
+      phase: 'failed',
+      evidence: {
+        skill: {
+          kind: 'survival',
+          outcome: 'drowning_escape_open_water',
+          retryable: true,
+          shore: { outcome: 'no_safe_shore', candidates: 0 },
+        },
+      },
+    },
+  };
+
+  assert.equal(rearmOpenWaterDrowningEscape(mode, agent, execution), true);
+  assert.equal(mode.failed_drowning_trigger.returnOwnerKind, 'job');
+  assert.equal(mode.failed_drowning_trigger.returnOwnerId, 'miner-cave-expedition');
+  assert.deepEqual(
+    openWaterDrowningEscapeDecision(mode, agent),
+    {
+      eligible: false,
+      blocking: false,
+      code: 'open_water_mining_return_handoff',
+    },
+  );
+
+  agent.job_director.activeOrder.id = 'miner-replacement';
+  assert.deepEqual(
+    openWaterDrowningEscapeDecision(mode, agent),
+    {
+      eligible: true,
+      blocking: false,
+      code: 'open_water_escape_material_changed',
+    },
+  );
+});
+
 test('self-preservation recognizes a live numeric healing potion while it owns the critical lane', () => {
   const healingPotion = {
     name: 'potion',

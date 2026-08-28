@@ -83,6 +83,9 @@ const HELD_WORK_RESUME_COMMANDS = new Set([
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
 const PLAYER_ITEM_PLAN_COMMANDS = new Set(['!queueItemPlan']);
 const PLAYER_STORAGE_PLAN_COMMANDS = new Set(['!queueStoragePlan']);
+const DIRECT_AGENDA_PLAN_KINDS = new Map([
+    ['!requestResourceProject', 'resource_project'],
+]);
 const MAX_CONSTRUCTION_COMPILATION_TURNS = 6;
 const MAX_ITEM_PLAN_COMPILATION_TURNS = 3;
 // How often a still-open player request is quoted back while the model is
@@ -171,15 +174,22 @@ export function correlatedAgendaPlanSubmissionAccepted({
     agendaEntries,
 } = {}) {
     const durableIds = new Set((Array.isArray(agendaEntries) ? agendaEntries : []).map(entry => entry?.id).filter(Boolean));
-    const allowedCommands = deferredAssignment?.kind === 'storage_plan'
-        ? PLAYER_STORAGE_PLAN_COMMANDS
-        : PLAYER_ITEM_PLAN_COMMANDS;
+    const deferredPlanKind = ['item_plan', 'storage_plan'].includes(deferredAssignment?.kind)
+        ? deferredAssignment.kind
+        : null;
+    const directPlanKind = DIRECT_AGENDA_PLAN_KINDS.get(commandName) || null;
+    const expectedPlanKind = deferredPlanKind || directPlanKind;
+    const commandAllowed = deferredPlanKind === 'storage_plan'
+        ? PLAYER_STORAGE_PLAN_COMMANDS.has(commandName)
+        : deferredPlanKind === 'item_plan'
+            ? PLAYER_ITEM_PLAN_COMMANDS.has(commandName)
+            : directPlanKind !== null;
     return Boolean(
-        ['item_plan', 'storage_plan'].includes(deferredAssignment?.kind)
-        && allowedCommands.has(commandName)
+        expectedPlanKind
+        && commandAllowed
         && requestContext?.requestId
         && submission?.submissionKind === 'agenda_submission'
-        && submission.planKind === deferredAssignment.kind
+        && submission.planKind === expectedPlanKind
         && submission.requestId === requestContext.requestId
         && requestContext.selectedSkill === commandName
         && submission?.selectedSkill === commandName
@@ -325,6 +335,12 @@ function inventorySnapshot(bot) {
 }
 
 export { hasPendingDeathRecovery };
+
+export function idleSignalMayReleaseBody(agent) {
+    if (!agent?.bot || !agent?.actions) return false;
+    return agent.actions.executing !== true
+        && (Number(agent.bot.mindcraftManagedNavigationDepth) || 0) <= 0;
+}
 
 function identityMatchKeys(identity) {
     const value = String(identity || '');
@@ -2339,6 +2355,22 @@ export class Agent {
                     this.history.save();
                     break;
                 }
+                const agendaPlanAccepted = correlatedAgendaPlanSubmissionAccepted({
+                    deferredAssignment: deferredModelAssignment,
+                    commandName: command_name,
+                    requestContext: commandExecution?.requestContext,
+                    submission: durableSubmission,
+                    agendaEntries: this.agenda_director?.entries,
+                });
+                if (agendaPlanAccepted && !deferredModelAssignment) {
+                    // A complete typed project is now durably installed. The
+                    // model turn that selected it must end here: continuing the
+                    // same player request can manufacture a second child plan
+                    // that cancels the Agenda's active Job and strands every
+                    // dependency behind it.
+                    this.history.save();
+                    break;
+                }
                 // Quote the player back every few commands while their request
                 // is still open. Bounded, because a reminder that never stops
                 // is just noise, and silent after the request is satisfied --
@@ -2368,13 +2400,7 @@ export class Agent {
                     );
                 }
                 const deferredAssignmentAccepted = ['item_plan', 'storage_plan'].includes(deferredModelAssignment?.kind)
-                    ? correlatedAgendaPlanSubmissionAccepted({
-                        deferredAssignment: deferredModelAssignment,
-                        commandName: command_name,
-                        requestContext: commandExecution?.requestContext,
-                        submission: durableSubmission,
-                        agendaEntries: this.agenda_director?.entries,
-                    })
+                    ? agendaPlanAccepted
                     : persistentJobAccepted;
                 if (deferredAssignmentAccepted) {
                     const acceptedAssignmentKind = deferredModelAssignment.kind;
@@ -2826,6 +2852,13 @@ export class Agent {
                 deathRecord: deathPersistence.record,
                 deathPersistenceCode: deathPersistence.code,
             });
+            this.job_director?.reconcileDeath?.({
+                position,
+                dimension,
+                recoverableItems,
+                deathRecord: deathPersistence.record,
+                deathPersistenceCode: deathPersistence.code,
+            });
             this.agenda_director?.reconcileDeath?.({
                 position,
                 dimension,
@@ -2939,6 +2972,15 @@ export class Agent {
             }
         });
         this.bot.on('idle', () => {
+            // `idle` is a wake-up edge, not body authority. Delayed legacy
+            // emitters can publish it after ActionManager has already leased
+            // the body to the next job. Clearing Pathfinder in that interval
+            // terminalizes a valid route as PathStopped with no preemption
+            // receipt. Only a physically unleased body may be normalized.
+            if (!idleSignalMayReleaseBody(this)) {
+                this.behavior_arbiter?.wake?.('stale_idle_signal_ignored');
+                return;
+            }
             try { this.bot.moveVehicle?.(0, 0); } catch { /* no mounted vehicle */ }
             this.bot.clearControlStates();
             this.bot.pathfinder.stop(); // clear any lingering pathfinder

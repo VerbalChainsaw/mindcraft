@@ -87,3 +87,58 @@ test('Given an already stopped arbiter, no evaluation parks', async () => {
   assert.equal(reason, 'stopped');
   assert.ok(elapsed < 200, `a stopped arbiter must not park, waited ${elapsed}ms`);
 });
+
+test('a settled hazard is routed only to the captured durable commitment owner', () => {
+  const observed = [];
+  const jobProvider = {
+    currentControlCommitment: () => ({
+      owner: 'player_job',
+      obligationId: 'miner-river-return',
+      phase: 'recover',
+    }),
+    observeControlHazard(hazard, commitment) {
+      observed.push({ hazard, commitment });
+      return true;
+    },
+  };
+  const unrelatedProvider = {
+    currentControlCommitment: () => ({
+      owner: 'player_goal',
+      obligationId: 'other-goal',
+      phase: 'execute',
+    }),
+    observeControlHazard() {
+      throw new Error('unrelated provider must not receive the handoff');
+    },
+  };
+  const arbiter = new BehaviorArbiter({
+    name: 'hazard-handoff-probe',
+    bot: {
+      entity: { position: { x: 760.5, y: 64, z: -519.5 } },
+      game: { dimension: 'overworld' },
+    },
+  }, {
+    trace: { enabled: false },
+    commitmentProviders: [unrelatedProvider, jobProvider],
+  });
+  const commitment = {
+    owner: 'player_job',
+    obligationId: 'miner-river-return',
+    phase: 'recover',
+  };
+  const settlement = {
+    actionId: 'reflex-drowning-1',
+    phase: 'succeeded',
+    label: 'mode:self_preservation',
+    evidence: {
+      skill: { kind: 'survival', outcome: 'drowning_escape_stable' },
+    },
+  };
+
+  assert.equal(arbiter.handoffHazardSettlement(commitment, settlement), true);
+  assert.equal(observed.length, 1);
+  assert.deepEqual(observed[0].commitment, commitment);
+  assert.equal(observed[0].hazard.kind, 'drowning');
+  assert.equal(observed[0].hazard.outcome, 'drowning_escape_stable');
+  assert.deepEqual(observed[0].hazard.position, { x: 760, y: 64, z: -520 });
+});

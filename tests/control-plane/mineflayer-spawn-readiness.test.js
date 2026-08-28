@@ -1,42 +1,44 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { installPlayerLoadedSpawnReadiness } from '../../src/utils/mineflayer-spawn-readiness.js';
+import minecraftData from 'minecraft-data';
 
-function fakeBot({ supported = true } = {}) {
+const require = createRequire(import.meta.url);
+const mineflayerPackage = require('../../node_modules/mineflayer/package.json');
+const injectHealthPlugin = require('../../node_modules/mineflayer/lib/plugins/health.js');
+
+function fakeBot(version) {
+  const registry = minecraftData(version);
   const bot = new EventEmitter();
-  bot.supportFeature = feature => feature === 'sendsPlayerLoadedPacket' && supported;
+  bot._client = new EventEmitter();
+  bot.isAlive = true;
   bot.writes = [];
-  bot._client = {
-    write(packet, value) {
-      bot.writes.push({ packet, value });
-    },
-  };
+  bot.supportFeature = feature => registry.supportFeature(feature);
+  bot._client.write = (packet, value) => bot.writes.push({ packet, value });
   return bot;
 }
 
-test('Mineflayer 4.37.1 acknowledges player_loaded before ordinary spawn listeners', () => {
-  const bot = fakeBot();
-  const order = [];
-  bot.on('spawn', () => order.push('agent-spawn'));
+test('Mineflayer 4.38.0 natively acknowledges player_loaded before spawn listeners run', () => {
+  assert.equal(mineflayerPackage.version, '4.38.0');
 
-  assert.equal(installPlayerLoadedSpawnReadiness(bot, { mineflayerVersion: '4.37.1' }), true);
-  bot.prependListener('spawn', () => order.push('mineflayer-spawn'));
-  bot.on('spawn', () => order.push(`packet:${bot.writes[0]?.packet || 'missing'}`));
-  bot.emit('spawn');
+  const bot = fakeBot('1.21.4');
+  const spawnWrites = [];
+  bot.on('spawn', () => spawnWrites.push([...bot.writes]));
+  injectHealthPlugin(bot, { respawn: false });
+
+  bot._client.emit('update_health', {
+    health: 20,
+    food: 20,
+    foodSaturation: 5,
+  });
 
   assert.deepEqual(bot.writes, [{ packet: 'player_loaded', value: {} }]);
-  assert.deepEqual(order, ['mineflayer-spawn', 'agent-spawn', 'packet:player_loaded']);
+  assert.deepEqual(spawnWrites, [[{ packet: 'player_loaded', value: {} }]]);
 });
-test('the compatibility owner is inert for unsupported protocols and later Mineflayer versions', () => {
-  const unsupported = fakeBot({ supported: false });
-  assert.equal(installPlayerLoadedSpawnReadiness(unsupported, { mineflayerVersion: '4.37.1' }), true);
-  unsupported.emit('spawn');
-  assert.deepEqual(unsupported.writes, []);
 
-  const upgraded = fakeBot();
-  assert.equal(installPlayerLoadedSpawnReadiness(upgraded, { mineflayerVersion: '4.38.0' }), false);
-  upgraded.emit('spawn');
-  assert.deepEqual(upgraded.writes, []);
+test('the resolved minecraft-data release exposes the upstream spawn feature gate', () => {
+  assert.equal(minecraftData('1.21.4').supportFeature('sendsPlayerLoadedPacket'), true);
+  assert.equal(minecraftData('1.20.4').supportFeature('sendsPlayerLoadedPacket'), false);
 });

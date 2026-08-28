@@ -91,6 +91,44 @@ function boundedText(value, maximum = 240) {
     .slice(0, maximum);
 }
 
+function requiredOutputSignature(outputs) {
+  return JSON.stringify((Array.isArray(outputs) ? outputs : [])
+    .map(output => ({
+      source: boundedText(output?.source, 64),
+      item: boundedText(output?.item, 64),
+      quantity: Math.max(0, Math.floor(Number(output?.quantity) || 0)),
+    }))
+    .sort((left, right) => (
+      `${left.source}:${left.item}:${left.quantity}`
+        .localeCompare(`${right.source}:${right.item}:${right.quantity}`)
+    )));
+}
+
+function resumedAgendaJobMatchesActiveOrder(entry, order) {
+  if (!entry || entry.executor !== 'job' || !order?.id) return false;
+  if (entry.executorId) return entry.executorId === order.id;
+  // An explicit resume from older source may already have cleared the failed
+  // entry's executor ID after the exact Job was reactivated first. Recover
+  // only the fully bound Explorer contract; looser job families remain
+  // fail-closed because their dynamic baselines cannot be reconstructed here.
+  if (
+    entry.state !== 'pending'
+    || entry.evidence?.code !== 'agenda_chain_explicitly_resumed'
+    || entry.kind !== 'explore'
+    || order.role !== JOB_ROLE_FOR_KIND.explore
+    || order.kind !== JOB_ORDER_KIND.explore
+    || order.source !== 'player'
+    || order.requester !== entry.requester
+    || order.target?.name !== entry.target
+    || Number(order.quota) !== Number(entry.quantity)
+    || !['x', 'y', 'z'].every(axis => Number(order.target?.[axis]) === Number(entry[axis]))
+    || String(order.checkpoint?.homeDimension || '') !== String(entry.homeDimension || '')
+    || Boolean(order.checkpoint?.retainResults) !== (entry.retainResults === true)
+  ) return false;
+  return requiredOutputSignature(order.checkpoint?.requiredOutputs)
+    === requiredOutputSignature(entry.requiredOutputs);
+}
+
 function resolveDeferredLivestockBindings(agent, entry) {
   const bot = agent?.bot;
   if (!bot || entry?.kind !== 'settle_livestock') {
@@ -1185,6 +1223,12 @@ export class AgendaDirector {
 
   resumeFailedChain(reason = 'Explicitly resumed after a material repair.') {
     let rootIndex = this.entries.findIndex(entry => entry.state === 'failed');
+    const activeJob = this.agent.job_director?.activeOrder;
+    if (rootIndex < 0 && activeJob) {
+      rootIndex = this.entries.findIndex(entry => (
+        resumedAgendaJobMatchesActiveOrder(entry, activeJob)
+      ));
+    }
     if (
       rootIndex < 0
       && this.entries.length === 0
@@ -1212,6 +1256,9 @@ export class AgendaDirector {
       : null;
     const resumedExactGoal = resumedGoal?.resumed === true
       && resumedGoal.id === rootEntry.executorId;
+    const resumedExactJob = rootEntry.executor === 'job'
+      && resumedAgendaJobMatchesActiveOrder(rootEntry, activeJob);
+    const resumedExactExecutor = resumedExactGoal || resumedExactJob;
     const resumableIds = new Set([rootEntry.id]);
     for (const entry of this.entries.slice(rootIndex + 1)) {
       if (entry.dependsOnEntryId && resumableIds.has(entry.dependsOnEntryId)) {
@@ -1224,20 +1271,21 @@ export class AgendaDirector {
       resumableIds.has(entry.id)
           ? normalizeAgendaEntry({
             ...entry,
-            state: entry.id === rootEntry.id && resumedExactGoal ? 'active' : 'pending',
+            state: entry.id === rootEntry.id && resumedExactExecutor ? 'active' : 'pending',
             executorId: entry.id === rootEntry.id
               && (
                 (resumedExactGoal && entry.executor === 'goal')
+                || resumedExactJob
                 || (entry.executor === 'job' && entry.executorId === resumableJobId)
               )
-              ? entry.executorId
+              ? resumedExactJob ? activeJob.id : entry.executorId
               : '',
-            startedAt: entry.id === rootEntry.id && resumedExactGoal
+            startedAt: entry.id === rootEntry.id && resumedExactExecutor
               ? entry.startedAt || this.now()
               : null,
             finishedAt: null,
-            attempts: entry.id === rootEntry.id && resumedExactGoal ? entry.attempts : 0,
-            preemptions: entry.id === rootEntry.id && resumedExactGoal ? entry.preemptions : 0,
+            attempts: entry.id === rootEntry.id && resumedExactExecutor ? entry.attempts : 0,
+            preemptions: entry.id === rootEntry.id && resumedExactExecutor ? entry.preemptions : 0,
             materialChangeBlocker: null,
             ...(entry.kind === 'inventory_checklist' ? {
               // This counter bounds one causal correction campaign. An explicit
@@ -1250,6 +1298,8 @@ export class AgendaDirector {
             evidence: {
               code: entry.id === rootEntry.id && resumedExactGoal
                 ? 'agenda_goal_explicitly_resumed'
+                : entry.id === rootEntry.id && resumedExactJob
+                  ? 'agenda_job_explicitly_resumed'
                 : 'agenda_chain_explicitly_resumed',
               detail: boundedText(reason),
               retryable: true,

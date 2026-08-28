@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import Vec3 from 'vec3';
 
@@ -6,6 +7,7 @@ import {
   consume,
   permitsSupervisedEmergencyHunt,
   prepareFood,
+  reserveFoodHuntPickupSlot,
   foodSourceRequiresOpenSurface,
   foodSourceRegionApproachRequired,
   miningRouteSupportReturnConflict,
@@ -71,6 +73,58 @@ test('remote crop regions route before final interaction while nearby crops do n
   assert.equal(foodSourceRegionApproachRequired({ distance: null }), false);
 });
 
+test('food hunting reserves pickup capacity by retiring only a superseded tool', async () => {
+  const events = new EventEmitter();
+  const wornPickaxes = [130, 128, 126].map((durabilityUsed, index) => ({
+    name: 'stone_pickaxe',
+    count: 1,
+    slot: 9 + index,
+    type: 1,
+    maxDurability: 131,
+    durabilityUsed,
+  }));
+  const healthyPickaxe = {
+    name: 'stone_pickaxe',
+    count: 1,
+    slot: 12,
+    type: 1,
+    maxDurability: 131,
+    durabilityUsed: 20,
+  };
+  const protectedOre = { name: 'raw_iron', count: 13, slot: 13, type: 2 };
+  let emptySlots = 0;
+  const carried = [...wornPickaxes, healthyPickaxe, protectedOre];
+  const bot = {
+    interrupt_code: false,
+    entities: {},
+    entity: { position: new Vec3(0, 64, 0), height: 1.8 },
+    registry: {
+      items: [],
+      itemsByName: {
+        stone_pickaxe: { maxDurability: 131 },
+      },
+    },
+    inventory: {
+      slots: carried,
+      items: () => carried.filter(item => item.count > 0),
+      emptySlotCount: () => emptySlots,
+    },
+    on: events.on.bind(events),
+    removeListener: events.removeListener.bind(events),
+    async tossStack(item) {
+      assert.equal(wornPickaxes.includes(item), true);
+      item.count = 0;
+      emptySlots += 1;
+    },
+  };
+
+  assert.equal(await reserveFoodHuntPickupSlot(bot), true);
+  assert.equal(emptySlots, 3);
+  assert.equal(wornPickaxes.every(item => item.count === 0), true);
+  assert.equal(healthyPickaxe.count, 1);
+  assert.equal(protectedOre.count, 13);
+});
+
 test('best_food selects the strongest safe carried food and delegates native consumption', async () => {
   const apple = { name: 'apple', count: 1, type: 1 };
   const bread = { name: 'bread', count: 1, type: 2 };
@@ -105,6 +159,34 @@ test('best_food selects the strongest safe carried food and delegates native con
     name: 'bread',
     selector: 'best_food',
   });
+});
+
+test('consume waits for the delayed authoritative hunger update after the native task resolves', async () => {
+  const bread = { name: 'bread', count: 1, type: 1 };
+  const bot = {
+    food: 13,
+    health: 20,
+    heldItem: null,
+    interrupt_code: false,
+    registry: { foodsByName: { bread: { foodPoints: 5, saturation: 6 } } },
+    inventory: {
+      slots: [bread],
+      items: () => bread.count > 0 ? [bread] : [],
+      findInventoryItem: name => name === 'bread' && bread.count > 0 ? bread : null,
+    },
+    async equip(item) { this.heldItem = item; },
+    async consume() {
+      setTimeout(() => {
+        bread.count = 0;
+        this.food = 18;
+      }, 25);
+    },
+  };
+
+  assert.equal(await consume(bot, 'bread'), true);
+  assert.equal(bot.lastActionEvidence.outcome, 'consumed');
+  assert.equal(bot.lastActionEvidence.beforeFood, 13);
+  assert.equal(bot.lastActionEvidence.afterFood, 18);
 });
 
 test('Given a held job tool, verified consumption restores the tool and records bodily postconditions', async () => {

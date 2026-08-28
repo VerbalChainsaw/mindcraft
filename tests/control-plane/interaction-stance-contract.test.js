@@ -208,6 +208,40 @@ test('shared stance execution attributes legality, planning, and physical execut
   });
   assert.equal(stalled.failureStage, 'path_execution_failed');
 
+  const settledPlacement = await reachInteractionStance(bot, {
+    kind: 'placement',
+    target: { name: 'spruce_planks', x: 4, y: 67, z: 0 },
+    goal,
+    candidates: [stance],
+    probeStances: () => ({ reachable: true, status: 'success', pathLength: 2, terminalPosition: stance }),
+    navigateGoal: () => {
+      bot.entity.position = new Vec3(stance.x, stance.y, stance.z);
+      bot.lastActionEvidence = { outcome: 'path_stopped' };
+      return false;
+    },
+    acceptSelectedStanceSettlement: true,
+    settleStandingCell: async () => new Vec3(stance.x, stance.y, stance.z),
+  });
+  assert.equal(settledPlacement.status, 'ready');
+  assert.equal(settledPlacement.code, 'selected_stance_settled_after_stop');
+  assert.deepEqual(settledPlacement.selectedStance, stance);
+
+  bot.entity.position = new Vec3(0, 64, 0);
+  const alternateStance = Object.freeze({ x: 3, y: 64, z: 1 });
+  const settledAlternatePlacement = await reachInteractionStance(bot, {
+    kind: 'placement',
+    target: { name: 'spruce_planks', x: 4, y: 67, z: 0 },
+    goal,
+    candidates: [stance, alternateStance],
+    probeStances: () => ({ reachable: true, status: 'success', pathLength: 2, terminalPosition: stance }),
+    navigateGoal: () => false,
+    acceptSelectedStanceSettlement: true,
+    settleStandingCell: async () => new Vec3(alternateStance.x, alternateStance.y, alternateStance.z),
+  });
+  assert.equal(settledAlternatePlacement.status, 'ready');
+  assert.equal(settledAlternatePlacement.code, 'legal_stance_settled_after_stop');
+  assert.deepEqual(settledAlternatePlacement.selectedStance, alternateStance);
+
   const reached = await reachInteractionStance(bot, {
     kind: 'workstation',
     target,

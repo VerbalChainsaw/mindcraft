@@ -65,6 +65,29 @@ test('Pathfinder requires independent support before settling a destructive inte
   assert.equal(goal.isEnd(new Vec3(5, 69, 7)), true);
 });
 
+test('Pathfinder accepts an unobstructed selectable block with no collision box', () => {
+  const target = new Vec3(4, 67, 7);
+  let obstruction = null;
+  const world = {
+    getBlock(position) {
+      assert.deepEqual(position, target);
+      return { name: 'wheat', boundingBox: 'empty' };
+    },
+    raycast(start, direction, reach) {
+      assert.ok(start.y > target.y);
+      assert.ok(direction.y < 0);
+      assert.ok(reach < 4.5);
+      return obstruction;
+    },
+  };
+  const goal = new GoalLookAtBlock(target, world);
+  const stance = new Vec3(4, 68, 7);
+
+  assert.equal(goal.isEnd(stance), true);
+  obstruction = { position: new Vec3(4, 68, 7), face: 0 };
+  assert.equal(goal.isEnd(stance), false);
+});
+
 test('Pathfinder climbs only into another physics-supported climbable cell', () => {
   const node = { x: 4, y: 64, z: 7, remainingBlocks: 0 };
   const topOfVine = climbMovement(new Map([
@@ -306,7 +329,7 @@ test('Pathfinder owns closing an openable that it opened for a forward move', ()
       return {
         position: new Vec3(5, 64, 7),
         openable: true,
-        _properties: { open: false },
+        _properties: { open: false, facing: 'east' },
         liquid: false,
       };
     }
@@ -357,7 +380,7 @@ test('Pathfinder uses the same owned openable lifecycle for a raised doorway', (
       return {
         position: new Vec3(5, 65, 7),
         openable: true,
-        _properties: { open: false },
+        _properties: { open: false, facing: 'east' },
         physical: false,
       };
     }
@@ -400,4 +423,53 @@ test('Pathfinder uses the same owned openable lifecycle for a raised doorway', (
       destination: { x: 5, y: 65, z: 7 },
     },
   }]);
+});
+
+test('Pathfinder rejects a lateral step into a door that would rotate across the route', () => {
+  const node = { x: 4, y: 64, z: 7, remainingBlocks: 0 };
+  const movement = Object.create(Movements.prototype);
+  movement.canOpenDoors = true;
+  movement.getNumEntitiesAt = () => 0;
+  movement.safeOrBreak = () => 0;
+  movement.makeMove = (_node, x, y, z, remainingBlocks, cost, toBreak, toPlace, type) => ({
+    x,
+    y,
+    z,
+    remainingBlocks,
+    cost,
+    toBreak,
+    toPlace,
+    locomotion: { type },
+  });
+  const door = {
+    position: new Vec3(5, 65, 7),
+    openable: true,
+    safe: false,
+    _properties: { open: false, facing: 'north' },
+  };
+  movement.getBlock = (_node, x, y, z) => {
+    if (x === 1 && y === 1 && z === 0) return door;
+    if (x === 1 && y === 0 && z === 0) {
+      return { position: new Vec3(5, 64, 7), physical: true, height: 65 };
+    }
+    if (x === 0 && y === -1 && z === 0) {
+      return { position: new Vec3(4, 63, 7), physical: true, height: 64 };
+    }
+    return {
+      position: new Vec3(node.x + x, node.y + y, node.z + z),
+      physical: false,
+      height: node.y + y,
+    };
+  };
+
+  assert.equal(movement.openableAction(node, door), null);
+  const lateralNeighbors = [];
+  movement.getMoveJumpUp(node, { x: 1, z: 0 }, lateralNeighbors);
+  assert.equal(lateralNeighbors.length, 0);
+
+  door._properties.facing = 'east';
+  assert.ok(movement.openableAction(node, door));
+  const frontBackNeighbors = [];
+  movement.getMoveJumpUp(node, { x: 1, z: 0 }, frontBackNeighbors);
+  assert.equal(frontBackNeighbors.length, 1);
 });

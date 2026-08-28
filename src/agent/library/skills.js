@@ -207,6 +207,7 @@ const NAVIGATION_STOP_SETTLEMENT_TIMEOUT_MS = 750;
 const NAVIGATION_RECOVERY_STALL_TIMEOUT_MS = 1_500;
 const NAVIGATION_PROGRESS_DISTANCE = 0.75;
 const NAVIGATION_GOAL_PROGRESS_DELTA = 0.25;
+const PROGRESSIVE_NAVIGATION_MAX_GOAL_DIVERGENCE = 4;
 const NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS = 4_000;
 const SUPPORTED_STANCE_STABILITY_MS = 150;
 const NAVIGATION_RECOVERY_DISTANCE = 1;
@@ -552,6 +553,10 @@ const TOOL_TIER = Object.freeze({
     netherite: 6,
 });
 const HUNTABLE_FOOD_ANIMALS = new Set(['chicken', 'cow', 'pig', 'rabbit', 'sheep']);
+// Rabbit is the widest ordinary food-animal loot envelope: meat, hide, and a
+// possible foot. Reserve the whole envelope so non-food byproducts cannot take
+// the only slot before the food stack reaches inventory.
+const FOOD_HUNT_PICKUP_SLOT_RESERVE = 3;
 
 function actionEvidenceSnapshot(bot, evidence) {
     const previous = bot.lastActionEvidence;
@@ -1722,6 +1727,52 @@ function safeMovements(bot) {
     return guardExecutableDiagonalCorners(movements);
 }
 
+export function configureNavigationStepExclusions(movements, values = []) {
+    if (!movements || !Array.isArray(movements.exclusionAreasStep)) return movements;
+    const keys = [...new Set((Array.isArray(values) ? values : [])
+        .filter(value => [value?.x, value?.y, value?.z].every(Number.isFinite))
+        .slice(-16)
+        .map(value => `${Math.floor(value.x)}:${Math.floor(value.y)}:${Math.floor(value.z)}`))];
+    if (keys.length === 0) return movements;
+    const signature = keys.sort().join('|');
+    const alreadyApplied = movements.exclusionAreasStep.some(
+        exclusion => exclusion?.mindcraftNavigationStepSignature === signature,
+    );
+    if (alreadyApplied) return movements;
+    const excluded = new Set(keys);
+    const exclusion = block => excluded.has(
+        `${Math.floor(Number(block?.position?.x))}:${Math.floor(Number(block?.position?.y))}:${Math.floor(Number(block?.position?.z))}`,
+    ) ? 100 : 0;
+    exclusion.mindcraftNavigationStepSignature = signature;
+    movements.exclusionAreasStep.push(exclusion);
+    return movements;
+}
+
+export function navigationRegionBreakWeight(block, regions) {
+    return block?.position
+        && collectionPositionExcluded(block.position, normalizeCollectionExclusions(regions))
+        ? 100
+        : 0;
+}
+
+function navigationOptionsProtectingRegions(bot, regions, baseOptions = {}) {
+    const protectedRegions = normalizeCollectionExclusions(regions);
+    if (protectedRegions.length === 0) return baseOptions;
+    const baseMovementFactory = typeof baseOptions.movements === 'function'
+        ? baseOptions.movements
+        : () => safeMovements(bot);
+    return {
+        ...baseOptions,
+        movements: () => {
+            const movements = baseMovementFactory();
+            movements.exclusionAreasBreak.push(block => (
+                navigationRegionBreakWeight(block, protectedRegions)
+            ));
+            return movements;
+        },
+    };
+}
+
 export function configureDryRouteMovements(movements, bot) {
     if (!movements || typeof movements !== 'object') return movements;
     const waterType = bot?.registry?.blocksByName?.water?.id;
@@ -1952,15 +2003,14 @@ export function interactionStandingStances(bot, target, goal, radius = 5) {
         for (let x = target.x - boundedRadius; x <= target.x + boundedRadius; x += 1) {
             for (let z = target.z - boundedRadius; z <= target.z + boundedRadius; z += 1) {
                 const stance = new Vec3(x, y, z);
-                if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
-                if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                if (!isProspectiveStandingCellClear(bot, stance)) continue;
                 const support = bot.blockAt(stance.offset(0, -1, 0));
                 // Doors, gates, and trapdoors are traversable interactions,
                 // not stable floors. Treating an upper door half as support
                 // advertised a two-block step onto the doorway while building
                 // the roof above it, even though no horizontal standing
                 // surface existed there.
-                if (!isSafeGameplaySupport(support) || support.openable) continue;
+                if (!isSafeGameplaySupport(support) || isUnstableOpenableSupport(support)) continue;
                 if (!goal.isEnd(stance)) continue;
                 candidates.push(stance);
             }
@@ -2043,6 +2093,8 @@ export async function reachInteractionStance(bot, {
     probeStances = probeSafeNavigationStances,
     navigateGoal = goToGoal,
     navigationOptions = undefined,
+    acceptSelectedStanceSettlement = false,
+    settleStandingCell = waitForStableSupportedStandingCell,
 } = {}) {
     const legalStances = Array.isArray(candidates)
         ? candidates.filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
@@ -2118,6 +2170,42 @@ export async function reachInteractionStance(bot, {
             code: 'interrupted',
         });
     }
+    let postStopSettlementCode = null;
+    if (!reached && acceptSelectedStanceSettlement === true && selected) {
+        // Pathfinder can reject goto with PathStopped after the body has
+        // already landed on the exact stance proven by the preceding route
+        // probe. Placement has a stronger second boundary immediately below:
+        // it rebuilds GoalPlaceBlock against the arrived world and binds the
+        // exact support face before sending any packet. Let that boundary own
+        // the final legality verdict instead of burning Builder retries on a
+        // stale navigation exception.
+        const settled = await settleStandingCell(
+            bot,
+            Math.min(GROUND_SETTLE_TIMEOUT_MS, remainingActionTimeMs(GROUND_SETTLE_TIMEOUT_MS)),
+            SUPPORTED_STANCE_STABILITY_MS,
+        );
+        const settledKey = settled ? miningCellKey(settled) : null;
+        const settledIsLegal = settledKey !== null && legalStances.some(position => (
+            miningCellKey({
+                x: Math.floor(position.x),
+                y: Math.floor(position.y),
+                z: Math.floor(position.z),
+            }) === settledKey
+        ));
+        if (!settled) {
+            postStopSettlementCode = 'selected_stance_unsettled_after_stop';
+        } else if (!settledIsLegal) {
+            postStopSettlementCode = 'selected_stance_changed_after_stop';
+        } else {
+            return interactionStanceReady({
+                ...routeDetail,
+                code: settledKey === miningCellKey(selected)
+                    ? 'selected_stance_settled_after_stop'
+                    : 'legal_stance_settled_after_stop',
+                selectedStance: settled,
+            });
+        }
+    }
     if (
         !reached
         || !navigationGoalSatisfied(bot, executionGoal)
@@ -2125,7 +2213,9 @@ export async function reachInteractionStance(bot, {
     ) {
         return interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.PATH_EXECUTION_FAILED, {
             ...routeDetail,
-            code: bot.lastActionEvidence?.outcome || 'path_execution_failed',
+            code: postStopSettlementCode
+                || bot.lastActionEvidence?.outcome
+                || 'path_execution_failed',
             selectedStance: observedSupportedStandingCell(bot) || route.terminalPosition,
         });
     }
@@ -2643,8 +2733,7 @@ export function localNavigationEscapeStances(bot, origin = bot?.entity?.position
             ) continue;
             for (const dy of [0, 1, -1, 2]) {
                 const stance = origin.offset(dx, dy, dz);
-                if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
-                if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                if (!isProspectiveStandingCellClear(bot, stance)) continue;
                 if (!isSafeGameplaySupport(bot.blockAt(stance.offset(0, -1, 0)))) continue;
                 candidates.push(stance);
                 break;
@@ -2704,8 +2793,7 @@ function isCollectionStandingCellClear(block) {
     );
 }
 
-function observedBodyIntersectsBlock(bot, block) {
-    const position = bot.entity?.position;
+function bodyIntersectsBlockAtPosition(bot, position, block) {
     if (!position || !block) return true;
     if (block.boundingBox === 'empty') return false;
     if (!block.position || !Array.isArray(block.shapes)) return true;
@@ -2739,6 +2827,35 @@ function observedBodyIntersectsBlock(bot, block) {
             && body.minZ < maxZ - epsilon
             && body.maxZ > minZ + epsilon;
     });
+}
+
+function observedBodyIntersectsBlock(bot, block) {
+    return bodyIntersectsBlockAtPosition(bot, bot.entity?.position, block);
+}
+
+function isProspectiveStandingCellClear(bot, stance) {
+    if (!stance || typeof bot?.blockAt !== 'function') return false;
+    const bodyPosition = new Vec3(
+        Math.floor(stance.x) + 0.5,
+        Math.floor(stance.y),
+        Math.floor(stance.z) + 0.5,
+    );
+    return [stance, stance.offset(0, 1, 0)].every(position => {
+        const block = bot.blockAt(position);
+        return Boolean(
+            block
+            && !isLiquidGameplayBlock(block)
+            && !isHazardousGameplayBlock(block)
+            && !bodyIntersectsBlockAtPosition(bot, bodyPosition, block)
+        );
+    });
+}
+
+function isUnstableOpenableSupport(block) {
+    const name = String(block?.name || '');
+    return name.endsWith('_door')
+        || name.endsWith('_trapdoor')
+        || name.endsWith('_fence_gate');
 }
 
 function isObservedStandingCellClear(bot, block) {
@@ -5064,6 +5181,22 @@ export function foodSourceRegionApproachRequired({ distance, regionRadius = 4.5 
         && Number(distance) > Math.max(4.5, Number(regionRadius) || 4.5);
 }
 
+export async function reserveFoodHuntPickupSlot(bot) {
+    if (bot.inventory.emptySlotCount() >= FOOD_HUNT_PICKUP_SLOT_RESERVE) return true;
+    // Food recovery does not own the surrounding Job's materials. Restrict
+    // capacity relief to the two classes whose shared policy is intrinsically
+    // safe here: expendable natural fill and superseded duplicate tools.
+    const protectedNames = new Set(bot.inventory.items()
+        .filter(item => (
+            !NATURAL_FILL_BLOCKS.has(item.name)
+            && !TOOL_PREPARATION_SPECS[item.name]
+        ))
+        .map(item => item.name));
+    return await freeCollectionWorkingSlots(bot, protectedNames, FOOD_HUNT_PICKUP_SLOT_RESERVE, {
+        allowLocalCache: true,
+    });
+}
+
 export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorkstation=null, baselineFoodPoints=null) {
     const requestedPoints = Math.max(1, Math.min(160, Math.floor(Number(targetFoodPoints) || 24)));
     const searchRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
@@ -5425,6 +5558,17 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
                         y: animal.position.y,
                         z: animal.position.z,
                     },
+                };
+                break;
+            }
+            if (!await reserveFoodHuntPickupSlot(bot)) {
+                progress.huntingFailure = {
+                    outcome: 'inventory_full',
+                    target: {
+                        name: animal.name || 'animal',
+                        id: animal.id,
+                    },
+                    retryable: true,
                 };
                 break;
             }
@@ -8271,8 +8415,7 @@ async function reachRoundTripDisposalStance(bot, resumePosition, preservedReturn
     const addCandidate = (stance, routeIndex = null) => {
         const horizontal = Math.hypot(stance.x - home.x, stance.z - home.z);
         if (horizontal < 3) return;
-        if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) return;
-        if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) return;
+        if (!isProspectiveStandingCellClear(bot, stance)) return;
         const support = bot.blockAt(stance.offset(0, -1, 0));
         if (!support || !isAnchoredGameplaySupport(bot, support)) return;
         const key = miningCellKey(stance);
@@ -8303,8 +8446,7 @@ async function reachRoundTripDisposalStance(bot, resumePosition, preservedReturn
                 if (Math.abs(dx) + Math.abs(dz) !== horizontal) continue;
                 for (const dy of [0, 1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6]) {
                     const stance = home.offset(dx, dy, dz);
-                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
-                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                    if (!isProspectiveStandingCellClear(bot, stance)) continue;
                     const support = bot.blockAt(stance.offset(0, -1, 0));
                     if (!support || !isAnchoredGameplaySupport(bot, support)) continue;
                     const key = miningCellKey(stance);
@@ -11328,12 +11470,9 @@ export async function harvestMatureCrop(bot, cropName, outputName, count=1, rang
     return true;
 }
 
-function usefulDroppedItem(bot, item) {
-    const name = String(item?.name || '');
+function strategicInventoryResource(name) {
     return Boolean(
-        (bot.registry?.foodsByName?.[name] && !UNSAFE_FOOD_ITEMS.has(name))
-        || /_(?:pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boots|log|stem|planks|sapling|seeds)$/.test(name)
-        || name.startsWith('raw_')
+        name.startsWith('raw_')
         || /_(?:ore|ingot|nugget)$/.test(name)
         || [
             'coal',
@@ -11355,6 +11494,15 @@ function usefulDroppedItem(bot, item) {
             'crossbow',
             'arrow',
         ].includes(name)
+    );
+}
+
+function usefulDroppedItem(bot, item) {
+    const name = String(item?.name || '');
+    return Boolean(
+        (bot.registry?.foodsByName?.[name] && !UNSAFE_FOOD_ITEMS.has(name))
+        || /_(?:pickaxe|axe|shovel|hoe|sword|helmet|chestplate|leggings|boots|log|stem|planks|sapling|seeds)$/.test(name)
+        || strategicInventoryResource(name)
     );
 }
 
@@ -12179,7 +12327,7 @@ export function fixtureOrientationStances(bot, anchor, direction) {
         ));
 }
 
-export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
+export async function placeFixture(bot, blockType, x, y, z, kind, facing, placementOptions = {}) {
     const fixtureKind = String(kind || '').trim().toLowerCase();
     const fixtureFacing = String(facing || '').trim().toLowerCase();
     const direction = FIXTURE_FACING_OFFSETS[fixtureFacing];
@@ -12239,6 +12387,14 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
             target: { ...target, fixtureKind, facing: fixtureFacing },
             goal: stanceGoal,
             candidates: stances,
+            navigationOptions: navigationOptionsProtectingRegions(
+                bot,
+                placementOptions?.protectedNavigationRegions,
+                {
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: false,
+                },
+            ),
         })
         : interactionStanceFailure(INTERACTION_STANCE_FAILURE_STAGES.NO_LEGAL_STANCE, {
             kind: 'fixture_placement',
@@ -12258,7 +12414,19 @@ export async function placeFixture(bot, blockType, x, y, z, kind, facing) {
         return false;
     }
     await bot.lookAt(anchor.offset(0.5, 0.5, 0.5), true);
-    if (!await placeBlock(bot, blockType, anchor.x, anchor.y, anchor.z, 'bottom', true, false)) {
+    if (!await placeBlock(
+        bot,
+        blockType,
+        anchor.x,
+        anchor.y,
+        anchor.z,
+        'bottom',
+        true,
+        false,
+        null,
+        null,
+        placementOptions,
+    )) {
         const placementReceipt = bot.lastActionEvidence?.interactionStance;
         setActionEvidence(bot, {
             kind: 'fixture_place',
@@ -12479,6 +12647,84 @@ async function traverseActiveNetherPortal(
 }
 
 
+function currentPlacementGoal(bot, target, orderedDirections) {
+    if (
+        !bot?.world
+        || typeof bot?.blockAt !== 'function'
+        || !target
+        || !Array.isArray(orderedDirections)
+    ) return null;
+    const currentDirections = orderedDirections.filter(direction => {
+        const block = bot.blockAt(target.plus(direction));
+        return Boolean(
+            block
+            && !isReplaceableGameplayBlock(block)
+            && !block.name.endsWith('_door')
+        );
+    });
+    if (currentDirections.length === 0) return null;
+    try {
+        return new pf.goals.GoalPlaceBlock(target, bot.world, {
+            range: 4.5,
+            faces: currentDirections,
+            LOS: true,
+        });
+    } catch {
+        return null;
+    }
+}
+
+function placementTargetCollisionBlock(target) {
+    return {
+        position: target,
+        boundingBox: 'block',
+        shapes: [[0, 0, 0, 1, 1, 1]],
+    };
+}
+
+function placementBodyIntersectsTarget(bot, position, target) {
+    return bodyIntersectsBlockAtPosition(
+        bot,
+        position,
+        placementTargetCollisionBlock(target),
+    );
+}
+
+export function placementStandingStances(bot, target, goal) {
+    const descriptor = { x: target.x, y: target.y, z: target.z };
+    return interactionStandingStances(bot, descriptor, goal).filter(stance => {
+        const bodyPosition = new Vec3(stance.x + 0.5, stance.y, stance.z + 0.5);
+        return !placementBodyIntersectsTarget(bot, bodyPosition, target);
+    });
+}
+
+export function selectCurrentPlacementFace(bot, target, orderedDirections, eyePosition) {
+    if (!eyePosition) return null;
+    try {
+        return currentPlacementGoal(bot, target, orderedDirections)?.getFaceAndRef(eyePosition) || null;
+    } catch {
+        return null;
+    }
+}
+
+export function currentPlacementFaceFromSupportedBody(bot, target, orderedDirections) {
+    const standingCell = observedSupportedStandingCell(bot);
+    if (!standingCell) return null;
+    if (placementBodyIntersectsTarget(bot, bot.entity?.position, target)) return null;
+    const eyePosition = bot.entity?.position?.offset?.(
+        0,
+        Number(bot.entity?.eyeHeight) || 1.6,
+        0,
+    );
+    const selectedFace = selectCurrentPlacementFace(bot, target, orderedDirections, eyePosition);
+    const expectedReference = selectedFace?.face
+        ? target.plus(selectedFace.face)
+        : null;
+    return selectedFace?.ref?.equals?.(expectedReference)
+        ? { standingCell, selectedFace }
+        : null;
+}
+
 export async function placeBlock(
     bot,
     blockType,
@@ -12678,6 +12924,15 @@ export async function placeBlock(
         faces: supportDirections,
         LOS: true,
     });
+    const placementStances = placementStandingStances(bot, target_dest, placementGoal);
+    const placementNavigationOptions = navigationOptionsProtectingRegions(
+        bot,
+        placementOptions?.protectedNavigationRegions,
+        {
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        },
+    );
     // Pathfinder already owns the exact physical predicate for placing a
     // block. Every material uses the same stance contract; bypassing route
     // planning for torches, rails, or buckets makes failures unattributable.
@@ -12702,6 +12957,7 @@ export async function placeBlock(
         boundBodyCell
         && boundStandingCell
         && miningCellKey(boundBodyCell) === miningCellKey(boundStandingCell)
+        && !placementBodyIntersectsTarget(bot, bot.entity?.position, target_dest)
     );
     const boundEyePosition = occupiesBoundStandingCell
         ? bot.entity?.position?.offset?.(
@@ -12736,7 +12992,14 @@ export async function placeBlock(
         log(bot, `Cannot place ${blockType} from the exact bound route stance.`);
         return false;
     }
-    const interactionStance = occupiesBoundStandingCell
+    // If the body is already stably supported and the native current-world
+    // placement goal can bind an exact visible face, there is no route left to
+    // execute. Starting Pathfinder here can replace a stronger physical fact
+    // with a delayed PathStopped event while the usable body never moved.
+    const currentPlacement = !boundStandingCell
+        ? currentPlacementFaceFromSupportedBody(bot, target_dest, dirs)
+        : null;
+    let interactionStance = occupiesBoundStandingCell
         ? interactionStanceReady({
             kind: 'placement',
             target,
@@ -12750,14 +13013,23 @@ export async function placeBlock(
                 : 'bound_route_stance',
             pathLength: 0,
         })
+        : currentPlacement
+            ? interactionStanceReady({
+                kind: 'placement',
+                target,
+                candidateCount: 1,
+                code: 'current_face_ready',
+                selectedStance: currentPlacement.standingCell,
+                pathStatus: 'already_at_stance',
+                pathLength: 0,
+            })
         : await reachInteractionStance(bot, {
             kind: 'placement',
             target,
             goal: placementGoal,
-            navigationOptions: {
-                allowHealthBoundedDescent: false,
-                allowLocalRecovery: false,
-            },
+            candidates: placementStances,
+            navigationOptions: placementNavigationOptions,
+            acceptSelectedStanceSettlement: true,
         });
     if (interactionStance.status !== 'ready') {
         setActionEvidence(bot, evidenceWithInteractionStance({
@@ -12770,17 +13042,69 @@ export async function placeBlock(
         return false;
     }
 
-    // The world can change while Pathfinder is moving. Ask the same native goal
-    // which face is legal from the arrived eye position, then rebind that exact
-    // support reference before sending the placement packet.
-    const eyePosition = bot.entity?.position?.offset?.(
+    // The world can change while Pathfinder is moving. Rebuild the native goal
+    // against the arrived world, then bind that exact support reference before
+    // sending the placement packet.
+    let eyePosition = bot.entity?.position?.offset?.(
         0,
         Number(bot.entity?.eyeHeight) || 1.6,
         0,
     );
-    const selectedFace = eyePosition
-        ? placementGoal.getFaceAndRef(eyePosition)
+    // GoalPlaceBlock snapshots its usable face geometry in the constructor.
+    // Builder can create a new sibling or below-support while navigating to
+    // the next cell, so the navigation goal remains the route authority but a
+    // fresh native goal must bind the server-visible support at interaction
+    // time. Reusing the cached goal here strands an otherwise valid partial
+    // structure on the same cell until its attempt budget is exhausted.
+    let selectedFace = eyePosition
+        ? selectCurrentPlacementFace(bot, target_dest, dirs, eyePosition)
         : null;
+    if (!selectedFace && !occupiesBoundStandingCell) {
+        // The path probe can end at a stance that was legal when GoalPlaceBlock
+        // cached its faces but is no longer legal after a preceding blueprint
+        // cell or terrain support settles. Repeating the outer Builder attempt
+        // selects the same closest stance and burns its entire retry budget.
+        // Stay inside the Placement owner and make one bounded reselection from
+        // the remaining current-world legal stances.
+        const reboundGoal = currentPlacementGoal(bot, target_dest, dirs);
+        const currentCell = bot.entity?.position?.floored?.() || null;
+        const alternateStances = reboundGoal
+            ? placementStandingStances(bot, target_dest, reboundGoal).filter(stance => (
+                !currentCell || miningCellKey(stance) !== miningCellKey(currentCell)
+            ))
+            : [];
+        if (alternateStances.length > 0) {
+            const reboundStance = await reachInteractionStance(bot, {
+                kind: 'placement',
+                target,
+                goal: reboundGoal,
+                candidates: alternateStances,
+                navigationOptions: placementNavigationOptions,
+                acceptSelectedStanceSettlement: true,
+            });
+            interactionStance = reboundStance;
+            if (reboundStance.status === 'interrupted') {
+                setActionEvidence(bot, evidenceWithInteractionStance({
+                    kind: 'place',
+                    outcome: 'interrupted',
+                    target,
+                    retryable: false,
+                }, reboundStance));
+                log(bot, `Placement of ${blockType} was interrupted while selecting another usable stance.`);
+                return false;
+            }
+            if (reboundStance.status === 'ready') {
+                eyePosition = bot.entity?.position?.offset?.(
+                    0,
+                    Number(bot.entity?.eyeHeight) || 1.6,
+                    0,
+                );
+                selectedFace = eyePosition
+                    ? selectCurrentPlacementFace(bot, target_dest, dirs, eyePosition)
+                    : null;
+            }
+        }
+    }
     placementDirection = selectedFace?.face || null;
     const selectedReference = selectedFace?.ref || null;
     const expectedReference = placementDirection
@@ -15214,6 +15538,7 @@ function overflowKeepCount(bot, role, name, protectedName) {
         || /_(?:sapling|seeds)$/.test(name)
         || name.endsWith('_bed')
         || ['bucket', 'water_bucket', 'lava_bucket', 'crafting_table', 'furnace'].includes(name)
+        || strategicInventoryResource(name)
     ) return Infinity;
     if (['torch', 'soul_torch'].includes(name)) return 16;
     if (['coal', 'charcoal'].includes(name)) return 8;
@@ -15629,17 +15954,24 @@ export async function consume(bot, itemName="") {
         log(bot, `Could not consume ${item.name}: ${error.message}.`);
         return false;
     }
-    if (healingPotionRequested && beforeHealth !== null) {
-        await waitForWorldCondition(
-            bot,
-            () => (
-                Number(bot.health) > beforeHealth
-                && inventoryCount(bot, item.name) < beforeCount
-            ),
-            1_500,
-            50,
-        );
-    }
+    // Mineflayer's native task can resolve on a held-item or cooldown packet
+    // just before the authoritative inventory/food update is applied. Bind the
+    // skill result to that server postcondition instead of reading the same
+    // event-loop turn and reporting a false failure.
+    await waitForWorldCondition(
+        bot,
+        () => (
+            bot.interrupt_code
+            || (healingPotionRequested
+                ? beforeHealth !== null
+                    && Number(bot.health) > beforeHealth
+                    && inventoryCount(bot, item.name) < beforeCount
+                : inventoryCount(bot, item.name) < beforeCount
+                    || (beforeFood !== null && Number(bot.food) > beforeFood))
+        ),
+        1_500,
+        50,
+    );
     const afterCount = inventoryCount(bot, item.name);
     const afterFood = Number.isFinite(bot.food) ? bot.food : null;
     const afterHealth = Number.isFinite(bot.health) ? bot.health : null;
@@ -16247,24 +16579,28 @@ function navigationGoalSignature(goal) {
     return target ? `${target.x}:${target.y}:${target.z}` : String(goal?.constructor?.name || 'goal');
 }
 
-function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS) {
+function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS, {
+    countNovelCells = true,
+    maxGoalDivergence = Number.POSITIVE_INFINITY,
+} = {}) {
     const startedAt = Date.now();
     const startPosition = bot.entity.position.clone();
     let lastPosition = startPosition.clone();
     const startMetric = navigationGoalMetric(goal, startPosition);
     let bestMetric = startMetric;
+    let bestPosition = startPosition.clone();
     let goalSignature = navigationGoalSignature(goal);
     let lastProgressAt = startedAt;
     let lastDigTarget = bot.targetDigBlock?.position?.toString?.() || null;
     let nativeSearchStartedAt = startedAt;
-    let nativeSearchDeadlineAt = 0;
     const nativeThinkTimeoutMs = Math.max(
         NAVIGATION_PROGRESS_POLL_MS,
         Math.min(30_000, Number(bot.pathfinder?.thinkTimeout) || 5_000),
     );
+    let nativeSearchDeadlineAt = startedAt + nativeThinkTimeoutMs + NAVIGATION_PROGRESS_POLL_MS;
     const onPathReset = () => {
         nativeSearchStartedAt = Date.now();
-        nativeSearchDeadlineAt = 0;
+        nativeSearchDeadlineAt = nativeSearchStartedAt + nativeThinkTimeoutMs + NAVIGATION_PROGRESS_POLL_MS;
     };
     const onPathUpdate = result => {
         const pathLength = Array.isArray(result?.path) ? result.path.length : 0;
@@ -16296,6 +16632,28 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
             visitedCells.add(cellKey);
             const metricProgress = !targetChanged && Number.isFinite(metric)
                 && (!Number.isFinite(bestMetric) || metric <= bestMetric - NAVIGATION_GOAL_PROGRESS_DELTA);
+            const goalDiverged = !targetChanged
+                && Number.isFinite(maxGoalDivergence)
+                && Number.isFinite(metric)
+                && Number.isFinite(bestMetric)
+                && metric >= bestMetric + maxGoalDivergence;
+            if (goalDiverged) {
+                clearInterval(interval);
+                interval = null;
+                resolve({
+                    state: 'diverged',
+                    startedAt,
+                    stalledMs: Date.now() - lastProgressAt,
+                    startPosition,
+                    lastPosition,
+                    startMetric,
+                    bestMetric,
+                    bestPosition,
+                    lastMetric: metric,
+                    maxGoalDivergence,
+                });
+                return;
+            }
             // A stuck Pathfinder can pace between two nearby cells forever,
             // but an ordinary native route may need to detour around terrain.
             // Count each genuinely new cell once; revisiting it cannot renew
@@ -16304,10 +16662,12 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
             if (targetChanged) {
                 goalSignature = nextSignature;
                 bestMetric = metric;
+                bestPosition = current.clone();
             }
-            if (metricProgress || digTarget !== lastDigTarget || novelCell) {
+            if (metricProgress || digTarget !== lastDigTarget || (countNovelCells && novelCell)) {
                 if (metricProgress) {
                     bestMetric = metric;
+                    bestPosition = current.clone();
                 }
                 lastDigTarget = digTarget;
                 lastProgressAt = Date.now();
@@ -16326,6 +16686,7 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
                     lastPosition,
                     startMetric,
                     bestMetric,
+                    bestPosition,
                     lastMetric: metric,
                 });
             }
@@ -16340,12 +16701,17 @@ function startNavigationProgressWatchdog(bot, goal, stallTimeoutMs = NAVIGATION_
                 && (!Number.isFinite(bestMetric) || currentMetric < bestMetric)
                 ? currentMetric
                 : bestMetric;
+            const observedBestPosition = Number.isFinite(currentMetric)
+                && (!Number.isFinite(bestMetric) || currentMetric < bestMetric)
+                ? current
+                : bestPosition;
             return {
                 startedAt,
                 startPosition,
                 lastPosition: current,
                 startMetric,
                 bestMetric: observedBestMetric,
+                bestPosition: observedBestPosition.clone(),
                 lastMetric: currentMetric,
                 stalledMs: Date.now() - lastProgressAt,
             };
@@ -16410,6 +16776,40 @@ function nativeBestAvailableEndpoint(result) {
     };
 }
 
+export function snapshotPathfinderStuckState(value) {
+    if (!value || typeof value !== 'object') return null;
+
+    const clonePosition = position => {
+        if (!position || typeof position !== 'object') return null;
+        const clone = {
+            x: Number(position.x),
+            y: Number(position.y),
+            z: Number(position.z),
+        };
+        return Object.values(clone).every(Number.isFinite) ? clone : null;
+    };
+
+    return {
+        ...value,
+        position: clonePosition(value.position),
+        nextPoint: clonePosition(value.nextPoint),
+        delta: clonePosition(value.delta),
+        controls: value.controls && typeof value.controls === 'object'
+            ? { ...value.controls }
+            : null,
+        blocks: value.blocks && typeof value.blocks === 'object'
+            ? { ...value.blocks }
+            : null,
+        locomotion: value.locomotion && typeof value.locomotion === 'object'
+            ? {
+                ...value.locomotion,
+                source: clonePosition(value.locomotion.source),
+                destination: clonePosition(value.locomotion.destination),
+            }
+            : null,
+    };
+}
+
 async function runNavigationAttempt(
     bot,
     goal,
@@ -16417,13 +16817,22 @@ async function runNavigationAttempt(
     stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS,
     pathfinderOptions = {},
 ) {
-    const progressWatchdog = startNavigationProgressWatchdog(bot, goal, stallTimeoutMs);
+    const {
+        mindcraftProgressiveJourney = false,
+        ...nativePathfinderOptions
+    } = pathfinderOptions || {};
+    const progressWatchdog = startNavigationProgressWatchdog(bot, goal, stallTimeoutMs, {
+        countNovelCells: mindcraftProgressiveJourney !== true,
+        maxGoalDivergence: mindcraftProgressiveJourney === true
+            ? PROGRESSIVE_NAVIGATION_MAX_GOAL_DIVERGENCE
+            : Number.POSITIVE_INFINITY,
+    });
     let lastPathUpdate = null;
     const rememberPathUpdate = result => { lastPathUpdate = result; };
     bot.on('path_update', rememberPathUpdate);
     bot.pathfinder.setMovements(movements);
     const navigation = Promise.resolve()
-        .then(() => bot.pathfinder.goto(goal, pathfinderOptions))
+        .then(() => bot.pathfinder.goto(goal, nativePathfinderOptions))
         .then(
             () => ({ state: 'resolved' }),
             error => ({ state: 'rejected', error }),
@@ -16435,9 +16844,19 @@ async function runNavigationAttempt(
         if (['noPath', 'timeout'].includes(lastPathUpdate?.status)) {
             outcome.searchStatus = lastPathUpdate.status;
         }
-        const pathfinderState = bot.pathfinder.getLastStuckState?.();
+        const pathfinderState = snapshotPathfinderStuckState(
+            bot.pathfinder.getLastStuckState?.()
+            || bot.pathfinder.getCurrentExecutionState?.(),
+        );
         if (pathfinderState) outcome.pathfinder = pathfinderState;
-        if (['stalled', 'rejected'].includes(outcome.state)) {
+        if (outcome.state === 'stalled' && !pathfinderState) {
+            const error = new Error('Pathfinder produced no executable edge before the navigation planning deadline.');
+            error.name = 'Timeout';
+            outcome.state = 'rejected';
+            outcome.error = error;
+            outcome.planningOnly = true;
+        }
+        if (['diverged', 'stalled', 'rejected'].includes(outcome.state)) {
             stopNavigationGoal(bot);
             try { bot.clearControlStates?.(); } catch { /* disconnected body */ }
             // Both the external convergence watchdog and Pathfinder's own
@@ -16461,6 +16880,7 @@ async function runNavigationAttempt(
             );
         }
         Object.assign(outcome, progressWatchdog.snapshot());
+        outcome.supported = Boolean(observedSupportedStandingCell(bot));
         return outcome;
     } finally {
         bot.removeListener('path_update', rememberPathUpdate);
@@ -16470,6 +16890,7 @@ async function runNavigationAttempt(
 
 function shouldTryNavigationRecovery(bot, outcome) {
     if (bot.interrupt_code || !outcome) return false;
+    if (outcome.state === 'diverged') return true;
     if (outcome.state === 'stalled') return true;
     if (outcome.state !== 'rejected') return false;
     // A Pathfinder timeout means route computation exhausted its own budget;
@@ -16704,13 +17125,29 @@ export async function attemptLocalNavigationEscape(bot) {
         recovery.movements,
         NAVIGATION_RECOVERY_STALL_TIMEOUT_MS,
     );
-    const moved = bot.entity.position.distanceTo(start);
-    const terminal = observedSupportedStandingCell(bot);
-    const arrived = outcome.state === 'resolved'
+    let terminal = observedSupportedStandingCell(bot);
+    let arrived = outcome.state === 'resolved'
         && navigationGoalSatisfied(bot, escapeGoal)
         && Boolean(terminal);
+    let directPulse = null;
+    if (!arrived && !bot.interrupt_code && outcome.state === 'stalled') {
+        // The read-only probe above already proved an ordinary route to this
+        // stance and back. If Pathfinder still cannot execute this exact local
+        // edge, use the same bounded native-control pulse as a cleared mining
+        // corridor: one adjacent supported cell, abortable, and accepted only
+        // after the body settles there. This is an execution fallback for a
+        // proven edge, not a second route planner.
+        directPulse = await pulseAcrossBoundStandingCell(bot, selected);
+        terminal = observedSupportedStandingCell(bot);
+        arrived = directPulse.success
+            && navigationGoalSatisfied(bot, escapeGoal)
+            && Boolean(terminal);
+    }
+    const moved = bot.entity.position.distanceTo(start);
     return {
-        success: !bot.interrupt_code && arrived && moved >= NAVIGATION_PROGRESS_DISTANCE,
+        success: !bot.interrupt_code
+            && arrived
+            && (moved >= NAVIGATION_PROGRESS_DISTANCE || directPulse?.success === true),
         strategy,
         foliageCandidates: recovery.foliageCount,
         candidateCount: candidates.length,
@@ -16718,30 +17155,175 @@ export async function attemptLocalNavigationEscape(bot) {
         terminalStance: terminal,
         returnOutcome: route.returnStatus || null,
         distance: Math.round(moved * 100) / 100,
+        ...(directPulse ? { directPulse } : {}),
         outcome: outcome.state === 'rejected'
             ? pathfinderErrorOutcome(outcome.error, Boolean(bot.interrupt_code))
-            : arrived ? 'returnable_stance_reached' : 'escape_stance_not_reached',
+            : arrived && directPulse?.success
+                ? 'returnable_stance_reached_by_bound_pulse'
+                : arrived ? 'returnable_stance_reached' : 'escape_stance_not_reached',
     };
 }
 
 function navigationProgressEvidence(outcome) {
+    const startPosition = outcome.startPosition;
+    const lastPosition = outcome.lastPosition;
+    const displacement = startPosition && lastPosition
+        ? lastPosition.distanceTo(startPosition)
+        : 0;
+    const supported = outcome.supported === true;
+    const converged = Number.isFinite(outcome.startMetric)
+        && Number.isFinite(outcome.lastMetric)
+        && outcome.lastMetric <= outcome.startMetric - NAVIGATION_GOAL_PROGRESS_DELTA;
     return {
         startedAt: outcome.startedAt,
         stalledMs: outcome.stalledMs,
         startMetric: Number.isFinite(outcome.startMetric) ? outcome.startMetric : null,
         bestMetric: Number.isFinite(outcome.bestMetric) ? outcome.bestMetric : null,
         lastMetric: Number.isFinite(outcome.lastMetric) ? outcome.lastMetric : null,
+        distance: Math.round(displacement * 100) / 100,
+        supported,
+        progressed: supported
+            && converged
+            && displacement >= NAVIGATION_PROGRESS_DISTANCE,
         startPosition: {
-            x: outcome.startPosition.x,
-            y: outcome.startPosition.y,
-            z: outcome.startPosition.z,
+            x: startPosition.x,
+            y: startPosition.y,
+            z: startPosition.z,
         },
         lastPosition: {
-            x: outcome.lastPosition.x,
-            y: outcome.lastPosition.y,
-            z: outcome.lastPosition.z,
+            x: lastPosition.x,
+            y: lastPosition.y,
+            z: lastPosition.z,
         },
+        ...(outcome.bestPosition ? {
+            bestPosition: {
+                x: outcome.bestPosition.x,
+                y: outcome.bestPosition.y,
+                z: outcome.bestPosition.z,
+            },
+        } : {}),
         ...(outcome.pathfinder ? { pathfinder: outcome.pathfinder } : {}),
+    };
+}
+
+export function navigationDivergenceExclusion(outcome) {
+    if (outcome?.state !== 'diverged') return null;
+    const sourceValue = outcome.bestPosition;
+    const targetValue = outcome.lastPosition;
+    if (
+        ![sourceValue?.x, sourceValue?.y, sourceValue?.z].every(Number.isFinite)
+        || ![targetValue?.x, targetValue?.y, targetValue?.z].every(Number.isFinite)
+    ) return null;
+    const source = {
+        x: Math.floor(sourceValue.x),
+        y: Math.floor(sourceValue.y),
+        z: Math.floor(sourceValue.z),
+    };
+    const target = {
+        x: Math.floor(targetValue.x),
+        y: Math.floor(targetValue.y),
+        z: Math.floor(targetValue.z),
+    };
+    if (source.x === target.x && source.y === target.y && source.z === target.z) return null;
+    return {
+        ...target,
+        source,
+        locomotion: 'route_divergence',
+    };
+}
+
+export function goalDirectedNavigationProgress(
+    bot,
+    goal,
+    startPosition,
+    startedAt = Date.now(),
+) {
+    const start = startPosition?.clone?.();
+    const current = bot.entity?.position?.clone?.();
+    if (!start || !current) return null;
+    const startMetric = navigationGoalMetric(goal, start);
+    const lastMetric = navigationGoalMetric(goal, current);
+    return navigationProgressEvidence({
+        startedAt,
+        stalledMs: Math.max(0, Date.now() - startedAt),
+        startPosition: start,
+        lastPosition: current,
+        startMetric,
+        bestMetric: lastMetric,
+        lastMetric,
+        supported: Boolean(observedSupportedStandingCell(bot)),
+    });
+}
+
+export function movementPolicyExcludingStalledStep(movementFactory, stuckState) {
+    const movements = movementFactory();
+    const sourceValue = stuckState?.locomotion?.source;
+    const positionValue = stuckState?.position;
+    const nextValue = stuckState?.nextPoint;
+    const finiteSource = [sourceValue?.x, sourceValue?.y, sourceValue?.z].every(Number.isFinite);
+    const finitePosition = [positionValue?.x, positionValue?.y, positionValue?.z].every(Number.isFinite);
+    const finiteNext = [nextValue?.x, nextValue?.y, nextValue?.z].every(Number.isFinite);
+    const source = finiteSource
+        ? {
+            x: Math.floor(sourceValue.x),
+            y: Math.floor(sourceValue.y),
+            z: Math.floor(sourceValue.z),
+        }
+        : finitePosition
+            ? {
+                x: Math.floor(positionValue.x),
+                y: Math.floor(positionValue.y),
+                z: Math.floor(positionValue.z),
+            }
+            : null;
+    const target = finiteNext
+        ? {
+            x: Math.floor(nextValue.x),
+            y: Math.floor(nextValue.y),
+            z: Math.floor(nextValue.z),
+        }
+        : null;
+    const localStep = Boolean(
+        source
+        && target
+        && Math.max(
+            Math.abs(target.x - source.x),
+            Math.abs(target.y - source.y),
+            Math.abs(target.z - source.z),
+        ) <= 1
+        && (target.x !== source.x || target.y !== source.y || target.z !== source.z)
+        && Array.isArray(movements?.exclusionAreasStep)
+    );
+    if (!localStep) {
+        return {
+            movements,
+            excludedStep: null,
+            release() {},
+        };
+    }
+    const excludedStep = {
+        ...target,
+        source,
+        locomotion: String(stuckState?.locomotion?.type || stuckState?.executionMode || 'unknown'),
+    };
+    const exclude = block => (
+        Number(block?.position?.x) === target.x
+        && Number(block?.position?.y) === target.y
+        && Number(block?.position?.z) === target.z
+            ? 100
+            : 0
+    );
+    movements.exclusionAreasStep.push(exclude);
+    let released = false;
+    return {
+        movements,
+        excludedStep,
+        release() {
+            if (released) return;
+            released = true;
+            const index = movements.exclusionAreasStep.indexOf(exclude);
+            if (index >= 0) movements.exclusionAreasStep.splice(index, 1);
+        },
     };
 }
 
@@ -17314,6 +17896,24 @@ async function runSegmentedJourney(bot, goal, options, planning, movementFactory
     };
 }
 
+function settleSegmentedJourney(bot, options, planning, segmented, preflightRecovery = null) {
+    if (segmented?.attempted !== true) return null;
+    const arrived = segmented.arrived === true;
+    setNavigationActionEvidence(bot, options, {
+        kind: 'movement',
+        outcome: arrived ? 'arrived' : segmented.outcome,
+        planning,
+        segments: segmented.segments,
+        finalDestination: segmented.destination,
+        progressed: segmented.progressed,
+        waypointSelection: segmented.waypointSelection,
+        ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
+        retryable: arrived ? false : segmented.retryable,
+    });
+    if (!arrived) log(bot, segmented.message);
+    return arrived;
+}
+
 export async function goToGoal(bot, goal, options = {}) {
     /**
      * Navigate to the given goal. Use doors and attempt minimally destructive movements.
@@ -17329,11 +17929,15 @@ export async function goToGoal(bot, goal, options = {}) {
     };
     if (aborted() || remainingActionTimeMs() <= 0) return false;
     signal?.addEventListener?.('abort', stopForAbort, { once: true });
-    const movementFactory = typeof options?.movements === 'function'
+    const baseMovementFactory = typeof options?.movements === 'function'
         ? options.movements
         : options?.movements
             ? () => options.movements
             : () => safeMovements(bot);
+    const movementFactory = () => configureNavigationStepExclusions(
+        baseMovementFactory(),
+        options?.excludedNavigationSteps,
+    );
     let preflightRecovery = null;
     if (
         options?.requirePlannedRoute === true
@@ -17412,35 +18016,14 @@ export async function goToGoal(bot, goal, options = {}) {
                     planning,
                     movementFactory,
                 );
-                if (segmented.arrived) {
-                    setNavigationActionEvidence(bot, options, {
-                        kind: 'movement',
-                        outcome: 'arrived',
-                        planning,
-                        segments: segmented.segments,
-                        finalDestination: segmented.destination,
-                        progressed: segmented.progressed,
-                        waypointSelection: segmented.waypointSelection,
-                        ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
-                        retryable: false,
-                    });
-                    return true;
-                }
-                if (segmented.attempted) {
-                    setNavigationActionEvidence(bot, options, {
-                        kind: 'movement',
-                        outcome: segmented.outcome,
-                        planning,
-                        segments: segmented.segments,
-                        finalDestination: segmented.destination,
-                        progressed: segmented.progressed,
-                        waypointSelection: segmented.waypointSelection,
-                        ...(preflightRecovery ? { recovery: preflightRecovery } : {}),
-                        retryable: segmented.retryable,
-                    });
-                    log(bot, segmented.message);
-                    return false;
-                }
+                const settled = settleSegmentedJourney(
+                    bot,
+                    options,
+                    planning,
+                    segmented,
+                    preflightRecovery,
+                );
+                if (settled !== null) return settled;
             }
             setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
@@ -17463,10 +18046,18 @@ export async function goToGoal(bot, goal, options = {}) {
         250,
         Math.min(requestedStallTimeoutMs, remainingActionTimeMs(requestedStallTimeoutMs)),
     );
+    const managedPathfinderOptions = options?.allowBestReachable === true
+        ? {
+            ...(options?.pathfinderOptions || {}),
+            mindcraftProgressiveJourney: true,
+        }
+        : options?.pathfinderOptions;
     bot.mindcraftManagedNavigationDepth = Math.max(
         0,
         Number(bot.mindcraftManagedNavigationDepth) || 0,
     ) + 1;
+    const progressiveStart = bot.entity.position.clone();
+    const progressiveStartedAt = Date.now();
     const doorCheckInterval = startDoorInterval(bot);
     try {
         let recovery = preflightRecovery;
@@ -17496,7 +18087,7 @@ export async function goToGoal(bot, goal, options = {}) {
                 goal,
                 initialMovements,
                 navigationStallTimeoutMs,
-                options?.pathfinderOptions,
+                managedPathfinderOptions,
             );
         if (aborted()) return false;
         currentFeet = bot.entity?.position
@@ -17516,7 +18107,7 @@ export async function goToGoal(bot, goal, options = {}) {
                     goal,
                     movementFactory(),
                     navigationStallTimeoutMs,
-                    options?.pathfinderOptions,
+                    managedPathfinderOptions,
                 );
                 if (aborted()) return false;
             }
@@ -17531,7 +18122,7 @@ export async function goToGoal(bot, goal, options = {}) {
                 goal,
                 safeDescentMovements(bot),
                 navigationStallTimeoutMs,
-                options?.pathfinderOptions,
+                managedPathfinderOptions,
             );
             if (aborted()) return false;
             const descentRecovery = {
@@ -17561,18 +18152,68 @@ export async function goToGoal(bot, goal, options = {}) {
                 : localRecovery;
             recoveryAttempts += 1;
             recovery.attempt = recoveryAttempts;
-            if (!recovery.success) break;
+            if (!recovery.success) {
+                const failedRecoveryPolicy = movementPolicyExcludingStalledStep(
+                    movementFactory,
+                    outcome.pathfinder,
+                );
+                if (failedRecoveryPolicy.excludedStep) {
+                    recovery.excludedStep = failedRecoveryPolicy.excludedStep;
+                }
+                failedRecoveryPolicy.release();
+                break;
+            }
+            const progressiveRecovery = options?.allowBestReachable === true
+                ? goalDirectedNavigationProgress(
+                    bot,
+                    goal,
+                    progressiveStart,
+                    progressiveStartedAt,
+                )
+                : null;
+            if (progressiveRecovery?.progressed === true) {
+                const current = progressiveRecovery.lastPosition;
+                setNavigationActionEvidence(bot, options, {
+                    kind: 'movement',
+                    outcome: 'closest_explored',
+                    requestedGoalSatisfied: false,
+                    bestReachable: {
+                        x: Math.floor(current.x),
+                        y: Math.floor(current.y),
+                        z: Math.floor(current.z),
+                        pathLength: 0,
+                        cost: null,
+                        searchStatus: 'local_recovery',
+                    },
+                    progress: progressiveRecovery,
+                    recovery,
+                    retryable: true,
+                });
+                log(bot, 'Navigation preserved a supported local-recovery gain and will continue the progressive journey from that stance.');
+                return false;
+            }
             const recoveryAction = recovery.strategy === 'local_foliage_escape'
                 ? 'a bounded local foliage escape'
                 : 'a safe Pathfinder sidestep';
-            log(bot, `Navigation made ${recoveryAction} ${recoveryAttempts}/${MAX_NAVIGATION_RECOVERY_ATTEMPTS} and is retrying the route.`);
-            outcome = await runNavigationAttempt(
-                bot,
-                goal,
-                movementFactory(),
-                navigationStallTimeoutMs,
-                options?.pathfinderOptions,
+            const retryPolicy = movementPolicyExcludingStalledStep(
+                movementFactory,
+                outcome.pathfinder,
             );
+            if (retryPolicy.excludedStep) recovery.excludedStep = retryPolicy.excludedStep;
+            log(bot, retryPolicy.excludedStep
+                ? `Navigation made ${recoveryAction} ${recoveryAttempts}/${MAX_NAVIGATION_RECOVERY_ATTEMPTS} and is retrying with the stalled local step excluded.`
+                : `Navigation made ${recoveryAction} ${recoveryAttempts}/${MAX_NAVIGATION_RECOVERY_ATTEMPTS} and is retrying the route.`);
+            try {
+                outcome = await runNavigationAttempt(
+                    bot,
+                    goal,
+                    retryPolicy.movements,
+                    navigationStallTimeoutMs,
+                    managedPathfinderOptions,
+                );
+            } finally {
+                retryPolicy.release();
+            }
             if (aborted()) return false;
         }
         if (
@@ -17593,7 +18234,7 @@ export async function goToGoal(bot, goal, options = {}) {
                     endpointGoal,
                     movementFactory(),
                     navigationStallTimeoutMs,
-                    options?.pathfinderOptions,
+                    managedPathfinderOptions,
                 );
                 if (aborted()) return false;
                 endpointReached = closestOutcome.state === 'resolved'
@@ -17630,7 +18271,7 @@ export async function goToGoal(bot, goal, options = {}) {
             && Number.isFinite(outcome.lastMetric)
             && outcome.lastMetric < outcome.startMetric
             && (
-                outcome.state === 'stalled'
+                ['diverged', 'stalled'].includes(outcome.state)
                 || (
                     outcome.state === 'rejected'
                     && ['unreachable', 'path_timeout'].includes(pathfinderErrorOutcome(outcome.error, false))
@@ -17665,6 +18306,29 @@ export async function goToGoal(bot, goal, options = {}) {
                     : 'Pathfinder settled after physically converging to its closest explored stance.');
             return false;
         }
+        if (outcome.state === 'diverged') {
+            const target = navigationTarget(goal);
+            const excludedStep = navigationDivergenceExclusion(outcome);
+            const divergenceRecovery = excludedStep
+                ? {
+                    ...(recovery || {}),
+                    strategy: recovery?.strategy || 'route_divergence_exclusion',
+                    excludedStep,
+                }
+                : recovery;
+            setNavigationActionEvidence(bot, options, {
+                kind: 'movement',
+                outcome: 'path_diverged',
+                ...(target ? { target } : {}),
+                progress: navigationProgressEvidence(outcome),
+                ...(divergenceRecovery ? { recovery: divergenceRecovery } : {}),
+                retryable: true,
+            });
+            log(bot, excludedStep
+                ? `Progressive navigation stopped after diverging ${outcome.maxGoalDivergence} goal-cost units and recorded the regressive route cell for the owning journey.`
+                : `Progressive navigation stopped after diverging ${outcome.maxGoalDivergence} goal-cost units from its best supported frontier.`);
+            return false;
+        }
         if (outcome.state === 'stalled') {
             const target = navigationTarget(goal);
             setNavigationActionEvidence(bot, options, {
@@ -17686,12 +18350,46 @@ export async function goToGoal(bot, goal, options = {}) {
             log(bot, `Navigation stopped after ${Math.round(outcome.stalledMs / 1000)} seconds without physical progress.`);
             return false;
         }
+        if (
+            options?.allowSegmentedJourney === true
+            && outcome.state === 'rejected'
+            && pathfinderErrorOutcome(outcome.error, false) === 'path_timeout'
+        ) {
+            // Progressive full-destination search may time out before native A*
+            // discovers any executable frontier in a large or partially loaded
+            // world. That timeout is not world impossibility. Fall back to the
+            // existing receding-horizon journey, where every shorter leg still
+            // requires its own complete Pathfinder proof before movement.
+            const planning = Object.freeze({
+                reachable: false,
+                status: outcome.searchStatus || 'timeout',
+                pathLength: Math.max(0, Math.floor(Number(outcome.bestReachable?.pathLength) || 0)),
+                conclusive: false,
+                source: 'progressive_destination_timeout',
+            });
+            const segmented = await runSegmentedJourney(
+                bot,
+                goal,
+                options,
+                planning,
+                movementFactory,
+            );
+            const settled = settleSegmentedJourney(
+                bot,
+                options,
+                planning,
+                segmented,
+                recovery,
+            );
+            if (settled !== null) return settled;
+        }
         if (outcome.state === 'rejected') {
             const failure = pathfinderErrorOutcome(outcome.error, Boolean(bot.interrupt_code));
             setNavigationActionEvidence(bot, options, {
                 kind: 'movement',
                 outcome: failure,
                 error: String(outcome.error?.message || outcome.error).slice(0, 240),
+                progress: navigationProgressEvidence(outcome),
                 ...(recovery ? { recovery } : {}),
                 retryable: failure !== 'interrupted',
             });
@@ -19730,7 +20428,7 @@ function monotonicSurfaceMovements(bot) {
     return movements;
 }
 
-async function pulseAcrossBoundMiningCell(bot, target) {
+export async function pulseAcrossBoundStandingCell(bot, target) {
     const current = observedSupportedStandingCell(bot);
     const cardinalAdjacent = Boolean(
         current
@@ -19769,6 +20467,7 @@ async function pulseAcrossBoundMiningCell(bot, target) {
         try { bot.setControlState('forward', false); } catch { /* disconnected body */ }
         try { bot.setControlState('jump', false); } catch { /* disconnected body */ }
         try { bot.setControlState('sprint', false); } catch { /* disconnected body */ }
+        try { bot.clearControlStates?.(); } catch { /* disconnected body */ }
     }
     await waitForWorldCondition(
         bot,
@@ -19900,7 +20599,7 @@ async function traverseClearedMiningCell(bot, step) {
             recovery.success = arrived;
         }
         if (!arrived && !bot.interrupt_code) {
-            const directPulse = await pulseAcrossBoundMiningCell(bot, step);
+            const directPulse = await pulseAcrossBoundStandingCell(bot, step);
             recovery.directPulse = directPulse;
             if (directPulse.success) {
                 reached = true;
@@ -21661,10 +22360,9 @@ function waterBucketInteractionStances(bot, block) {
                     const stance = block.position.offset(x, y, z);
                     const key = miningCellKey(stance);
                     if (keys.has(key)) continue;
-                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
-                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                    if (!isProspectiveStandingCellClear(bot, stance)) continue;
                     const support = bot.blockAt(stance.offset(0, -1, 0));
-                    if (!isSafeGameplaySupport(support) || support.openable) continue;
+                    if (!isSafeGameplaySupport(support) || isUnstableOpenableSupport(support)) continue;
                     const eye = stance.offset(0.5, 1.62, 0.5);
                     if (eye.distanceTo(targetPoint) > 4.5) continue;
                     keys.add(key);
@@ -23518,6 +24216,7 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     }
 
     const candidates = [];
+    let openRoute = null;
     if (preservedReturnRoute.length === 0) {
         const baseX = Math.floor(origin.x);
         const baseZ = Math.floor(origin.z);
@@ -23540,7 +24239,7 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
         }
         candidates.sort((left, right) => left.distance - right.distance);
 
-        const openRoute = candidates.length > 0
+        openRoute = candidates.length > 0
             ? probeSafeRoundTripNavigationStances(
                 bot,
                 candidates,
@@ -23715,15 +24414,30 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
         return false;
     }
 
+    const openRouteUnproven = Boolean(
+        openRoute
+        && !openRoute.reachable
+        && openRoute.conclusive !== true
+    );
     setActionEvidence(bot, {
         kind: 'mining_relocation',
-        outcome: candidates.length > 0 ? 'open_cave_unreachable' : 'no_open_cave_route',
+        outcome: openRouteUnproven
+            ? 'open_cave_route_unproven'
+            : candidates.length > 0
+                ? 'open_cave_unreachable'
+                : 'no_open_cave_route',
         target,
         candidates: candidates.length,
+        ...(openRouteUnproven ? {
+            routeStatus: openRoute.status,
+            inconclusive: true,
+        } : {}),
         routeDigging: false,
         retryable: true,
     });
-    log(bot, `No safe cave or natural-fill staircase route reaches the productive y=${boundedY} band from here.`);
+    log(bot, openRouteUnproven
+        ? `The non-destructive cave-route search did not finish for y=${boundedY}; no excavation branch applies from this elevation.`
+        : `No safe cave or natural-fill staircase route reaches the productive y=${boundedY} band from here.`);
     return false;
 }
 
@@ -23731,7 +24445,10 @@ export async function goToPosition(bot, x, y, z, min_distance=2, {
     dryOnly = false,
     allowSegmentedJourney = false,
     allowBestReachable = false,
+    allowLocalRecovery = false,
     movementFactory = null,
+    protectedNavigationRegions = [],
+    excludedNavigationSteps = [],
 } = {}) {
     /**
      * Navigate to the given position.
@@ -23796,13 +24513,32 @@ export async function goToPosition(bot, x, y, z, min_distance=2, {
                 }
             }
         }
-        const selectedMovements = typeof movementFactory === 'function'
+        const requestedMovementFactory = typeof movementFactory === 'function'
             ? movementFactory
             : () => dryOnly ? dryRouteMovements(bot) : safeMovements(bot);
+        const baseMovementFactory = () => configureNavigationStepExclusions(
+            requestedMovementFactory(),
+            excludedNavigationSteps,
+        );
+        const protectedNavigationOptions = navigationOptionsProtectingRegions(
+            bot,
+            protectedNavigationRegions,
+            { movements: baseMovementFactory },
+        );
+        const selectedMovements = protectedNavigationOptions.movements || baseMovementFactory;
+        const protectsNavigationRegions = normalizeCollectionExclusions(
+            protectedNavigationRegions,
+        ).length > 0;
         const routed = await goToGoal(
             bot,
             new pf.goals.GoalNear(x, y, z, requestedDistance),
-            (dryOnly || allowSegmentedJourney || allowBestReachable || typeof movementFactory === 'function')
+            (
+                dryOnly
+                || allowSegmentedJourney
+                || allowBestReachable
+                || typeof movementFactory === 'function'
+                || protectsNavigationRegions
+            )
                 ? {
                     movements: selectedMovements,
                     // Long travel is progressive. When the caller accepts a
@@ -23813,7 +24549,8 @@ export async function goToPosition(bot, x, y, z, min_distance=2, {
                     allowSegmentedJourney: allowSegmentedJourney === true,
                     allowBestReachable: allowBestReachable === true,
                     allowHealthBoundedDescent: false,
-                    allowLocalRecovery: false,
+                    allowLocalRecovery: allowLocalRecovery === true,
+                    excludedNavigationSteps,
                 }
                 : {},
         );

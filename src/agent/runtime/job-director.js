@@ -19,6 +19,7 @@ import { RoleDirector } from './role-director.js';
 import { JobStateStore } from './job-state-store.js';
 import {
   advanceWorkOrder,
+  checkpointAfterControlHazard,
   createWorkOrder,
   normalizeWorkOrder,
   reconcileWorkOrder,
@@ -26,6 +27,7 @@ import {
 } from './work-order.js';
 import {
   createBuilderStockpileOrder,
+  inferredAccessDoorFixture,
   nextBuilderStep,
 } from './jobs/builder-plan.js';
 import {
@@ -311,10 +313,42 @@ function nextJobUpkeepStep(order, snapshot) {
   return null;
 }
 
+function hasPendingDeathItems(memoryBank, recordedAt) {
+  if (!Number.isSafeInteger(recordedAt) || recordedAt < 1) return false;
+  const death = memoryBank?.recallDeath?.(recordedAt);
+  if (!death || death.recoveredAt) return false;
+  return Object.values(death.inventory || {}).some(count => Number(count) > 0);
+}
+
+function nextJobDeathRecoveryStep(order, memoryBank) {
+  const recordedAt = Number(order.checkpoint?.deathRecovery?.recordedAt);
+  if (!Number.isSafeInteger(recordedAt) || recordedAt < 1) return null;
+  const checkpoint = { ...order.checkpoint, deathRecovery: null };
+  if (!hasPendingDeathItems(memoryBank, recordedAt)) {
+    return {
+      phase: order.resumePhase || 'assess',
+      checkpoint,
+      code: 'job_death_inventory_reconciled',
+      keepAnchor: true,
+    };
+  }
+  return {
+    command: `!recoverDeathItems(${recordedAt})`,
+    nextPhase: order.resumePhase || 'assess',
+    code: 'job_death_inventory_recovery',
+    target: { name: 'last_death_position' },
+    keepAnchor: true,
+    recoveryAction: true,
+    checkpointOnSuccess: checkpoint,
+  };
+}
+
 /**
  * Walk back to where physical work is authorized before continuing it.
  * Preempted jobs return to their explicit anchor; Builder also returns after
- * remote prerequisite acquisition before it may execute blueprint cells.
+ * remote prerequisite acquisition before it may execute blueprint cells. A
+ * durable return latch carries the same ownership boundary across death and
+ * respawn, after exact inventory recovery has settled.
  * `keepAnchor` stops the return step from overwriting the destination.
  */
 export function nextWorksiteReturnStep(order, snapshot) {
@@ -322,7 +356,8 @@ export function nextWorksiteReturnStep(order, snapshot) {
     && order.kind !== 'stockpile'
     && ['execute', 'deliver', 'verify'].includes(order.phase);
   const preempted = order.evidence?.code === 'preempted';
-  if (!builderExecution && !preempted) return null;
+  const pendingReturn = order.checkpoint?.worksiteReturnPending === true;
+  if (!builderExecution && !preempted && !pendingReturn) return null;
   const pendingCells = Array.isArray(snapshot.blueprintAudit?.missing)
     ? snapshot.blueprintAudit.missing
     : [];
@@ -402,19 +437,83 @@ export function nextWorksiteReturnStep(order, snapshot) {
       },
     };
   }
+  const accessReturnStance = builderExecution
+    && Number(snapshot.y) < Number(order.target?.y)
+    ? builderAccessReturnStance(order)
+    : null;
+  if (accessReturnStance) {
+    return {
+      command: `!goToCoordinates(${accessReturnStance.x}, ${accessReturnStance.y}, ${accessReturnStance.z}, 0.75)`,
+      nextPhase: order.phase,
+      code: 'worksite_access_return_required',
+      keepAnchor: true,
+      target: { name: 'worksite_access', ...accessReturnStance },
+      reason: 'Return through the blueprint access approach before executing enclosed work from below its foundation.',
+    };
+  }
   const distance = builderExecution
     ? Math.hypot(snapshot.x - anchor.x, snapshot.z - anchor.z)
     : Math.hypot(snapshot.x - anchor.x, snapshot.y - anchor.y, snapshot.z - anchor.z);
   const returnDistance = builderExecution
     ? BUILDER_EXECUTION_RETURN_DISTANCE
     : WORKSITE_RETURN_DISTANCE;
-  if (distance <= returnDistance) return null;
+  const returnPhase = order.phase === 'recover'
+    ? (order.resumePhase || 'assess')
+    : order.phase;
+  if (distance <= returnDistance) {
+    if (!pendingReturn) return null;
+    const {
+      worksiteReturnPending: _worksiteReturnPending,
+      worksiteReturnDryOnly: _worksiteReturnDryOnly,
+      ...checkpoint
+    } = order.checkpoint || {};
+    return {
+      phase: returnPhase,
+      checkpoint,
+      code: 'worksite_return_satisfied',
+      keepAnchor: true,
+    };
+  }
+  const dryOnly = order.checkpoint?.worksiteReturnDryOnly === true;
   return {
-    command: `!goToCoordinates(${anchor.x}, ${anchor.y}, ${anchor.z}, 2)`,
-    nextPhase: order.phase,
+    command: builderExecution
+      ? `!goToCoordinates(${anchor.x}, ${anchor.y}, ${anchor.z}, 2)`
+      : `!goToCoordinates(${anchor.x}, ${anchor.y}, ${anchor.z}, 2, ${dryOnly}, true, true)`,
+    nextPhase: returnPhase,
     code: 'worksite_return_required',
     keepAnchor: true,
+    recoveryAction: true,
     target: { name: 'worksite', x: anchor.x, y: anchor.y, z: anchor.z },
+  };
+}
+
+export function builderAccessReturnStance(order) {
+  const target = order?.target;
+  const blueprint = order?.blueprint;
+  if (
+    ![target?.x, target?.y, target?.z].every(Number.isFinite)
+    || !Number.isInteger(blueprint?.width)
+    || !Number.isInteger(blueprint?.depth)
+    || !Array.isArray(blueprint?.cells)
+  ) return null;
+  const access = blueprint.cells.find(cell => (
+    cell?.function === 'access'
+    && [cell.x, cell.y, cell.z].every(Number.isInteger)
+  ));
+  if (!access) return null;
+
+  let outwardX = 0;
+  let outwardZ = 0;
+  if (access.x === 0) outwardX = -1;
+  else if (access.x === blueprint.width - 1) outwardX = 1;
+  else if (access.z === 0) outwardZ = -1;
+  else if (access.z === blueprint.depth - 1) outwardZ = 1;
+  else return null;
+
+  return {
+    x: target.x + access.x + outwardX + 0.5,
+    y: target.y + access.y,
+    z: target.z + access.z + outwardZ + 0.5,
   };
 }
 
@@ -714,7 +813,9 @@ function auditBlueprint(bot, order, inventory) {
     const y = anchor.y + cell.y;
     const z = anchor.z + cell.z;
     const expected = materialFor(cell);
-    const fixture = cell.fixtureId ? fixturesById.get(cell.fixtureId) : null;
+    const fixture = cell.fixtureId
+      ? fixturesById.get(cell.fixtureId)
+      : inferredAccessDoorFixture(order.blueprint, cell);
     const current = blockAt(bot, x, y, z);
     if (!current) return { valid: false, code: 'unloaded', missing: [], incorrect: [] };
     if (blockMatchesPlacement(bot.registry, expected, current)) {
@@ -727,7 +828,23 @@ function auditBlueprint(bot, order, inventory) {
           return observedPart === offset.part && properties.facing === fixture.facing;
         });
         if (!fixtureValid) {
-          return { valid: false, code: 'fixture_state_invalid', missing: [], incorrect: [] };
+          // A legacy structure order stored its access door as an ordinary
+          // block, so any wood-family door previously counted as complete even
+          // when it was rotated across the doorway. The Builder owns this exact
+          // blueprint cell and may replace that mismatched fixture; generic
+          // terrain-clearing policy remains unchanged everywhere else.
+          incorrect.push({
+            x,
+            y,
+            z,
+            expected,
+            observed: current.name,
+            index,
+            clearable: true,
+            fixture,
+            correction: 'owned_fixture_state',
+          });
+          continue;
         }
       }
       correct += 1;
@@ -1140,6 +1257,92 @@ export class JobDirector extends RoleDirector {
       phase: order.phase || null,
       ownsCurrentAction: action.owner === 'job',
     };
+  }
+
+  observeControlHazard(hazard, commitment = {}) {
+    const order = this.activeOrder;
+    const orderId = order?.id || order?.orderId;
+    if (
+      !order
+      || commitment.owner !== 'player_job'
+      || commitment.obligationId !== orderId
+    ) return false;
+    const checkpoint = checkpointAfterControlHazard(order, hazard);
+    if (checkpoint.worksiteReturnDryOnly !== true) return false;
+    if (order.checkpoint?.worksiteReturnDryOnly === true) return true;
+    this.persist({
+      ...order,
+      checkpoint,
+      evidence: {
+        code: 'worksite_return_hazard_adapted',
+        detail: 'A settled drowning interruption changed the preserved worksite return to dry-only navigation.',
+        actionId: hazard?.actionId || order.evidence?.actionId || null,
+      },
+      updatedAt: this.now(),
+    });
+    this.nextAttemptAt = this.now();
+    return true;
+  }
+
+  reconcileDeath({
+    recoverableItems = 0,
+    deathRecord = null,
+    deathPersistenceCode = '',
+  } = {}) {
+    if (!this.activeOrder) return false;
+    const order = this.activeOrder;
+    const observedRecoverableItems = Math.max(0, Math.floor(Number(recoverableItems) || 0));
+    const recordedAt = Number(deathRecord?.recordedAt);
+    const persistedRecoverableDeath = Number.isSafeInteger(recordedAt)
+      && recordedAt > 0
+      && Object.values(deathRecord?.inventory || {}).some(count => Number(count) > 0);
+
+    // Death replaces the body that owned the current action. Revoke its
+    // settlement token before persisting the recovery latch so a late
+    // interrupted callback cannot overwrite the post-respawn order state.
+    this.invalidateDispatch();
+    if (observedRecoverableItems > 0 && !persistedRecoverableDeath) {
+      this.finishOrder(
+        'failed',
+        'death_recovery_persistence_failed',
+        `The bot died with ${observedRecoverableItems} carried item${observedRecoverableItems === 1 ? '' : 's'}, but the current death manifest was not persisted (${String(deathPersistenceCode || 'persistence_rejected').slice(0, 80)}).`,
+        false,
+      );
+      return true;
+    }
+
+    const resumePhase = order.phase === 'recover'
+      ? (order.resumePhase || 'assess')
+      : order.phase;
+    const hasWorksiteAnchor = [order.anchor?.x, order.anchor?.y, order.anchor?.z]
+      .every(Number.isFinite);
+    this.persist({
+      ...order,
+      phase: persistedRecoverableDeath ? 'recover' : 'assess',
+      resumePhase: persistedRecoverableDeath ? resumePhase : null,
+      checkpoint: {
+        ...order.checkpoint,
+        deathRecovery: persistedRecoverableDeath ? { recordedAt } : null,
+        ...(hasWorksiteAnchor ? { worksiteReturnPending: true } : {}),
+      },
+      evidence: {
+        code: persistedRecoverableDeath ? 'job_owner_died' : 'job_owner_died_no_inventory',
+        detail: persistedRecoverableDeath
+          ? `The bot died during this work order; recover the exact recorded inventory ${recordedAt} before resuming ${resumePhase}.`
+          : 'The bot died without a recoverable carried manifest; reassess the same work order from the replacement body.',
+        actionId: `death-${this.now()}`,
+      },
+      updatedAt: this.now(),
+    });
+    this.nextAttemptAt = this.now() + JOB_RETRY_MS;
+    this.setStatus(
+      persistedRecoverableDeath ? 'recovering' : 'waiting',
+      this.activeOrder.evidence.code,
+      this.activeOrder.target?.name || null,
+      this.activeOrder.evidence.detail,
+      true,
+    );
+    return true;
   }
 
   snapshot() {
@@ -1742,7 +1945,13 @@ export class JobDirector extends RoleDirector {
       let step;
       try {
         snapshot = this.getJobSnapshot(this.agent, this.activeOrder);
-        const upkeepStep = nextJobUpkeepStep(this.activeOrder, snapshot);
+        const deathRecoveryStep = nextJobDeathRecoveryStep(
+          this.activeOrder,
+          this.agent.memory_bank,
+        );
+        const upkeepStep = deathRecoveryStep
+          ? null
+          : nextJobUpkeepStep(this.activeOrder, snapshot);
         if (upkeepStep?.code === 'food_resupply_required') {
           const upkeepOutcome = this.agent.survival_director?.jobFoodUpkeepOutcome?.(this.activeOrder.id);
           if (upkeepOutcome?.phase === 'failed') {
@@ -1765,7 +1974,8 @@ export class JobDirector extends RoleDirector {
         } else {
           this.agent.survival_director?.clearJobFoodUpkeep?.(this.activeOrder.id);
         }
-        step = upkeepStep
+        step = deathRecoveryStep
+          || upkeepStep
           || nextWorksiteReturnStep(this.activeOrder, snapshot)
           || reducer(this.activeOrder, snapshot, null, {
             planItem: ({

@@ -1,22 +1,15 @@
 # Handoff — next session / forward proof boundary
 
-**Updated 2026-08-27. The Phase 7C continuity/recovery tranche is
-`ACCEPTED / CLOSED`; the cross-dimensional expedition remains `ACTIVE — PARTIAL`.
-Kevin's owner-issued startup capability is restored and `ACCEPTED / CLOSED`.
-Current-source Kevin is `world_ready` with coherent control and Paper sockets.
-Explicit `!resumeAgenda` restored the saved promise. Current Goal
-`goal-9d151ab6-1166-4ded-8492-96cfd3640551` is in `acquire` at attempts `0/4`,
-with 54 subgoals, a verified 154-cell mining-return spine ending at
-`(955,-32,-473)`, and 15 distinct failed diamond targets. Safety offline-player
-continuity, cumulative death recovery, operator-only process commands, and causal
-mining-return handoff are repaired, focused-tested, and physically composed. The
-Director explicitly paused during an acting three-diamond collection. After the
-owner-issued restart, Kevin retreated, crafted, collected, yielded through grouped
-hostiles, resumed, died, respawned, and preserved the same Goal at attempts `0`.
-Surface-progress preservation and fail-closed control-socket recovery are
-implemented and focused-proven but await ordinary composed terminal-branch proof.
-Agenda semantic deduplication and temporary-workstation custody remain open. No
-obsidian, portal, Nether, quartz, or requester return is claimed.**
+**Updated 2026-08-28. Mineflayer compatibility is the current technical cursor.
+The direct graph now pins `mineflayer@4.38.0` and `minecraft-data@3.114.0`;
+upstream owns pre-spawn `player_loaded` and trailing closed-window inventory
+reconciliation, so the local spawn shim was removed and only repository-owned
+lifecycle/settlement patches were ported. Package/static checks pass with no new
+focused regression. No Kevin, Paper, control-plane, or world restart occurred, so
+the upgraded runtime smoke remains open. The preserved Phase 7C Goal
+`goal-9d151ab6-1166-4ded-8492-96cfd3640551` remains the last known gameplay cursor
+at `acquire`, attempts `0/4`; no replacement state is authorized. Phase 7D now
+defines the finite `KM-0` through `KM-6` mastery sequence and explicit end.**
 
 `ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
 governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
@@ -84,30 +77,36 @@ governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
   loss now enters the existing bounded `AgentProcess` restart path; intentional
   stop remains terminal. Focused results are surface `22/22`, disconnect lifecycle
   `2/2`, and MindServer finalization `7/7`.
-- **NOW:** Kevin is running on current source, `world_ready`, and socket-coherent.
-  The same Goal survived retreat, crafting, iron collection, two grouped hostile
-  responses, resumed collection, death, respawn, and renewed critical-health
-  Safety at attempts `0`. Operator Hold remains false.
-- **NEXT ACCEPTANCE:** Let the current Safety/death recovery settle, resume the
-  exact persisted Goal/Agenda, finish diamond custody, and continue through
-  obsidian and portal construction. If ordinary composition reaches a blocked
-  post-ascent tool preparation or authenticated socket loss, directly confirm the
-  new terminal branch; do not manufacture either as a standalone comfort run.
-  Classify Agenda semantic deduplication or temporary-workstation custody only when
-  either materially blocks or corrupts the composed outcome.
+- **DONE:** The compatibility graph is upgraded to stable Mineflayer 4.38.0,
+  minecraft-data 3.114.0, minecraft-protocol 1.68.0, prismarine-chunk 1.41.0,
+  and prismarine-physics 1.11.1. The local spawn-readiness shim is retired; native
+  spawn/window behavior is retained; versioned patches now contain only the local
+  owner contracts upstream does not supply. `postinstall` applies every patch.
+- **NOW:** `KM-0` package/static verification is complete. Compact mechanics pass
+  `45/45`; direct compatibility/mechanics passes `80/80`; segmented navigation
+  passes `61/61`; and the critical gate passes `31/31` with lint/static checks.
+  The former inventory-capacity failure is repaired at the shared strategic-resource
+  reserve policy. No live process has been restarted or claimed as upgraded in this tranche.
+- **NEXT ACCEPTANCE:** Restart Kevin only on current source. Prove that the first
+  spawn reaches normal interaction through native `player_loaded`, that a
+  closed-container trailing inventory update reconciles without reopening or
+  losing cursor truth, and that the exact persisted Goal/Agenda restores. Then
+  resume natural play through the ordered Phase 7D mastery sequence; do not
+  manufacture a standalone mega-course or replace the saved Goal.
 - **OPEN VERIFICATION GAP:** The prior focused closeout set is `40/40`; the new
   owner slices add surface `22/22`, disconnect lifecycle `2/2`, and MindServer
-  finalization `7/7`. The
-  broad sweep across all 22 modified/new test files is `409/469`; 60 failures remain
-  outside the closed owner slice. They cluster in legacy Agenda/result fixtures,
-  incomplete Agent test doubles, older Survival sleep/action-result expectations,
-  perception-result consumers, and adjacent navigation mocks. Do not report the
+  finalization `7/7`. The final broad sweep across all 23 modified/new test files is
+  `421/472`; 51 failures remain outside the closed owner slice. They cluster in
+  legacy Agenda/result fixtures, incomplete Agent test doubles, older Survival
+  sleep/action-result expectations, perception-result consumers, and builder fixture
+  expectations. Do not report the
   branch-wide suite green or use those failures to reopen the focused physical
   cases without first reproducing their owning boundary.
-- **NOT NEXT:** Livestock continuation, standalone cow/pen evidence, a new planner/
-  director/scheduler, isolated Safety/death/mining demonstrations, coal/travel/
-  escape/Placement replay, Phase 5 Luna
-  matrix, Phase 8 collapse, verifier framework, branch cleanup, or provider ceremony.
+- **NOT NEXT:** Another movement engine, Baritone import, a universal transaction
+  engine, leaf-command proliferation, dependency expansion beyond the exact stable
+  graph, isolated accepted-mechanic replay, a manufactured mega-course, Phase 5
+  Luna matrix, Phase 8 collapse, verifier framework, branch cleanup, or provider
+  ceremony.
 
 Update this block whenever a gameplay tranche materially advances or the Director
 changes priority. The newest explicit Director direction outranks stale prose; the
@@ -241,34 +240,28 @@ managed Java remaining. Use it; do not rerun it.
 
 ## Current tranche
 
-**State: the Phase 7C continuity/recovery tranche is `ACCEPTED / CLOSED`; the
-autonomous cross-dimensional expedition is `ACTIVE — PARTIAL`;
-its path is locked in `ARCHITECTURE.md` under “Phase 7C — autonomous cross-
-dimensional expedition.” Livestock and the workshop remain preserved partial
-evidence, not current cursors. Functional-base commissioning and its fixtures are
-`ACCEPTED / CLOSED`. The Luna matrix remains `0/112` and does not displace this
-tranche.**
+**State: the Mineflayer 4.38 compatibility foundation is `ACTIVE` with package and
+static verification complete and live runtime acceptance pending. The autonomous
+cross-dimensional expedition, livestock project, and workshop remain preserved
+partial evidence; none is replaced or replayed by the compatibility work. Phase
+7D in `ARCHITECTURE.md` is the sole remaining mastery order.**
 
 ### Execution cursor
 
-1. **`NE-1` durable plan — PHYSICALLY RESUMED:** explicit `!resumeAgenda`
-   restored the saved promise without model restoration, replacement Goal, or
-   parallel plan. The persisted file now has ten entries because the model
-   appended semantically equivalent item-plan entries; deduplication is open.
-2. **`NE-2` Safety/bodily recovery — COMPOSED FOUNDATION:** Safety physically
-   proved both structural containment and stable non-closing separation behind
-   blocked sight. Multi-source incidents release once and hand the exact Goal back
-   without spending its attempt. New damage, lost separation, breached refuge, or
-   a distinct live threat reopens ownership; a guarded source cannot immediately
-   reacquire the body while its release condition still holds.
-3. **`NE-2` readiness acquisition — ACTIVE AT DIAMOND CUSTODY:** Goal
-   `goal-9d151ab6-1166-4ded-8492-96cfd3640551` is in `acquire` at attempts `0/4`.
-   Iron collection, three-ingot smelting, table/sticks/iron-pickaxe crafting,
-   long descent, 154-cell return-route verification, 15 distinct diamond target
-   exclusions, protected-route retirement, surface recovery, and Safety resumption
-   are preserved. The explicit pause interrupted an acting three-diamond collect.
-4. **`NE-3` through `NE-5` — PENDING:** no obsidian, portal, Nether entry, new
-   quartz, paired return, or requester rendezvous is claimed.
+1. **`KM-0` package migration — VERIFIED:** exact stable dependency graph, native
+   spawn/window ownership, minimal versioned patches, postinstall application,
+   `45/45` compact mechanics, `80/80` direct compatibility/mechanics, `61/61`
+   segmented navigation, and a green `31/31` critical gate.
+2. **`KM-0` live runtime — PENDING:** Kevin-only restart, first-spawn interaction,
+   trailing closed-window inventory reconciliation, and exact Goal/Agenda restore.
+3. **Preserved gameplay state:** Goal
+   `goal-9d151ab6-1166-4ded-8492-96cfd3640551`, phase `acquire`, attempts `0/4`,
+   and all accepted Safety/recovery/navigation effects remain authoritative. No
+   compatibility step may manufacture replacement Goal, Agenda, or world state.
+4. **After `KM-0`:** resume the exact Goal and credit any directly traversed
+   `KM-1` through `KM-5` boundary without replay. When that Mission settles, select
+   the first unclosed domain gate. Run `KM-6` only after all five close. Gameplay
+   work ends there; Phase 8/9 consolidation ends the migration.
 
 Do not treat these as independent work orders or create a parallel plan surface.
 Full acceptance, continue/stop rules, and Definition of Done live only in the cited
@@ -535,16 +528,19 @@ Architecture subsection. Do not replay the protected depth route as standalone p
 - Preserve the workshop's completed ore exploration, iron pickaxe, and shield as
   partial evidence; do not replay them. Its bucket/storage/return predicates remain
   open but are not the current gameplay cursor.
-- Continue Phase 7C through the exact persisted Agenda and Goal. Preserve the
+- Complete the bounded `KM-0` Kevin-only runtime smoke, then continue Phase 7C
+  through the exact persisted Agenda and Goal. Preserve the
   verified 154-cell return spine, 15 failed diamond targets, completed iron/
   smelting/crafting effects, and the closed Safety/death/authority/mining-handoff
   owners. Finish diamond custody, then let GoalDirector/Agenda continue to
-  obsidian custody, portal, dimension, quartz, and requester return. Do not resume
-  livestock or replay the closed owner cases in isolation.
+  obsidian custody, portal, dimension, quartz, and requester return. Credit any
+  directly exercised `KM-1` through `KM-5` boundary; do not resume livestock or
+  replay a closed owner case in isolation merely to fill the plan.
 - Preserve the bounded Phase 5 Luna question as separately authorized later work;
   it does not displace the current Phase 7B livestock composition outcome.
-- Begin Phase 8 collapse of legacy directors and lanes only after the active Phase
-  7 composition work closes and replacement evidence covers player-visible deeds.
+- Run `KM-6` only after every domain gate is closed. Begin Phase 8 collapse of
+  legacy directors and lanes only after that capstone and replacement evidence
+  cover the player-visible deeds.
 - Judge each tranche by whether Gabriel Jr. can state an ordinary-language
   promise, Kevin can understand and execute its coherent multi-step plan, survive
   interruption or change, and truthfully finish or explain what remains.
@@ -592,13 +588,13 @@ Architecture subsection. Do not replay the protected depth route as standalone p
 
 ## Runtime authorization boundaries
 
-Phase 7C autonomous cross-dimensional expedition is the active technical/gameplay
-tranche. Kevin is intentionally stopped; Paper and the control plane remain
-running. Explicit resume and the continuity/recovery owner tranche are closed. The
-current cursor is persisted Goal `goal-9d151ab6-1166-4ded-8492-96cfd3640551`,
-paused during three-diamond collection at attempts `0/4`. Resume that exact owner;
-do not manufacture a replacement Goal, manually edit/deduplicate the saved Agenda,
-or sequence portal prerequisites outside its owners.
+Mineflayer compatibility is the active technical tranche. No runtime or world
+mutation occurred during package migration. The next physical action is a
+Kevin-only restart and bounded `KM-0` smoke; Paper and the control plane must remain
+running. After that proof, resume persisted Goal
+`goal-9d151ab6-1166-4ded-8492-96cfd3640551` at its owning checkpoint. Do not
+manufacture a replacement Goal, manually edit/deduplicate the saved Agenda, or
+sequence portal prerequisites outside its owners.
 
 The Phase 6 swim-exit and composed workaround chain are complete and
 `ACCEPTED / CLOSED`; do not repeat them unless changed ownership, composition,
@@ -631,8 +627,9 @@ report the exact provider/error, and do not retry or switch providers.
   Phase 6 swim-exit, composed terrain courses, Phase 7 Placement shelter, and
   functional-base commissioning ran physically and closed; Container remains
   preserved `ACTIVE` evidence;
-- no dependency change, parallel plan, parallel handoff surface, or new test
-  framework; the existing canonical handoff and Q&A were updated in place.
+- the prior closed gameplay tranche made no dependency change. The current bounded
+  Mineflayer compatibility change is recorded above; it created no parallel plan,
+  parallel handoff surface, or new test framework.
 
 ## Workspace and continuity
 

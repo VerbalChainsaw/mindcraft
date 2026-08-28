@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   blueprintEscapeStances,
+  builderAccessReturnStance,
   nextWorksiteReturnStep,
 } from '../../src/agent/runtime/job-director.js';
 
@@ -99,6 +100,31 @@ test('Builder composes surface access and native worksite return before blueprin
   assert.equal(remoteFromNextCell.command, '!goToCoordinates(12, 70, -18, 2)');
 });
 
+test('a Miner return that survived drowning resumes the same destination on a dry-only progressive route', () => {
+  const order = {
+    role: 'miner',
+    kind: 'explore',
+    phase: 'recover',
+    resumePhase: 'execute',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    anchor: { x: 207, y: 69, z: -359 },
+    evidence: { code: 'preempted' },
+    checkpoint: {
+      worksiteReturnPending: true,
+      worksiteReturnDryOnly: true,
+    },
+  };
+
+  const returnStep = nextWorksiteReturnStep(order, { x: 760, y: 64, z: -520 });
+  assert.equal(returnStep.command, '!goToCoordinates(207, 69, -359, 2, true, true, true)');
+  assert.equal(returnStep.recoveryAction, true);
+
+  const arrived = nextWorksiteReturnStep(order, { x: 207, y: 69, z: -359 });
+  assert.equal(arrived.code, 'worksite_return_satisfied');
+  assert.equal(arrived.checkpoint.worksiteReturnPending, undefined);
+  assert.equal(arrived.checkpoint.worksiteReturnDryOnly, undefined);
+});
+
 test('Construction escape candidates include safe one-block descents outside the footprint', () => {
   const bot = {
     entity: { position: { x: 4.5, y: 65, z: 4.5 } },
@@ -113,4 +139,37 @@ test('Construction escape candidates include safe one-block descents outside the
   });
 
   assert.ok(stances.some(position => position.x === 4 && position.y === 64 && position.z === 5));
+});
+
+test('Builder returns through the designed access approach before executing from below an enclosure', () => {
+  const order = {
+    role: 'builder',
+    kind: 'build',
+    phase: 'execute',
+    target: { name: 'functional_shelter', x: 164, y: 78, z: -382 },
+    checkpoint: { nextCell: 82 },
+    evidence: { code: 'cell_verified' },
+    blueprint: {
+      width: 5,
+      depth: 5,
+      cells: [
+        { x: 0, y: 1, z: 2, material: 'spruce_door', function: 'access' },
+        { x: 3, y: 1, z: 3, material: 'furnace', function: 'smelting' },
+      ],
+    },
+  };
+
+  assert.deepEqual(builderAccessReturnStance(order), { x: 163.5, y: 79, z: -379.5 });
+  const step = nextWorksiteReturnStep(order, {
+    x: 167.65,
+    y: 76,
+    z: -378.5,
+    blueprintAudit: {
+      missing: [{ index: 82, x: 167, y: 79, z: -379 }],
+    },
+  });
+
+  assert.equal(step.code, 'worksite_access_return_required');
+  assert.equal(step.command, '!goToCoordinates(163.5, 79, -379.5, 0.75)');
+  assert.equal(step.keepAnchor, true);
 });

@@ -41,7 +41,7 @@ this plan was reconciled:
   re-inspected before each implementation change; supporting docs avoid binding
   claims to mutable line offsets.
 
-### 2.1 Current phase and proof ledger (2026-08-27)
+### 2.1 Current phase and proof ledger (2026-08-28)
 
 Only the states below are current. `docs/CAMPAIGN-RECORD.md` owns the detailed
 physical evidence and accepted non-regression outcomes; `docs/HANDOFF.md` owns the
@@ -73,6 +73,8 @@ one active tranche, if any.
 | Phase 7C continuity, recovery, and operator-authority tranche | `ACCEPTED / CLOSED` | Current source proved four owner-level corrections without replacing the single-owner architecture: Safety remembers an offline requester across incidents and deaths and falls through to local shelter instead of redispatching `goToPlayer`; death recovery accumulates recovered custody and spends an attempt only when a retry makes no recovery progress; autonomous/model dispatch cannot invoke operator process commands such as `!stop`; and a mining segment preserves its causal protected/hazard/geometry failure so GoalDirector retires the stale return spine and hands off to `!goToSurface`. Fresh closeout checks pass Safety `10/10`, command authority `11/11`, combined Goal death/mining recovery `11/11`, and segmented death/mining recovery `8/8`. Live current-source composition additionally proved one multi-hostile Safety episode, explicit model `!stop` rejection while Kevin remained connected, protected-cell spine retirement, physical ascent y61 -> y66, and same-Goal continuation. These cases are frozen; repeat them only after changed ownership, contradictory evidence, or a new composed failure. |
 | Phase 7C autonomous cross-dimensional expedition | `ACTIVE — PARTIAL` | Explicit `!resumeAgenda` restored the saved expedition without manufacturing a replacement promise. The current productive Goal is `goal-9d151ab6-1166-4ded-8492-96cfd3640551`, phase `acquire`, attempts `0/4`, with 54 subgoals, a verified 154-cell mining-return spine ending at `(955,-32,-473)`, and 15 distinct failed diamond targets. The same chain physically collected iron, smelted three ingots, crafted its table/sticks/iron pickaxe, descended, searched changing diamond candidates, survived critical multi-hostile interruption, and resumed. The Director explicitly paused the run while `!collectBlocksInRange` was acting for three diamonds; Kevin was then stopped cleanly while Paper/control plane stayed running. No obsidian, portal, Nether entry, quartz custody, or requester return is claimed. Agenda semantic deduplication and temporary-workstation cleanup remain open adjacent defects. |
 | Remaining Phase 7 specialist boundaries | `ACTIVE` | PvP and Vehicle now have first-class ActionManager halt/settlement adapters, and `goToSurface` declares Pathfinder ownership; focused lifecycle checks prove lease retention until PvP target+pursuit or vehicle input settles. Craft, Furnace, Container open-window interruption, and player-visible physical traversal of the new PvP/Vehicle boundaries remain open. Placement remains closed. |
+| Mineflayer 4.38 compatibility foundation | `ACTIVE` | `mineflayer@4.38.0` and `minecraft-data@3.114.0` are exact direct dependencies. Upstream now owns pre-spawn `player_loaded` and trailing closed-window inventory reconciliation, so the local spawn shim was removed. Remaining Mineflayer and physics patches were regenerated only for repository-owned lifecycle, cancellation, settlement, placement, hotbar, and shoreline contracts. Package/static verification is complete: compact mechanics `45/45`, direct compatibility/mechanics `80/80`, segmented navigation `61/61`, and the critical gate `31/31` plus lint/static checks. The closeout also repaired fail-closed strategic-resource custody and preserved inconclusive mining-route truth. A Kevin-only current-runtime smoke remains open. |
+| Finite companion mastery closure | `PENDING` | Phase 7D defines one ordered `KM-0` through `KM-6` completion sequence using existing owners and package-native mechanics. Gameplay mastery ends at the `KM-6` cooperative capstone; Phase 8 and Phase 9 then consolidate covered legacy machinery and end the migration. |
 
 The Scenario Lab catalog describes registered scenario definitions and executor
 availability. Its static `not-run` values are not an acceptance ledger and must
@@ -1192,6 +1194,54 @@ failure is classified at its owning boundary; completed prerequisites are not
 replayed; no provider turn, restart, safety response, death, or dimension transition
 can erase or silently substitute the final promise. Only then mark Phase 7C
 `ACCEPTED / CLOSED` in all three authorities.
+
+#### Phase 7D — finite companion mastery closure
+
+This is the remaining gameplay sequence and its end. It does not introduce a new
+planner, movement engine, transaction platform, or command-leaf catalog. Each item
+extends the existing Mission -> Activity -> specialist -> ActionManager path, reuses
+accepted evidence, and adds a mechanism only when a composed outcome proves that an
+existing owner cannot express the required state transition.
+
+Native package behavior is the default implementation surface. Mineflayer owns
+spawn acknowledgement, authoritative inventory/window updates, crafting, furnace,
+container, consumption, sleep, villager, enchantment/anvil, entity interaction, and
+vehicle primitives. The owned Pathfinder remains the voxel-topology and traversal
+owner; CollectBlock remains collection execution. Repository code supplies policy,
+binding, cancellation, correlation, settlement, recovery, and player-visible truth.
+Before adding or porting a local behavior, check the pinned dependency's current API
+and release delta; do not carry a patch whose behavior is now upstream.
+
+`KM-0` is the only strict prerequisite. `KM-1` through `KM-5` are ordered closure
+gates for selecting the next unproven owner, not commands to discard or replace a
+productive persisted Mission. Continue the current Goal after `KM-0` and credit any
+mastery boundary it directly exercises; after that Mission settles, select the first
+unclosed gate. `KM-6` runs only after all five domain gates close.
+
+| ID | State | Mastery outcome | Owning mechanism and acceptance |
+|---|---|---|---|
+| `KM-0` | `ACTIVE` | **Compatibility foundation.** Run current source on the exact supported dependency graph. | Kevin-only restart loads Mineflayer 4.38.0 with `minecraft-data` 3.114.0; first-spawn interaction is available without a local readiness shim; a closed container's trailing inventory update reconciles correctly; the preserved Goal/Agenda loads unchanged; no Paper/control-plane restart is required. |
+| `KM-1` | `PENDING` | **Recovery autonomy.** Recover from ordinary stranded, hungry, injured, exposed, night, and no-carried-food states, then resume useful work. | The existing Safety/Survival incident owns the interruption and chooses among carried food, local forage/crop/fish/safe hunt, shelter, relocation, daylight wait, cache/workshop return, or truthful bounded wait. One incident owns the body; verified safety releases the exact prior commitment with its productive budget intact. |
+| `KM-2` | `PENDING` | **Workshop and equipment lifecycle.** Acquire, craft, smelt, store, equip, repair, enchant, brew, or trade through bound fixtures without duplication or lost custody. | Close `CS-5` and `CS-6` using thin specialists over native Mineflayer window APIs and the shared settlement contract. Container interruption, Craft/Furnace interruption, cursor truth, equipment replacement, and partial server-side progress must reconcile before handoff. No universal transaction engine. |
+| `KM-3` | `PENDING` | **Protection and rescue.** Defend self or player, choose melee/shield/ranged/potion/retreat/cover coherently, and resume the interrupted promise. | Extend the existing Safety incident plus PvP adapter; native combat/equipment/consume primitives execute tactics. Multi-hostile pressure remains one supervisory episode, a failed tactic changes method, rescue does not steal operator authority, and release requires verified containment, disengagement, or truthful blocked safety. |
+| `KM-4` | `PENDING` | **Sustainable home stewardship.** Maintain food, lighting, storage floors, tools, crops, livestock, gates, and modest structure repair across time. | Builder, Container, Farm/Livestock, GoalDirector, and memory owners complete the preserved livestock suffix and one multi-day base-maintenance project. Replanting, breeding, gate closure, exact storage floors, and fixture truth settle without nearest-object substitution or repeated completed work. |
+| `KM-5` | `PENDING` | **Mobility and exploration.** Scout, remember, guide, return, and use boat/horse/minecart or portals when they materially improve the trip. | Pathfinder owns terrain; native vehicle/entity APIs own mount, control, dismount, and server truth; memory owns landmarks and paired routes. Vehicle interruption/settlement receives physical proof. The preserved `NE-1` through `NE-5` expedition is one hard composition inside this domain, not the definition of the whole character. |
+| `KM-6` | `PENDING` | **Cooperative companion capstone.** Complete one broad ordinary-language project while the player may travel, contribute items, correct a detail, request help, or interrupt naturally. | One Mission identity survives planning, recovery, workshop work, travel, protection, partial player contribution, correction, delivery/return, and final settlement. Existing owners replan from observed reality; no parallel task engine, stale leaf replay, false completion, or unexplained physical owner remains. |
+
+`KM-0` through `KM-5` may close through different natural projects when their owning
+boundary is directly observable; do not build an artificial mega-course. `KM-6` is
+the one final composed proof. It must end with the player-visible promise satisfied
+or truthfully impossible, Kevin alive and safe, inventory/world/requester facts
+reconciled, Mission/Agenda/Job/Goal terminal or idle as appropriate, and no active
+Safety incident, combat target, path, vehicle input, container window, cursor item,
+collection task, delayed callback, or body lease.
+
+**Gameplay mastery ends when `KM-0` through `KM-6` are `ACCEPTED / CLOSED`.** At that
+point do not add more mastery mechanics for reassurance. Execute Phase 8 and Phase 9
+only against replacement evidence, remove or demote covered legacy lanes, run the
+final capstone once on the consolidated path if ownership changed, reconcile the
+three authorities, and end the migration. The Phase 5 model-variance matrix remains
+a separate bounded research question and is not a prerequisite for gameplay mastery.
 
 ### Phase 8 — demote directors and collapse lanes
 

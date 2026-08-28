@@ -5,6 +5,7 @@ import {
   createBuilderConstructionOrder,
   createBuilderStockpileOrder,
   createConstructionBlueprint,
+  inferredAccessDoorFixture,
   nextBuilderStep,
 } from '../../src/agent/runtime/jobs/builder-plan.js';
 import {
@@ -1026,6 +1027,28 @@ test('Given a missing logical fixture, Builder dispatches one fixture placement 
 
   assert.equal(step.command, '!placeFixtureAt("oak_door", 10, 65, 10, "door", "east")');
   assert.equal(step.nextPhase, 'verify');
+});
+
+test('Legacy boundary access doors regain an inward logical fixture orientation', () => {
+  const westDoor = inferredAccessDoorFixture({ width: 5, depth: 5 }, {
+    x: 0,
+    y: 1,
+    z: 2,
+    material: 'spruce_door',
+    function: 'access',
+  });
+  const northDoor = inferredAccessDoorFixture({ width: 5, depth: 5 }, {
+    x: 2,
+    y: 1,
+    z: 0,
+    material: 'birch_door',
+    function: 'access',
+  });
+
+  assert.equal(westDoor.kind, 'door');
+  assert.equal(westDoor.facing, 'east');
+  assert.equal(northDoor.facing, 'south');
+  assert.deepEqual(westDoor.occupiedOffsets.map(({ part }) => part), ['lower', 'upper']);
 });
 
 test('A verified emergency shelter completes only after the bot occupies its protected interior', () => {

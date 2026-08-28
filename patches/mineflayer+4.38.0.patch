@@ -5,7 +5,7 @@ index e75e90c..d4a547f 100644
 @@ -39,6 +39,18 @@ export type ChatLevel = 'enabled' | 'commandsOnly' | 'disabled'
  export type ViewDistance = 'far' | 'normal' | 'short' | 'tiny' | number
  export type MainHands = 'left' | 'right'
-
+ 
 +export interface ContainerOpenOptions {
 +  signal?: AbortSignal
 +  timeoutMs?: number
@@ -22,44 +22,44 @@ index e75e90c..d4a547f 100644
    [plugin: string]: boolean | Plugin
  }
 @@ -273,7 +285,7 @@ export interface Bot extends TypedEmitter<BotEvents> {
-
+ 
    hasPlugin: (plugin: Plugin) => boolean
-
+ 
 -  sleep: (bedBlock: Block) => Promise<void>
 +  sleep: (bedBlock: Block) => Promise<SleepTransition>
-
+ 
    isABed: (bedBlock: Block) => boolean
-
+ 
 @@ -365,7 +377,10 @@ export interface Bot extends TypedEmitter<BotEvents> {
      pages: string[]
    ) => Promise<void>
-
+ 
 -  openContainer: (chest: Block | Entity, direction?: Vec3, cursorPos?: Vec3) => Promise<Chest | Dispenser>
 +  openContainer: {
 +    (chest: Block | Entity, options?: ContainerOpenOptions): Promise<Chest | Dispenser>
 +    (chest: Block | Entity, direction?: Vec3, cursorPos?: Vec3, options?: ContainerOpenOptions): Promise<Chest | Dispenser>
 +  }
-
+ 
    openChest: (chest: Block | Entity, direction?: number, cursorPos?: Vec3) => Promise<Chest>
-
+ 
 @@ -410,9 +425,9 @@ export interface Bot extends TypedEmitter<BotEvents> {
-
+ 
    transfer: (options: TransferOptions) => Promise<void>
-
+ 
 -  openBlock: (block: Block, direction?: Vec3, cursorPos?: Vec3) => Promise<Window>
 +  openBlock: (block: Block, direction?: Vec3, cursorPos?: Vec3, options?: ContainerOpenOptions) => Promise<Window>
-
+ 
 -  openEntity: (block: Entity, Class: new () => EventEmitter) => Promise<Window>
 +  openEntity: (entity: Entity, options?: ContainerOpenOptions) => Promise<Window>
-
+ 
    moveSlotItem: (
      sourceSlot: number,
 diff --git a/node_modules/mineflayer/lib/container_open_gate.js b/node_modules/mineflayer/lib/container_open_gate.js
 new file mode 100644
-index 0000000..b07cd65
+index 0000000..a8dcd4f
 --- /dev/null
 +++ b/node_modules/mineflayer/lib/container_open_gate.js
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,152 @@
 +'use strict'
 +
 +const DEFAULT_RESPONSE_HORIZON_MS = 20000
@@ -161,8 +161,6 @@ index 0000000..b07cd65
 +
 +    operation.onAbort = () => {
 +      if (!isCurrent()) return
-+      // The action may settle immediately, but the channel remains owned by
-+      // this generation until its response arrives or the server horizon ends.
 +      settlePublic('reject', abortError())
 +    }
 +    operation.onWindowOpen = (window) => {
@@ -173,8 +171,6 @@ index 0000000..b07cd65
 +        return
 +      }
 +
-+      // A response for an aborted/timed-out activation cannot become a usable
-+      // window. Keep the channel quarantined until disposal has completed.
 +      Promise.resolve()
 +        .then(() => this.closeLateWindow(window))
 +        .catch(() => {})
@@ -217,7 +213,7 @@ index 0000000..b07cd65
 +  DEFAULT_RESPONSE_HORIZON_MS
 +}
 diff --git a/node_modules/mineflayer/lib/plugins/bed.js b/node_modules/mineflayer/lib/plugins/bed.js
-index 9b526f6..5cf1720 100644
+index 9b526f6..2c02a61 100644
 --- a/node_modules/mineflayer/lib/plugins/bed.js
 +++ b/node_modules/mineflayer/lib/plugins/bed.js
 @@ -70,7 +70,7 @@ function inject (bot) {
@@ -229,9 +225,9 @@ index 9b526f6..5cf1720 100644
          jumpBoost: 0
        })
      }
-@@ -147,22 +147,40 @@ function inject (bot) {
+@@ -147,22 +147,41 @@ function inject (bot) {
        }
-
+ 
        // We need to register the listener before actually going to sleep to avoid race conditions
 -      const waitingPromise = waitUntilSleep()
 +      const waitingPromise = waitUntilSleep(bot.time.time)
@@ -240,7 +236,7 @@ index 9b526f6..5cf1720 100644
 +      return await waitingPromise
      }
    }
-
+ 
 -  async function waitUntilSleep () {
 +  async function waitUntilSleep (activationTime) {
      return new Promise((resolve, reject) => {
@@ -260,6 +256,11 @@ index 9b526f6..5cf1720 100644
 +        cleanup()
          reject(new Error('bot is not sleeping'))
        }, 3000)
+ 
+-      bot.once('sleep', () => {
+-        clearTimeout(timeoutForSleep)
+-        resolve()
+-      })
 +      const onSleep = () => finish({ enteredSleep: true, woke: false, evidence: 'entity_sleep' })
 +      const onTime = () => {
 +        const advanced = Number(bot.time.time) - Number(activationTime)
@@ -267,16 +268,12 @@ index 9b526f6..5cf1720 100644
 +          finish({ enteredSleep: true, woke: true, immediateDawn: true, evidence: 'day_advance' })
 +        }
 +      }
-
--      bot.once('sleep', () => {
--        clearTimeout(timeoutForSleep)
--        resolve()
--      })
++
 +      bot.on('sleep', onSleep)
 +      bot.on('time', onTime)
      })
    }
-
+ 
 diff --git a/node_modules/mineflayer/lib/plugins/chest.js b/node_modules/mineflayer/lib/plugins/chest.js
 index 82e85ff..1a765a4 100644
 --- a/node_modules/mineflayer/lib/plugins/chest.js
@@ -284,7 +281,7 @@ index 82e85ff..1a765a4 100644
 @@ -11,14 +11,27 @@ function inject (bot) {
      return false
    }
-
+ 
 -  async function openContainer (containerToOpen, direction, cursorPos) {
 +  function isOpenOptions (value) {
 +    return value != null && typeof value === 'object' &&
@@ -363,14 +360,14 @@ index d3291b0..dd88803 100644
 @@ -82,7 +82,7 @@ function inject (bot, options) {
        bot.game.height = dimensionData.height
      }
-
+ 
 -    if (packet.difficulty) {
 +    if (packet.difficulty != null) {
        bot.game.difficulty = difficultyNames[packet.difficulty]
      }
    }
 diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
-index 0636faa..9f8304d 100644
+index 264b5d6..e18b3f8 100644
 --- a/node_modules/mineflayer/lib/plugins/inventory.js
 +++ b/node_modules/mineflayer/lib/plugins/inventory.js
 @@ -2,6 +2,7 @@ const assert = require('assert')
@@ -378,12 +375,12 @@ index 0636faa..9f8304d 100644
  const { once, sleep, createDoneTask, createTask, withTimeout } = require('../promise_utils')
  const { toNotchianYaw, toNotchianPitch } = require('../conversions')
 +const { ContainerOpenGate } = require('../container_open_gate')
-
+ 
  module.exports = inject
-
+ 
 @@ -30,6 +31,9 @@ function inject (bot, { hideErrors }) {
    let sequence = 0
-
+ 
    let nextActionNumber = 0 // < 1.17
 +  const containerOpenGate = new ContainerOpenGate(bot, {
 +    closeLateWindow: window => closeWindow(window)
@@ -391,10 +388,10 @@ index 0636faa..9f8304d 100644
    let stateId = -1
    if (bot.supportFeature('stateIdUsed')) {
      const listener = packet => { stateId = packet.stateId }
-@@ -382,16 +386,20 @@ function inject (bot, { hideErrors }) {
+@@ -389,16 +393,20 @@ function inject (bot, { hideErrors }) {
      }
    }
-
+ 
 -  async function openBlock (block, direction, cursorPos) {
 -    bot.activateBlock(block, direction, cursorPos)
 -    const [window] = await once(bot, 'windowOpen')
@@ -406,7 +403,7 @@ index 0636faa..9f8304d 100644
      extendWindow(window)
      return window
    }
-
+ 
 -  async function openEntity (entity) {
 -    bot.activateEntity(entity)
 -    const [window] = await once(bot, 'windowOpen')
@@ -419,23 +416,19 @@ index 0636faa..9f8304d 100644
      return window
    }
 diff --git a/node_modules/mineflayer/lib/plugins/place_block.js b/node_modules/mineflayer/lib/plugins/place_block.js
-index fdaec6b..dc1082b 100644
+index fdaec6b..3401c1f 100644
 --- a/node_modules/mineflayer/lib/plugins/place_block.js
 +++ b/node_modules/mineflayer/lib/plugins/place_block.js
-@@ -1,5 +1,11 @@
+@@ -1,5 +1,7 @@
  const { onceWithCleanup } = require('../promise_utils')
-
-+// A normal server round-trip can exceed the old 500 ms receipt horizon even
-+// when placement succeeds. Keep the mechanic bounded and responsive, but give
-+// the authoritative block update enough time to arrive before reporting a
-+// false failure to callers.
+ 
 +const BLOCK_PLACEMENT_RECEIPT_TIMEOUT_MS = 2000
 +
  module.exports = inject
-
+ 
  function inject (bot) {
-@@ -10,12 +16,21 @@ function inject (bot) {
-
+@@ -10,12 +12,17 @@ function inject (bot) {
+ 
      let newBlock = bot.blockAt(dest)
      if (oldBlock.type === newBlock.type) {
 -      [oldBlock, newBlock] = await onceWithCleanup(bot, `blockUpdate:${dest}`, {
@@ -452,31 +445,23 @@ index fdaec6b..dc1082b 100644
 +          checkCondition: (oldBlock, newBlock) => !oldBlock || !newBlock || oldBlock.type !== newBlock.type
 +        })
 +      } catch (error) {
-+        // Re-read once at the deadline. This accepts a placement already
-+        // reflected in the authoritative world cache even if its event raced
-+        // listener cleanup, while preserving the timeout when the destination
-+        // genuinely remained unchanged.
 +        newBlock = bot.blockAt(dest)
 +        if (oldBlock?.type === newBlock?.type) throw error
 +      }
      }
-
+ 
      // blockUpdate emits (null, null) when the world unloads
 diff --git a/node_modules/mineflayer/lib/plugins/simple_inventory.js b/node_modules/mineflayer/lib/plugins/simple_inventory.js
-index 8c68644..bcc982a 100644
+index 8c68644..5294dd9 100644
 --- a/node_modules/mineflayer/lib/plugins/simple_inventory.js
 +++ b/node_modules/mineflayer/lib/plugins/simple_inventory.js
-@@ -121,8 +121,12 @@ function inject (bot) {
+@@ -121,8 +121,8 @@ function inject (bot) {
        destSlot = QUICK_BAR_START + nextQuickBarSlot
        nextQuickBarSlot = (nextQuickBarSlot + 1) % QUICK_BAR_COUNT
      }
 -    setQuickBarSlot(destSlot - QUICK_BAR_START)
      await bot.moveSlotItem(sourceSlot, destSlot)
-+    // Bind the requested stack into the destination before selecting it. If
-+    // the hotbar is full, selecting the LRU slot first briefly exposes its old
-+    // item to the server; an immediate use/place packet can then act with that
-+    // stale stack even though the local inventory swap subsequently succeeds.
 +    setQuickBarSlot(destSlot - QUICK_BAR_START)
    }
-
+ 
    function getDestSlot (destination) {

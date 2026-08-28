@@ -296,6 +296,32 @@ test('Repeated success at one unchanged coordinate still trips the no-progress g
   assert.equal(outcome.result.code, 'action_pattern_detected');
 });
 
+test('An open automatic-action circuit releases after the body leaves its original patch', async () => {
+  const agent = createHarness();
+  let runs = 0;
+  let outcome;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    outcome = await agent.actions.runAction('action:prepareFood', () => {
+      runs += 1;
+      return true;
+    }, { owner: 'survival' });
+  }
+
+  assert.equal(outcome.result.code, 'action_pattern_detected');
+  assert.equal(runs, 4);
+
+  agent.bot.entity.position = { x: 20, y: 64, z: 10 };
+  const resumed = await agent.actions.runAction('action:prepareFood', () => {
+    runs += 1;
+    return true;
+  }, { owner: 'survival' });
+
+  assert.equal(resumed.result.phase, 'succeeded');
+  assert.notEqual(resumed.result.code, 'action_pattern_detected');
+  assert.equal(runs, 5);
+});
+
 test('Reflex interruptions do not turn deterministic job resumption into a false loop', async () => {
   const agent = createHarness();
   const outcomes = [];

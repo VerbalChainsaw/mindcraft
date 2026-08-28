@@ -56,6 +56,21 @@ function createDirector() {
   return new GoalDirector(agent, { store, procedures });
 }
 
+test('a terminal Goal no longer masks a live durable commitment during an ownership gap', () => {
+  const director = createDirector();
+  director.activeGoal = { id: 'old-failed-goal', phase: 'failed' };
+
+  assert.equal(director.currentControlCommitment({ owner: null }), null);
+
+  director.activeGoal = { id: 'live-goal', phase: 'execute' };
+  assert.deepEqual(director.currentControlCommitment({ owner: 'player' }), {
+    owner: 'player_goal',
+    obligationId: 'live-goal',
+    phase: 'execute',
+    ownsCurrentAction: true,
+  });
+});
+
 function boundaryGoal(subgoals) {
   const base = createItemGoalContract({
     kind: 'acquire',

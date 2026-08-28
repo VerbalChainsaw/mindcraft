@@ -317,6 +317,169 @@ test('SurvivalDirector honors a correlated durable-job food upkeep request witho
   assert.equal(Object.isFrozen(director.snapshot().decision.jobFoodUpkeep), true);
 });
 
+test('Repeated identical durable-job food upkeep preserves Survival cooldown', () => {
+  const agent = createAgent();
+  const wakes = [];
+  agent.behavior_arbiter = { wake: reason => wakes.push(reason) };
+  const director = new SurvivalDirector(agent);
+  const request = {
+    workOrderId: 'family-scout',
+    requester: 'DadPlayer',
+    targetFoodPoints: 24,
+  };
+
+  assert.equal(director.requestJobFoodUpkeep(request), true);
+  director.nextEligibleAt = 12_345;
+  assert.equal(director.requestJobFoodUpkeep(request), true);
+
+  assert.equal(director.nextEligibleAt, 12_345);
+  assert.deepEqual(wakes, ['job_food_upkeep_requested']);
+});
+
+test('Durable-job food recovery outranks ambient night shelter without losing correlation', async () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(10, 64, 10);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.agenda_director = { hasUnfinished: () => true };
+  agent.job_director = { activeOrder: { id: 'family-scout', source: 'player' } };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 20,
+      hunger: 15,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      dimension: 'overworld',
+      difficulty: 'hard',
+      timeOfDay: 18_000,
+      weather: 'Clear',
+      sheltered: false,
+      shelters: [{ name: 'cave', x: 4, y: 64, z: 4, distance: 6, reachable: true, safe: true }],
+    }),
+    executeCommand: (_agent, command, options) => {
+      commands.push({ command, options });
+      return {
+        value: null,
+        result: {
+          actionId: 'job-food-night-1',
+          phase: 'failed',
+          code: 'skill_no_food_sources',
+          detail: 'No safe food source was available in the current patch.',
+          target: { name: 'safe_food' },
+          retryable: true,
+        },
+      };
+    },
+  });
+  agent.survival_director = director;
+
+  director.requestJobFoodUpkeep({
+    workOrderId: 'family-scout',
+    requester: 'DadPlayer',
+    targetFoodPoints: 24,
+  });
+  director.update();
+  await settle();
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].command, '!prepareFood(24, 64)');
+  assert.equal(commands[0].options.missionId, 'survival:acquire_food');
+  assert.equal(director.snapshot().decision.selectedIntent.reason, 'durable_job_food_resupply');
+  assert.equal(director.foodSourceBlocker.workOrderId, 'family-scout');
+});
+
+test('A blocked durable-job food action advances into bounded food recovery', () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.entity.position = new Vec3(10, 64, 10);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.job_director = { activeOrder: { id: 'family-scout', source: 'player' } };
+  agent.agenda_director = {
+    activeEntry: () => ({ requester: 'DadPlayer' }),
+    pending: () => [],
+  };
+  const director = new SurvivalDirector(agent, { isAtSurface: () => true });
+  const intent = {
+    kind: 'acquire_food',
+    reason: 'durable_job_food_resupply',
+    workOrderId: 'family-scout',
+    targetFoodPoints: 24,
+    searchRadius: 64,
+  };
+
+  director.settleFoodRecovery(intent, {
+    actionId: 'food-circuit-1',
+    phase: 'blocked',
+    code: 'action_pattern_detected',
+    retryable: true,
+  });
+
+  assert.equal(director.foodSourceBlocker.workOrderId, 'family-scout');
+  assert.deepEqual(director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 20,
+    hunger: 15,
+    food: [],
+    healingConsumables: [],
+  }, POLICY), {
+    kind: 'return_to_player',
+    target: { name: 'DadPlayer' },
+    reason: 'food_sources_exhausted_returning_to_requester',
+  });
+});
+
+test('SurvivalDirector may consume carried food for a correlated durable-job upkeep request', async () => {
+  const agent = createAgent();
+  agent.agenda_director = { hasUnfinished: () => true };
+  agent.job_director = { activeOrder: { id: 'expedition-return', source: 'player' } };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 20,
+      hunger: 13,
+      urgentDanger: false,
+      food: [{ name: 'bread', count: 13, foodPoints: 5, saturation: 6 }],
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      return {
+        value: 'Consumed bread.',
+        result: {
+          actionId: 'job-food-eat-1',
+          phase: 'succeeded',
+          code: 'skill_consumed',
+          detail: 'Consumed bread.',
+          target: { name: 'bread' },
+          retryable: false,
+        },
+      };
+    },
+  });
+  agent.survival_director = director;
+
+  assert.equal(director.requestJobFoodUpkeep({
+    workOrderId: 'expedition-return',
+    requester: 'Director',
+    targetFoodPoints: 24,
+  }), true);
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!consume("bread")']);
+  assert.equal(director.snapshot().code, 'skill_consumed');
+  assert.equal(director.snapshot().decision.outcomeCode, 'action_dispatched');
+});
+
 test('Given critical health and a verified healing potion, SurvivalDirector dispatches semantic healing consumption', async () => {
   const agent = createAgent();
   agent.isIdle = () => false;
@@ -566,7 +729,7 @@ test('Given critical hunger before a typed goal starts, no-source recovery inher
     }),
     executeCommand: (_agent, command) => {
       commands.push(command);
-      agent.last_action_result = command.startsWith('!prepareFood')
+      const result = command.startsWith('!prepareFood')
         ? {
             actionId: `critical-hunger-food-${commands.length}`,
             phase: 'failed',
@@ -581,10 +744,11 @@ test('Given critical hunger before a typed goal starts, no-source recovery inher
             target: { name: 'DadPlayer' },
             retryable: false,
           };
+      return { value: null, result };
     },
   });
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     director.nextEligibleAt = 0;
     director.update();
     await settle();
@@ -594,7 +758,7 @@ test('Given critical hunger before a typed goal starts, no-source recovery inher
     '!prepareFood(1, 24)',
     '!goToPlayer("DadPlayer", 3, true)',
   ]);
-  assert.equal(director.snapshot().code, 'recovery_food_sources_exhausted');
+  assert.equal(director.foodSourceBlocker.returnAttempted, true);
 });
 
 test('food recovery adopts a present non-attacking companion and keeps an interrupted return pending', () => {
@@ -1184,6 +1348,59 @@ test('a tactical retreat remains an unresolved survival incident until Kevin rea
   assert.equal(director.snapshot().safetyIncident.resolutionCode, 'safety_rendezvous_reached');
 });
 
+test('critical bodily stabilization outranks Safety rendezvous after disengagement', () => {
+  const now = Date.now();
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 2;
+  agent.bot.food = 14;
+  agent.bot.entity.position = new Vec3(0, 64, 0);
+  agent.bot.entities = {};
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.companion_context = {
+    snapshot: () => ({
+      presence: 'present',
+      canonicalUsername: 'DadPlayer',
+      position: { x: 30, y: 64, z: 0 },
+    }),
+  };
+  const director = new SurvivalDirector(agent, { now: () => now });
+  director.safetyIncident = {
+    id: 'safety-critical-stabilization',
+    active: true,
+    stage: 'disengaged',
+    source: { kind: 'hostile', id: 44, name: 'skeleton', username: null },
+    sources: [{ kind: 'hostile', id: 44, name: 'skeleton', username: null }],
+    startedAt: now,
+    lastDamageAt: now,
+  };
+
+  const intent = director.safetyIncidentIntent({
+    held: false,
+    idle: true,
+    health: 2,
+    hunger: 14,
+    urgentDanger: false,
+    recentDamage: true,
+    hostiles: [],
+    food: [{ name: 'bread', count: 9, foodPoints: 5, saturation: 6 }],
+    healingConsumables: [],
+    shelters: [],
+    canShelterInPlace: false,
+    shelterInPlaceStances: [],
+    timeOfDay: 6_000,
+    difficulty: 'normal',
+  }, POLICY);
+
+  assert.deepEqual(intent, {
+    kind: 'eat',
+    item: 'bread',
+    reason: 'critical_hunger',
+    incidentId: 'safety-critical-stabilization',
+  });
+});
+
 test('a future Agenda rendezvous cannot release an active Safety incident to unrelated player work', async () => {
   const agent = createAgent();
   agent.name = 'Kevin';
@@ -1256,8 +1473,8 @@ test('Safety carries an authoritative offline-helper failure across death until 
   agent.bot.entities = {};
   agent.bot.game = { dimension: 'minecraft:overworld' };
   agent.goal_director = { activeGoal: { id: 'goal-mining', requester: 'DirectorOps' } };
-  let presence = 'absent';
-  let playerPosition = null;
+  let presence = 'present';
+  let playerPosition = { x: 30, y: 64, z: 0 };
   agent.companion_context = {
     snapshot: () => ({
       presence,
@@ -1292,6 +1509,7 @@ test('Safety carries an authoritative offline-helper failure across death until 
   const firstIntent = director.safetyIncidentIntent(situation);
 
   assert.equal(firstIntent.kind, 'return_to_player');
+  presence = 'absent';
   director.settleSafetyIncident(firstIntent, {
     actionId: 'offline-helper',
     phase: 'failed',
@@ -1317,6 +1535,52 @@ test('Safety carries an authoritative offline-helper failure across death until 
 
   assert.equal(restoredIntent.kind, 'return_to_player');
   assert.equal(restoredIntent.target.name, 'DirectorOps');
+});
+
+test('Safety ignores stale requester coordinates until requester presence is confirmed', () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 6;
+  agent.bot.food = 20;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {};
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.goal_director = { activeGoal: { id: 'goal-mining', requester: 'DirectorOps' } };
+  agent.companion_context = {
+    snapshot: () => ({
+      presence: 'absent',
+      canonicalUsername: 'DirectorOps',
+      position: { x: 30, y: 64, z: 0 },
+    }),
+  };
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent);
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 47,
+    name: 'skeleton',
+    observedAt: Date.now(),
+  });
+  director.replaceSafetyIncident({ stage: 'disengaged' });
+
+  const intent = director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 20,
+    shelters: [],
+    canShelterInPlace: true,
+    shelterInPlaceStances: [],
+    food: [],
+    healingConsumables: [],
+  });
+
+  assert.equal(intent.kind, 'shelter_in_place');
+  assert.equal(intent.incidentId, director.safetyIncident.id);
 });
 
 test('a player-caused hit waits for clarification and a fresh explicit order resolves it', () => {

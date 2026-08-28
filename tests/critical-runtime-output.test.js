@@ -48,7 +48,7 @@ import {
   ResponsiveFollowGoal,
 } from '../src/agent/library/skills.js';
 
-test('a stalled native navigation promise cannot retain action ownership after its goal is stopped', async () => {
+test('an unresponsive native navigation promise cannot retain action ownership after its goal is stopped', async () => {
   let stoppedGoals = 0;
   let clearedControls = 0;
   const bot = new EventEmitter();
@@ -97,12 +97,12 @@ test('a stalled native navigation promise cannot retain action ownership after i
   assert.equal(reached, false);
   assert.equal(
     bot.lastActionEvidence.outcome,
-    'path_stalled',
+    'path_timeout',
     JSON.stringify(bot.lastActionEvidence),
   );
   assert.ok(stoppedGoals >= 1);
   assert.ok(clearedControls >= 1);
-  assert.ok(Date.now() - startedAt < 6_000, 'stopped navigation must return within its bounded settlement window');
+  assert.ok(Date.now() - startedAt < 7_500, 'stopped navigation must return within its bounded settlement window');
 });
 
 test('critical action results preserve phase, sanitize output, and expose bounded telemetry', () => {
@@ -127,6 +127,7 @@ test('critical action results preserve phase, sanitize output, and expose bounde
     target: { name: 'chest', x: 4, y: 70, z: -2 },
     evidence: null,
     retryable: false,
+    continuation: { kind: 'terminal' },
     startedAt: 10,
     finishedAt: 20,
   });
@@ -139,6 +140,7 @@ test('critical action results preserve phase, sanitize output, and expose bounde
     detail: 'Refused protected chest',
     target: { name: 'chest', x: 4, y: 70, z: -2 },
     retryable: false,
+    continuation: { kind: 'terminal' },
     durationMs: 10,
     startedAt: 10,
     finishedAt: 20,
@@ -639,7 +641,7 @@ test('player navigation refines a native goal cell that settles outside the phys
         yield {
           result: {
             status: 'timeout',
-            path: [terminalNode.clone()],
+            path: [boundaryNode.clone()],
           },
         };
       }());

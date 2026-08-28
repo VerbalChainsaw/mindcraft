@@ -15,12 +15,16 @@ import {
     goToPosition,
     mineSearchTunnel,
     followPlayer,
+    goalDirectedNavigationProgress,
     localNavigationEgressPlan,
     observeFollowDestinationProgress,
+    movementPolicyExcludingStalledStep,
+    pulseAcrossBoundStandingCell,
     recoverDeathItems,
     segmentJourneyDestination,
     segmentWaypointCandidates,
     segmentWaypointSelection,
+    snapshotPathfinderStuckState,
     traverseMiningRouteSegment,
 } from '../src/agent/library/skills.js';
 
@@ -28,6 +32,34 @@ const require = createRequire(import.meta.url);
 const mcData = require('minecraft-data')('1.21.11');
 const Block = require('prismarine-block')('1.21.11');
 const pf = require('mineflayer-pathfinder');
+
+function attachCollisionRaycastWorld(bot) {
+    bot.world = {
+        raycastCalls: 0,
+        getBlock(position) {
+            return bot.blockAt(position);
+        },
+        raycast(origin, direction, maxDistance) {
+            this.raycastCalls += 1;
+            const stepLength = 0.05;
+            const step = direction.clone().normalize().scaled(stepLength);
+            let point = origin.clone();
+            const steps = Math.ceil(maxDistance / stepLength);
+            for (let index = 0; index < steps; index += 1) {
+                point = point.plus(step);
+                const block = bot.blockAt(point.floored());
+                if (block?.boundingBox === 'empty') continue;
+                return {
+                    ...block,
+                    position: block.position.clone(),
+                    face: 1,
+                };
+            }
+            return null;
+        },
+    };
+    return bot;
+}
 
 // Live seam campaign 2026-08-15: death-item recovery failed
 // `skill_death_position_unreachable` with a Pathfinder decision timeout over a
@@ -66,6 +98,158 @@ function worldBot({
         },
     };
 }
+
+function boundedStandingCellPulseBot() {
+    const controls = [];
+    const bot = {
+        interrupt_code: false,
+        entity: {
+            position: new Vec3(0.5, 70, 0.5),
+            width: 0.6,
+            height: 1.8,
+            onGround: true,
+        },
+        blockAt(position) {
+            const name = position.y === 69 ? 'stone' : 'air';
+            const block = new Block(mcData.blocksByName[name].id, 0, 0);
+            block.position = position.clone();
+            return block;
+        },
+        async lookAt() {},
+        setControlState(control, active) {
+            controls.push({ control, active });
+            if (control === 'forward' && active === true) {
+                bot.entity.position = new Vec3(1.5, 70, 0.5);
+            }
+        },
+    };
+    return { bot, controls };
+}
+
+test('a bound standing-cell pulse crosses one preverified stalled edge and clears native controls', async () => {
+    const { bot, controls } = boundedStandingCellPulseBot();
+
+    const recovery = await pulseAcrossBoundStandingCell(bot, new Vec3(1, 70, 0));
+
+    assert.equal(recovery.success, true);
+    assert.equal(recovery.outcome, 'bound_step_pulse_reached');
+    assert.deepEqual(bot.entity.position, new Vec3(1.5, 70, 0.5));
+    assert.ok(controls.some(({ control, active }) => control === 'forward' && active === true));
+    assert.deepEqual(controls.slice(-3), [
+        { control: 'forward', active: false },
+        { control: 'jump', active: false },
+        { control: 'sprint', active: false },
+    ]);
+});
+
+test('progressive recovery recognizes only supported displacement that converges on the bound goal', () => {
+    const { bot } = boundedStandingCellPulseBot();
+    const start = bot.entity.position.clone();
+    bot.entity.position = new Vec3(-1.5, 70, 0.5);
+
+    const progress = goalDirectedNavigationProgress(
+        bot,
+        new pf.goals.GoalBlock(-10, 70, 0),
+        start,
+        123,
+    );
+
+    assert.equal(progress.startedAt, 123);
+    assert.equal(progress.supported, true);
+    assert.equal(progress.progressed, true);
+    assert.equal(progress.distance, 2);
+    assert.ok(progress.lastMetric < progress.startMetric);
+});
+
+test('a stalled native step is excluded only from the bounded Pathfinder retry policy', () => {
+    const baseMovements = { exclusionAreasStep: [] };
+    const policy = movementPolicyExcludingStalledStep(
+        () => baseMovements,
+        {
+            executionMode: 'walk',
+            nextPoint: { x: 820.5, y: 63, z: -543.5 },
+            locomotion: {
+                type: 'walk',
+                source: { x: 819, y: 63, z: -543 },
+            },
+        },
+    );
+
+    assert.deepEqual(policy.excludedStep, {
+        x: 820,
+        y: 63,
+        z: -544,
+        source: { x: 819, y: 63, z: -543 },
+        locomotion: 'walk',
+    });
+    assert.equal(policy.movements, baseMovements);
+    assert.equal(baseMovements.exclusionAreasStep.length, 1);
+    assert.equal(baseMovements.exclusionAreasStep[0]({ position: new Vec3(820, 63, -544) }), 100);
+    assert.equal(baseMovements.exclusionAreasStep[0]({ position: new Vec3(819, 63, -544) }), 0);
+    policy.release();
+    assert.equal(baseMovements.exclusionAreasStep.length, 0);
+});
+
+test('a current execution receipt binds its native next step to the observed body cell', () => {
+    const movements = { exclusionAreasStep: [] };
+    const policy = movementPolicyExcludingStalledStep(() => movements, {
+        executionMode: 'drop_down',
+        position: { x: 580.5, y: 63, z: -384.4 },
+        nextPoint: { x: 579.5, y: 62, z: -384.5 },
+        locomotion: null,
+    });
+
+    assert.deepEqual(policy.excludedStep, {
+        x: 579,
+        y: 62,
+        z: -385,
+        source: { x: 580, y: 63, z: -385 },
+        locomotion: 'drop_down',
+    });
+    policy.release();
+});
+
+test('the stuck-edge receipt remains stable while a later Pathfinder attempt mutates nested locomotion state', () => {
+    const native = {
+        executionMode: 'walk',
+        position: { x: 820.45, y: 63, z: -542.89 },
+        nextPoint: { x: 820.5, y: 63, z: -543.5 },
+        locomotion: {
+            type: 'walk',
+            source: { x: 820, y: 63, z: -543 },
+        },
+        controls: { forward: true, jump: false, sprint: false },
+        blocks: { feet: 'air', head: 'air', support: 'stone' },
+    };
+
+    const snapshot = snapshotPathfinderStuckState(native);
+    native.locomotion.source.x = 999;
+    native.nextPoint.z = 999;
+
+    assert.deepEqual(snapshot.locomotion.source, { x: 820, y: 63, z: -543 });
+    assert.deepEqual(snapshot.nextPoint, { x: 820.5, y: 63, z: -543.5 });
+});
+
+test('durable job navigation exclusions constrain the initial native route policy', async () => {
+    const { bot, routeCalls } = nativeJourneyBot({
+        finalDestinationX: 10,
+        directRouteFromX: -1,
+    });
+
+    const arrived = await goToGoal(bot, new pf.goals.GoalBlock(10, 70, 0), {
+        requirePlannedRoute: true,
+        allowLocalRecovery: false,
+        excludedNavigationSteps: [{ x: 1, y: 70, z: 0 }],
+    });
+
+    assert.equal(arrived, true);
+    assert.ok(routeCalls.length > 0);
+    assert.equal(
+        routeCalls[0].movements.exclusionStep({ position: new Vec3(1, 70, 0) }),
+        Number.POSITIVE_INFINITY,
+    );
+    assert.equal(routeCalls[0].movements.exclusionStep({ position: new Vec3(2, 70, 0) }), 0);
+});
 
 function routeTarget(goal) {
     const target = Array.isArray(goal?.goals) ? goal.goals[0] : goal;
@@ -174,6 +358,62 @@ function nativeJourneyBot({
     };
     return { bot, executionPolicies, gotoTargets, routeCalls };
 }
+
+function destinationDivergingBot() {
+    const { bot } = nativeJourneyBot();
+    let motion = null;
+    let finishNavigation = null;
+    bot.pathfinder.goto = () => new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = callback => {
+            if (settled) return;
+            settled = true;
+            clearInterval(motion);
+            callback();
+        };
+        finishNavigation = () => settle(resolve);
+        motion = setInterval(() => {
+            bot.entity.position.x -= 1;
+        }, 100);
+        setTimeout(() => settle(() => reject(new Error('test navigation remained divergent'))), 2_200);
+    });
+    bot.pathfinder.setGoal = goal => {
+        if (goal == null) finishNavigation?.();
+    };
+    bot.pathfinder.getLastStuckState = () => ({
+        executionMode: 'walk',
+        position: bot.entity.position.clone(),
+        nextPoint: bot.entity.position.offset(-1, 0, 0),
+        locomotion: {
+            type: 'walk',
+            source: bot.entity.position.floored(),
+        },
+        onGround: true,
+        controls: { forward: true, jump: false, sprint: false },
+        blocks: { feet: 'air', head: 'air', support: 'stone' },
+    });
+    return bot;
+}
+
+test('progressive travel stops a novel-cell detour before it can erase a verified frontier', async () => {
+    const bot = destinationDivergingBot();
+
+    const arrived = await goToGoal(bot, new pf.goals.GoalBlock(10, 70, 0), {
+        allowBestReachable: true,
+        allowLocalRecovery: false,
+    });
+
+    assert.equal(arrived, false);
+    assert.equal(bot.lastActionEvidence.outcome, 'path_diverged');
+    assert.ok(bot.entity.position.x >= -5.5, `divergent journey reached x=${bot.entity.position.x}`);
+    assert.deepEqual(bot.lastActionEvidence.recovery?.excludedStep, {
+        x: Math.floor(bot.entity.position.x),
+        y: 70,
+        z: 0,
+        source: { x: 0, y: 70, z: 0 },
+        locomotion: 'route_divergence',
+    });
+});
 
 function miningRelocationProbeBot(routeStatus = 'timeout') {
     const routeCalls = [];
@@ -396,6 +636,7 @@ function enclosedNavigationBot({
             cleared.add(key);
         },
     };
+    attachCollisionRaycastWorld(bot);
     return { bot, cleared, dug, routeCalls };
 }
 
@@ -599,15 +840,21 @@ function blockBreakBot({ correctedByServer = false } = {}) {
         interrupt_code: false,
         output: '',
         heldItem: null,
-        entity: { position: new Vec3(0.5, 66, 0.5) },
+        entity: { position: new Vec3(0.5, 70, 1.5) },
         game: { gameMode: 'survival' },
         inventory: { items: () => [], slots: [] },
         modes: { isOn: () => false },
         tool: { equipForBlock: () => Promise.resolve() },
-        blockAt() {
-            if (!digAt) return leaf;
-            if (correctedByServer && Date.now() - digAt >= 120) return leaf;
-            return air;
+        blockAt(query) {
+            if (query.equals(position)) {
+                if (!digAt) return leaf;
+                if (correctedByServer && Date.now() - digAt >= 120) return leaf;
+                return air;
+            }
+            const name = query.y === 69 ? 'stone' : 'air';
+            const block = new Block(mcData.blocksByName[name].id, 0, 0);
+            block.position = query.clone();
+            return block;
         },
         dig(block, forceLook, digFace) {
             digCalls.push({ block, forceLook, digFace });
@@ -615,6 +862,7 @@ function blockBreakBot({ correctedByServer = false } = {}) {
             return Promise.resolve();
         },
     };
+    attachCollisionRaycastWorld(bot);
     return { bot, digCalls };
 }
 
@@ -627,6 +875,7 @@ test('shared block breaking delegates visible-face selection to Mineflayer rayca
     assert.equal(digCalls.length, 1);
     assert.equal(digCalls[0].forceLook, true);
     assert.equal(digCalls[0].digFace, 'raycast');
+    assert.ok(bot.world.raycastCalls > 0);
     assert.equal(bot.lastActionEvidence.outcome, 'broken');
 });
 
@@ -1282,6 +1531,93 @@ test('a vertically separated local destination converges through a native-routed
         && receipt.terminal?.y === 71
         && receipt.expectedProgress.relation === 'decrease_spatial_distance'
     )));
+});
+
+test('a Pathfinder timeout preserves verified supported convergence toward the requested coordinates', async () => {
+    const { bot } = nativeJourneyBot();
+    bot.pathfinder.goto = async () => {
+        bot.entity.position = new Vec3(25.5, 70, 0.5);
+        const error = new Error('Took to long to decide path to goal!');
+        error.name = 'Timeout';
+        throw error;
+    };
+
+    const arrived = await goToPosition(bot, 50, 70, 0, 2);
+
+    assert.equal(arrived, false);
+    assert.equal(bot.lastActionEvidence.kind, 'movement');
+    assert.equal(bot.lastActionEvidence.outcome, 'path_timeout');
+    assert.equal(bot.lastActionEvidence.progress.supported, true);
+    assert.equal(bot.lastActionEvidence.progress.progressed, true);
+    assert.ok(bot.lastActionEvidence.progress.distance >= 24);
+    assert.ok(
+        bot.lastActionEvidence.progress.lastMetric
+        < bot.lastActionEvidence.progress.startMetric,
+    );
+});
+
+test('native route planning receives its think horizon before the movement watchdog may stall', async () => {
+    const { bot } = nativeJourneyBot();
+    bot.pathfinder.thinkTimeout = 4_000;
+    bot.pathfinder.goto = () => new Promise((resolve, reject) => {
+        setTimeout(() => {
+            const error = new Error('Took to long to decide path to goal!');
+            error.name = 'Timeout';
+            reject(error);
+        }, 3_900);
+    });
+
+    const arrived = await goToPosition(bot, 50, 70, 0, 2);
+
+    assert.equal(arrived, false);
+    assert.equal(bot.lastActionEvidence.outcome, 'path_timeout');
+    assert.ok(bot.lastActionEvidence.progress.stalledMs >= 3_800);
+});
+
+test('a planning-only watchdog deadline is not misclassified as a physical path stall', async () => {
+    const { bot } = nativeJourneyBot();
+    let finishNavigation = null;
+    bot.pathfinder.goto = () => new Promise(resolve => { finishNavigation = resolve; });
+    bot.pathfinder.setGoal = goal => {
+        if (goal == null) finishNavigation?.();
+    };
+    bot.pathfinder.getCurrentExecutionState = () => null;
+
+    const arrived = await goToPosition(bot, 50, 70, 0, 2);
+
+    assert.equal(arrived, false);
+    assert.equal(bot.lastActionEvidence.outcome, 'path_timeout');
+    assert.match(bot.lastActionEvidence.error, /no executable edge/i);
+});
+
+test('a progressive destination timeout falls back to complete native journey segments', async () => {
+    const { bot, gotoTargets, routeCalls } = nativeJourneyBot();
+    const nativeGoto = bot.pathfinder.goto;
+    let destinationAttempts = 0;
+    bot.pathfinder.goto = async goal => {
+        destinationAttempts += 1;
+        if (destinationAttempts === 1) {
+            const error = new Error('Took to long to decide path to goal!');
+            error.name = 'Timeout';
+            throw error;
+        }
+        return nativeGoto(goal);
+    };
+
+    const arrived = await goToPosition(bot, 50, 70, 0, 2, {
+        allowSegmentedJourney: true,
+        allowBestReachable: true,
+        allowLocalRecovery: false,
+    });
+
+    assert.equal(arrived, true);
+    assert.deepEqual(gotoTargets.map(position => position.x), [20, 50]);
+    assert.equal(bot.lastActionEvidence.outcome, 'arrived');
+    assert.equal(bot.lastActionEvidence.planning.source, 'progressive_destination_timeout');
+    assert.equal(bot.lastActionEvidence.planning.conclusive, false);
+    assert.equal(bot.lastActionEvidence.segments.length, 1);
+    assert.equal(bot.lastActionEvidence.segments[0].outcome, 'progress_verified');
+    assert.ok(routeCalls.some(call => call.target?.x === 20));
 });
 
 test('segmentation never executes a waypoint without a native reverse proof', async () => {

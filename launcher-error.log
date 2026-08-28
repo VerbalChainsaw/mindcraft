@@ -79,3 +79,398 @@ Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
 [mindcraft-startup] login_callback
 [mindcraft-startup] spawn_callback
 [mindcraft-startup] handlers_ready
+'C:\Program' is not recognized as an internal or external command,
+operable program or batch file.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 245 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Kevin's memory exceeded 1500 chars and was trimmed to a boundary.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 253 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 257 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 269 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 278 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 285 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 288 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 290 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 296 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 302 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 318 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[craft] Temporary crafting table cleanup ended as workstation_drop_unreachable.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 326 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 331 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Error: Openable spruce_door did not report open after activation
+    at servicePendingOpenable (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:541:27)
+    at EventEmitter.monitorMovement (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:985:9)
+    at EventEmitter.emit (node:events:521:24)
+    at tickPhysics (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:83:11)
+    at Timeout.doPhysics [as _onTimeout] (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:71:7)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 336 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 341 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 347 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Error in spawn event: ReferenceError: resumeTypedGoal is not defined
+    at EventEmitter.<anonymous> (file:///C:/Users/zerop/Development/minecraft-companion-brain-v2/src/agent/agent.js:726:41)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+[companion] Standing directive was not restored: Discarded persisted companion directive: 348 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 350 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 352 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Error: Openable spruce_door did not report open after activation
+    at servicePendingOpenable (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:541:27)
+    at EventEmitter.monitorMovement (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:985:9)
+    at EventEmitter.emit (node:events:521:24)
+    at tickPhysics (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:83:11)
+    at Timeout.doPhysics [as _onTimeout] (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:71:7)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[companion] Standing directive was not restored: Discarded persisted companion directive: 355 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 358 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+Error: Openable spruce_door did not report open after activation
+    at servicePendingOpenable (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:541:27)
+    at EventEmitter.monitorMovement (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:985:9)
+    at EventEmitter.emit (node:events:521:24)
+    at tickPhysics (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:83:11)
+    at Timeout.doPhysics [as _onTimeout] (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:71:7)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[companion] Standing directive was not restored: Discarded persisted companion directive: 363 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 380 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 381 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 387 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 389 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 399 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 403 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 406 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 409 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 412 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 416 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 420 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 424 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 427 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 429 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 430 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 434 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 436 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 438 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 439 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 441 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[craft] Temporary crafting table cleanup ended as workstation_drop_unreachable.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 552 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 566 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 576 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 579 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 582 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 585 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 589 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 593 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 605 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 612 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+[companion] Standing directive was not restored: Discarded persisted companion directive: 616 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 619 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[companion] Standing directive was not restored: Discarded persisted companion directive: 627 minute(s) old, older than the 15-minute activity window.
+[mindcraft-startup] settings_profile_ready
+[mindcraft-startup] mineflayer_created
+[mindcraft-startup] login_callback
+[mindcraft-startup] spawn_callback
+[mindcraft-startup] handlers_ready
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+Error: Openable spruce_door did not report open after activation
+    at servicePendingOpenable (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:541:27)
+    at EventEmitter.monitorMovement (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:985:9)
+    at EventEmitter.emit (node:events:521:24)
+    at tickPhysics (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:83:11)
+    at Timeout.doPhysics [as _onTimeout] (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:71:7)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+Error: Openable spruce_door did not report open after activation
+    at servicePendingOpenable (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:541:27)
+    at EventEmitter.monitorMovement (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:985:9)
+    at EventEmitter.emit (node:events:521:24)
+    at tickPhysics (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:83:11)
+    at Timeout.doPhysics [as _onTimeout] (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:71:7)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[behavior-arbiter] Concurrent factual reaction failed safely: EPERM: operation not permitted, rename 'C:\Users\zerop\Development\minecraft-companion-brain-v2\bots\Kevin\runtime-memory.json.tmp-39356-743e8a176ae2' -> 'C:\Users\zerop\Development\minecraft-companion-brain-v2\bots\Kevin\runtime-memory.jso
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+Error: Openable spruce_door did not report open after activation
+    at servicePendingOpenable (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:541:27)
+    at EventEmitter.monitorMovement (C:\Users\zerop\Development\minecraft-companion-brain-v2\packages\minecraft-runtime\mineflayer-pathfinder\index.js:985:9)
+    at EventEmitter.emit (node:events:521:24)
+    at tickPhysics (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:83:11)
+    at Timeout.doPhysics [as _onTimeout] (C:\Users\zerop\Development\minecraft-companion-brain-v2\node_modules\mineflayer\lib\plugins\physics.js:71:7)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[combat] PvP cancellation is settling; ActionManager ownership remains held.
+[combat] PvP cancellation is settling; ActionManager ownership remains held.

@@ -28,3 +28,17 @@ test('working-slot release selects only unprotected zero-reserve clutter', () =>
     null,
   );
 });
+
+test('working-slot release fails closed for strategic resources', () => {
+  const bot = botWith([
+    { name: 'raw_iron', count: 3, slot: 10 },
+    { name: 'deepslate_iron_ore', count: 2, slot: 11 },
+    { name: 'iron_nugget', count: 7, slot: 12 },
+    { name: 'iron_ingot', count: 6, slot: 13 },
+    { name: 'diamond', count: 1, slot: 14 },
+    { name: 'redstone', count: 16, slot: 15 },
+    { name: 'arrow', count: 8, slot: 16 },
+  ]);
+
+  assert.equal(selectDisposableWorkingSlotStack(bot), null);
+});

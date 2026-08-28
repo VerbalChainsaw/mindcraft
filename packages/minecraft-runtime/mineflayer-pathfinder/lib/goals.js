@@ -333,6 +333,36 @@ class GoalLookAtBlock extends Goal {
       node.z === this.pos.z
     ) return false
 
+    const startPos = new Vec3(node.x + 0.5, node.y + this.entityHeight, node.z + 0.5)
+    let targetBlock = null
+    try {
+      targetBlock = this.world.getBlock?.(this.pos) || null
+    } catch {
+      targetBlock = null
+    }
+    if (targetBlock?.boundingBox === 'empty') {
+      // world.raycast intentionally follows collision shapes. Crops, torches,
+      // buttons and other selectable empty-collision blocks therefore cannot
+      // be returned as its hit even when a player can interact with them. For
+      // that package gap, prove the same bounded eye ray is unobstructed up to
+      // the target's visual block center; the interaction packet remains the
+      // final server-side acceptance boundary.
+      const targetPos = new Vec3(this.pos.x + 0.5, this.pos.y + 0.5, this.pos.z + 0.5)
+      const distance = startPos.distanceTo(targetPos)
+      if (distance > this.reach) return false
+      if (distance <= Number.EPSILON) return true
+      const obstruction = this.world.raycast(
+        startPos,
+        targetPos.clone().subtract(startPos).normalize(),
+        Math.min(this.reach, distance + 1e-6)
+      )?.position
+      return !obstruction || (
+        obstruction.x === this.pos.x &&
+        obstruction.y === this.pos.y &&
+        obstruction.z === this.pos.z
+      )
+    }
+
     // The ray starts at the player's eye and is already bounded by `reach`
     // below. The former precheck measured from the player's feet to a point
     // entityHeight above the target, which rejected ordinary overhead blocks
@@ -357,7 +387,6 @@ class GoalLookAtBlock extends Goal {
         continue
       }
       const targetPos = new Vec3(this.pos.x, this.pos.y, this.pos.z).offset(0.5 + (i === 'x' ? visibleFaces[i] * 0.5 : 0), 0.5 + (i === 'y' ? visibleFaces[i] * 0.5 : 0), 0.5 + (i === 'z' ? visibleFaces[i] * 0.5 : 0))
-      const startPos = new Vec3(node.x + 0.5, node.y + this.entityHeight, node.z + 0.5)
       const rayPos = this.world.raycast(startPos, targetPos.clone().subtract(startPos).normalize(), this.reach)?.position
       if (rayPos && rayPos.x === this.pos.x && rayPos.y === this.pos.y && rayPos.z === this.pos.z) {
         validFaces.push({

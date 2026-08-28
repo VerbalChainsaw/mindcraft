@@ -889,7 +889,11 @@ function verifySearchRegionRelocation(before, after, binding) {
   );
   const reachedTarget = targetDistance <= binding.closeness + 0.75;
   const changedRegion = horizontalDisplacement >= binding.minimumDisplacement;
-  const verified = sameDimension && (reachedTarget || changedRegion);
+  // A bounded segment toward a distant region is useful recovery progress,
+  // but it is not completion of the bound relocation. WorkOrder consumes the
+  // movement receipt and retries from the new stance without advancing the
+  // region counter; only arrival may apply checkpointOnSuccess.
+  const verified = sameDimension && reachedTarget;
   return immutable({
     ok: verified,
     code: verified ? 'search_region_relocation_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
@@ -897,7 +901,9 @@ function verifySearchRegionRelocation(before, after, binding) {
       ? reachedTarget
         ? `Minecraft confirmed arrival in the requested search region (${targetDistance.toFixed(2)} blocks from its center).`
         : `Minecraft confirmed a ${horizontalDisplacement.toFixed(2)}-block move into a distinct search region.`
-      : `Minecraft did not confirm the required ${binding.minimumDisplacement}-block search-region change.`,
+      : changedRegion
+        ? `Minecraft confirmed ${horizontalDisplacement.toFixed(2)} blocks of progress, but not arrival in the bound search region.`
+        : `Minecraft did not confirm arrival in the bound search region.`,
     targetDistance: Number.isFinite(targetDistance) ? targetDistance : null,
     horizontalDisplacement,
     reachedTarget,
@@ -1645,7 +1651,9 @@ defineCapability({
     { requirement: `current dimension ${args.dimension}`, satisfied: !args.dimension || snapshot.dimension === args.dimension },
   ]),
   expectedEffects: (_snapshot, args) => [immutable({
-    kind: 'search_region_change',
+    kind: 'search_region_arrival',
+    target: { x: args.x, y: args.y, z: args.z },
+    closeness: args.closeness,
     minimumDisplacement: args.minimumDisplacement,
   })],
   bind: (_context, args) => immutable({

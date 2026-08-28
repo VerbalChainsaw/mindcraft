@@ -14,7 +14,6 @@ import {
     smeltingOutputForInput,
 } from './smelting-catalogue.js';
 import { foodAnimalSource } from './food-semantics.js';
-import { installPlayerLoadedSpawnReadiness } from './mineflayer-spawn-readiness.js';
 const armorManager = plugin;
 const { pathfinder } = pf;
 const { plugin: collectblock } = collectBlockRuntime;
@@ -246,7 +245,6 @@ export function initBot(username) {
     }
 
     const bot = createBot(options);
-    installPlayerLoadedSpawnReadiness(bot);
     installRecipeBookIndex(bot);
 
     // Suppress PartialReadError for non-critical packets

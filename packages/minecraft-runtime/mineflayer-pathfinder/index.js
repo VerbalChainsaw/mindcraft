@@ -40,6 +40,7 @@ function inject (bot) {
   let returningPos = null
   let stopPathing = false
   let lastStuckState = null
+  let currentExecutionState = null
   let verticalTransition = null
   let parkourTransition = null
   let pendingOpenable = null
@@ -165,6 +166,17 @@ function inject (bot) {
       delta: { ...lastStuckState.delta },
       controls: { ...lastStuckState.controls },
       blocks: { ...lastStuckState.blocks }
+    }
+  }
+
+  bot.pathfinder.getCurrentExecutionState = () => {
+    if (!currentExecutionState) return null
+    return {
+      ...currentExecutionState,
+      position: { ...currentExecutionState.position },
+      nextPoint: { ...currentExecutionState.nextPoint },
+      delta: { ...currentExecutionState.delta },
+      controls: { ...currentExecutionState.controls }
     }
   }
 
@@ -1421,6 +1433,23 @@ function inject (bot) {
       bot.setControlState('sprint', false)
     }
 
+    currentExecutionState = {
+      recordedAt: Date.now(),
+      executionMode,
+      locomotion: nextPoint.locomotion || null,
+      pathLength: path.length,
+      position: { x: p.x, y: p.y, z: p.z },
+      nextPoint: { x: nextPoint.x, y: nextPoint.y, z: nextPoint.z },
+      delta: { x: dx, y: dy, z: dz },
+      controls: {
+        forward: bot.controlState.forward,
+        jump: bot.controlState.jump,
+        sprint: bot.controlState.sprint
+      },
+      onGround: bot.entity.onGround,
+      isInWater: bot.entity.isInWater
+    }
+
     // check for futility
     if (performance.now() - lastNodeTime > NODE_EXECUTION_STALL_MS) {
       // should never take this long to go to the next node
@@ -1428,20 +1457,7 @@ function inject (bot) {
       const support = bot.blockAt(p.floored().offset(0, -1, 0))
       const head = bot.blockAt(p.floored().offset(0, 1, 0))
       lastStuckState = {
-        recordedAt: Date.now(),
-        executionMode,
-        locomotion: nextPoint.locomotion || null,
-        pathLength: path.length,
-        position: { x: p.x, y: p.y, z: p.z },
-        nextPoint: { x: nextPoint.x, y: nextPoint.y, z: nextPoint.z },
-        delta: { x: dx, y: dy, z: dz },
-        controls: {
-          forward: bot.controlState.forward,
-          jump: bot.controlState.jump,
-          sprint: bot.controlState.sprint
-        },
-        onGround: bot.entity.onGround,
-        isInWater: bot.entity.isInWater,
+        ...currentExecutionState,
         blocks: {
           feet: feet?.name || null,
           head: head?.name || null,

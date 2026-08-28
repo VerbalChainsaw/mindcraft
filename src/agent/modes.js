@@ -4,6 +4,7 @@ import * as mc from '../utils/mcdata.js';
 import settings from './settings.js';
 import convoManager from './conversation.js';
 import { isDrinkableHealingPotion } from './runtime/brewing-plan.js';
+import { builderWorksiteCollectionExclusion } from './runtime/jobs/builder-plan.js';
 
 const MAX_BEHAVIOR_LOG_CHARS = 1_024;
 const FRESH_PLAYER_ACTION_GRACE_MS = 3_000;
@@ -15,6 +16,18 @@ const PLAYER_ACTION_GUARD_MODES = new Set([
     'elbow_room',
     'idle_staring',
 ]);
+
+export function ambientTorchPlacementPermitted(agent) {
+    const worksite = builderWorksiteCollectionExclusion(
+        agent?.home_state?.snapshot?.().structureOrder,
+        {
+            includeFailed: true,
+            protectRouteStances: true,
+            reason: 'remembered_builder_worksite',
+        },
+    );
+    return !worksite || !skills.collectionPositionExcluded(agent?.bot?.entity?.position, [worksite]);
+}
 
 function appendBehaviorLog(agent, message) {
     const current = String(agent?.bot?.modes?.behavior_log || '');
@@ -353,6 +366,7 @@ export function rearmOpenWaterDrowningEscape(mode, agent, execution) {
         || skill?.retryable !== true
         || !stillInWater
     ) return false;
+    const returnOwner = activeMiningReturnOwner(agent);
     mode.failed_drowning_trigger = Object.freeze({
         botPosition: reflexBlockPosition(bot?.entity?.position),
         dimension: String(bot?.game?.dimension || '').replace(/^minecraft:/, ''),
@@ -362,41 +376,68 @@ export function rearmOpenWaterDrowningEscape(mode, agent, execution) {
         shoreCandidates: Number.isFinite(Number(skill?.shore?.candidates))
             ? Number(skill.shore.candidates)
             : null,
-        goalId: typeof agent?.goal_director?.activeGoal?.id === 'string'
-            ? agent.goal_director.activeGoal.id.slice(0, 120)
-            : null,
-        miningReturnIndex: Number.isFinite(Number(
-            agent?.goal_director?.activeGoal?.checkpoint?.miningReturnIndex,
-        ))
-            ? Number(agent.goal_director.activeGoal.checkpoint.miningReturnIndex)
-            : null,
+        // `goalId` remains for compatibility with persisted in-process
+        // receipts from before Miner work orders could own this handoff.
+        goalId: returnOwner?.kind === 'goal' ? returnOwner.id : null,
+        returnOwnerKind: returnOwner?.kind || null,
+        returnOwnerId: returnOwner?.id || null,
+        miningReturnIndex: returnOwner?.index ?? null,
     });
     // Keep the ordinary failed-reflex backoff installed by execute(). Waking
-    // the arbiter is still useful: the exact durable Goal can take the body
+    // the arbiter is still useful: the exact durable activity can take the body
     // during that handoff instead of waiting for another scheduler interval.
     agent?.behavior_arbiter?.wake?.('open_water_drowning_handoff');
     return true;
 }
 
+function activeMiningReturnOwner(agent) {
+    const candidates = [
+        {
+            kind: 'goal',
+            owner: agent?.goal_director?.activeGoal,
+            phases: ['assess', 'execute', 'verify'],
+        },
+        {
+            kind: 'job',
+            owner: agent?.job_director?.activeOrder?.role === 'miner'
+                ? agent.job_director.activeOrder
+                : null,
+            phases: ['assess', 'prepare', 'execute', 'verify', 'deliver', 'recover'],
+        },
+    ];
+    for (const candidate of candidates) {
+        const owner = candidate.owner;
+        if (!owner?.id || !candidate.phases.includes(owner.phase)) continue;
+        const index = Number(owner?.checkpoint?.miningReturnIndex);
+        return Object.freeze({
+            kind: candidate.kind,
+            id: String(owner.id).slice(0, 120),
+            index: Number.isFinite(index) ? index : null,
+            route: owner?.checkpoint?.miningReturnRoute,
+        });
+    }
+    return null;
+}
+
 function durableMiningReturnPending(agent, failedReceipt) {
-    const goal = agent?.goal_director?.activeGoal;
-    const route = goal?.checkpoint?.miningReturnRoute;
-    const index = Number(goal?.checkpoint?.miningReturnIndex);
+    const owner = activeMiningReturnOwner(agent);
+    const failedOwnerKind = failedReceipt?.returnOwnerKind || (failedReceipt?.goalId ? 'goal' : null);
+    const failedOwnerId = failedReceipt?.returnOwnerId || failedReceipt?.goalId || null;
     return Boolean(
-        goal?.id
-        && failedReceipt?.goalId === goal.id
-        && ['assess', 'execute', 'verify'].includes(goal.phase)
-        && Array.isArray(route)
-        && route.length > 0
-        && Number.isFinite(index)
-        && index >= -1
+        owner?.id
+        && failedOwnerKind === owner.kind
+        && failedOwnerId === owner.id
+        && Array.isArray(owner.route)
+        && owner.route.length > 0
+        && Number.isFinite(owner.index)
+        && owner.index >= -1
     );
 }
 
 /**
  * A completed open-water escape attempt may be retried only after physical
- * evidence changes. While an exact persisted mining-return Goal is ready, the
- * emergency band yields so that Goal can acquire ActionManager and let native
+ * evidence changes. While an exact persisted mining-return activity is ready,
+ * the emergency band yields so its Director can acquire ActionManager and let native
  * Pathfinder own the swim. Without that handoff, the emergency band remains a
  * truthful non-dispatching wait until oxygen, health, position, dimension, or
  * water settlement changes.
@@ -424,8 +465,10 @@ export function openWaterDrowningEscapeDecision(mode, agent, {
             position.z - failed.botPosition.z,
         ) >= 2
         : failed.botPosition !== position;
-    const activeGoal = agent?.goal_director?.activeGoal;
-    const currentReturnIndex = Number(activeGoal?.checkpoint?.miningReturnIndex);
+    const returnOwner = activeMiningReturnOwner(agent);
+    const failedOwnerKind = failed.returnOwnerKind || (failed.goalId ? 'goal' : null);
+    const failedOwnerId = failed.returnOwnerId || failed.goalId || null;
+    const currentReturnIndex = returnOwner?.index;
     const materiallyChanged = Boolean(
         !stillInWater
         || managedNavigationActive
@@ -433,7 +476,8 @@ export function openWaterDrowningEscapeDecision(mode, agent, {
         || moved
         || (Number.isFinite(health) && failed.health !== null && health !== failed.health)
         || (Number.isFinite(oxygen) && oxygen <= DROWNING_REFLEX_OXYGEN)
-        || (activeGoal?.id || null) !== (failed.goalId || null)
+        || (returnOwner?.kind || null) !== failedOwnerKind
+        || (returnOwner?.id || null) !== failedOwnerId
         || (
             Number.isFinite(currentReturnIndex)
             && failed.miningReturnIndex !== null
@@ -1331,7 +1375,7 @@ const modes_list = [
         cooldown: 5,
         last_place: Date.now(),
         update: function (agent) {
-            if (world.shouldPlaceTorch(agent.bot)) {
+            if (ambientTorchPlacementPermitted(agent) && world.shouldPlaceTorch(agent.bot)) {
                 if (Date.now() - this.last_place < this.cooldown * 1000) return;
                 void execute(this, agent, async () => {
                     const pos = agent.bot.entity.position;
@@ -1477,6 +1521,7 @@ async function execute(mode, agent, func, timeout=-1, { handoffMessage = null } 
     if (agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
+    const interruptedCommitment = agent.behavior_arbiter?.playerCommitment?.() || null;
     const continuingAccompaniment = durablePlayerAccompanimentActive(agent);
     const interruptedDirective = continuingAccompaniment
         ? standingDirectiveIdentity(agent)
@@ -1530,6 +1575,12 @@ async function execute(mode, agent, func, timeout=-1, { handoffMessage = null } 
                 recoveryStillRequired
                     ? 'I broke contact. I am getting safe before I resume your order.'
                     : 'I am clear. Resuming your order now.',
+                );
+        }
+        if (mode.name === 'self_preservation' && interruptedCommitment) {
+            agent.behavior_arbiter?.handoffHazardSettlement?.(
+                interruptedCommitment,
+                code_return?.result,
             );
         }
         agent.behavior_arbiter?.requestDirectiveResume?.(interruptedDirective);

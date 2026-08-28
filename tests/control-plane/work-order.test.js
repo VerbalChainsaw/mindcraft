@@ -3,11 +3,58 @@ import test from 'node:test';
 
 import {
   advanceWorkOrder,
+  checkpointAfterControlHazard,
   createWorkOrder,
   normalizeWorkOrder,
   reconcileWorkOrder,
   resumeFailedWorkOrder,
+  workOrderCollectionExclusions,
 } from '../../src/agent/runtime/work-order.js';
+
+test('a settled drowning handoff adapts only an active Miner worksite return to dry routing', () => {
+  const miner = createWorkOrder({
+    role: 'miner',
+    kind: 'explore',
+    checkpoint: { worksiteReturnPending: true },
+  });
+
+  assert.deepEqual(checkpointAfterControlHazard(miner, {
+    kind: 'drowning',
+    outcome: 'drowning_escape_stable',
+  }), {
+    worksiteReturnPending: true,
+    worksiteReturnDryOnly: true,
+  });
+  assert.deepEqual(checkpointAfterControlHazard({
+    ...miner,
+    role: 'builder',
+  }, {
+    kind: 'drowning',
+    outcome: 'drowning_escape_stable',
+  }), miner.checkpoint);
+});
+
+test('collection exclusions retain failed deepslate variants for the requested ore family', () => {
+  const order = createWorkOrder({
+    role: 'miner',
+    kind: 'explore',
+    target: { name: 'ores' },
+    checkpoint: {
+      failedTargets: [
+        { name: 'deepslate_iron_ore', x: 779, y: 0, z: -512 },
+        { name: 'coal_ore', x: 770, y: 2, z: -500 },
+      ],
+    },
+  });
+
+  assert.deepEqual(workOrderCollectionExclusions(order, 'iron_ore'), [{
+    name: 'deepslate_iron_ore',
+    x: 779,
+    y: 0,
+    z: -512,
+    radius: 4,
+  }]);
+});
 
 test('Given a valid construction request, work-order normalization preserves bounded authoritative fields', () => {
   const order = createWorkOrder({
@@ -248,6 +295,35 @@ test('Verified mining progress checkpoints the reverse-route cursor before repla
   assert.equal(rebound.checkpoint.miningReturnIndex, 2);
 });
 
+test('work-order normalization stores one loop-erased mining spine and clamps its cursor', () => {
+  const order = createWorkOrder({
+    id: 'mine-route-loop-erasure',
+    role: 'miner',
+    kind: 'explore',
+    source: 'player',
+    requester: 'Director',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    quota: 11,
+    checkpoint: {
+      miningReturnRoute: [
+        { x: 207, y: 69, z: -359 },
+        { x: 208, y: 69, z: -359 },
+        { x: 209, y: 68, z: -359 },
+        { x: 208, y: 69, z: -359 },
+        { x: 210, y: 68, z: -359 },
+      ],
+      miningReturnIndex: 4,
+    },
+  });
+
+  assert.deepEqual(order.checkpoint.miningReturnRoute, [
+    { x: 207, y: 69, z: -359 },
+    { x: 208, y: 69, z: -359 },
+    { x: 210, y: 68, z: -359 },
+  ]);
+  assert.equal(order.checkpoint.miningReturnIndex, 2);
+});
+
 test('Verified mining fragments retain the surface route across an open traversable gap', () => {
   const order = createWorkOrder({
     id: 'mine-route-open-gap',
@@ -426,6 +502,225 @@ test('Surface access uses the bounded recovery budget without spending productiv
   assert.equal(reached.evidence.code, 'skill_surface_reached');
 });
 
+test('verified movement during a retryable recovery refreshes the bounded segment without spending a productive attempt', () => {
+  const order = createWorkOrder({
+    id: 'progressive-relocation',
+    role: 'miner',
+    kind: 'explore',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    quota: 11,
+    phase: 'recover',
+    resumePhase: 'execute',
+    attempts: 2,
+    recoveries: 8,
+  });
+  const progressiveTimeout = advanceWorkOrder(order, {
+    actionId: 'progressive-path-timeout',
+    phase: 'failed',
+    code: 'skill_path_timeout',
+    detail: 'Pathfinder timed out after physically converging.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'path_timeout',
+        progress: {
+          startMetric: 70,
+          lastMetric: 24,
+          distance: 46,
+          supported: true,
+          progressed: true,
+          startPosition: { x: 214.9, y: 64, z: -358.5 },
+          lastPosition: { x: 191, y: 62, z: -354 },
+        },
+      },
+    },
+  }, { recoveryAction: true });
+
+  assert.equal(progressiveTimeout.phase, 'recover');
+  assert.equal(progressiveTimeout.resumePhase, 'execute');
+  assert.equal(progressiveTimeout.attempts, 2);
+  assert.equal(progressiveTimeout.recoveries, 0);
+  assert.equal(progressiveTimeout.evidence.code, 'capability_verified_partial_progress');
+
+  const unchangedTimeout = advanceWorkOrder(progressiveTimeout, {
+    actionId: 'unchanged-path-timeout',
+    phase: 'failed',
+    code: 'skill_path_timeout',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'path_timeout',
+        progress: {
+          startMetric: 24,
+          lastMetric: 24,
+          distance: 0,
+          supported: true,
+          progressed: false,
+          startPosition: { x: 191, y: 62, z: -354 },
+          lastPosition: { x: 191, y: 62, z: -354 },
+        },
+      },
+    },
+  }, { recoveryAction: true });
+
+  assert.equal(unchangedTimeout.phase, 'recover');
+  assert.equal(unchangedTimeout.attempts, 2);
+  assert.equal(unchangedTimeout.recoveries, 1);
+});
+
+test('a proven dry-route dead end hands the same worksite return to Safety-supervised progressive travel', () => {
+  const order = createWorkOrder({
+    id: 'open-ocean-return',
+    role: 'miner',
+    kind: 'explore',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    phase: 'recover',
+    resumePhase: 'acquire',
+    attempts: 2,
+    recoveries: 7,
+    checkpoint: {
+      worksiteReturnPending: true,
+      worksiteReturnDryOnly: true,
+    },
+  });
+
+  const adapted = advanceWorkOrder(order, {
+    actionId: 'dry-waypoint-rejected',
+    phase: 'failed',
+    code: 'skill_segmented_journey_no_safe_waypoint',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'segmented_journey_no_safe_waypoint',
+      },
+    },
+  }, { recoveryAction: true });
+
+  assert.equal(adapted.phase, 'recover');
+  assert.equal(adapted.resumePhase, 'acquire');
+  assert.equal(adapted.attempts, 2);
+  assert.equal(adapted.recoveries, 0);
+  assert.equal(adapted.checkpoint.worksiteReturnPending, true);
+  assert.equal(adapted.checkpoint.worksiteReturnDryOnly, undefined);
+  assert.equal(adapted.evidence.code, 'dry_route_method_rejected');
+
+  const ordinaryRouteStall = advanceWorkOrder(adapted, {
+    actionId: 'ordinary-route-stalled',
+    phase: 'failed',
+    code: 'skill_path_timeout',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'path_timeout',
+        progress: {
+          startMetric: 343,
+          lastMetric: 343,
+          distance: 0,
+          supported: true,
+          progressed: false,
+          startPosition: { x: 546.5, y: 69, z: -408.5 },
+          lastPosition: { x: 546.5, y: 69, z: -408.5 },
+        },
+      },
+    },
+  }, { recoveryAction: true });
+  assert.equal(ordinaryRouteStall.phase, 'recover');
+  assert.equal(ordinaryRouteStall.recoveries, 1);
+});
+
+test('a failed recovery persists the exact stalled Pathfinder step without spending productive attempts', () => {
+  const order = createWorkOrder({
+    id: 'learned-worksite-route',
+    role: 'miner',
+    kind: 'explore',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    phase: 'recover',
+    resumePhase: 'acquire',
+    anchor: { x: 207, y: 69, z: -359 },
+    checkpoint: { worksiteReturnPending: true },
+  });
+
+  const recovery = advanceWorkOrder(order, {
+    actionId: 'stalled-edge-1',
+    phase: 'failed',
+    code: 'skill_path_stalled',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'path_stalled',
+        recovery: {
+          excludedStep: {
+            x: 820,
+            y: 63,
+            z: -544,
+            source: { x: 819, y: 63, z: -543 },
+            locomotion: 'walk',
+          },
+        },
+      },
+    },
+  }, { recoveryAction: true, nextPhase: 'acquire' });
+
+  assert.equal(recovery.phase, 'recover');
+  assert.equal(recovery.attempts, 0);
+  assert.equal(recovery.recoveries, 1);
+  assert.deepEqual(recovery.checkpoint.navigationStepExclusions, [{
+    x: 820,
+    y: 63,
+    z: -544,
+    source: { x: 819, y: 63, z: -543 },
+    locomotion: 'walk',
+  }]);
+  assert.deepEqual(
+    normalizeWorkOrder(JSON.parse(JSON.stringify(recovery))).checkpoint.navigationStepExclusions,
+    recovery.checkpoint.navigationStepExclusions,
+  );
+});
+
+test('verified segmented journey progress refreshes the bounded recovery segment', () => {
+  const order = createWorkOrder({
+    id: 'segmented-worksite-return',
+    role: 'miner',
+    kind: 'explore',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    quota: 11,
+    phase: 'recover',
+    resumePhase: 'assess',
+    attempts: 2,
+    recoveries: 7,
+  });
+  const advanced = advanceWorkOrder(order, {
+    actionId: 'segmented-return-1',
+    phase: 'failed',
+    code: 'skill_segmented_journey_incomplete',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'segmented_journey_incomplete',
+        progressed: 18,
+        segments: [{
+          executed: true,
+          outcome: 'progress_verified',
+          terminal: { x: 812, y: 66, z: -501 },
+          safety: { supported: true, nonHazardous: true },
+        }],
+      },
+    },
+  }, { recoveryAction: true });
+
+  assert.equal(advanced.phase, 'recover');
+  assert.equal(advanced.resumePhase, 'assess');
+  assert.equal(advanced.attempts, 2);
+  assert.equal(advanced.recoveries, 0);
+  assert.equal(advanced.evidence.code, 'capability_verified_partial_progress');
+});
+
 test('Given a persisted in-flight order after restart, reconciliation forces world revalidation before resuming', () => {
   const order = {
     ...createWorkOrder({
@@ -591,6 +886,56 @@ test('an explicit player resume re-arms the same failed order and preserves its 
 
   const completed = normalizeWorkOrder({ ...failed, phase: 'complete' });
   assert.equal(resumeFailedWorkOrder(completed).phase, 'complete');
+});
+
+test('an explicit mining resume clears exhausted strategy counters but preserves physical progress', () => {
+  const failed = createWorkOrder({
+    id: 'miner-resume-1',
+    role: 'miner',
+    kind: 'explore',
+    source: 'player',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    quota: 11,
+    phase: 'failed',
+    attempts: 1,
+    recoveries: 2,
+    checkpoint: {
+      acquisitionStrategy: 'mining_corridor',
+      baselineFamilyCounts: { coal: 5, raw_iron: 5 },
+      requiredOutputs: [
+        { source: 'iron_ore', item: 'raw_iron', quantity: 8 },
+        { source: 'coal_ore', item: 'coal', quantity: 3 },
+      ],
+      corridorRequirementItem: 'coal',
+      corridorRequirementProgress: 0,
+      caveSearchRelocations: 4,
+      miningRegionRelocations: 2,
+      corridorSearchLegs: 8,
+      miningRelocationPending: true,
+      lastFailedTargetActionId: 'failed-coal-leg',
+      miningReturnRoute: [{ x: 755, y: 7, z: -520 }],
+      failedTargets: [{ name: 'coal_ore', x: 747, y: 14, z: -508 }],
+    },
+    evidence: {
+      code: 'mining_strategy_exhausted',
+      detail: 'Partial relocations exhausted the old strategy counters.',
+      actionId: 'failed-coal-leg',
+    },
+  });
+
+  const resumed = resumeFailedWorkOrder(failed, 12_345);
+
+  assert.equal(resumed.checkpoint.caveSearchRelocations, undefined);
+  assert.equal(resumed.checkpoint.miningRegionRelocations, undefined);
+  assert.equal(resumed.checkpoint.corridorSearchLegs, undefined);
+  assert.equal(resumed.checkpoint.miningRelocationPending, undefined);
+  assert.equal(resumed.checkpoint.lastFailedTargetActionId, undefined);
+  assert.deepEqual(resumed.checkpoint.baselineFamilyCounts, failed.checkpoint.baselineFamilyCounts);
+  assert.deepEqual(resumed.checkpoint.requiredOutputs, failed.checkpoint.requiredOutputs);
+  assert.equal(resumed.checkpoint.corridorRequirementItem, 'coal');
+  assert.equal(resumed.checkpoint.corridorRequirementProgress, 0);
+  assert.deepEqual(resumed.checkpoint.miningReturnRoute, failed.checkpoint.miningReturnRoute);
+  assert.deepEqual(resumed.checkpoint.failedTargets, failed.checkpoint.failedTargets);
 });
 
 test('Given a work order anchor, only finite coordinates are kept', () => {

@@ -1519,7 +1519,7 @@ export class GoalDirector {
 
   currentControlCommitment(action = {}) {
     const goal = this.activeGoal;
-    if (!goal?.id) return null;
+    if (!goal?.id || TERMINAL_PHASES.has(goal.phase)) return null;
     return {
       owner: 'player_goal',
       obligationId: goal.id,

@@ -1244,11 +1244,17 @@ export class SurvivalDirector extends BehaviorDirector {
   requestJobFoodUpkeep({ workOrderId, requester = '', targetFoodPoints = 24 } = {}) {
     const normalizedId = boundedDecisionText(workOrderId, 96);
     if (!normalizedId) return false;
-    this.jobFoodUpkeep = Object.freeze({
+    const nextUpkeep = Object.freeze({
       workOrderId: normalizedId,
       requester: boundedDecisionText(requester, 32),
       targetFoodPoints: Math.max(1, Math.min(64, Math.floor(Number(targetFoodPoints) || 24))),
     });
+    if (
+      this.jobFoodUpkeep?.workOrderId === nextUpkeep.workOrderId
+      && this.jobFoodUpkeep.requester === nextUpkeep.requester
+      && this.jobFoodUpkeep.targetFoodPoints === nextUpkeep.targetFoodPoints
+    ) return true;
+    this.jobFoodUpkeep = nextUpkeep;
     this.nextEligibleAt = 0;
     this.agent.behavior_arbiter?.wake?.('job_food_upkeep_requested');
     return true;
@@ -1675,16 +1681,28 @@ export class SurvivalDirector extends BehaviorDirector {
       };
     }
 
+    // A helper rendezvous is movement, not stabilization. Once the immediate
+    // threat has disengaged, a critically wounded body with an executable heal
+    // or meal must use it before crossing more terrain. The Safety incident
+    // remains the sole owner throughout; this only orders its own recovery
+    // rungs so it cannot escort itself to death and release stale player work.
+    const localRecovery = chooseSurvivalIntent(situation, policy);
+    if (['heal', 'eat'].includes(localRecovery?.kind)) {
+      return {
+        ...localRecovery,
+        incidentId: incident.id,
+      };
+    }
+
     let player = safetyPlayerTarget(this.agent, incident);
+    if (player && !safetyPlayerPresenceConfirmed(this.agent, player)) {
+      player = null;
+    }
     if (
       player
       && String(this.unavailableSafetyPlayer?.name || '').toLowerCase() === player.toLowerCase()
     ) {
-      if (safetyPlayerPresenceConfirmed(this.agent, player)) {
-        this.unavailableSafetyPlayer = null;
-      } else {
-        player = null;
-      }
+      this.unavailableSafetyPlayer = null;
     }
     if (player) {
       if (safetyPlayerDistance(this.agent, player) <= SAFETY_RENDEZVOUS_DISTANCE) {
@@ -1761,8 +1779,7 @@ export class SurvivalDirector extends BehaviorDirector {
     // an indefinite wait while a deterministic bodily action remains locally
     // executable. Reuse the same survival ladder and correlate the action to
     // this incident; do not create a second food or shelter policy here.
-    const localRecovery = chooseSurvivalIntent(situation, policy);
-    if (['heal', 'eat', 'shelter_in_place'].includes(localRecovery?.kind)) {
+    if (localRecovery?.kind === 'shelter_in_place') {
       return {
         ...localRecovery,
         incidentId: incident.id,
@@ -1983,7 +2000,14 @@ export class SurvivalDirector extends BehaviorDirector {
 
   settleFoodRecovery(intent, result) {
     if (intent?.kind === 'acquire_food') {
-      if (['skill_no_food_sources', 'skill_source_access_required'].includes(result?.code)) {
+      if ([
+        'skill_no_food_sources',
+        'skill_source_access_required',
+        'action_pattern_detected',
+      ].includes(result?.code)) {
+        // ActionManager has proved that the unchanged local acquisition may
+        // not run again. Advance the existing bounded food-recovery state so
+        // Survival changes region/route instead of replaying the blocked call.
         this.captureFoodSourceBlocker(intent, result);
       }
       else if (result?.phase === 'succeeded') this.foodSourceBlocker = null;
@@ -2126,19 +2150,42 @@ export class SurvivalDirector extends BehaviorDirector {
       // outranks this branch above and inside Safety's own supervisor.
       const restoredFoodContinuation = recoveryFoodIntent?.reason === 'food_access_restored'
         && situation.urgentDanger !== true;
+      const criticalBodilyNeed = Number(situation.health) <= 8
+        || Number(situation.hunger) <= Number(policy.criticalFood ?? 6);
+      const immediateBodilyRecovery = immediateBodilyIntent && (
+        ['heal', 'eat'].includes(immediateBodilyIntent.kind)
+        || (criticalBodilyNeed && immediateBodilyIntent.kind !== 'acquire_food')
+      )
+        ? immediateBodilyIntent
+        : null;
+      const criticalFoodAcquisition = immediateBodilyIntent?.kind === 'acquire_food'
+        && criticalBodilyNeed
+        ? recoveryFoodIntent || immediateBodilyIntent
+        : null;
+      // Once Job has stopped on its explicit food prerequisite, that correlated
+      // recovery is the continuation of player work. It must outrank ambient
+      // sleep, shelter, armor, and drop upkeep or both directors can wait on
+      // each other forever. Safety and immediate bodily recovery remain above
+      // it, and any established food blocker keeps owning its bounded route.
+      const cooperativeFoodIntent = cooperativeUpkeep
+        ? recoveryFoodIntent || {
+            kind: 'acquire_food',
+            targetFoodPoints: cooperativeUpkeep.targetFoodPoints,
+            reason: 'durable_job_food_resupply',
+            workOrderId: cooperativeUpkeep.workOrderId,
+          }
+        : null;
       const routedFoodIntent = restoredFoodContinuation
         ? recoveryFoodIntent
-        : immediateBodilyIntent?.kind === 'acquire_food'
-          ? recoveryFoodIntent || immediateBodilyIntent
-          : immediateBodilyIntent || recoveryFoodIntent;
+        : immediateBodilyRecovery
+          || criticalFoodAcquisition
+          || cooperativeFoodIntent
+          || (immediateBodilyIntent?.kind === 'acquire_food'
+            ? recoveryFoodIntent || immediateBodilyIntent
+            : immediateBodilyIntent || recoveryFoodIntent);
       intent = this.safetyIncidentIntent(situation, effectivePolicy)
         || routedFoodIntent
-        || (cooperativeUpkeep ? {
-          kind: 'acquire_food',
-          targetFoodPoints: cooperativeUpkeep.targetFoodPoints,
-          reason: 'durable_job_food_resupply',
-          workOrderId: cooperativeUpkeep.workOrderId,
-        } : null);
+        || cooperativeFoodIntent;
       if (intent?.kind === 'acquire_food' && !Number.isFinite(Number(intent.searchRadius))) {
         intent = {
           ...intent,
@@ -2188,7 +2235,8 @@ export class SurvivalDirector extends BehaviorDirector {
       this.jobFoodUpkeep
       && this.agent.job_director?.activeOrder?.id === this.jobFoodUpkeep.workOrderId
       && (
-        intent.workOrderId === this.jobFoodUpkeep.workOrderId
+        intent.kind === 'eat'
+        || intent.workOrderId === this.jobFoodUpkeep.workOrderId
         || this.foodSourceBlocker?.workOrderId === this.jobFoodUpkeep.workOrderId
       )
     );

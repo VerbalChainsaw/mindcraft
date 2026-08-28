@@ -4,6 +4,7 @@ import test from 'node:test';
 import { collectionPositionExcluded } from '../../src/agent/library/skills.js';
 import { requesterTerrainCollectionExclusion } from '../../src/agent/runtime/collection-candidate-selector.js';
 import { builderWorksiteCollectionExclusion } from '../../src/agent/runtime/jobs/builder-plan.js';
+import { ambientTorchPlacementPermitted } from '../../src/agent/modes.js';
 import {
   advanceWorkOrder,
   createWorkOrder,
@@ -59,6 +60,63 @@ test('inactive or unrelated jobs do not claim a collection region', () => {
   };
 
   assert.equal(builderWorksiteCollectionExclusion(order), null);
+});
+
+test('a failed remembered Builder footprint remains protected from ambient utility behavior until resolved', () => {
+  const failedOrder = {
+    id: 'builder-failed-camp',
+    role: 'builder',
+    kind: 'build',
+    phase: 'failed',
+    target: { x: 164, y: 78, z: -382 },
+    blueprint: {
+      cells: [
+        { x: 0, y: 0, z: 0, material: 'spruce_planks' },
+        { x: 4, y: 3, z: 4, material: 'spruce_planks' },
+      ],
+    },
+  };
+  const remembered = builderWorksiteCollectionExclusion(failedOrder, {
+    includeFailed: true,
+    reason: 'remembered_builder_worksite',
+  });
+  const protectedHalo = builderWorksiteCollectionExclusion(failedOrder, {
+    includeFailed: true,
+    protectRouteStances: true,
+    reason: 'remembered_builder_worksite',
+  });
+
+  assert.equal(builderWorksiteCollectionExclusion(failedOrder), null);
+  assert.deepEqual(remembered, {
+    minX: 164,
+    maxX: 168,
+    minY: 78,
+    maxY: 81,
+    minZ: -382,
+    maxZ: -378,
+    reason: 'remembered_builder_worksite',
+    orderId: 'builder-failed-camp',
+  });
+  assert.deepEqual(protectedHalo, {
+    minX: 159,
+    maxX: 173,
+    minY: 76,
+    maxY: 83,
+    minZ: -387,
+    maxZ: -373,
+    reason: 'remembered_builder_worksite',
+    orderId: 'builder-failed-camp',
+  });
+
+  const agent = {
+    bot: { entity: { position: { x: 163, y: 78, z: -380 } } },
+    home_state: { snapshot: () => ({ structureOrder: failedOrder }) },
+  };
+  assert.equal(ambientTorchPlacementPermitted(agent), false);
+  agent.bot.entity.position = { x: 158, y: 78, z: -380 };
+  assert.equal(ambientTorchPlacementPermitted(agent), true);
+  agent.home_state.snapshot = () => ({ structureOrder: { ...failedOrder, phase: 'complete' } });
+  assert.equal(ambientTorchPlacementPermitted(agent), true);
 });
 
 test('terrain extraction excludes the active requester area without blocking non-terrain collection', () => {
