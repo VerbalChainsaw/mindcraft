@@ -82,7 +82,7 @@ export class JobStateStore {
     mkdirSync(this.directory, { recursive: true });
   }
 
-  load() {
+  load({ allowStaleActiveOrder = false } = {}) {
     this.lastError = null;
     this.terminalReceipt = null;
     if (!existsSync(this.filePath)) return null;
@@ -96,9 +96,15 @@ export class JobStateStore {
       }
       this.terminalReceipt = normalizeTerminalReceipt(document.terminalReceipt);
       // An active work order is in-flight activity, not durable knowledge.
-      // Restoring one from a previous play session revives work nobody asked
-      // for. See activity-freshness.js.
-      if (document.activeOrder && isStaleActivityState(document.savedAt)) {
+      // Ordinary starts must not revive work from a previous play session.
+      // AgentProcess' explicit lifecycle-restart marker is the sole exception,
+      // symmetric with GoalStateStore: it continues the same owned runtime and
+      // lets Agenda correlate the exact executor before either store is refreshed.
+      if (
+        document.activeOrder
+        && isStaleActivityState(document.savedAt)
+        && allowStaleActiveOrder !== true
+      ) {
         this.lastError = staleActivityReason('job state', document.savedAt);
         return null;
       }

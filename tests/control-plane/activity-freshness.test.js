@@ -10,10 +10,12 @@ import {
 } from '../../src/agent/runtime/activity-freshness.js';
 import { CompanionDirectiveStateStore } from '../../src/agent/runtime/companion-directive-state.js';
 import { JobStateStore } from '../../src/agent/runtime/job-state-store.js';
+import { JobDirector } from '../../src/agent/runtime/job-director.js';
 import { GoalDirector, GoalStateStore } from '../../src/agent/runtime/goal-director.js';
 import { createItemGoalContract } from '../../src/agent/runtime/goal-contract.js';
 import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
 import { AgendaStore, normalizeAgendaEntry } from '../../src/agent/runtime/agenda.js';
+import { createWorkOrder } from '../../src/agent/runtime/work-order.js';
 
 const BOT = 'FreshnessBot';
 
@@ -63,7 +65,7 @@ test('a clock that jumped does not make old activity look fresh', () => {
   );
 });
 
-test('JobStateStore drops an active work order from a previous session', () => {
+test('JobStateStore restores a stale active order only for an explicit lifecycle restart', () => {
   const { root, cleanup } = seed('job-state.json', {
     version: 1,
     activeOrder: {
@@ -74,11 +76,94 @@ test('JobStateStore drops an active work order from a previous session', () => {
     savedAt: Date.now() - (ACTIVITY_STATE_MAX_AGE_MS + 60_000),
   });
   try {
-    const store = new JobStateStore(BOT, { root });
-    assert.equal(store.load(), null, 'a work order from a finished session must not revive');
-    assert.match(String(store.lastError || ''), /Discarded persisted job state/);
+    const ordinaryStart = new JobStateStore(BOT, { root });
+    assert.equal(ordinaryStart.load(), null, 'a work order from a finished session must not revive');
+    assert.match(String(ordinaryStart.lastError || ''), /Discarded persisted job state/);
+
+    const explicitRestart = new JobStateStore(BOT, { root });
+    const restored = explicitRestart.load({ allowStaleActiveOrder: true });
+    assert.equal(restored?.id, 'builder-1');
+    assert.equal(explicitRestart.lastError, null);
   } finally {
     cleanup();
+  }
+});
+
+test('lifecycle restart restores one stale Job and its exact correlated Agenda entry', () => {
+  const now = Date.now();
+  const staleSavedAt = now - (ACTIVITY_STATE_MAX_AGE_MS + 60_000);
+  const root = mkdtempSync(path.join(tmpdir(), 'job-agenda-lifecycle-restart-'));
+  mkdirSync(path.join(root, BOT), { recursive: true });
+  const order = createWorkOrder({
+    id: 'miner-lifecycle-resume',
+    role: 'miner',
+    kind: 'explore',
+    source: 'player',
+    requester: 'DirectorOps',
+    target: { name: 'ores', x: 166, y: 79, z: -380 },
+    quota: 11,
+    checkpoint: {
+      homeDimension: 'overworld',
+      retainResults: true,
+      requiredOutputs: [{ source: 'iron_ore', item: 'raw_iron', quantity: 8 }],
+    },
+  });
+  const agendaEntry = normalizeAgendaEntry({
+    id: 'agenda-lifecycle-resume',
+    kind: 'explore',
+    executor: 'job',
+    target: 'ores',
+    quantity: 11,
+    retainResults: true,
+    requiredOutputs: order.checkpoint.requiredOutputs,
+    requester: 'DirectorOps',
+    x: 166,
+    y: 79,
+    z: -380,
+    homeDimension: 'overworld',
+    state: 'active',
+    executorId: order.id,
+    startedAt: staleSavedAt,
+  }, { now: () => staleSavedAt });
+  writeFileSync(path.join(root, BOT, 'job-state.json'), JSON.stringify({
+    version: 1,
+    activeOrder: order,
+    terminalReceipt: null,
+    savedAt: staleSavedAt,
+  }), 'utf8');
+  writeFileSync(path.join(root, BOT, 'agenda.json'), JSON.stringify({
+    version: 1,
+    entries: [agendaEntry],
+    savedAt: staleSavedAt,
+  }), 'utf8');
+
+  try {
+    const agent = {
+      name: BOT,
+      lifecycle_restart: true,
+      runtime: { autonomy: 'balanced' },
+      goal_director: { activeGoal: null, lastGoal: null },
+      behavior_arbiter: { wake() {} },
+    };
+    agent.job_director = new JobDirector(agent, {
+      store: new JobStateStore(BOT, { root }),
+      getSnapshot: () => ({ inventory: {}, position: { x: 166, y: 79, z: -380 } }),
+      now: () => now,
+    });
+    agent.agenda_director = new AgendaDirector(agent, {
+      store: new AgendaStore(BOT, { root }),
+      now: () => now,
+    });
+
+    assert.equal(agent.job_director.activeOrder?.id, order.id);
+    assert.equal(agent.agenda_director.entries[0]?.id, agendaEntry.id);
+    assert.equal(agent.agenda_director.entries[0]?.state, 'active');
+    assert.equal(agent.agenda_director.entries[0]?.executorId, order.id);
+    assert.equal(agent.agenda_director.status.code, 'agenda_restored');
+    const persistedAgenda = JSON.parse(readFileSync(path.join(root, BOT, 'agenda.json'), 'utf8'));
+    assert.ok(persistedAgenda.savedAt > staleSavedAt);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

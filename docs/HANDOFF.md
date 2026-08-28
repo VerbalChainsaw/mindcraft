@@ -3,13 +3,17 @@
 **Updated 2026-08-28. Mineflayer compatibility is the current technical cursor.
 The direct graph now pins `mineflayer@4.38.0` and `minecraft-data@3.114.0`;
 upstream owns pre-spawn `player_loaded` and trailing closed-window inventory
-reconciliation, so the local spawn shim was removed and only repository-owned
-lifecycle/settlement patches were ported. Package/static checks pass with no new
-focused regression. No Kevin, Paper, control-plane, or world restart occurred, so
-the upgraded runtime smoke remains open. The preserved Phase 7C Goal
-`goal-9d151ab6-1166-4ded-8492-96cfd3640551` remains the last known gameplay cursor
-at `acquire`, attempts `0/4`; no replacement state is authorized. Phase 7D now
-defines the finite `KM-0` through `KM-6` mastery sequence and explicit end.**
+reconciliation. A Kevin-only current-source restart reached `world_ready` while
+Paper and the control plane retained their process identities. That run also
+corrected stale continuity prose: Goal
+`goal-9d151ab6-1166-4ded-8492-96cfd3640551` is terminal failed at attempts `4/4`,
+not active. The exact active Explore Job `miner-b3015154-c239-43d2-91d4-01b4a09032eb`
+was rejected by the old 15-minute freshness gate before the lifecycle-restart
+exception was added, and the correlated Agenda then failed closed. The Job payload
+is no longer present in `job-state.json`; do not manufacture or manually resurrect
+it. The owner repair is focused-green, but trailing closed-window reconciliation
+and a live exact-cursor restart remain open. Phase 7D defines the finite `KM-0`
+through `KM-6` mastery sequence and explicit end.**
 
 `ARCHITECTURE.md` is the sole architecture and migration plan. `AGENTS.md`
 governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
@@ -86,13 +90,17 @@ governs work. `docs/CAMPAIGN-RECORD.md` is the canonical physical-evidence and
   `45/45`; direct compatibility/mechanics passes `80/80`; segmented navigation
   passes `61/61`; and the critical gate passes `31/31` with lint/static checks.
   The former inventory-capacity failure is repaired at the shared strategic-resource
-  reserve policy. No live process has been restarted or claimed as upgraded in this tranche.
-- **NEXT ACCEPTANCE:** Restart Kevin only on current source. Prove that the first
-  spawn reaches normal interaction through native `player_loaded`, that a
-  closed-container trailing inventory update reconciles without reopening or
-  losing cursor truth, and that the exact persisted Goal/Agenda restores. Then
-  resume natural play through the ordered Phase 7D mastery sequence; do not
-  manufacture a standalone mega-course or replace the saved Goal.
+  reserve policy. Kevin-only restart reached `world_ready` on current source with
+  Paper/control unchanged. Explicit lifecycle restart now permits one stale active
+  Job, after which Agenda's existing exact executor correlation owns restoration;
+  focused lifecycle checks pass `14/14`. The prior defective restart had already
+  removed the real Job payload, so no live restore is claimed.
+- **NEXT ACCEPTANCE:** Through a valid naturally created or owner-resumed durable
+  commitment, prove that a Kevin-only lifecycle restart restores the exact Job and
+  correlated Agenda identity, then prove a closed-container trailing inventory
+  update reconciles without reopening or losing cursor truth. Continue natural
+  play through Phase 7D; do not reconstruct the lost Job from telemetry or invent
+  a replacement Goal merely to satisfy the smoke.
 - **OPEN VERIFICATION GAP:** The prior focused closeout set is `40/40`; the new
   owner slices add surface `22/22`, disconnect lifecycle `2/2`, and MindServer
   finalization `7/7`. The final broad sweep across all 23 modified/new test files is
@@ -252,16 +260,20 @@ partial evidence; none is replaced or replayed by the compatibility work. Phase
    spawn/window ownership, minimal versioned patches, postinstall application,
    `45/45` compact mechanics, `80/80` direct compatibility/mechanics, `61/61`
    segmented navigation, and a green `31/31` critical gate.
-2. **`KM-0` live runtime — PENDING:** Kevin-only restart, first-spawn interaction,
-   trailing closed-window inventory reconciliation, and exact Goal/Agenda restore.
+2. **`KM-0` live runtime — ACTIVE/PARTIAL:** Kevin-only current-source restart
+   reached `world_ready` through native spawn while Paper/control remained running.
+   Closed-window reconciliation and exact stale Job/Agenda restoration remain open.
 3. **Preserved gameplay state:** Goal
-   `goal-9d151ab6-1166-4ded-8492-96cfd3640551`, phase `acquire`, attempts `0/4`,
-   and all accepted Safety/recovery/navigation effects remain authoritative. No
-   compatibility step may manufacture replacement Goal, Agenda, or world state.
-4. **After `KM-0`:** resume the exact Goal and credit any directly traversed
-   `KM-1` through `KM-5` boundary without replay. When that Mission settles, select
-   the first unclosed domain gate. Run `KM-6` only after all five close. Gameplay
-   work ends there; Phase 8/9 consolidation ends the migration.
+   `goal-9d151ab6-1166-4ded-8492-96cfd3640551` is terminal failed at attempts `4/4`.
+   Agenda entry `agenda-1787905102570-1` still records executor
+   `miner-b3015154-c239-43d2-91d4-01b4a09032eb`, but `job-state.json` no longer
+   contains that Job after the pre-repair stale-load failure. Telemetry preserves
+   the exact prior Job evidence. Do not reconstruct it manually or claim it active.
+4. **After `KM-0`:** continue from the next valid owner-issued durable commitment
+   and credit any directly traversed `KM-1` through `KM-5` boundary without replay.
+   When that Mission settles, select the first unclosed domain gate. Run `KM-6`
+   only after all five close. Gameplay work ends there; Phase 8/9 consolidation
+   ends the migration.
 
 Do not treat these as independent work orders or create a parallel plan surface.
 Full acceptance, continue/stop rules, and Definition of Done live only in the cited
@@ -528,14 +540,13 @@ Architecture subsection. Do not replay the protected depth route as standalone p
 - Preserve the workshop's completed ore exploration, iron pickaxe, and shield as
   partial evidence; do not replay them. Its bucket/storage/return predicates remain
   open but are not the current gameplay cursor.
-- Complete the bounded `KM-0` Kevin-only runtime smoke, then continue Phase 7C
-  through the exact persisted Agenda and Goal. Preserve the
-  verified 154-cell return spine, 15 failed diamond targets, completed iron/
-  smelting/crafting effects, and the closed Safety/death/authority/mining-handoff
-  owners. Finish diamond custody, then let GoalDirector/Agenda continue to
-  obsidian custody, portal, dimension, quartz, and requester return. Credit any
-  directly exercised `KM-1` through `KM-5` boundary; do not resume livestock or
-  replay a closed owner case in isolation merely to fill the plan.
+- Complete the bounded `KM-0` runtime smoke through a valid owner-issued durable
+  commitment. Preserve the expedition's verified 154-cell return spine, 15 failed
+  diamond targets, completed iron/smelting/crafting effects, and closed Safety/
+  death/authority/mining-handoff evidence, but do not reconstruct its lost Job or
+  terminal Goal. Continue natural play from the next truthful commitment and
+  credit any directly exercised `KM-1` through `KM-5` boundary; do not resume
+  livestock or replay a closed owner case in isolation merely to fill the plan.
 - Preserve the bounded Phase 5 Luna question as separately authorized later work;
   it does not displace the current Phase 7B livestock composition outcome.
 - Run `KM-6` only after every domain gate is closed. Begin Phase 8 collapse of
@@ -549,9 +560,9 @@ Architecture subsection. Do not replay the protected depth route as standalone p
 
 ## Immediate next-session state
 
-- Branch: `recovery/iron-pickaxe-20260803`.
-- Published capability baseline: `a6e69f8ff5d7d0eb0bfe9c6b37058a66d7c393ba`.
-- Kevin was stopped cleanly through the control plane after the Director's pause.
+- Branch: `develop`, the repository default and canonical integration branch.
+- Published capability baseline: `1309e6d95bb942b10477fe050ee5f3925dbf3a2c`.
+- Kevin was stopped through the control plane after the bounded compatibility probe.
   Paper and the control plane remained running; do not restart either for ordinary
   continuation. Verify current process identity before relying on any saved PID.
 - That published baseline contains the accepted Phase 6 terrain mechanics,
@@ -559,25 +570,25 @@ Architecture subsection. Do not replay the protected depth route as standalone p
   best-reachable work, village expedition, Container baseline, provider repair,
   canonical records, and Director-owned interaction-stance evidence. Preserve and
   continue it; do not rebuild around an older checkpoint or detached matrix copy.
-- `bots/Kevin/agenda.json` is no longer an active eight-entry workshop cursor. It
-  records completed workshop exploration, iron-pickaxe, and shield entries; a
-  failed bucket entry (`inventory_capacity_blocked`); and player-cancelled deposit/
-  return entries (`agenda_cleared`). Preserve those outcomes; do not describe the
-  old Explorer as active or replay completed outputs.
+- `bots/Kevin/agenda.json` currently retains eight entries. Entry
+  `agenda-1787905102570-1` is still marked active and names Explore executor
+  `miner-b3015154-c239-43d2-91d4-01b4a09032eb`, but the corresponding active Job
+  payload is absent. Treat this as preserved orphaned evidence, not an executable
+  cursor, until an owning recovery path resolves it.
 - Builder order `builder-0545847a-84e8-497f-89f6-49c43c08f8d0` completed 49/49.
   Cow scout/return/guide and wheat custody completed. Livestock settlement remains
   incomplete and preserved after its gate-binding and mixed-height travel defects
   were repaired; it is not the current execution cursor.
-- The active working change has physical Phase 7C evidence through retained-route
+- The preserved Phase 7C evidence includes retained-route
   casting access, exact bound-face breaking, physical obsidian formation, water-
   bucket recovery, a replacement protected staircase from Y55 to Y7, complete-
   seal and stable-disengagement Safety exits, repeated death recovery, explicit
   Agenda resume, iron collection/smelting/crafting, long descent, causal return-
   spine retirement, surface recovery, critical-health hostile recovery, and same-
-  Goal continuation. Current Goal `goal-9d151ab6-1166-4ded-8492-96cfd3640551`
-  is paused in `acquire` at attempts `0/4`, 54 subgoals, 154 verified spine cells,
-  and 15 excluded diamond targets. No obsidian custody, portal, Nether, quartz, or
-  final return outcome is claimed.
+  Goal continuation. That historical productive Goal later became terminal failed
+  at attempts `4/4`; no Goal is active now. The later Explore Job/Agenda cursor was
+  lost at the pre-repair Job freshness boundary described above. No obsidian
+  custody, portal, Nether, quartz, or final return outcome is claimed.
 - Q-007 is answered YES. Controlled runs are authorized without another per-run
   question while each run can change a mechanic owner, repair, composition
   verdict, or significant risk. This applies to new and old mechanics; saved
@@ -588,13 +599,13 @@ Architecture subsection. Do not replay the protected depth route as standalone p
 
 ## Runtime authorization boundaries
 
-Mineflayer compatibility is the active technical tranche. No runtime or world
-mutation occurred during package migration. The next physical action is a
-Kevin-only restart and bounded `KM-0` smoke; Paper and the control plane must remain
-running. After that proof, resume persisted Goal
-`goal-9d151ab6-1166-4ded-8492-96cfd3640551` at its owning checkpoint. Do not
-manufacture a replacement Goal, manually edit/deduplicate the saved Agenda, or
-sequence portal prerequisites outside its owners.
+Mineflayer compatibility is the active technical tranche. One Kevin-only restart
+reached `world_ready`; Paper and the control plane remained running. Kevin is now
+stopped. The next physical action must use a valid naturally created or owner-
+resumed commitment to prove exact Job/Agenda restoration and the remaining closed-
+window reconciliation. Do not reconstruct the lost Job from telemetry, resurrect
+the terminal Goal, manually edit/deduplicate the saved Agenda, or sequence portal
+prerequisites outside their owners.
 
 The Phase 6 swim-exit and composed workaround chain are complete and
 `ACCEPTED / CLOSED`; do not repeat them unless changed ownership, composition,

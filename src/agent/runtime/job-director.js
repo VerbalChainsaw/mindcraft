@@ -1207,7 +1207,9 @@ export class JobDirector extends RoleDirector {
     this.dispatchGeneration = 0;
     this.activeDispatch = null;
     try {
-      const persisted = this.store.load();
+      const persisted = this.store.load({
+        allowStaleActiveOrder: this.agent.lifecycle_restart === true,
+      });
       this.lastReceipt = this.store.terminalReceipt || null;
       this.lastOrder = this.lastReceipt?.order || null;
       if (this.store.lastError) {
