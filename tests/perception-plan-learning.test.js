@@ -400,6 +400,35 @@ test('Equivalent plank recipes collect generic wood before binding an unobserved
   assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64, false, true)');
 });
 
+test('Insufficient mixed planks do not bind tool preparation to one absent tree species', () => {
+  const registry = minecraftData('1.21.11');
+  const carried = [
+    { name: 'oak_planks', type: registry.itemsByName.oak_planks.id, count: 1 },
+    { name: 'spruce_planks', type: registry.itemsByName.spruce_planks.id, count: 1 },
+    { name: 'stick', type: registry.itemsByName.stick.id, count: 4 },
+    { name: 'cobblestone', type: registry.itemsByName.cobblestone.id, count: 87 },
+  ];
+  const bot = {
+    registry,
+    entity: { position: { x: 0, y: 46, z: 0 } },
+    entities: {},
+    inventory: { slots: carried, items: () => carried },
+    findBlock() { return null; },
+  };
+
+  const plan = buildPrerequisitePlan(bot, {
+    target: 'stone_pickaxe',
+    quantity: 1,
+    range: 64,
+    allowUnobservedSelfDropRoot: false,
+  });
+
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.nextStep.capability.id, 'collect_wood');
+  assert.equal(plan.nextStep.capability.access.requiresSurface, true);
+  assert.equal(plan.nextStep.capability.binding.command, '!collectWoodInRange(1, 64, false, true)');
+});
+
 test('The causal planner prefers a carried transform source over a dead partial recipe alternative', () => {
   const bot = nearbyRecipeBot();
   bot.inventory.items = () => [

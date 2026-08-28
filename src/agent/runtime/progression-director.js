@@ -176,12 +176,13 @@ export class ProgressionDirector extends BehaviorDirector {
 
     const target = { name: String(plan.currentStage || 'progression').slice(0, 64) };
     if (!this.begin(`progression_${plan.currentStage || 'step'}`, target, plan.nextOperation || '')) return;
-    const previousActionId = this.agent.last_action_result?.actionId || null;
-
-    void Promise.resolve(this.executeProgressionCommand(this.agent, command, { owner: 'autonomy' }))
-      .then(() => {
-        const result = this.agent.last_action_result;
-        if (!result?.actionId || result.actionId === previousActionId) {
+    void Promise.resolve(this.executeProgressionCommand(this.agent, command, {
+      owner: 'autonomy',
+      returnExecution: true,
+    }))
+      .then(execution => {
+        const result = execution?.result || null;
+        if (!result?.actionId) {
           this.consecutiveFailures += 1;
           this.fail('missing_action_result', 'Progression step returned without a new structured result.', true);
           this.nextEligibleAt = this.now() + FAILURE_COOLDOWN_MS;

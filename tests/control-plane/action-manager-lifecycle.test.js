@@ -34,10 +34,11 @@ function createHarness({ moving = false, collecting = false } = {}) {
   bot.targetDigBlock = null;
   bot.entity = { position: { x: 0, y: 64, z: 0 } };
   bot.pathfinder = {
+    goal: null,
     isMoving: () => state.moving,
     isMining: () => state.mining,
     isBuilding: () => state.building,
-    setGoal(goal) { bot.emit('goal_updated', goal, false); },
+    setGoal(goal) { this.goal = goal; bot.emit('goal_updated', goal, false); },
     stop() { state.forcedStops += 1; },
   };
   bot.collectBlock = {
@@ -50,6 +51,22 @@ function createHarness({ moving = false, collecting = false } = {}) {
   };
   bot.stopDigging = async () => {};
   bot.clearControlStates = () => { bot.controlState = {}; };
+  bot.moveVehicle = () => {};
+  bot.pvp = {
+    target: null,
+    async stop() {
+      this.target = null;
+      bot.pathfinder.goal = null;
+      state.moving = false;
+      bot.emit('stoppedAttacking');
+    },
+    forceStop() {
+      this.target = null;
+      bot.pathfinder.goal = null;
+      state.moving = false;
+      bot.emit('stoppedAttacking');
+    },
+  };
 
   const agent = {
     name: 'LifecycleBot',
@@ -145,6 +162,65 @@ test('CollectBlock retains the body lease until its task and Pathfinder both set
   assert.equal(bot.listenerCount('collectBlock_finished'), 0);
 });
 
+test('PvP retains the body lease until both target and pursuit settle', async () => {
+  const { agent, bot, releases, state } = createHarness({ moving: true });
+  const operation = deferred();
+  bot.pvp.target = { id: 42 };
+  bot.pathfinder.goal = { kind: 'follow' };
+  const running = agent.actions.runAction('test:pvp', () => operation.promise, {
+    timeout: -1,
+    specialist: 'pvp',
+  });
+
+  await waitFor(() => agent.actions.executing);
+  bot.emit('startedAttacking');
+  operation.resolve(true);
+  await waitFor(() => agent.actions.activitySnapshot()?.lifecycle === 'SETTLING');
+
+  assert.equal(agent.actions.executing, true);
+  assert.equal(releases.length, 0);
+
+  bot.pvp.target = null;
+  bot.pathfinder.goal = null;
+  state.moving = false;
+  bot.emit('stoppedAttacking');
+  const result = await running;
+
+  assert.equal(result.success, true);
+  assert.equal(releases.length, 1);
+  assert.equal(agent.actions.activitySnapshot().specialist, 'pvp');
+  assert.equal(agent.actions.activitySnapshot().settlement.evidence, 'pvp_idle_pathfinder_idle');
+  assert.equal(bot.listenerCount('startedAttacking'), 0);
+  assert.equal(bot.listenerCount('stoppedAttacking'), 0);
+});
+
+test('vehicle control retains the body lease until zero-input settlement', async () => {
+  const { agent, bot, releases } = createHarness();
+  const operation = deferred();
+  const running = agent.actions.runAction('test:vehicle', () => operation.promise, {
+    timeout: -1,
+    specialist: 'vehicle',
+  });
+
+  await waitFor(() => agent.actions.executing);
+  bot.emit('vehicle_control_start', { vehicleId: 7 });
+  operation.resolve(true);
+  await waitFor(() => agent.actions.activitySnapshot()?.lifecycle === 'SETTLING');
+
+  assert.equal(agent.actions.executing, true);
+  assert.equal(releases.length, 0);
+
+  bot.emit('vehicle_control_stop', { vehicleId: 7, outcome: 'arrived' });
+  const result = await running;
+
+  assert.equal(result.success, true);
+  assert.equal(releases.length, 1);
+  assert.equal(agent.actions.activitySnapshot().specialist, 'vehicle');
+  assert.equal(agent.actions.activitySnapshot().settlement.evidence, 'vehicle_input_idle');
+  assert.equal(bot.listenerCount('vehicle_control_start'), 0);
+  assert.equal(bot.listenerCount('vehicle_control_stop'), 0);
+});
+
 test('non-specialist Mission commands still receive one correlated Activity lifecycle', async () => {
   const { agent, releases, starts } = createHarness();
   const context = {
@@ -169,6 +245,37 @@ test('non-specialist Mission commands still receive one correlated Activity life
   assert.equal(agent.actions.activitySnapshot().activityId, 'mission-charcoal:activity:7');
   assert.equal(agent.actions.activitySnapshot().lifecycle, 'SUCCEEDED');
   assert.equal(agent.actions.activitySnapshot().settlement.evidence, 'command_promise_settled');
+});
+
+test('interleaved command executions retain their exact correlated results', async () => {
+  const { agent } = createHarness();
+  const firstGate = deferred();
+  const secondGate = deferred();
+  const firstResult = Object.freeze({ actionId: 'action-first', phase: 'succeeded', code: 'first_done' });
+  const secondResult = Object.freeze({ actionId: 'action-second', phase: 'failed', code: 'second_failed' });
+
+  const firstExecution = agent.actions.runWithCommandExecution(async () => {
+    await firstGate.promise;
+    agent.actions.recordCommandExecutionResult(firstResult);
+    return 'first value';
+  }, { requestId: 'request-first', selectedSkill: '!first', routeOrigin: 'test' });
+  const secondExecution = agent.actions.runWithCommandExecution(async () => {
+    await secondGate.promise;
+    agent.actions.recordCommandExecutionResult(secondResult);
+    return 'second value';
+  }, { requestId: 'request-second', selectedSkill: '!second', routeOrigin: 'test' });
+
+  secondGate.resolve();
+  const settledSecond = await secondExecution;
+  firstGate.resolve();
+  const settledFirst = await firstExecution;
+
+  assert.equal(settledFirst.value, 'first value');
+  assert.equal(settledFirst.result, firstResult);
+  assert.equal(settledFirst.requestContext.requestId, 'request-first');
+  assert.equal(settledSecond.value, 'second value');
+  assert.equal(settledSecond.result, secondResult);
+  assert.equal(settledSecond.requestContext.requestId, 'request-second');
 });
 
 test('a stop timeout records cancellation and escalation without releasing ownership', async () => {

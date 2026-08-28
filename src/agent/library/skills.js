@@ -105,6 +105,7 @@ import {
     UNSAFE_FOOD_ITEMS,
 } from '../runtime/item-family.js';
 import {
+    loopEraseMiningRouteCells,
     minimumMiningCorridorSteps,
     searchSupportedMiningVoxelCorridors,
     selectBoundedMiningProgressStances,
@@ -202,6 +203,7 @@ const INTERACTION_CONFIRM_TIMEOUT_MS = 750;
 const INTERACTION_CONFIRM_POLL_MS = 50;
 const NAVIGATION_PROGRESS_POLL_MS = 500;
 const NAVIGATION_STALL_TIMEOUT_MS = 3_700;
+const NAVIGATION_STOP_SETTLEMENT_TIMEOUT_MS = 750;
 const NAVIGATION_RECOVERY_STALL_TIMEOUT_MS = 1_500;
 const NAVIGATION_PROGRESS_DISTANCE = 0.75;
 const NAVIGATION_GOAL_PROGRESS_DELTA = 0.25;
@@ -283,10 +285,19 @@ const MINING_COLLECTION_SLOT_RESERVE = 3;
 // impossible from a full inventory.
 const MAX_COLLECTION_SLOT_RELEASE_ACTIONS = 12;
 const MIN_COLLECTION_NATURAL_FILL_RESERVE = 16;
+const MAX_DISPOSAL_STANCE_HORIZONTAL = 8;
+const PASSIVE_PICKUP_CLEARANCE = 2.5;
 const MINING_TUNNEL_LENGTH = 12;
 const MAX_MINING_ROUTE_HEADINGS = 3;
+// Depth relocation has no concrete ore identity to rank toward. A gaze-ranked
+// subset of three can therefore omit the sole heading away from a wall,
+// shelter, or protected worksite. Its corridor planner is already bounded per
+// heading, so cover all four cardinals before declaring local depth geometry
+// exhausted without widening target-bound mining search.
+const MAX_MINING_DEPTH_HEADINGS = 4;
 const MINING_ROUTE_STEP_TIMEOUT_MS = 2_000;
 const MINING_ROUTE_STEP_ESTIMATE_MS = 450;
+const MINING_SUPPORT_PLACEMENT_ESTIMATE_MS = 1_500;
 const MINING_ROUTE_DEADLINE_RESERVE_MS = 3_500;
 const MAX_MINING_EXCAVATION_BLOCKS = 96;
 // How much SURFACE a route may disturb, measured as the number of distinct
@@ -315,8 +326,21 @@ const MAX_MINING_PROGRESS_ROUTE_STEPS = 12;
 const MAX_MINING_PROGRESS_VERTICAL = 6;
 const MIN_MINING_PROGRESS_STEPS = 2;
 const MAX_MINING_PROGRESS_STANCES = 12;
+const MAX_CASTING_SITE_CANDIDATES = 12;
+const MAX_CASTING_STANCES_PER_SITE = 6;
+const MAX_CASTING_BINDING_ROUTE_ATTEMPTS = 3;
+const MAX_CASTING_CHAMBER_SOURCE_CANDIDATES = 48;
+const MAX_CASTING_CHAMBER_RAY_CLEARS = 6;
 const MAX_MINING_FALLING_COLUMN = 3;
+const MAX_MINING_ROUTE_GEOMETRY_REPAIRS = 2;
 const FALLING_BLOCK_SETTLE_MS = 250;
+const REBINDABLE_SURFACE_CORRIDOR_FAILURES = new Set([
+    'route_block_not_broken',
+    'route_step_not_reached',
+    'route_step_out_of_reach',
+    'route_support_not_placed',
+    'support_placement_left_bound_stance',
+]);
 const MIN_SURFACE_ROUTE_PROGRESS = 2;
 const MAX_SURFACE_CORRIDOR_RISE = 4;
 const SURFACE_CORRIDOR_ROUTE_SLACK = 12;
@@ -1257,6 +1281,7 @@ async function waitForExpectedDropPickup(
         timeoutMs = COLLECTION_DROP_TIMEOUT_MS,
         targetPosition = null,
         priorEntityIds = null,
+        allowApproach = true,
     } = {},
 ) {
     const deadline = Date.now() + remainingActionTimeMs(timeoutMs);
@@ -1284,10 +1309,12 @@ async function waitForExpectedDropPickup(
             );
         });
         if (expectedDrop) {
-            attemptedEntities.add(expectedDrop.id);
-            const remaining = Math.max(100, deadline - Date.now());
-            await approachDroppedItem(bot, expectedDrop, remaining);
-            if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
+            if (allowApproach) {
+                attemptedEntities.add(expectedDrop.id);
+                const remaining = Math.max(100, deadline - Date.now());
+                await approachDroppedItem(bot, expectedDrop, remaining);
+                if (inventoryCountByTypes(bot, itemTypes) > beforeCount) return true;
+            }
         }
         await interruptibleDelay(bot, INVENTORY_POLL_MS);
     }
@@ -1565,6 +1592,19 @@ const EXCAVATION_DEBRIS_ITEMS = new Set([
     'cobblestone',
     'cobbled_deepslate',
 ]);
+// Surface recovery may turn carried excavation output into an exact floor
+// under a preflighted route cell. Keep this deliberately narrower than the
+// debris family: gravity blocks and slow/partial supports are unsuitable for
+// a return spine even though they are valid mining output.
+const SURFACE_SUPPORT_MATERIAL_PREFERENCE = Object.freeze([
+    'cobblestone', 'cobbled_deepslate',
+    'stone', 'deepslate', 'tuff', 'andesite', 'diorite', 'granite',
+    'dirt', 'coarse_dirt', 'rooted_dirt', 'grass_block', 'podzol', 'mycelium',
+    'clay', 'mud', 'moss_block', 'sandstone', 'red_sandstone',
+    'netherrack', 'blackstone', 'basalt', 'end_stone', 'calcite',
+    'dripstone_block', 'snow_block',
+]);
+const MIN_SURFACE_SUPPORT_REMAINDER = 3;
 const TRAVERSAL_POLICIES = new Set(['preserve', 'careful', 'full']);
 const moveAwayHistory = new WeakMap();
 
@@ -2188,6 +2228,7 @@ export function probeSafeRoundTripNavigationStances(
     home,
     timeoutMs = 2_000,
     movements = null,
+    { returnRadius = 3 } = {},
 ) {
     const candidates = (Array.isArray(stances) ? stances : [])
         .filter(position => [position?.x, position?.y, position?.z].every(Number.isFinite))
@@ -2224,7 +2265,7 @@ export function probeSafeRoundTripNavigationStances(
             Math.floor(home.x),
             Math.floor(home.y),
             Math.floor(home.z),
-            3,
+            Math.max(0, Math.min(3, Math.floor(Number(returnRadius) || 0))),
         );
         lastReturn = probeSafeNavigationFrom(
             bot,
@@ -2979,6 +3020,7 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
     placementAuthorizer = null,
     placementExclusions = null,
     additionalSafeToBreak = null,
+    protectedBreakGeometry = null,
 } = {}) {
     const targetBlocks = Array.isArray(targetBlockOrBlocks)
         ? targetBlockOrBlocks
@@ -3000,6 +3042,10 @@ function targetScopedCollectionMovements(bot, targetBlockOrBlocks, {
     // exact bounded target set to pathfinder; every incidental route block
     // stays unbreakable.
     movements.safeToBreak = (candidate) => {
+        if (
+            candidate?.position
+            && protectedBreakGeometry?.has(miningCellKey(candidate.position))
+        ) return false;
         const selectedTarget = (
             targets.has(`${candidate?.type}:${candidate?.position?.x}:${candidate?.position?.y}:${candidate?.position?.z}`)
             && safetyGuard.safeToBreak(candidate)
@@ -4350,6 +4396,15 @@ function collectionInventoryStateEvidence(bot) {
 // the block itself is wanted, which is why it is requested explicitly rather
 // than scored as a general bonus.
 const FORTUNE_DROP_PATTERN = /(?:coal_ore|diamond_ore|emerald_ore|lapis_ore|redstone_ore|nether_gold_ore|nether_quartz_ore|copper_ore|amethyst_cluster|glowstone|melon|sweet_berry_bush)$/;
+const ORE_DROP_ITEMS = new Set([
+    'coal',
+    'diamond',
+    'emerald',
+    'iron',
+    'gold',
+    'lapis_lazuli',
+    'redstone',
+]);
 const ENCHANT_NAME = /(?:^|:)([a-z_]+)$/;
 
 /**
@@ -4505,7 +4560,7 @@ export function selectMiningRouteTool(
     const targetTier = targetFamily === family
         ? minimumPreparedToolTierForBlock(bot, targetBlock, family)
         : null;
-    if (family !== 'pickaxe' || !Number.isFinite(targetTier)) {
+    if (family !== 'pickaxe') {
         return items.sort((left, right) => (
             toolPreparationTier(right) - toolPreparationTier(left)
             || toolEnchantmentScore(bot, right, block) - toolEnchantmentScore(bot, left, block)
@@ -4515,17 +4570,24 @@ export function selectMiningRouteTool(
     }
 
     // Wooden and golden picks are poor corridor tools even where Minecraft
-    // technically permits them. Prefer the fastest carried tier below the
-    // target requirement (iron below diamond, stone below iron), otherwise the
-    // lowest capable target tier. Durability breaks ties within that role.
+    // technically permits them. When the route has a final target, prefer the
+    // fastest carried tier below that target's requirement (iron below diamond,
+    // stone below iron). A pure travel/search corridor has no final block, so
+    // spend the lowest responsive tier that can harvest each obstruction. This
+    // keeps diamond durability available for mechanics that actually require
+    // diamond, such as the bound obsidian source, while the capacity ledger
+    // still promotes to iron/diamond when the lower tool cannot do the job or
+    // exhausts its usable reserve.
     const responsive = items.filter(item => toolPreparationTier(item) >= TOOL_TIER.stone);
     const candidates = responsive.length > 0 ? responsive : items;
-    const lowerTier = candidates.filter(item => toolPreparationTier(item) < targetTier);
+    const lowerTier = Number.isFinite(targetTier)
+        ? candidates.filter(item => toolPreparationTier(item) < targetTier)
+        : [];
     const roleCandidates = lowerTier.length > 0 ? lowerTier : candidates;
     return roleCandidates.sort((left, right) => {
         const leftTier = toolPreparationTier(left);
         const rightTier = toolPreparationTier(right);
-        const tierDelta = lowerTier.length > 0
+        const tierDelta = lowerTier.length > 0 && Number.isFinite(targetTier)
             ? rightTier - leftTier
             : leftTier - rightTier;
         if (tierDelta !== 0) return tierDelta;
@@ -4539,7 +4601,8 @@ export function selectMiningRouteTool(
 
 async function equipBestToolForBlock(bot, block, options = {}) {
     const family = toolFamilyForBlock(block);
-    const routeTool = options?.preserveTargetToolFor
+    const routeTool = options?.preferMiningRouteTool === true
+        || options?.preserveTargetToolFor
         ? selectMiningRouteTool(bot, block, options.preserveTargetToolFor)
         : null;
     const preferred = routeTool || (family
@@ -4974,6 +5037,33 @@ export async function prepareMaterial(bot, materialName, num=1, range=64, collec
     return finish(success && materialInventoryCount(bot, material) >= desired, success ? 'prepared' : 'preparation_failed');
 }
 
+export function permitsSupervisedEmergencyHunt({ immediateSupply = false, health } = {}) {
+    return immediateSupply === true
+        && Number.isFinite(Number(health))
+        && Number(health) >= 5;
+}
+
+export function foodSourceRequiresOpenSurface({
+    bodyY,
+    sourceY,
+    sourceDistance,
+    occupiesOpenSurface = false,
+    minimumRise = 4,
+} = {}) {
+    if (occupiesOpenSurface === true) return false;
+    const elevated = Number.isFinite(Number(bodyY))
+        && Number.isFinite(Number(sourceY))
+        && Number(sourceY) >= Number(bodyY) + Math.max(1, Number(minimumRise) || 4);
+    const outsideInteractionReach = Number.isFinite(Number(sourceDistance))
+        && Number(sourceDistance) > MAX_MELEE_REACH;
+    return elevated || outsideInteractionReach;
+}
+
+export function foodSourceRegionApproachRequired({ distance, regionRadius = 4.5 } = {}) {
+    return Number.isFinite(Number(distance))
+        && Number(distance) > Math.max(4.5, Number(regionRadius) || 4.5);
+}
+
 export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorkstation=null, baselineFoodPoints=null) {
     const requestedPoints = Math.max(1, Math.min(160, Math.floor(Number(targetFoodPoints) || 24)));
     const searchRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
@@ -5003,6 +5093,8 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
         itemsCooked: 0,
         breadCrafted: 0,
         huntingDeferredReason: null,
+        huntingFailure: null,
+        accessRequirement: null,
         foodPointPolicy: immediateSupply ? 'immediate_edible' : 'durable_reserve',
     };
     const target = {
@@ -5131,15 +5223,66 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     };
     const harvestMatureCrops = async () => {
         let crops = [];
+        const loadMatureCrops = () => world.getNearestBlocksWhere(bot, matureFoodCrop, searchRange, 32)
+            .filter(Boolean)
+            .sort((left, right) => (
+                bot.entity.position.distanceTo(left.position)
+                - bot.entity.position.distanceTo(right.position)
+            ));
         try {
-            crops = world.getNearestBlocksWhere(bot, matureFoodCrop, searchRange, 32)
-                .filter(Boolean)
-                .sort((left, right) => (
-                    bot.entity.position.distanceTo(left.position)
-                    - bot.entity.position.distanceTo(right.position)
-                ));
+            crops = loadMatureCrops();
         } catch {
             return;
+        }
+        const nearestCrop = crops[0] || null;
+        const nearestDistance = nearestCrop?.position
+            ? bot.entity.position.distanceTo(nearestCrop.position)
+            : null;
+        if (
+            nearestCrop?.position
+            && !nearbyHostile()
+            && foodSourceRegionApproachRequired({ distance: nearestDistance })
+        ) {
+            const sourceRegion = nearestCrop.position.clone();
+            const approached = await goToPosition(
+                bot,
+                sourceRegion.x,
+                sourceRegion.y,
+                sourceRegion.z,
+                2,
+                {
+                    allowSegmentedJourney: true,
+                    // A closest explored endpoint is useful for long travel,
+                    // but it is not crop access. The live failure stopped five
+                    // blocks below a farm, declared the region reached, and
+                    // handed an impossible vertical interaction to harvesting.
+                    allowBestReachable: false,
+                },
+            );
+            if (interrupted()) return;
+            const observedDistance = bot.entity?.position?.distanceTo?.(sourceRegion);
+            if (!approached) {
+                progress.accessRequirement = {
+                    kind: 'food_region',
+                    reason: 'loaded_food_crop_region_unreached',
+                    target: {
+                        name: nearestCrop.name,
+                        x: sourceRegion.x,
+                        y: sourceRegion.y,
+                        z: sourceRegion.z,
+                    },
+                    startingDistance: nearestDistance,
+                    observedDistance: Number.isFinite(observedDistance) ? observedDistance : null,
+                    progressed: Number.isFinite(observedDistance)
+                        && observedDistance + 2 < nearestDistance,
+                };
+                return;
+            }
+            try {
+                crops = loadMatureCrops();
+            } catch {
+                return;
+            }
         }
         for (const crop of crops) {
             if (interrupted() || availableFoodPoints() >= targetPoints || nearbyHostile()) break;
@@ -5152,7 +5295,38 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
                 cropPosition.x,
                 cropPosition.y,
                 cropPosition.z,
-            )) continue;
+            )) {
+                const failure = bot.lastActionEvidence || {};
+                // Interaction-stanced block work is the final crop operation,
+                // not a long-range exploration mechanism. If the nearest
+                // loaded crop cannot be reached while the body is still below
+                // opaque cover, classify the missing access once and return it
+                // to Survival rather than trying every crop in the same remote
+                // field and eventually claiming that no food exists.
+                if (
+                    progress.cropsHarvested === 0
+                    && failure.outcome === 'unreachable'
+                    && foodSourceRequiresOpenSurface({
+                        bodyY: bot.entity?.position?.y,
+                        sourceY: cropPosition.y,
+                        sourceDistance: bot.entity?.position?.distanceTo?.(cropPosition),
+                        occupiesOpenSurface: Boolean(occupiedOpenSurfaceStandingCell(bot)),
+                    })
+                ) {
+                    progress.accessRequirement = {
+                        kind: 'surface',
+                        reason: 'loaded_food_crop_outside_open_surface_access',
+                        target: {
+                            name: current.name,
+                            x: cropPosition.x,
+                            y: cropPosition.y,
+                            z: cropPosition.z,
+                        },
+                    };
+                    break;
+                }
+                continue;
+            }
             progress.cropsHarvested += 1;
             await new Promise(resolve => setTimeout(resolve, 200));
             try {
@@ -5185,7 +5359,13 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     );
     const huntFoodAnimals = async () => {
         const health = Number(bot.health);
-        if (!Number.isFinite(health) || health < 12) {
+        // Immediate bodily recovery may hunt a passive food animal from five
+        // or more half-hearts when no hostile is within the local guard ring.
+        // The global Safety supervisor remains able to interrupt this action;
+        // refusing every passive source below twelve health made recovery
+        // impossible precisely when food was needed to regenerate.
+        const supervisedEmergencyHunt = permitsSupervisedEmergencyHunt({ immediateSupply, health });
+        if (!Number.isFinite(health) || (health < 12 && !supervisedEmergencyHunt)) {
             progress.huntingDeferredReason = Number.isFinite(health)
                 ? 'critical_health'
                 : 'health_unknown';
@@ -5204,11 +5384,16 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
             await prepareTool(bot, 'stone_sword');
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
+            const currentHealth = Number(bot.health);
+            const emergencyHuntStillAllowed = permitsSupervisedEmergencyHunt({
+                immediateSupply,
+                health: currentHealth,
+            });
             if (
                 interrupted()
                 || availableFoodPoints() + potentialCookedFoodPoints() >= targetPoints
                 || nearbyHostile()
-                || Number(bot.health) < 12
+                || (currentHealth < 12 && !emergencyHuntStillAllowed)
             ) break;
             const candidates = world.getNearbyEntities(bot, searchRange)
                 .filter(entity => (
@@ -5223,7 +5408,60 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
             const sustainable = candidates.find(entity => populations[entity.name] >= 3);
             const animal = sustainable || (availableFoodPoints() === 0 ? candidates[0] : null);
             if (!animal) break;
-            if (!await attackEntity(bot, animal, true)) break;
+            if (foodSourceRequiresOpenSurface({
+                bodyY: bot.entity?.position?.y,
+                sourceY: animal.position?.y,
+                sourceDistance: bot.entity?.position?.distanceTo?.(animal.position),
+                occupiesOpenSurface: Boolean(occupiedOpenSurfaceStandingCell(bot)),
+            })) {
+                progress.huntingDeferredReason = 'surface_access_required';
+                progress.accessRequirement = {
+                    kind: 'surface',
+                    reason: 'elevated_hunt_target_outside_open_surface_access',
+                    target: {
+                        name: animal.name || 'animal',
+                        id: animal.id,
+                        x: animal.position.x,
+                        y: animal.position.y,
+                        z: animal.position.z,
+                    },
+                };
+                break;
+            }
+            if (!await attackEntity(bot, animal, true, {
+                pickupKind: 'food_hunt_pickup',
+                pickupFilter: item => Boolean(
+                    bot.registry?.foodsByName?.[item?.name]
+                    && !UNSAFE_FOOD_ITEMS.has(item.name)
+                ),
+            })) {
+                const failure = bot.lastActionEvidence || {};
+                progress.huntingFailure = {
+                    outcome: String(failure.outcome || 'hunt_failed'),
+                    target: failure.target || {
+                        name: animal.name || 'animal',
+                        id: animal.id,
+                    },
+                    retryable: failure.retryable !== false,
+                };
+                if (
+                    Number(animal.position?.y) >= Number(bot.entity?.position?.y) + 4
+                    && ['combat_timeout', 'target_lost', 'unreachable'].includes(failure.outcome)
+                ) {
+                    progress.accessRequirement = {
+                        kind: 'surface',
+                        reason: 'elevated_hunt_target_outside_returnable_pursuit',
+                        target: {
+                            name: animal.name || 'animal',
+                            id: animal.id,
+                            x: animal.position.x,
+                            y: animal.position.y,
+                            z: animal.position.z,
+                        },
+                    };
+                }
+                break;
+            }
             progress.animalsHunted += 1;
         }
     };
@@ -5236,6 +5474,16 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     await cookCarriedFood(false);
     if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
+    // A one-point bodily emergency asks for the fastest supervised edible
+    // source, not a durable farm transaction. Try a loaded passive animal
+    // before spending the bounded action on every remote crop stance. Normal
+    // reserve building remains crop-first and sustainable below.
+    if (immediateSupply) {
+        await huntFoodAnimals();
+        if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
+        if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
+    }
+
     await harvestMatureCrops();
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
     await craftAvailableBread();
@@ -5245,13 +5493,15 @@ export async function prepareFood(bot, targetFoodPoints=24, range=64, exactWorks
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
     if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
-    await huntFoodAnimals();
+    if (!immediateSupply) await huntFoodAnimals();
     if (interrupted()) return await finish(false, 'interrupted', { retryable: false });
     if (carriedCookableCount() > 0) await cookCarriedFood(true);
     if (availableFoodPoints() >= targetPoints) return await finish(true, 'prepared', { retryable: false });
 
     const afterPoints = availableFoodPoints();
-    return await finish(false, afterPoints > beforePoints ? 'partial_supply' : 'no_food_sources', {
+    return await finish(false, progress.accessRequirement
+        ? 'source_access_required'
+        : afterPoints > beforePoints ? 'partial_supply' : 'no_food_sources', {
         availableFoodPoints: afterPoints,
     });
 }
@@ -6477,6 +6727,95 @@ async function fireTacticalBow(bot, entity, desiredRange) {
     return await performVerifiedRangedShot(bot, entity);
 }
 
+async function performExplosiveMeleeKite(bot, entity, desiredRange = 8) {
+    const maximumHits = 5;
+    let botAttributedHits = 0;
+    let verifiedSeparations = 0;
+    for (let attempt = 0; attempt < maximumHits; attempt += 1) {
+        if (!entity?.position || !bot.entities?.[entity.id]) {
+            return {
+                confirmed: botAttributedHits > 0,
+                outcome: botAttributedHits > 0 ? 'explosive_threat_cleared' : 'target_lost',
+                evidence: { botAttributedHits, verifiedSeparations },
+            };
+        }
+        if (bot.interrupt_code || (Number(bot.health) || 0) <= 8) {
+            return {
+                confirmed: false,
+                outcome: bot.interrupt_code ? 'interrupted' : 'critical_health',
+                evidence: { botAttributedHits, verifiedSeparations },
+            };
+        }
+        const distance = bot.entity.position.distanceTo(entity.position);
+        if (distance > MAX_MELEE_REACH) {
+            const approached = await goToGoal(
+                bot,
+                new pf.goals.GoalFollow(entity, Math.max(2.6, MAX_MELEE_REACH - 0.2)),
+                {
+                    movements: () => safeMovements(bot),
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: false,
+                },
+            );
+            if (!approached || !entity?.position || !bot.entities?.[entity.id]) {
+                return {
+                    confirmed: false,
+                    outcome: bot.lastActionEvidence?.outcome || 'explosive_approach_blocked',
+                    evidence: { botAttributedHits, verifiedSeparations },
+                };
+            }
+        }
+        const hit = await attackEntity(bot, entity, false);
+        const hitEvidence = bot.lastActionEvidence || null;
+        if (!hit) {
+            if (!bot.entities?.[entity.id] && botAttributedHits > 0) {
+                return {
+                    confirmed: true,
+                    outcome: 'explosive_threat_cleared',
+                    evidence: { botAttributedHits, verifiedSeparations },
+                };
+            }
+            return {
+                confirmed: false,
+                outcome: hitEvidence?.outcome || 'explosive_hit_unverified',
+                evidence: { botAttributedHits, verifiedSeparations, hitEvidence },
+            };
+        }
+        botAttributedHits += 1;
+        if (!bot.entities?.[entity.id]) {
+            return {
+                confirmed: true,
+                outcome: 'explosive_threat_cleared',
+                evidence: { botAttributedHits, verifiedSeparations },
+            };
+        }
+        const separationBefore = bot.entity.position.distanceTo(entity.position);
+        const separated = await moveAwayFromEntity(bot, entity, desiredRange);
+        const separationAfter = entity?.position
+            ? bot.entity.position.distanceTo(entity.position)
+            : desiredRange;
+        if (!separated || separationAfter < desiredRange - 1) {
+            return {
+                confirmed: false,
+                outcome: bot.lastActionEvidence?.outcome || 'explosive_separation_failed',
+                evidence: {
+                    botAttributedHits,
+                    verifiedSeparations,
+                    separationBefore,
+                    separationAfter,
+                },
+            };
+        }
+        verifiedSeparations += 1;
+        await waitCombatWindow(bot, DEFENSE_SWING_INTERVAL_MS);
+    }
+    return {
+        confirmed: !bot.entities?.[entity.id] && botAttributedHits > 0,
+        outcome: bot.entities?.[entity.id] ? 'explosive_melee_limit_reached' : 'explosive_threat_cleared',
+        evidence: { botAttributedHits, verifiedSeparations },
+    };
+}
+
 export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, attributedEntityId=null, options={}) {
     const requestedRange = Math.max(4, Math.min(32, Math.floor(Number(range) || TACTICAL_COMBAT_RANGE)));
     const objective = options?.objective === 'disengage' ? 'disengage' : 'resolve';
@@ -6603,7 +6942,17 @@ export async function resolveTacticalCombat(bot, range=TACTICAL_COMBAT_RANGE, at
             }
 
             let attack = null;
-            if (response === 'ranged') {
+            if (response === 'explosive_melee') {
+                if (!await equipCombatShield(bot)) {
+                    return finish(false, 'shield_equipment_failed', { steps });
+                }
+                shieldWindows += 1;
+                attack = await performExplosiveMeleeKite(
+                    bot,
+                    entity,
+                    selected.desiredRange,
+                );
+            } else if (response === 'ranged') {
                 attack = await fireTacticalBow(bot, entity, selected.desiredRange);
                 if (attack.confirmed) rangedShots += 1;
             } else {
@@ -7390,7 +7739,10 @@ export async function harvestEntityDrop(bot, sourceName, outputName, method='she
     return false;
 }
 
-export async function attackEntity(bot, entity, kill=true) {
+export async function attackEntity(bot, entity, kill=true, {
+    pickupFilter = null,
+    pickupKind = 'combat_pickup',
+} = {}) {
     /**
      * Attack mob of the given type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
@@ -7406,7 +7758,13 @@ export async function attackEntity(bot, entity, kill=true) {
         return false;
     }
 
-    const target = { name: entity.username || entity.name || 'entity', id: entity.id };
+    const target = {
+        name: entity.username || entity.name || 'entity',
+        id: entity.id,
+        x: entity.position.x,
+        y: entity.position.y,
+        z: entity.position.z,
+    };
     let pos = entity.position.clone();
     if (bot.interrupt_code) {
         setActionEvidence(bot, { kind: 'combat', outcome: 'interrupted', target, retryable: false });
@@ -7595,7 +7953,21 @@ export async function attackEntity(bot, entity, kill=true) {
             log(bot, `Successfully defeated ${target.name}.`);
             await stopPvpCombatAndSettle(bot);
             try {
-                await pickupNearbyItems(bot);
+                if (typeof pickupFilter === 'function') {
+                    await waitForWorldCondition(bot, () => (
+                        droppedItemCandidates(bot, 8, pickupFilter).length > 0
+                    ), 1_000, 50);
+                    const priorityDrops = droppedItemCandidates(bot, 8, pickupFilter);
+                    if (priorityDrops.length > 0) {
+                        await collectDroppedItemQueue(bot, priorityDrops, {
+                            kind: pickupKind,
+                            requireAll: false,
+                            successMessage: count => `Collected ${count} priority drop${count === 1 ? '' : 's'} from ${target.name}.`,
+                        });
+                    }
+                } else {
+                    await pickupNearbyItems(bot);
+                }
             } catch (error) {
                 console.warn(`[combat] Could not collect drops after defeating ${target.name}: ${String(error?.message || error).slice(0, 240)}`);
             }
@@ -7753,6 +8125,7 @@ async function tossDiscardedStack(bot, item, {
     discardedEntities = null,
 } = {}) {
     const origin = bot.entity?.position?.clone?.();
+    const inventoryBefore = inventoryCount(bot, item.name);
     const priorIds = new Set(Object.keys(bot.entities || {}).map(Number));
     let observed = null;
     const matchesDiscard = entity => {
@@ -7792,15 +8165,24 @@ async function tossDiscardedStack(bot, item, {
         // newly spawned nearby stack by identity and item type.
         await interruptibleDelay(bot, 350);
         observed ||= Object.values(bot.entities || {}).find(matchesDiscard) || null;
-        if (!Number.isFinite(observed?.id)) return false;
-        ignoredPickupEntityIds(bot).add(observed.id);
+        const inventoryReduced = inventoryCount(bot, item.name)
+            <= Math.max(0, inventoryBefore - Math.max(1, Number(item.count) || 1));
+        if (Number.isFinite(observed?.id)) ignoredPickupEntityIds(bot).add(observed.id);
         if (Array.isArray(discardedEntities)) {
-            discardedEntities.push({
-                id: observed.id,
-                position: observed.position?.clone?.() || null,
-            });
+            if (Number.isFinite(observed?.id)) {
+                discardedEntities.push({
+                    id: observed.id,
+                    position: observed.position?.clone?.() || origin?.clone?.() || null,
+                });
+            } else if (inventoryReduced && origin) {
+                // Entity metadata can arrive after the bounded correlation
+                // window, but the authoritative carried count already proves
+                // the whole selected stack left inventory. Preserve its known
+                // disposal origin so physical separation remains verifiable.
+                discardedEntities.push({ id: null, position: origin.clone() });
+            }
         }
-        return true;
+        return inventoryReduced;
     } finally {
         bot.removeListener('entitySpawn', onEntitySpawn);
     }
@@ -7859,11 +8241,222 @@ export function selectRedundantExcavationDebrisStack(inventoryItems, protectedNa
         || null;
 }
 
+function disposalNavigationMovements(bot) {
+    const movements = safeMovements(bot);
+    // Disposal is inventory maintenance, not excavation authority. Both legs
+    // must traverse only geometry that already exists.
+    movements.canDig = false;
+    movements.canPlaceBlocks = false;
+    movements.allow1by1towers = false;
+    movements.allowParkour = false;
+    return movements;
+}
+
+async function reachRoundTripDisposalStance(bot, resumePosition, preservedReturnRoute = []) {
+    if (
+        !resumePosition
+        || ![resumePosition.x, resumePosition.y, resumePosition.z].every(Number.isFinite)
+    ) return false;
+    const home = new Vec3(
+        Math.floor(resumePosition.x),
+        Math.floor(resumePosition.y),
+        Math.floor(resumePosition.z),
+    );
+    const preservedCorridor = normalizePreservedMiningReturnRoute(preservedReturnRoute);
+    const corridorAnchorIndex = preservedCorridor.findLastIndex(stance => (
+        sameMiningCell(stance, home)
+    ));
+    const candidates = [];
+    const candidateKeys = new Set();
+    const addCandidate = (stance, routeIndex = null) => {
+        const horizontal = Math.hypot(stance.x - home.x, stance.z - home.z);
+        if (horizontal < 3) return;
+        if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) return;
+        if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) return;
+        const support = bot.blockAt(stance.offset(0, -1, 0));
+        if (!support || !isAnchoredGameplaySupport(bot, support)) return;
+        const key = miningCellKey(stance);
+        if (candidateKeys.has(key)) return;
+        candidateKeys.add(key);
+        candidates.push({
+            position: stance,
+            corridorBound: Number.isInteger(routeIndex),
+            routeIndex,
+            horizontal,
+        });
+    };
+    // Mining access already owns an exact return corridor. Reuse its currently
+    // loaded, still-supported cells as the first disposal candidates instead of
+    // asking a second local-space selector to rediscover the same topology.
+    // Pathfinder below remains the authority for both the outbound and return
+    // edges, so stale checkpoint geometry still fails closed.
+    for (const [routeIndex, stance] of preservedCorridor.entries()) {
+        addCandidate(stance, routeIndex);
+    }
+    // Surface legs deliberately rise several blocks at a time. Their already-
+    // opened staircase can be the nearest returnable disposal route even when
+    // the generic two-block local-escape horizon cannot see its endpoint. Scan
+    // loaded supported cells only; Pathfinder still has to prove both edges.
+    for (let horizontal = 3; horizontal <= 8; horizontal += 1) {
+        for (let dx = -horizontal; dx <= horizontal; dx += 1) {
+            for (let dz = -horizontal; dz <= horizontal; dz += 1) {
+                if (Math.abs(dx) + Math.abs(dz) !== horizontal) continue;
+                for (const dy of [0, 1, 2, 3, 4, 5, 6, -1, -2, -3, -4, -5, -6]) {
+                    const stance = home.offset(dx, dy, dz);
+                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
+                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                    const support = bot.blockAt(stance.offset(0, -1, 0));
+                    if (!support || !isAnchoredGameplaySupport(bot, support)) continue;
+                    const key = miningCellKey(stance);
+                    if (candidateKeys.has(key)) continue;
+                    candidateKeys.add(key);
+                    candidates.push({
+                        position: stance,
+                        corridorBound: false,
+                        horizontal: Math.hypot(stance.x - home.x, stance.z - home.z),
+                    });
+                }
+            }
+        }
+    }
+    candidates.sort((left, right) => (
+        Number(right.corridorBound) - Number(left.corridorBound)
+        || left.horizontal - right.horizontal
+        || Math.abs(left.position.y - home.y) - Math.abs(right.position.y - home.y)
+        || Number(left.position.y < home.y) - Number(right.position.y < home.y)
+        || left.position.x - right.position.x
+        || left.position.z - right.position.z
+    ));
+    candidates.splice(128);
+    const movements = disposalNavigationMovements(bot);
+    const reachCandidate = async (selected) => {
+        const goal = new pf.goals.GoalBlock(selected.x, selected.y, selected.z);
+        const reached = await goToGoal(bot, goal, {
+            movements,
+            allowHealthBoundedDescent: false,
+            allowLocalRecovery: false,
+        });
+        const settled = reached && await waitForWorldCondition(
+            bot,
+            () => physicallyOccupiesStandingCell(bot, selected),
+            GROUND_SETTLE_TIMEOUT_MS,
+            25,
+        );
+        return Boolean(
+            settled
+            && bot.entity?.position
+            && Math.hypot(
+                bot.entity.position.x - home.x,
+                bot.entity.position.z - home.z,
+            ) >= 3
+        );
+    };
+    if (corridorAnchorIndex >= 0) {
+        const hasSymmetricSupportedRoute = (candidateIndex) => {
+            const first = Math.min(corridorAnchorIndex, candidateIndex);
+            const last = Math.max(corridorAnchorIndex, candidateIndex);
+            let previous = preservedCorridor[first];
+            if (!isMiningRouteCellReturnable(bot, previous)) return false;
+            for (let index = first + 1; index <= last; index += 1) {
+                const current = preservedCorridor[index];
+                if (
+                    !isMiningRouteCellReturnable(bot, current)
+                    // A supported one-block mining stair is reversible: the
+                    // downhill edge is a bounded step and the reverse edge is
+                    // Minecraft's ordinary one-block climb. Both standing
+                    // cells and both head cells were rechecked above.
+                    || Math.abs(current.y - previous.y) > 1
+                    || Math.abs(current.x - previous.x) + Math.abs(current.z - previous.z) !== 1
+                ) return false;
+                previous = current;
+            }
+            return true;
+        };
+        const corridorCandidate = candidates.find(candidate => (
+            candidate.corridorBound
+            && hasSymmetricSupportedRoute(candidate.routeIndex)
+        ));
+        if (corridorCandidate && await reachCandidate(corridorCandidate.position)) return true;
+    }
+    const route = probeSafeRoundTripNavigationStances(
+        bot,
+        candidates.map(candidate => candidate.position),
+        home,
+        Math.min(2_500, remainingActionTimeMs(2_500)),
+        movements,
+        { returnRadius: 1 },
+    );
+    if (!route.reachable || !route.terminalPosition) return false;
+    const selected = new Vec3(
+        route.terminalPosition.x,
+        route.terminalPosition.y,
+        route.terminalPosition.z,
+    );
+    return await reachCandidate(selected);
+}
+
+function unavoidableLoosePickupSlots(bot, resumePosition) {
+    if (
+        !resumePosition
+        || ![resumePosition.x, resumePosition.y, resumePosition.z].every(Number.isFinite)
+    ) return 0;
+    // A generic disposal stance is at most eight horizontal blocks from home.
+    // Any existing item entity outside that bound plus passive pickup clearance
+    // cannot consume a slot during the outbound/return transaction.
+    const exposureRadius = MAX_DISPOSAL_STANCE_HORIZONTAL + PASSIVE_PICKUP_CLEARANCE;
+    const looseByName = new Map();
+    const stackSizeByName = new Map();
+    for (const entity of Object.values(bot.entities || {})) {
+        if (
+            entity?.name !== 'item'
+            || !entity.position
+            || entity.position.distanceTo(resumePosition) > exposureRadius
+        ) continue;
+        let dropped = null;
+        try {
+            dropped = entity.getDroppedItem?.() || null;
+        } catch {
+            dropped = null;
+        }
+        if (!dropped?.name || !(Number(dropped.count) > 0)) continue;
+        looseByName.set(
+            dropped.name,
+            (looseByName.get(dropped.name) || 0) + Math.floor(Number(dropped.count)),
+        );
+        stackSizeByName.set(
+            dropped.name,
+            Math.max(1, Math.floor(Number(dropped.stackSize) || 64)),
+        );
+    }
+    if (looseByName.size === 0) return 0;
+
+    const carriedCapacity = new Map();
+    for (const item of bot.inventory.items()) {
+        if (!looseByName.has(item.name)) continue;
+        const stackSize = Math.max(
+            1,
+            Math.floor(Number(item.stackSize) || stackSizeByName.get(item.name) || 64),
+        );
+        carriedCapacity.set(
+            item.name,
+            (carriedCapacity.get(item.name) || 0) + Math.max(0, stackSize - item.count),
+        );
+    }
+    let slots = 0;
+    for (const [name, looseCount] of looseByName.entries()) {
+        const stackSize = stackSizeByName.get(name) || 64;
+        const remaining = Math.max(0, looseCount - (carriedCapacity.get(name) || 0));
+        slots += Math.ceil(remaining / stackSize);
+    }
+    return Math.min(MAX_COLLECTION_SLOT_RELEASE_ACTIONS, slots);
+}
+
 async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 1, {
     allowLocalCache = true,
     resumePosition = null,
     requireDisposalSeparation = !allowLocalCache,
     preferBulkNaturalFill = false,
+    preservedReturnRoute = [],
 } = {}) {
     const inventoryStart = Number(bot.inventory?.inventoryStart);
     const inventoryEnd = Number(bot.inventory?.inventoryEnd);
@@ -7872,11 +8465,24 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
         && inventoryEnd > inventoryStart
         ? inventoryEnd - inventoryStart
         : 36;
-    const desiredSlots = Math.max(1, Math.min(
+    const minimumFinalSlots = Math.max(1, Math.min(
         carriedSlotCount,
         Math.floor(Number(requestedSlots) || 1),
     ));
-    if (!allowLocalCache && requireDisposalSeparation) {
+    const pickupBufferSlots = !allowLocalCache && requireDisposalSeparation
+        ? unavoidableLoosePickupSlots(bot, resumePosition)
+        : 0;
+    const desiredSlots = Math.min(
+        carriedSlotCount,
+        minimumFinalSlots + pickupBufferSlots,
+    );
+    if (pickupBufferSlots > 0) {
+        log(
+            bot,
+            `Reserved ${pickupBufferSlots} additional disposal slot${pickupBufferSlots === 1 ? '' : 's'} for unavoidable loose items on the local return route.`,
+        );
+    }
+    if (requireDisposalSeparation) {
         const staleDrop = bot.nearestEntity?.(entity => (
             entity?.name === 'item'
             && entity?.position
@@ -7894,6 +8500,32 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
                 log(bot, 'Could not reach a clean disposal stance away from old dropped items.');
                 return false;
             }
+        }
+    }
+    if (
+        !allowLocalCache
+        && requireDisposalSeparation
+        && bot.inventory.emptySlotCount() < desiredSlots
+        && resumePosition
+        && [resumePosition.x, resumePosition.y, resumePosition.z].every(Number.isFinite)
+        && bot.entity?.position?.distanceTo?.(resumePosition) < 3
+    ) {
+        // The first work cell is often the current cell. Tossing there and then
+        // "returning" to it cannot escape passive pickup, so disposal needs an
+        // actual outbound leg before any inventory is released. The verified
+        // resume route below brings the body back after the stack is left here.
+        const disposalStanceReached = await reachRoundTripDisposalStance(
+            bot,
+            resumePosition,
+            preservedReturnRoute,
+        );
+        if (
+            !disposalStanceReached
+            || !bot.entity?.position
+            || bot.entity.position.distanceTo(resumePosition) < 3
+        ) {
+            log(bot, 'Could not establish a supported disposal stance away from the bound work cell.');
+            return false;
         }
     }
     let releaseActions = 0;
@@ -7983,9 +8615,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
 
         const disposableClutter = selectDisposableWorkingSlotStack(bot, protectedNames);
         if (disposableClutter) {
-            // Only the shared overflow policy's lowest-value, zero-reserve
-            // class is eligible here. Unknown items, useful reserves, gear,
-            // food, and every current job material remain fail-closed.
+            // The shared overflow policy has already assigned this exact item a
+            // zero keep count. Priority orders those zero-reserve candidates;
+            // protected job materials, useful reserves, gear, and food remain
+            // fail-closed in overflowKeepCount or protectedNames.
             discardedDropsQuarantined = await tossDiscardedStack(bot, disposableClutter, {
                 awayFrom: resumePosition,
                 discardedEntities,
@@ -8056,10 +8689,9 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
     }
     let released = bot.inventory.emptySlotCount() >= desiredSlots;
     if (
-        released
-        && releaseActions > 0
-        && !allowLocalCache
+        releaseActions > 0
         && requireDisposalSeparation
+        && (discardedEntities.length > 0 || !discardedDropsQuarantined)
     ) {
         let leftDisposalStance = false;
         if (resumePosition && [resumePosition.x, resumePosition.y, resumePosition.z].every(Number.isFinite)) {
@@ -8070,7 +8702,17 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
                 1,
             );
             leftDisposalStance = resumeGoal.isEnd(bot.entity.position.floored())
-                || await goToGoal(bot, resumeGoal, { allowLocalRecovery: false });
+                || await goToGoal(bot, resumeGoal, {
+                    movements: disposalNavigationMovements(bot),
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: false,
+                });
+            // Native navigation can report its no-progress timeout on the same
+            // tick the server settles the body inside the requested radius.
+            // The current Minecraft position is the postcondition; reconcile
+            // it after the promise settles instead of preserving a stale false.
+            leftDisposalStance = leftDisposalStance
+                || resumeGoal.isEnd(bot.entity.position.floored());
         } else {
             const liveDiscard = discardedEntities
                 .map(entry => bot.entities?.[entry.id])
@@ -8092,7 +8734,10 @@ async function freeCollectionWorkingSlots(bot, protectedNames, requestedSlots = 
             log(bot, 'Working slots opened, but the bot could not leave the disposal pickup radius safely.');
             return false;
         }
-        released = bot.inventory.emptySlotCount() >= desiredSlots;
+        // Existing route drops may legitimately consume the explicit buffer on
+        // the way home. The caller's requested collection capacity must remain;
+        // the temporary buffer itself need not remain empty after settlement.
+        released = bot.inventory.emptySlotCount() >= minimumFinalSlots;
     }
     return released;
 }
@@ -8164,7 +8809,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         return false;
     }
     let blocktypes = [blockType];
-    if (blockType === 'coal' || blockType === 'diamond' || blockType === 'emerald' || blockType === 'iron' || blockType === 'gold' || blockType === 'lapis_lazuli' || blockType === 'redstone')
+    if (ORE_DROP_ITEMS.has(blockType))
         blocktypes.push(blockType+'_ore');
     if (blockType.endsWith('ore'))
         blocktypes.push('deepslate_'+blockType);
@@ -8177,6 +8822,12 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
         || blockType === 'deepslate'
         || blockType === 'ancient_debris'
         || blockType === 'obsidian'
+        // Item goals name the drop (`diamond`), while the bound physical source
+        // is an ore block (`deepslate_diamond_ore`). Preserve that registry
+        // relationship through access planning so a prospective mining stance
+        // is handed to the deterministic corridor owner instead of being
+        // mislabeled unreachable before excavation starts.
+        || ORE_DROP_ITEMS.has(blockType)
         || blockType.endsWith('_ore');
     // Exact exposed-resource bindings must be able to forbid excavation.
     // Omission retains the normal mining default; an explicit false is policy.
@@ -8452,7 +9103,17 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             // worse than trying and failing, because trying and failing at least
             // moves and reports why.
             const fallbackBlock = blocks[0];
-            if (fallbackBlock && !bot.interrupt_code) {
+            // CollectBlock's open-ended dig fallback is useful before an
+            // expedition has a spine. Once a verified return route exists,
+            // however, it becomes a second excavation owner and can mine the
+            // floor out from under that spine while chasing an ore candidate.
+            // The deterministic corridor attempt above already owns the safe
+            // answer in that state, so keep the body and route intact.
+            if (
+                fallbackBlock
+                && !bot.interrupt_code
+                && preservedReturnRoute.length === 0
+            ) {
                 log(bot, `No stance found for ${blockType}; letting collectblock dig its own route.`);
                 const heldBefore = world.getInventoryCounts(bot)?.[blockType] || 0;
                 bot.modes.pause('unstuck');
@@ -8474,6 +9135,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                         allowPillars: true,
                         allowNaturalRouteDigging: true,
                         requireReturnableRoute: false,
+                        protectedBreakGeometry: protectedReturnGeometry,
                     });
                     await runBoundedCollectionOperation(
                         bot,
@@ -8568,7 +9230,15 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
             const desiredSlots = allowNaturalRouteDigging
                 ? MINING_COLLECTION_SLOT_RESERVE
                 : 1;
-            const cleared = await freeCollectionWorkingSlots(bot, protectedNames, desiredSlots);
+            const cleared = await freeCollectionWorkingSlots(bot, protectedNames, desiredSlots, {
+                // Mining debris tossed beside the working stance is immediately
+                // reabsorbed by Minecraft regardless of the autonomous pickup
+                // filter. Throw it away from the bound resource and physically
+                // settle back at that resource before trusting the new capacity.
+                resumePosition: block.position,
+                requireDisposalSeparation: true,
+                preferBulkNaturalFill: allowNaturalRouteDigging,
+            });
             hasFreeSlot = bot.inventory.emptySlotCount() > 0;
             hasPotentialStackSpace = bot.inventory.items().some(item => (
                 expectedDropTypes.has(item.type)
@@ -8576,12 +9246,8 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 && item.count < item.stackSize
             ));
             if (
-                !cleared
-                || (!hasFreeSlot && !hasPotentialStackSpace)
-                || (
-                    allowNaturalRouteDigging
-                    && bot.inventory.emptySlotCount() < desiredSlots
-                )
+                !hasFreeSlot
+                && !hasPotentialStackSpace
             ) {
                 setCollectionEvidence({
                     kind: 'collect',
@@ -8593,6 +9259,16 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                 });
                 log(bot, `Cannot collect ${block.name}: inventory cannot reserve ${desiredSlots} working slot${desiredSlots === 1 ? '' : 's'} safely.`);
                 return false;
+            }
+            if (!cleared && allowNaturalRouteDigging && bot.inventory.emptySlotCount() < desiredSlots) {
+                // The reserve protects throughput, not the truth of the target
+                // transfer. When the exact drop already fits a partial carried
+                // stack, keep the bounded mining action moving and let its
+                // postcondition verify the requested inventory increase.
+                log(
+                    bot,
+                    `Continuing with ${bot.inventory.emptySlotCount()} of ${desiredSlots} preferred mining slots because ${block.name} has verified carried stack capacity.`,
+                );
             }
         }
         try {
@@ -8815,6 +9491,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null, range=64
                             allowPillars: searchOptions?.allowPillars === true,
                             allowNaturalRouteDigging: false,
                             requireReturnableRoute: searchOptions?.requireReturnableRoute === true,
+                            protectedBreakGeometry: protectedReturnGeometry,
                         });
                         try {
                             await runBoundedCollectionOperation(
@@ -10851,15 +11528,50 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
             reach: 4.5,
             requireIndependentSupport: options?.requireIndependentSupport === true,
         });
-        const interactionStance = await reachInteractionStance(bot, {
-            kind: 'break',
-            target,
-            goal: breakGoal,
-            navigationOptions: {
-                allowHealthBoundedDescent: false,
-                allowLocalRecovery: false,
-            },
-        });
+        const occupiedCell = observedSupportedStandingCell(bot);
+        const boundStandingCell = options?.boundStandingCell;
+        const occupiesBoundStandingCell = Boolean(
+            occupiedCell
+            && boundStandingCell
+            && miningCellKey(occupiedCell) === miningCellKey(boundStandingCell)
+        );
+        const blockVisibleFromBoundStance = Boolean(
+            occupiesBoundStandingCell
+            && (
+                breakGoal.isEnd(occupiedCell)
+                // GoalLookAtBlock can reject an adjacent upper-face dig from
+                // a negative-Y staircase even though the exact bound eye ray
+                // reaches that block. The corridor already owns the body cell;
+                // use the same exact-cell ray proof as route preflight before
+                // falling back to a global stance search.
+                || miningBlockFaceReachableFromStandingCell(bot, block, occupiedCell)
+            )
+        );
+        // Mining corridors bind every body cell and every authorized clearance
+        // block before execution. If the body still occupies that exact safe
+        // cell and Mineflayer can currently raycast the exact block, a second
+        // global stance search can only discard stronger route authority. This
+        // was the surface-escape loop: the corridor was valid, but generic
+        // GoalLookAtBlock search timed out before attempting the visible dig.
+        const interactionStance = blockVisibleFromBoundStance
+            ? interactionStanceReady({
+                kind: 'break',
+                target,
+                candidateCount: 1,
+                code: 'bound_route_stance',
+                selectedStance: occupiedCell,
+                pathStatus: 'bound_route_stance',
+                pathLength: 0,
+            })
+            : await reachInteractionStance(bot, {
+                kind: 'break',
+                target,
+                goal: breakGoal,
+                navigationOptions: {
+                    allowHealthBoundedDescent: false,
+                    allowLocalRecovery: false,
+                },
+            });
         if (interactionStance.status !== 'ready') {
             setActionEvidence(bot, evidenceWithInteractionStance({
                 kind: 'break',
@@ -10867,7 +11579,10 @@ export async function breakBlockAt(bot, x, y, z, options = {}) {
                 target,
                 retryable: interactionStance.status !== 'interrupted',
             }, interactionStance));
-            log(bot, `Cannot reach a visible face of ${block.name} to break it.`);
+            const from = occupiedCell
+                ? ` from ${occupiedCell.x},${occupiedCell.y},${occupiedCell.z}`
+                : '';
+            log(bot, `Cannot reach a visible face of ${block.name} at ${x},${y},${z}${from}.`);
             return false;
         }
 
@@ -11774,6 +12489,8 @@ export async function placeBlock(
     dontCheat=false,
     replaceObstruction=true,
     preferredInventorySlot=null,
+    boundStandingCell=null,
+    placementOptions={},
 ) {
     /**
      * Place the given block type at the given position. It will build off from any adjacent blocks. Will fail if there is a block in the way or nothing to build off of.
@@ -11785,6 +12502,8 @@ export async function placeBlock(
      * @param {string} placeOn, the preferred side of the block to place on. Can be 'top', 'bottom', 'north', 'south', 'east', 'west', or 'side'. Defaults to bottom. Will place on first available side if not possible.
      * @param {boolean} dontCheat, overrides cheat mode to place the block normally. Defaults to false.
      * @param {number|null} preferredInventorySlot, exact source slot for bounded inventory compaction. Defaults to normal item selection.
+     * @param {Vec3|null} boundStandingCell, exact body cell already owned by the calling route.
+     * @param {object} placementOptions, narrowly-scoped physical placement variants.
      * @returns {Promise<boolean>} true if the block was placed, false otherwise.
      * @example
      * let p = world.getPosition(bot);
@@ -11962,15 +12681,84 @@ export async function placeBlock(
     // Pathfinder already owns the exact physical predicate for placing a
     // block. Every material uses the same stance contract; bypassing route
     // planning for torches, rails, or buckets makes failures unattributable.
-    const interactionStance = await reachInteractionStance(bot, {
-        kind: 'placement',
-        target,
-        goal: placementGoal,
-        navigationOptions: {
-            allowHealthBoundedDescent: false,
-            allowLocalRecovery: false,
-        },
-    });
+    const occupiedCell = observedSupportedStandingCell(bot);
+    const observedBodyCell = bot.entity?.position?.floored?.() || null;
+    const unsettledSupportPlacement = Boolean(
+        placementOptions?.allowUnsettledSupportUnderBody === true
+        && observedBodyCell
+        && boundStandingCell
+        && miningCellKey(observedBodyCell) === miningCellKey(boundStandingCell)
+        && Math.abs(Number(bot.entity?.position?.y) - boundStandingCell.y) <= 0.35
+        && target_dest.equals(boundStandingCell.offset(0, -1, 0))
+        && isObservedStandingCellClear(bot, bot.blockAt(boundStandingCell))
+        && isObservedStandingCellClear(bot, bot.blockAt(boundStandingCell.offset(0, 1, 0)))
+        && isReplaceableGameplayBlock(bot.blockAt(target_dest))
+        && !isLiquidGameplayBlock(bot.blockAt(target_dest))
+        && !isHazardousGameplayBlock(bot.blockAt(target_dest))
+        && hasSurfaceSupportPlacementAnchor(bot, target_dest)
+    );
+    const boundBodyCell = occupiedCell || (unsettledSupportPlacement ? observedBodyCell : null);
+    const occupiesBoundStandingCell = Boolean(
+        boundBodyCell
+        && boundStandingCell
+        && miningCellKey(boundBodyCell) === miningCellKey(boundStandingCell)
+    );
+    const boundEyePosition = occupiesBoundStandingCell
+        ? bot.entity?.position?.offset?.(
+            0,
+            Number(bot.entity?.eyeHeight) || 1.6,
+            0,
+        )
+        : null;
+    let boundFace = null;
+    try {
+        boundFace = boundEyePosition
+            ? placementGoal.getFaceAndRef(boundEyePosition)
+            : null;
+    } catch {
+        boundFace = null;
+    }
+    const boundExpectedReference = boundFace?.face
+        ? target_dest.plus(boundFace.face)
+        : null;
+    const boundPlacementReady = Boolean(
+        boundFace?.ref?.equals?.(boundExpectedReference)
+    );
+    if (occupiesBoundStandingCell && !boundPlacementReady) {
+        setActionEvidence(bot, {
+            kind: 'place',
+            outcome: 'bound_stance_unusable',
+            target,
+            boundStandingCell: boundBodyCell,
+            unsettledSupportPlacement,
+            retryable: true,
+        });
+        log(bot, `Cannot place ${blockType} from the exact bound route stance.`);
+        return false;
+    }
+    const interactionStance = occupiesBoundStandingCell
+        ? interactionStanceReady({
+            kind: 'placement',
+            target,
+            candidateCount: 1,
+            code: unsettledSupportPlacement
+                ? 'bound_body_support_stance'
+                : 'bound_route_stance',
+            selectedStance: boundBodyCell,
+            pathStatus: unsettledSupportPlacement
+                ? 'bound_body_support_stance'
+                : 'bound_route_stance',
+            pathLength: 0,
+        })
+        : await reachInteractionStance(bot, {
+            kind: 'placement',
+            target,
+            goal: placementGoal,
+            navigationOptions: {
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        });
     if (interactionStance.status !== 'ready') {
         setActionEvidence(bot, evidenceWithInteractionStance({
             kind: 'place',
@@ -12037,7 +12825,15 @@ export async function placeBlock(
     try {
         let placed = false;
         if (item_name.includes('bucket')) {
-            placed = await useToolOnBlock(bot, item_name, buildOffBlock);
+            // A filled bucket places fluid by interacting with the selected
+            // support face, not by generically using the held item. Preserve
+            // the exact GoalPlaceBlock result and the already-arrived stance;
+            // otherwise the interaction helper can replan away from the
+            // protected route and the server receives no destination face.
+            placed = await useToolOnBlock(bot, item_name, buildOffBlock, {
+                boundStandingCell: observedSupportedStandingCell(bot),
+                interactionFace: faceVec,
+            });
         }
         else {
             await bot.equip(block_item, 'hand');
@@ -13174,14 +13970,19 @@ export async function recoverDeathItems(bot, deathRecord, {
         for (const [name, expectedCount] of Object.entries(expected)) {
             const carried = Math.max(0, Number(after[name]) || 0);
             const gainedCount = Math.max(0, carried - (Number(before[name]) || 0));
-            recoveredByItem[name] = Math.max(
+            const recoveredCount = Math.max(
                 Math.max(0, Number(previouslyRecovered[name]) || 0),
                 Math.min(expectedCount, carried),
             );
+            recoveredByItem[name] = recoveredCount;
             gainedByItem[name] = Math.min(expectedCount, gainedCount);
             recovered += recoveredByItem[name];
             gained += gainedByItem[name];
-            missing += Math.max(0, expectedCount - carried);
+            // Recovery is a durable pickup fact, not a requirement to keep the
+            // original manifest untouched forever. Survival may eat recovered
+            // food and productive work may consume recovered materials before
+            // the next observation; the cumulative ledger must not regress.
+            missing += Math.max(0, expectedCount - recoveredCount);
         }
         return Object.freeze({
             after: Object.freeze({ ...after }),
@@ -14444,10 +15245,10 @@ export function selectDisposableWorkingSlotStack(bot, protectedNames = new Set()
             && Number.isInteger(item.slot)
             && ![...protectedSet].some(name => protectedInventoryItem(item.name, String(name || '').trim()))
             && overflowKeepCount(bot, 'builder', item.name, '') === 0
-            && overflowPriority(item.name) === 0
         ))
         .sort((left, right) => (
-            left.count - right.count
+            overflowPriority(left.name) - overflowPriority(right.name)
+            || left.count - right.count
             || left.name.localeCompare(right.name)
             || left.slot - right.slot
         ))[0] || null;
@@ -14766,19 +15567,24 @@ export async function consume(bot, itemName="") {
     const bestFoodRequested = itemName === 'best_food' || itemName === '';
     const healingPotionRequested = itemName === 'healing_potion';
     const target = { name: bestFoodRequested ? 'best_food' : itemName || 'item' };
+    const carriedItems = Array.isArray(bot.inventory?.slots)
+        ? bot.inventory.slots.filter(Boolean)
+        : (bot.inventory?.items?.() || []);
     let item;
     if (healingPotionRequested) {
-        item = bot.inventory.items().find(candidate => (
+        item = carriedItems.find(candidate => (
             isDrinkableHealingPotion(candidate, bot.version)
         )) || null;
         if (item) {
             target.inventoryName = item.name;
             target.effect = potionIdentity(item, bot.version);
         }
-    } else if (!bestFoodRequested) item = bot.inventory.findInventoryItem(itemName);
+    } else if (!bestFoodRequested) {
+        item = carriedItems.find(candidate => candidate?.name === itemName) || null;
+    }
     else {
         const foods = bot.registry?.foodsByName || {};
-        item = bot.inventory.items()
+        item = carriedItems
             .filter(candidate => (
                 foods[candidate.name]
                 && !UNSAFE_FOOD_ITEMS.has(candidate.name)
@@ -14847,7 +15653,7 @@ export async function consume(bot, itemName="") {
         const previousItem = previousHeldItemRecord?.name === previousHeldItem
             && Number(previousHeldItemRecord?.count ?? 1) > 0
             ? previousHeldItemRecord
-            : bot.inventory.findInventoryItem(previousHeldItem);
+            : carriedItems.find(candidate => candidate?.name === previousHeldItem) || null;
         if (previousItem) {
             try {
                 await bot.equip(previousItem, 'hand');
@@ -15561,6 +16367,29 @@ function stopNavigationGoal(bot) {
     }
 }
 
+async function awaitStoppedNavigationSettlement(navigation) {
+    const timeoutMs = Math.max(
+        0,
+        Math.min(
+            NAVIGATION_STOP_SETTLEMENT_TIMEOUT_MS,
+            remainingActionTimeMs(NAVIGATION_STOP_SETTLEMENT_TIMEOUT_MS),
+        ),
+    );
+    if (timeoutMs <= 0) return false;
+
+    let timeout = null;
+    try {
+        return await Promise.race([
+            navigation.then(() => true),
+            new Promise(resolve => {
+                timeout = setTimeout(() => resolve(false), timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timeout) clearTimeout(timeout);
+    }
+}
+
 function nativeBestAvailableEndpoint(result) {
     if (
         !['noPath', 'timeout'].includes(result?.status)
@@ -15581,14 +16410,20 @@ function nativeBestAvailableEndpoint(result) {
     };
 }
 
-async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS) {
+async function runNavigationAttempt(
+    bot,
+    goal,
+    movements,
+    stallTimeoutMs = NAVIGATION_STALL_TIMEOUT_MS,
+    pathfinderOptions = {},
+) {
     const progressWatchdog = startNavigationProgressWatchdog(bot, goal, stallTimeoutMs);
     let lastPathUpdate = null;
     const rememberPathUpdate = result => { lastPathUpdate = result; };
     bot.on('path_update', rememberPathUpdate);
     bot.pathfinder.setMovements(movements);
     const navigation = Promise.resolve()
-        .then(() => bot.pathfinder.goto(goal))
+        .then(() => bot.pathfinder.goto(goal, pathfinderOptions))
         .then(
             () => ({ state: 'resolved' }),
             error => ({ state: 'rejected', error }),
@@ -15604,12 +16439,20 @@ async function runNavigationAttempt(bot, goal, movements, stallTimeoutMs = NAVIG
         if (pathfinderState) outcome.pathfinder = pathfinderState;
         if (['stalled', 'rejected'].includes(outcome.state)) {
             stopNavigationGoal(bot);
+            try { bot.clearControlStates?.(); } catch { /* disconnected body */ }
             // Both the external convergence watchdog and Pathfinder's own
             // timeout can stop an ordinary step-up while the body is airborne.
-            // Do not let the caller bind recovery geometry until the plugin
-            // promise is finished and the server observes a supported stance.
-            await navigation;
-            try { bot.clearControlStates?.(); } catch { /* disconnected body */ }
+            // Give the plugin a bounded chance to settle, but never let an old
+            // goto promise retain body ownership after its goal was stopped.
+            // The server-side support observation below remains the authority
+            // for whether recovery geometry may bind from the resulting body.
+            const navigationSettled = await awaitStoppedNavigationSettlement(navigation);
+            if (!navigationSettled) {
+                outcome.stopSettlement = {
+                    status: 'timeout',
+                    timeoutMs: NAVIGATION_STOP_SETTLEMENT_TIMEOUT_MS,
+                };
+            }
             await waitForWorldCondition(
                 bot,
                 () => Boolean(observedSupportedStandingCell(bot)),
@@ -16648,7 +17491,13 @@ export async function goToGoal(bot, goal, options = {}) {
         }
         let outcome = navigationGoalSatisfied(bot, goal)
             ? { state: 'resolved' }
-            : await runNavigationAttempt(bot, goal, initialMovements, navigationStallTimeoutMs);
+            : await runNavigationAttempt(
+                bot,
+                goal,
+                initialMovements,
+                navigationStallTimeoutMs,
+                options?.pathfinderOptions,
+            );
         if (aborted()) return false;
         currentFeet = bot.entity?.position
             ? bot.blockAt(bot.entity.position.floored())
@@ -16662,7 +17511,13 @@ export async function goToGoal(bot, goal, options = {}) {
             if (aborted()) return false;
             if (recovery.success) {
                 log(bot, 'Navigation stepped out of shallow water and is retrying the requested route.');
-                outcome = await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
+                outcome = await runNavigationAttempt(
+                    bot,
+                    goal,
+                    movementFactory(),
+                    navigationStallTimeoutMs,
+                    options?.pathfinderOptions,
+                );
                 if (aborted()) return false;
             }
         }
@@ -16676,6 +17531,7 @@ export async function goToGoal(bot, goal, options = {}) {
                 goal,
                 safeDescentMovements(bot),
                 navigationStallTimeoutMs,
+                options?.pathfinderOptions,
             );
             if (aborted()) return false;
             const descentRecovery = {
@@ -16710,7 +17566,13 @@ export async function goToGoal(bot, goal, options = {}) {
                 ? 'a bounded local foliage escape'
                 : 'a safe Pathfinder sidestep';
             log(bot, `Navigation made ${recoveryAction} ${recoveryAttempts}/${MAX_NAVIGATION_RECOVERY_ATTEMPTS} and is retrying the route.`);
-            outcome = await runNavigationAttempt(bot, goal, movementFactory(), navigationStallTimeoutMs);
+            outcome = await runNavigationAttempt(
+                bot,
+                goal,
+                movementFactory(),
+                navigationStallTimeoutMs,
+                options?.pathfinderOptions,
+            );
             if (aborted()) return false;
         }
         if (
@@ -16731,6 +17593,7 @@ export async function goToGoal(bot, goal, options = {}) {
                     endpointGoal,
                     movementFactory(),
                     navigationStallTimeoutMs,
+                    options?.pathfinderOptions,
                 );
                 if (aborted()) return false;
                 endpointReached = closestOutcome.state === 'resolved'
@@ -17187,7 +18050,22 @@ function isStableMiningStagingCell(bot, feet) {
         !isCollectionStandingCellClear(standing)
         || !isCollectionStandingCellClear(head)
         || !isAnchoredGameplaySupport(bot, support)
+        || !isNaturalFillBlock(bot, support)
+        || isProtectedGameplayBlock(support)
     ) return false;
+
+    // A body can stand safely inside a base while every legal staircase exits
+    // through its crafting table, torch, wall, or other protected fixture.
+    // Staging owns the whole entrance work volume, not only the support block.
+    for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+            for (let yOffset = -1; yOffset <= 2; yOffset += 1) {
+                if (isProtectedGameplayBlock(bot.blockAt(feet.offset(dx, yOffset, dz)))) {
+                    return false;
+                }
+            }
+        }
+    }
 
     // Keep the staircase mouth one full cell away from liquid. Natural-fill
     // safety deliberately rejects blocks beside water, so staging on the
@@ -17362,10 +18240,16 @@ async function stageMiningStaircase(bot, targetBlock = null) {
             },
         );
         if (bot.interrupt_code) return false;
-        if (
+        const settled = Boolean(
             (reached || physicallyOccupiesStandingCell(bot, candidate.position))
-            && isStableMiningStagingCell(bot, candidate.position)
-        ) {
+            && await waitForWorldCondition(
+                bot,
+                () => physicallyOccupiesStandingCell(bot, candidate.position),
+                GROUND_SETTLE_TIMEOUT_MS,
+                25,
+            )
+        );
+        if (settled && isStableMiningStagingCell(bot, candidate.position)) {
             log(bot, 'Reached stable dry ground before opening the mining staircase.');
             return Object.freeze({ success: true, outcome: 'staging_verified', retryable: false });
         }
@@ -17391,10 +18275,11 @@ async function carveExploratoryDepthRoute(bot, targetY, options = {}) {
     );
     const rejections = {};
     let toolRequirement = null;
+    let safelyExcavated = 0;
     for (let drop = maximumDrop; drop >= 1; drop -= 1) {
         const run = drop + 2;
         const stances = orderedMiningHeadings(bot)
-            .slice(0, MAX_MINING_ROUTE_HEADINGS)
+            .slice(0, MAX_MINING_DEPTH_HEADINGS)
             .map(heading => origin.offset(heading.x * run, -drop, heading.z * run));
         for (const stance of stances) {
             const plan = buildMiningAccessPlan(bot, null, run, {
@@ -17423,6 +18308,7 @@ async function carveExploratoryDepthRoute(bot, targetY, options = {}) {
                     // staircase after execution begins. The exact origin has
                     // been restored, so reject only this heading and preflight
                     // the next one instead of replaying the same impossible dig.
+                    safelyExcavated += Math.max(0, Math.floor(Number(access.excavated) || 0));
                     rejections[failureOutcome] = (rejections[failureOutcome] || 0) + 1;
                     continue;
                 }
@@ -17463,6 +18349,9 @@ async function carveExploratoryDepthRoute(bot, targetY, options = {}) {
         progressed: false,
         outcome: toolRequirement ? 'insufficient_tool_durability' : 'no_safe_depth_corridor',
         rejections,
+        excavated: safelyExcavated,
+        geometryChanged: safelyExcavated > 0,
+        returnable: safelyExcavated > 0,
         ...(toolRequirement ? { toolRequirement } : {}),
     };
 }
@@ -17482,9 +18371,7 @@ function miningCellKey(position) {
 }
 
 function normalizePreservedMiningReturnRoute(value) {
-    return (Array.isArray(value) ? value : [])
-        .slice(-512)
-        .filter(cell => [cell?.x, cell?.y, cell?.z].every(Number.isFinite))
+    return loopEraseMiningRouteCells(value, { limit: 512 })
         .map(cell => new Vec3(
             Math.floor(cell.x),
             Math.floor(cell.y),
@@ -17539,6 +18426,58 @@ function miningRouteTouchesLiquid(bot, positions) {
     )));
 }
 
+function observedMiningFluidFrontier(bot, stepPosition, expectedFluid, targetBlock = null) {
+    if (!stepPosition || typeof expectedFluid !== 'string' || expectedFluid.length === 0) {
+        return null;
+    }
+    const occupied = observedSupportedStandingCell(bot);
+    const adjacentStep = Boolean(
+        occupied
+        && Math.abs(occupied.x - stepPosition.x) + Math.abs(occupied.z - stepPosition.z) === 1
+        && Math.abs(occupied.y - stepPosition.y) <= 1
+    );
+    if (
+        !adjacentStep
+        || !physicallyOccupiesStandingCell(bot, occupied)
+        || !isMiningRouteCellReturnable(bot, occupied)
+        || isMiningRouteCellReturnable(bot, stepPosition)
+    ) return null;
+
+    const liveTarget = targetBlock?.position ? bot.blockAt(targetBlock.position) : null;
+    if (
+        !liveTarget
+        || liveTarget.name !== expectedFluid
+        || fluidSourceLevel(liveTarget) !== 0
+    ) return null;
+
+    const frontierPositions = [stepPosition, stepPosition.offset(0, 1, 0)];
+    const offsets = [
+        [1, 0, 0], [-1, 0, 0], [0, 1, 0],
+        [0, -1, 0], [0, 0, 1], [0, 0, -1],
+    ];
+    for (const position of [...frontierPositions]) {
+        for (const [x, y, z] of offsets) frontierPositions.push(position.offset(x, y, z));
+    }
+    const observedFluids = [...new Map(frontierPositions
+        .map(position => bot.blockAt(position))
+        .filter(block => block?.name === expectedFluid)
+        .map(block => [miningCellKey(block.position), block])).values()];
+    if (observedFluids.length === 0) return null;
+
+    return {
+        fluid: expectedFluid,
+        occupied,
+        blockedStep: stepPosition,
+        source: liveTarget.position,
+        observedFluids: observedFluids.map(block => ({
+            x: block.position.x,
+            y: block.position.y,
+            z: block.position.z,
+            level: fluidSourceLevel(block),
+        })),
+    };
+}
+
 function boundedFallingRouteColumn(bot, start) {
     const blocks = [];
     let position = start;
@@ -17570,6 +18509,70 @@ function fallingColumnDepth(bot, start) {
     return depth;
 }
 
+function carriedSurfaceSupportItems(bot) {
+    const rank = new Map(
+        SURFACE_SUPPORT_MATERIAL_PREFERENCE.map((name, index) => [name, index]),
+    );
+    return bot.inventory.items()
+        .filter(item => rank.has(item.name) && Number(item.count) > 0)
+        .sort((left, right) => (
+            rank.get(left.name) - rank.get(right.name)
+            || right.count - left.count
+            || left.name.localeCompare(right.name)
+            || left.slot - right.slot
+        ));
+}
+
+function assessSurfaceSupportMaterialCapacity(bot, requiredPlacements) {
+    const required = Math.max(0, Math.floor(Number(requiredPlacements) || 0));
+    const items = carriedSurfaceSupportItems(bot);
+    const available = items.reduce(
+        (total, item) => total + Math.max(0, Number(item.count) || 0),
+        0,
+    );
+    const usable = Math.max(0, available - MIN_SURFACE_SUPPORT_REMAINDER);
+    return {
+        ok: required <= usable,
+        outcome: required <= usable
+            ? 'support_material_sufficient'
+            : 'insufficient_support_material',
+        required,
+        available,
+        usable,
+        reserve: MIN_SURFACE_SUPPORT_REMAINDER,
+        materials: items.map(item => ({
+            name: item.name,
+            count: item.count,
+            slot: item.slot,
+        })),
+    };
+}
+
+function selectCarriedSurfaceSupportMaterial(bot) {
+    return carriedSurfaceSupportItems(bot)[0] || null;
+}
+
+function hasSurfaceSupportPlacementAnchor(
+    bot,
+    position,
+    virtualSupportKeys = new Set(),
+) {
+    return [
+        [0, -1, 0], [0, 1, 0],
+        [1, 0, 0], [-1, 0, 0],
+        [0, 0, 1], [0, 0, -1],
+    ].some(([x, y, z]) => {
+        const neighbourPosition = position.offset(x, y, z);
+        if (virtualSupportKeys?.has?.(miningCellKey(neighbourPosition))) return true;
+        const neighbour = bot.blockAt(neighbourPosition);
+        return Boolean(
+            neighbour
+            && isSafeGameplaySupport(neighbour)
+            && !isProtectedGameplayBlock(neighbour)
+        );
+    });
+}
+
 export function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
     const feet = step.position;
     const head = feet.offset(0, 1, 0);
@@ -17579,7 +18582,45 @@ export function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
     if (!supportBlock || !bot.blockAt(ceiling)) {
         return { ok: false, outcome: 'route_chunk_unloaded', blocks: [] };
     }
-    const supportAssessment = assessAnchoredGameplaySupport(bot, supportBlock);
+    let supportAssessment = assessAnchoredGameplaySupport(bot, supportBlock);
+    const supportPlacements = [];
+    if (!supportAssessment.ok && options.allowSupportPlacement === true) {
+        const supportKey = miningCellKey(support);
+        if (options.protectedGeometry?.has(supportKey)) {
+            return {
+                ok: false,
+                outcome: 'preserved_return_route_conflict',
+                conflictBlock: support,
+                blocks: [],
+            };
+        }
+        if (
+            supportBlock
+            && isReplaceableGameplayBlock(supportBlock)
+            && !isLiquidGameplayBlock(supportBlock)
+            && !isHazardousGameplayBlock(supportBlock)
+            && hasSurfaceSupportPlacementAnchor(
+                bot,
+                support,
+                options.virtualSupportKeys,
+            )
+        ) {
+            supportPlacements.push(support);
+            supportAssessment = {
+                ok: true,
+                outcome: 'support_placement_planned',
+                blocks: [],
+                anchor: null,
+            };
+        } else if (supportBlock && isReplaceableGameplayBlock(supportBlock)) {
+            return {
+                ok: false,
+                outcome: 'support_placement_unanchored',
+                blockedBy: supportBlock.name,
+                blocks: [],
+            };
+        }
+    }
     if (!supportAssessment.ok) {
         return {
             ok: false,
@@ -17681,6 +18722,7 @@ export function assessMiningRouteStep(bot, step, targetBlock, options = {}) {
         outcome: 'route_step_safe',
         blocks,
         supportBlocks: supportAssessment.blocks,
+        supportPlacements,
     };
 }
 
@@ -17712,6 +18754,19 @@ export function orderMiningExcavationBlocks(blocks, origin = null, { ascending =
         if (!origin?.distanceTo) return 0;
         return origin.distanceTo(left.position) - origin.distanceTo(right.position);
     });
+}
+
+export function miningBlockFaceReachableFromStandingCell(bot, block, stance) {
+    if (
+        !block?.position
+        || !stance
+        || !bot?.world
+    ) return false;
+    const goal = new pf.goals.GoalLookAtBlock(block.position, bot.world, {
+        reach: 4.5,
+        entityHeight: Number(bot.entity?.eyeHeight) || 1.6,
+    });
+    return goal.isEnd(stance);
 }
 
 function miningExcavationTouchesOpenSky(bot, block) {
@@ -17793,6 +18848,7 @@ export function assessMiningRouteDurability(
     {
         allowReplacementBootstrapReserve = false,
         allowUnharvestedBreaks = false,
+        allowTargetProtectedReserve = false,
         targetBlock = null,
     } = {},
 ) {
@@ -17822,21 +18878,36 @@ export function assessMiningRouteDurability(
             const materialCount = spec.material === 'planks'
                 ? plankInventoryCount(bot)
                 : inventoryCount(bot, spec.material);
+            const currentUsable = items
+                .filter(carried => carried.name === name)
+                .reduce((maximum, carried) => Math.max(
+                    maximum,
+                    toolDurability(bot, carried).usable,
+                ), 0);
+            // The requirement must distinguish a genuinely new replacement
+            // from the same worn tool that just failed the route. Reporting
+            // only the unassigned tail let a four-use wooden pick satisfy a
+            // one-use requirement and sent depth relocation straight back to
+            // the unchanged staircase forever.
+            const replacementMinimum = Math.max(
+                minimumUsableDurability,
+                Number.isFinite(currentUsable) ? currentUsable + 1 : minimumUsableDurability,
+            );
             return {
                 ...item,
                 freshUsable: Number.isFinite(durability.max)
                     ? durability.max - toolDurabilityReserve(bot, item)
                     : Number.POSITIVE_INFINITY,
+                replacementMinimum,
                 preparationReady: (
                     materialCount >= spec.materialCount
-                    && inventoryCount(bot, 'stick') >= 2
-                    && inventoryCount(bot, 'crafting_table') >= 1
+                    && plankInventoryCount(bot) >= toolPreparationPlankFloor(bot, name)
                 ),
             };
             })
             .filter(item => (
                 item
-                && item.freshUsable >= minimumUsableDurability
+                && item.freshUsable >= item.replacementMinimum
                 && blocks.every(block => {
                     try { return block.canHarvest(item.type); } catch { return false; }
                 })
@@ -17856,13 +18927,19 @@ export function assessMiningRouteDurability(
         ))[0] || null;
     };
 
-    // The target is a separate capability role. Reserve exactly one usable
-    // break for it before assigning corridor fill; a fixed whole-tranche
-    // minimum wrongly forced the ore-tier pick to excavate every route block.
+    // The target is a separate capability role. Its exact, already-observed
+    // block needs one real break, while the protected reserve belongs to
+    // uncertain corridor excavation. Applying the corridor reserve here made
+    // a worn but capable pick look incapable of the final one-break harvest
+    // and sent the planner into an unrelated replacement-material expedition.
     let targetTool = null;
     if (targetBlock) {
         targetTool = items
-            .filter(item => capacities.get(item.slot) > 0)
+            .filter(item => (
+                allowTargetProtectedReserve
+                    ? toolDurability(bot, item).remaining > 0
+                    : capacities.get(item.slot) > 0
+            ))
             .filter(item => {
                 try { return targetBlock.canHarvest(item.type); } catch { return false; }
             })
@@ -17879,12 +18956,14 @@ export function assessMiningRouteDurability(
                 requiredFor: targetBlock.name,
                 requiredBreaks: routeBlocks.length + 1,
                 replacementTool: replacement?.name || null,
-                minimumUsableDurability: 1,
+                minimumUsableDurability: replacement?.replacementMinimum || 1,
                 targetCapability: true,
             };
         }
         const remaining = capacities.get(targetTool.slot);
-        if (Number.isFinite(remaining)) capacities.set(targetTool.slot, remaining - 1);
+        if (Number.isFinite(remaining)) {
+            capacities.set(targetTool.slot, Math.max(0, remaining - 1));
+        }
     }
 
     const assigned = new Map();
@@ -17914,7 +18993,7 @@ export function assessMiningRouteDurability(
                 requiredFor: requirement.block.name,
                 requiredBreaks: routeBlocks.length + (targetBlock ? 1 : 0),
                 replacementTool: replacement?.name || null,
-                minimumUsableDurability: remainingBlocks.length,
+                minimumUsableDurability: replacement?.replacementMinimum || remainingBlocks.length,
             };
         }
         const remaining = capacities.get(selected.slot);
@@ -17927,11 +19006,49 @@ export function assessMiningRouteDurability(
         requiredBreaks: routeBlocks.length + (targetBlock ? 1 : 0),
         assigned: Object.fromEntries(assigned),
         targetTool: targetTool?.name || null,
+        targetUsesProtectedReserve: Boolean(
+            allowTargetProtectedReserve
+            &&
+            targetTool
+            && Number.isFinite(toolDurability(bot, targetTool).remaining)
+            && toolDurability(bot, targetTool).usable < 1
+        ),
         targetReserve: targetBlock ? 1 : 0,
         unharvestedBreaks,
         replacementBootstrapReserve: allowReplacementBootstrapReserve,
         allowUnharvestedBreaks,
     };
+}
+
+export function miningRouteSupportReturnConflict(origin, route = []) {
+    if (!origin || !Array.isArray(route)) return null;
+    const returnBody = new Map();
+    const bindBody = (position, routeIndex) => {
+        returnBody.set(miningCellKey(position), { position, routeIndex, part: 'feet' });
+        returnBody.set(miningCellKey(position.offset(0, 1, 0)), {
+            position: position.offset(0, 1, 0),
+            routeIndex,
+            part: 'head',
+        });
+    };
+    bindBody(origin, -1);
+    for (const [routeIndex, step] of route.entries()) {
+        const position = step?.position;
+        if (!position?.offset) continue;
+        const support = position.offset(0, -1, 0);
+        const conflict = returnBody.get(miningCellKey(support));
+        if (conflict) {
+            return Object.freeze({
+                routeIndex,
+                support,
+                returnRouteIndex: conflict.routeIndex,
+                returnPart: conflict.part,
+                returnCell: conflict.position,
+            });
+        }
+        bindBody(position, routeIndex);
+    }
+    return null;
 }
 
 function assessMiningAccessPlan(
@@ -17946,6 +19063,7 @@ function assessMiningAccessPlan(
         allowReplacementBootstrapReserve = false,
         allowUnharvestedBreaks = false,
         allowNaturalFoliageExcavation = false,
+        allowSupportPlacement = false,
         stageFallingDebris = false,
         maxRouteSteps = null,
         protectedGeometry = null,
@@ -17957,16 +19075,32 @@ function assessMiningAccessPlan(
     if (route.length === 0 || route.length > maximumSteps) {
         return { ok: false, outcome: 'route_step_budget_exceeded', route, stance };
     }
+    const supportReturnConflict = miningRouteSupportReturnConflict(origin, route);
+    if (supportReturnConflict) {
+        return {
+            ok: false,
+            outcome: 'route_support_overlaps_return_cell',
+            route,
+            stance,
+            origin,
+            conflict: supportReturnConflict,
+            safePrefixLength: supportReturnConflict.routeIndex,
+        };
+    }
     let previous = origin;
     const excavation = new Map();
     const requiredSupports = new Map();
-    const bindRequiredSupport = (block, standingCell) => {
-        if (!block?.position) return;
-        requiredSupports.set(miningCellKey(block.position), {
-            support: block.position,
+    const supportPlacements = new Map();
+    const bindRequiredSupportPosition = (position, standingCell) => {
+        if (!position) return;
+        requiredSupports.set(miningCellKey(position), {
+            support: position,
             standingCell,
         });
     };
+    const bindRequiredSupport = (block, standingCell) => (
+        bindRequiredSupportPosition(block?.position, standingCell)
+    );
     const originSupport = assessAnchoredGameplaySupport(
         bot,
         bot.blockAt(origin.offset(0, -1, 0)),
@@ -17977,6 +19111,7 @@ function assessMiningAccessPlan(
     for (const block of originSupport.blocks) bindRequiredSupport(block, origin);
     const stepExcavationBlocks = [];
     const stepEstimatedDigMs = [];
+    const stepSupportPlacements = [];
     for (const [stepIndex, step] of route.entries()) {
         const horizontalDelta = Math.abs(step.position.x - previous.x)
             + Math.abs(step.position.z - previous.z);
@@ -17992,12 +19127,16 @@ function assessMiningAccessPlan(
                 excavationBlocks: [...excavation.values()],
                 stepExcavationBlocks,
                 stepEstimatedDigMs,
+                supportPlacements: [...supportPlacements.values()],
+                stepSupportPlacements,
                 blockedStepIndex: stepIndex,
                 blockedStep: step.position,
             };
         }
         const assessment = assessMiningRouteStep(bot, step, targetBlock, {
             allowNaturalFoliage: allowNaturalFoliageExcavation === true,
+            allowSupportPlacement: allowSupportPlacement === true,
+            virtualSupportKeys: new Set(requiredSupports.keys()),
             protectedGeometry,
         });
         if (!assessment.ok) {
@@ -18010,6 +19149,8 @@ function assessMiningAccessPlan(
                 excavationBlocks: [...excavation.values()],
                 stepExcavationBlocks,
                 stepEstimatedDigMs,
+                supportPlacements: [...supportPlacements.values()],
+                stepSupportPlacements,
                 blockedStepIndex: stepIndex,
                 blockedStep: step.position,
             };
@@ -18017,6 +19158,15 @@ function assessMiningAccessPlan(
         for (const block of assessment.supportBlocks || []) {
             bindRequiredSupport(block, step.position);
         }
+        const newlyBoundSupportPlacements = [];
+        for (const position of assessment.supportPlacements || []) {
+            const key = miningCellKey(position);
+            bindRequiredSupportPosition(position, step.position);
+            if (supportPlacements.has(key)) continue;
+            supportPlacements.set(key, position);
+            newlyBoundSupportPlacements.push(position);
+        }
+        stepSupportPlacements.push(newlyBoundSupportPlacements);
         const newlyBoundBlocks = [];
         for (const block of assessment.blocks) {
             const key = miningCellKey(block.position);
@@ -18037,6 +19187,28 @@ function assessMiningAccessPlan(
             0,
         ));
         previous = step.position;
+    }
+    const supportPlacementList = [...supportPlacements.values()];
+    const supportMaterialCapacity = assessSurfaceSupportMaterialCapacity(
+        bot,
+        supportPlacementList.length,
+    );
+    if (!supportMaterialCapacity.ok) {
+        return {
+            ok: false,
+            outcome: supportMaterialCapacity.outcome,
+            route,
+            stance,
+            origin,
+            excavationBlocks: [...excavation.values()],
+            stepExcavationBlocks,
+            stepEstimatedDigMs,
+            supportPlacements: supportPlacementList,
+            stepSupportPlacements,
+            supportMaterialCapacity,
+            requiredSupportPlacements: supportPlacementList.length,
+            availableSupportPlacements: supportMaterialCapacity.usable,
+        };
     }
     if (stageFallingDebris) {
         for (let index = 1; index < route.length; index += 1) {
@@ -18083,6 +19255,9 @@ function assessMiningAccessPlan(
             excavationBlocks: [...excavation.values()],
             stepExcavationBlocks,
             stepEstimatedDigMs,
+            supportPlacements: supportPlacementList,
+            stepSupportPlacements,
+            supportMaterialCapacity,
         };
     }
     if (!sameMiningCell(stance, previous)) {
@@ -18128,17 +19303,74 @@ function assessMiningAccessPlan(
         : excavationBlocks;
     const blockBudget = plannedBreaks.length;
     if (blockBudget > MAX_MINING_EXCAVATION_BLOCKS) {
+        // Search may prove a long connected corridor even though one action is
+        // allowed to excavate only a bounded prefix. Find the longest prefix
+        // that fits the physical break budget, then run that prefix back
+        // through this same assessment owner so durability, supports, surface
+        // disturbance, returnability, and deadline checks remain identical to
+        // a naturally short route.
+        const prefixExcavationKeys = new Set();
+        let prefixLength = 0;
+        for (let index = 0; index < Math.max(0, route.length - 1); index += 1) {
+            const nextKeys = (stepExcavationBlocks[index] || [])
+                .map(block => miningCellKey(block.position))
+                .filter(key => !prefixExcavationKeys.has(key));
+            if (prefixExcavationKeys.size + nextKeys.length > MAX_MINING_EXCAVATION_BLOCKS) break;
+            for (const key of nextKeys) prefixExcavationKeys.add(key);
+            prefixLength = index + 1;
+        }
+        if (prefixLength > 0) {
+            const prefixRoute = route.slice(0, prefixLength);
+            const prefix = assessMiningAccessPlan(
+                bot,
+                origin,
+                null,
+                prefixRoute.at(-1).position,
+                prefixRoute,
+                prefixLength,
+                {
+                    breakTarget: false,
+                    allowReplacementBootstrapReserve,
+                    allowUnharvestedBreaks,
+                    allowNaturalFoliageExcavation,
+                    allowSupportPlacement,
+                    stageFallingDebris,
+                    maxRouteSteps: prefixLength,
+                    protectedGeometry,
+                },
+            );
+            if (prefix.ok || prefix.outcome === 'route_deadline_insufficient') {
+                return {
+                    ...prefix,
+                    ...(prefix.ok ? { outcome: 'route_prefix_ready' } : {}),
+                    partial: true,
+                    fullRouteSteps: route.length,
+                    fullBlockBudget: blockBudget,
+                };
+            }
+        }
         return {
             ok: false,
             outcome: 'excavation_budget_exceeded',
             route,
             stance,
+            origin,
+            excavationBlocks,
+            excavationBudget,
+            stepExcavationBlocks,
+            stepEstimatedDigMs,
+            supportPlacements: supportPlacementList,
+            stepSupportPlacements,
+            supportMaterialCapacity,
             blockBudget,
         };
     }
     const durability = assessMiningRouteDurability(bot, excavationBlocks, {
         allowReplacementBootstrapReserve,
         allowUnharvestedBreaks,
+        // Only a bound collection target may spend the protected reserve.
+        // Every ordinary route block and generic break retains the reserve.
+        allowTargetProtectedReserve: Boolean(targetBlock),
         targetBlock,
     });
     if (!durability.ok) return { ...durability, route, stance, blockBudget };
@@ -18157,7 +19389,12 @@ function assessMiningAccessPlan(
     const estimatedTargetDigMs = breakTarget && targetBlock
         ? Math.max(50, collectionBreakTime(bot, targetBlock))
         : 0;
-    const estimatedDigMs = estimatedRouteDigMs + estimatedTargetDigMs;
+    const estimatedSupportPlacementMs = (
+        supportPlacementList.length * MINING_SUPPORT_PLACEMENT_ESTIMATE_MS
+    );
+    const estimatedDigMs = estimatedRouteDigMs
+        + estimatedTargetDigMs
+        + estimatedSupportPlacementMs;
     const estimatedReturnMs = Math.ceil(route.length * MINING_ROUTE_STEP_ESTIMATE_MS);
     const estimatedDurationMs = Math.ceil(estimatedDigMs + estimatedReturnMs);
     if (
@@ -18176,6 +19413,10 @@ function assessMiningAccessPlan(
             excavationBudget,
             stepExcavationBlocks,
             stepEstimatedDigMs,
+            supportPlacements: supportPlacementList,
+            stepSupportPlacements,
+            supportMaterialCapacity,
+            estimatedSupportPlacementMs,
             blockBudget,
             estimatedDurationMs,
             estimatedReturnMs,
@@ -18184,6 +19425,7 @@ function assessMiningAccessPlan(
             protectedGeometry,
             allowUnharvestedBreaks,
             allowNaturalFoliageExcavation: allowNaturalFoliageExcavation === true,
+            allowSupportPlacement: allowSupportPlacement === true,
             stageFallingDebris: stageFallingDebris === true,
         };
     }
@@ -18197,6 +19439,10 @@ function assessMiningAccessPlan(
         excavationBudget,
         stepExcavationBlocks,
         stepEstimatedDigMs,
+        supportPlacements: supportPlacementList,
+        stepSupportPlacements,
+        supportMaterialCapacity,
+        estimatedSupportPlacementMs,
         blockBudget,
         breakTarget,
         estimatedDurationMs,
@@ -18206,6 +19452,7 @@ function assessMiningAccessPlan(
         protectedGeometry,
         allowUnharvestedBreaks,
         allowNaturalFoliageExcavation: allowNaturalFoliageExcavation === true,
+        allowSupportPlacement: allowSupportPlacement === true,
         stageFallingDebris: stageFallingDebris === true,
         surfaceDisturbance,
     };
@@ -18226,23 +19473,38 @@ export function selectMiningDeadlinePrefix(plan, remainingMs) {
         (total, duration) => total + Math.max(0, Number(duration) || 0),
         0,
     );
+    const totalStepPlacementMs = (plan.stepSupportPlacements || []).reduce(
+        (total, placements) => total
+            + ((placements?.length || 0) * MINING_SUPPORT_PLACEMENT_ESTIMATE_MS),
+        0,
+    );
     const targetDigMs = Math.max(0, Number(plan.estimatedTargetDigMs) || 0);
     let cumulativeDigMs = 0;
+    let cumulativePlacementMs = 0;
     let longestSafe = null;
     let bridgingPrefix = null;
 
     for (let length = 1; length <= maximumPrefixLength; length += 1) {
         cumulativeDigMs += Math.max(0, Number(plan.stepEstimatedDigMs[length - 1]) || 0);
+        cumulativePlacementMs += (
+            (plan.stepSupportPlacements?.[length - 1]?.length || 0)
+            * MINING_SUPPORT_PLACEMENT_ESTIMATE_MS
+        );
         const traversalMs = length * MINING_ROUTE_STEP_ESTIMATE_MS;
         const requiredMs = cumulativeDigMs
+            + cumulativePlacementMs
             + (traversalMs * 2)
             + MINING_ROUTE_DEADLINE_RESERVE_MS;
         if (requiredMs > availableMs) break;
 
-        const estimatedExecutionMs = cumulativeDigMs + traversalMs;
+        const estimatedExecutionMs = cumulativeDigMs + cumulativePlacementMs + traversalMs;
         const postRemainingMs = Math.max(0, availableMs - estimatedExecutionMs);
         const remainingSteps = plan.route.length - length;
-        const remainingDigMs = totalStepDigMs - cumulativeDigMs + targetDigMs;
+        const remainingDigMs = totalStepDigMs
+            - cumulativeDigMs
+            + totalStepPlacementMs
+            - cumulativePlacementMs
+            + targetDigMs;
         const postRouteRequiredMs = remainingDigMs
             + (remainingSteps * MINING_ROUTE_STEP_ESTIMATE_MS * 2)
             + MINING_ROUTE_DEADLINE_RESERVE_MS;
@@ -18264,6 +19526,9 @@ export function selectMiningDeadlinePrefix(plan, remainingMs) {
     const route = plan.route.slice(0, selected.length);
     const stepExcavationBlocks = plan.stepExcavationBlocks.slice(0, selected.length);
     const excavationBlocks = stepExcavationBlocks.flat();
+    const stepSupportPlacements = (plan.stepSupportPlacements || [])
+        .slice(0, selected.length);
+    const supportPlacements = stepSupportPlacements.flat();
     return {
         ...plan,
         ok: true,
@@ -18274,6 +19539,11 @@ export function selectMiningDeadlinePrefix(plan, remainingMs) {
         excavationBudget: excavationBlocks.length,
         stepExcavationBlocks,
         stepEstimatedDigMs: plan.stepEstimatedDigMs.slice(0, selected.length),
+        supportPlacements,
+        stepSupportPlacements,
+        estimatedSupportPlacementMs: (
+            supportPlacements.length * MINING_SUPPORT_PLACEMENT_ESTIMATE_MS
+        ),
         blockBudget: excavationBlocks.length,
         breakTarget: false,
         partial: true,
@@ -18301,7 +19571,7 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
             4,
             Math.abs(stance.y - origin.y) + requestedLength + 2,
         )));
-    const assessSearchStep = step => {
+    const assessSearchStep = (step, searchState = {}) => {
         if (
             options.stageFallingDebris === true
             && step.yOffset > 0
@@ -18317,17 +19587,52 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
                 };
             }
         }
-        return assessMiningRouteStep(bot, step, targetBlock, {
+        const assessment = assessMiningRouteStep(bot, step, targetBlock, {
             allowNaturalFoliage: options.allowNaturalFoliageExcavation === true,
+            allowSupportPlacement: options.allowSupportPlacement === true,
+            virtualSupportKeys: searchState.virtualSupportKeys,
             protectedGeometry,
         });
+        if (
+            assessment.ok
+            && sameMiningCell(miningStepSourcePosition(step), origin)
+        ) {
+            const firstBlock = orderMiningExcavationBlocks(
+                assessment.blocks,
+                origin,
+                { ascending: step.yOffset > 0 },
+            )[0];
+            if (
+                firstBlock
+                && !miningBlockFaceReachableFromStandingCell(bot, firstBlock, origin)
+            ) {
+                return {
+                    ok: false,
+                    outcome: 'route_initial_block_face_unreachable',
+                    blockedBy: firstBlock.name,
+                    blockedBlock: firstBlock.position,
+                    blocks: [],
+                };
+            }
+        }
+        return assessment;
     };
     const search = searchSupportedMiningVoxelCorridors({
         origin,
         stances,
         assessStep: assessSearchStep,
         maxRouteSteps: maximumSteps,
-        maxExcavationBlocks: MAX_MINING_EXCAVATION_BLOCKS,
+        // Planning may span multiple returnable action leases. Execution still
+        // owns the strict per-action excavation budget; this wider planning
+        // bound merely lets the search prove the connected full corridor so
+        // assessMiningAccessPlan can lease its first safe prefix.
+        maxExcavationBlocks: Math.max(
+            MAX_MINING_EXCAVATION_BLOCKS,
+            Math.min(
+                MAX_MINING_EXCAVATION_BLOCKS * 4,
+                Math.floor(Number(options.maxSearchExcavationBlocks) || 0),
+            ),
+        ),
         maxExpansions: MAX_MINING_CORRIDOR_EXPANSIONS,
         maxSolutions: MAX_MINING_CORRIDOR_SOLUTIONS,
         maxDetour: MAX_MINING_CORRIDOR_DETOUR,
@@ -18359,6 +19664,7 @@ function buildMiningAccessPlan(bot, targetBlock, requestedLength, options = {}) 
         .filter(assessment => assessment.ok)
         .sort((left, right) => (
             left.blockBudget - right.blockBudget
+            || (left.supportPlacements?.length || 0) - (right.supportPlacements?.length || 0)
             || left.route.length - right.route.length
             || left.estimatedDurationMs - right.estimatedDurationMs
         ));
@@ -18424,20 +19730,94 @@ function monotonicSurfaceMovements(bot) {
     return movements;
 }
 
+async function pulseAcrossBoundMiningCell(bot, target) {
+    const current = observedSupportedStandingCell(bot);
+    const cardinalAdjacent = Boolean(
+        current
+        && target
+        && Math.abs(current.x - target.x) + Math.abs(current.z - target.z) === 1
+        && Math.abs(current.y - target.y) <= 1
+    );
+    if (
+        !cardinalAdjacent
+        || !isMiningRouteCellReturnable(bot, current)
+        || !isMiningRouteCellReturnable(bot, target)
+        || miningRouteTouchesLiquid(bot, [
+            current,
+            current.offset(0, 1, 0),
+            target,
+            target.offset(0, 1, 0),
+        ])
+    ) return { attempted: false, success: false, outcome: 'bound_step_geometry_changed' };
+
+    const signal = actionCancellationSignal();
+    const reached = () => physicallyOccupiesStandingCell(bot, target);
+    try {
+        await bot.lookAt(target.offset(0.5, 1, 0.5), true);
+        const deadlineAt = Date.now() + 900;
+        while (
+            !reached()
+            && !bot.interrupt_code
+            && signal?.aborted !== true
+            && Date.now() < deadlineAt
+        ) {
+            bot.setControlState('forward', true);
+            bot.setControlState('jump', true);
+            await interruptibleDelay(bot, 50);
+        }
+    } finally {
+        try { bot.setControlState('forward', false); } catch { /* disconnected body */ }
+        try { bot.setControlState('jump', false); } catch { /* disconnected body */ }
+        try { bot.setControlState('sprint', false); } catch { /* disconnected body */ }
+    }
+    await waitForWorldCondition(
+        bot,
+        () => Boolean(
+            reached()
+            && bot.entity?.onGround === true
+            && isMiningRouteCellReturnable(bot, target)
+        ),
+        GROUND_SETTLE_TIMEOUT_MS,
+        25,
+    );
+    const success = Boolean(
+        reached()
+        && bot.entity?.onGround === true
+        && isMiningRouteCellReturnable(bot, target)
+    );
+    return {
+        attempted: true,
+        success,
+        outcome: success ? 'bound_step_pulse_reached' : 'bound_step_pulse_not_reached',
+    };
+}
+
 async function traverseClearedMiningCell(bot, step) {
     if (!step) return { success: false, outcome: 'route_step_unavailable' };
     const start = bot.entity?.position?.clone?.() || null;
-    const reached = await goToGoal(
+    const routeDistance = start?.distanceTo?.(step) || 0;
+    const pathfinderTimeoutMs = Math.max(
+        5_000,
+        Math.min(20_000, 5_000 + Math.ceil(routeDistance) * 750),
+    );
+    const searchRadius = Math.max(8, Math.min(64, Math.ceil(routeDistance) + 8));
+    const goal = new pf.goals.GoalBlock(step.x, step.y, step.z);
+    const navigate = async () => await goToGoal(
         bot,
-        new pf.goals.GoalBlock(step.x, step.y, step.z),
+        goal,
         {
             movements: () => clearedMiningMovements(bot),
             stallTimeoutMs: MINING_ROUTE_STEP_TIMEOUT_MS,
             allowHealthBoundedDescent: false,
             allowLocalRecovery: false,
+            pathfinderOptions: {
+                timeout: pathfinderTimeoutMs,
+                searchRadius,
+            },
         },
     );
-    const movement = bot.lastActionEvidence?.kind === 'movement'
+    let reached = await navigate();
+    let movement = bot.lastActionEvidence?.kind === 'movement'
         ? bot.lastActionEvidence
         : null;
     await waitForWorldCondition(
@@ -18446,11 +19826,90 @@ async function traverseClearedMiningCell(bot, step) {
         GROUND_SETTLE_TIMEOUT_MS,
         25,
     );
-    const observed = bot.entity?.position?.clone?.() || null;
-    const arrived = Boolean(
+    let observed = bot.entity?.position?.clone?.() || null;
+    let arrived = Boolean(
         physicallyOccupiesStandingCell(bot, step)
         && isMiningRouteCellReturnable(bot, step)
     );
+    let recovery = null;
+    const boundStepRecoveryEligible = Boolean(
+        !arrived
+        && observed
+        && observed.distanceTo(step) <= 3
+        && observedSupportedStandingCell(bot)
+        && isMiningRouteCellReturnable(bot, step)
+    );
+    if (boundStepRecoveryEligible) {
+        const settled = await waitForWorldCondition(
+            bot,
+            () => Boolean(
+                bot.entity?.onGround === true
+                && observedSupportedStandingCell(bot)
+            ),
+            GROUND_SETTLE_TIMEOUT_MS,
+            25,
+        );
+        recovery = {
+            strategy: 'settle_and_jump_assist_bound_corridor_step',
+            settled,
+            attempted: false,
+            success: false,
+            initialMovementOutcome: movement?.outcome || null,
+        };
+        if (
+            settled
+            && !bot.interrupt_code
+            && movement?.outcome === 'path_stalled'
+        ) {
+            recovery.attempted = true;
+            // Pathfinder retains the horizontal route. Refresh only Minecraft's
+            // native jump input for one short bounded window so a body settled
+            // on the source-cell lip can cross into the already-verified target
+            // cell instead of repeating the same walk stall indefinitely.
+            let jumpAssistActive = true;
+            const jumpAssistInterval = setInterval(() => {
+                if (jumpAssistActive) bot.setControlState('jump', true);
+            }, 50);
+            const jumpAssistTimeout = setTimeout(() => {
+                jumpAssistActive = false;
+                try { bot.setControlState('jump', false); } catch { /* disconnected body */ }
+            }, 450);
+            try {
+                bot.setControlState('jump', true);
+                reached = await navigate();
+            } finally {
+                jumpAssistActive = false;
+                clearInterval(jumpAssistInterval);
+                clearTimeout(jumpAssistTimeout);
+                try { bot.setControlState('jump', false); } catch { /* disconnected body */ }
+            }
+            movement = bot.lastActionEvidence?.kind === 'movement'
+                ? bot.lastActionEvidence
+                : movement;
+            await waitForWorldCondition(
+                bot,
+                () => physicallyOccupiesStandingCell(bot, step),
+                GROUND_SETTLE_TIMEOUT_MS,
+                25,
+            );
+            observed = bot.entity?.position?.clone?.() || null;
+            arrived = Boolean(
+                physicallyOccupiesStandingCell(bot, step)
+                && isMiningRouteCellReturnable(bot, step)
+            );
+            recovery.success = arrived;
+        }
+        if (!arrived && !bot.interrupt_code) {
+            const directPulse = await pulseAcrossBoundMiningCell(bot, step);
+            recovery.directPulse = directPulse;
+            if (directPulse.success) {
+                reached = true;
+                observed = bot.entity?.position?.clone?.() || null;
+                arrived = true;
+                recovery.success = true;
+            }
+        }
+    }
     return {
         success: arrived,
         outcome: arrived ? 'route_step_reached' : 'route_step_not_reached',
@@ -18459,6 +19918,7 @@ async function traverseClearedMiningCell(bot, step) {
         reached,
         onGround: bot.entity?.onGround === true,
         movement,
+        ...(recovery ? { recovery } : {}),
     };
 }
 
@@ -18473,6 +19933,29 @@ function fallingBlockEntitiesInMiningCell(bot, target) {
     ));
 }
 
+function observedMiningRouteCellGeometry(bot, target) {
+    const describe = position => {
+        const block = bot.blockAt(position);
+        return {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            loaded: Boolean(block),
+            name: block?.name || '',
+            boundingBox: block?.boundingBox || '',
+            diggable: block?.diggable === true,
+            liquid: Boolean(block && isLiquidGameplayBlock(block)),
+            hazardous: Boolean(block && isHazardousGameplayBlock(block)),
+            protected: Boolean(block && isProtectedGameplayBlock(block)),
+        };
+    };
+    return {
+        feet: describe(target),
+        head: describe(target.offset(0, 1, 0)),
+        support: describe(target.offset(0, -1, 0)),
+    };
+}
+
 async function restorePreservedMiningRouteCell(bot, target) {
     const feet = target;
     const head = target.offset(0, 1, 0);
@@ -18480,14 +19963,29 @@ async function restorePreservedMiningRouteCell(bot, target) {
     const supportBlock = bot.blockAt(support);
     const supportRepairNeeded = !isAnchoredGameplaySupport(bot, supportBlock);
     if (miningRouteTouchesLiquid(bot, [feet, head])) {
-        return { success: false, outcome: 'return_route_liquid_risk', cleared: 0 };
+        return {
+            success: false,
+            outcome: 'return_route_liquid_risk',
+            cleared: 0,
+            changedBlocksCleared: 0,
+            fallingBlocksCleared: 0,
+            observedGeometry: observedMiningRouteCellGeometry(bot, target),
+        };
     }
 
     let cleared = 0;
+    let changedBlocksCleared = 0;
+    let fallingBlocksCleared = 0;
     let settlementPending = false;
     while (true) {
         if (bot.interrupt_code) {
-            return { success: false, outcome: 'interrupted', cleared };
+            return {
+                success: false,
+                outcome: 'interrupted',
+                cleared,
+                changedBlocksCleared,
+                fallingBlocksCleared,
+            };
         }
         if (isMiningRouteCellReturnable(bot, target)) {
             const fallingEntities = fallingBlockEntitiesInMiningCell(bot, target);
@@ -18503,6 +20001,8 @@ async function restorePreservedMiningRouteCell(bot, target) {
                         success: false,
                         outcome: bot.interrupt_code ? 'interrupted' : 'return_route_debris_unsettled',
                         cleared,
+                        changedBlocksCleared,
+                        fallingBlocksCleared,
                     };
                 }
                 settlementPending = true;
@@ -18511,8 +20011,14 @@ async function restorePreservedMiningRouteCell(bot, target) {
             if (!settlementPending) {
                 return {
                     success: true,
-                    outcome: cleared > 0 ? 'return_route_debris_restored' : 'return_route_ready',
+                    outcome: changedBlocksCleared > 0
+                        ? 'return_route_geometry_restored'
+                        : fallingBlocksCleared > 0
+                            ? 'return_route_debris_restored'
+                            : 'return_route_ready',
                     cleared,
+                    changedBlocksCleared,
+                    fallingBlocksCleared,
                 };
             }
             await interruptibleDelay(
@@ -18538,24 +20044,99 @@ async function restorePreservedMiningRouteCell(bot, target) {
                 success: true,
                 outcome: 'return_route_support_repair_needed',
                 cleared,
+                changedBlocksCleared,
+                fallingBlocksCleared,
                 supportRepairNeeded: true,
             };
         }
-        if (!lowest || !isFallingGameplayBlock(lowest)) {
-            return { success: false, outcome: 'return_route_changed', cleared };
+        if (!lowest) {
+            return {
+                success: false,
+                outcome: 'return_route_changed',
+                cleared,
+                changedBlocksCleared,
+                fallingBlocksCleared,
+                observedGeometry: observedMiningRouteCellGeometry(bot, target),
+            };
+        }
+        if (!isFallingGameplayBlock(lowest)) {
+            if (
+                changedBlocksCleared >= MAX_MINING_ROUTE_GEOMETRY_REPAIRS
+                || lowest.diggable !== true
+                || isProtectedGameplayBlock(lowest)
+                || isHazardousGameplayBlock(lowest)
+            ) {
+                return {
+                    success: false,
+                    outcome: isProtectedGameplayBlock(lowest)
+                        ? 'protected_block_in_route'
+                        : isHazardousGameplayBlock(lowest)
+                            ? 'hazardous_block_in_route'
+                            : lowest.diggable !== true
+                                ? 'return_route_block_not_diggable'
+                                : 'return_route_geometry_limit',
+                    cleared,
+                    changedBlocksCleared,
+                    fallingBlocksCleared,
+                    observedGeometry: observedMiningRouteCellGeometry(bot, target),
+                };
+            }
+            const occupied = observedSupportedStandingCell(bot);
+            if (!occupied || !isMiningRouteCellReturnable(bot, occupied)) {
+                return {
+                    success: false,
+                    outcome: 'return_route_repair_stance_missing',
+                    cleared,
+                    changedBlocksCleared,
+                    fallingBlocksCleared,
+                    observedGeometry: observedMiningRouteCellGeometry(bot, target),
+                };
+            }
+            if (!await breakBlockAt(
+                bot,
+                lowest.position.x,
+                lowest.position.y,
+                lowest.position.z,
+                {
+                    requireHarvest: false,
+                    requireIndependentSupport: true,
+                    boundStandingCell: occupied,
+                },
+            )) {
+                return {
+                    success: false,
+                    outcome: 'return_route_geometry_not_cleared',
+                    cleared,
+                    changedBlocksCleared,
+                    fallingBlocksCleared,
+                    observedGeometry: observedMiningRouteCellGeometry(bot, target),
+                };
+            }
+            cleared += 1;
+            changedBlocksCleared += 1;
+            settlementPending = true;
+            continue;
         }
         const column = boundedFallingRouteColumn(bot, lowest.position);
         if (!column.ok || column.blocks.length === 0) {
             return { success: false, outcome: column.outcome, cleared };
         }
-        if (cleared >= MAX_MINING_FALLING_COLUMN) {
-            return { success: false, outcome: 'return_route_debris_limit', cleared };
+        if (fallingBlocksCleared >= MAX_MINING_FALLING_COLUMN) {
+            return {
+                success: false,
+                outcome: 'return_route_debris_limit',
+                cleared,
+                changedBlocksCleared,
+                fallingBlocksCleared,
+            };
         }
         if (miningRouteTouchesLiquid(bot, column.blocks.map(block => block.position))) {
             return {
                 success: false,
                 outcome: 'return_route_liquid_risk',
                 cleared,
+                changedBlocksCleared,
+                fallingBlocksCleared,
             };
         }
         if (!await breakBlockAt(
@@ -18568,9 +20149,16 @@ async function restorePreservedMiningRouteCell(bot, target) {
                 acceptFallingReplacement: true,
             },
         )) {
-            return { success: false, outcome: 'return_route_debris_not_cleared', cleared };
+            return {
+                success: false,
+                outcome: 'return_route_debris_not_cleared',
+                cleared,
+                changedBlocksCleared,
+                fallingBlocksCleared,
+            };
         }
         cleared += 1;
+        fallingBlocksCleared += 1;
         settlementPending = true;
     }
 }
@@ -18616,7 +20204,10 @@ export async function traverseMiningRouteCell(bot, x, y, z) {
             kind: 'mining_return',
             outcome: restoration.outcome,
             target: { name: 'mining_return_cell', x: target.x, y: target.y, z: target.z },
-            debrisRestored: restoration.cleared,
+            debrisRestored: restoration.fallingBlocksCleared || 0,
+            changedBlocksCleared: restoration.changedBlocksCleared || 0,
+            observedGeometry: restoration.observedGeometry
+                || observedMiningRouteCellGeometry(bot, target),
             retryable: false,
         });
         log(bot, `The preserved mining return cell at ${target.x}, ${target.y}, ${target.z} could not be safely restored (${restoration.outcome.replace(/_/g, ' ')}).`);
@@ -18624,10 +20215,10 @@ export async function traverseMiningRouteCell(bot, x, y, z) {
     }
     const traversal = await traverseClearedMiningCell(bot, target);
     if (traversal.success && (fallingEntitiesObserved > 0 || restoration.cleared > 0)) {
-        // The relevant falling column changed during this action. Give the
-        // authoritative world one final bounded settlement interval before
-        // checkpointing the route index; otherwise gravel can push the bot
-        // backward immediately after ActionManager releases ownership.
+        // The route geometry changed during this action. Give the authoritative
+        // world one final bounded settlement interval before checkpointing the
+        // route index; otherwise newly exposed gravel can push the bot backward
+        // immediately after ActionManager releases ownership.
         await interruptibleDelay(bot, FALLING_BLOCK_SETTLE_MS);
     }
     const success = Boolean(
@@ -18653,16 +20244,112 @@ export async function traverseMiningRouteCell(bot, x, y, z) {
         target: { name: 'mining_return_cell', x: target.x, y: target.y, z: target.z },
         observedPosition: traversal.observed || null,
         fallingEntitiesObserved,
-        debrisRestored: restoration.cleared,
+        debrisRestored: restoration.fallingBlocksCleared || 0,
+        changedBlocksCleared: restoration.changedBlocksCleared || 0,
+        observedGeometry: observedMiningRouteCellGeometry(bot, target),
         supportRepairNeeded: restoration.supportRepairNeeded === true,
         supportRepaired,
         returnable: success,
         routeDigging: restoration.cleared > 0,
         retryable: !success && !bot.interrupt_code,
     });
+    const repairDetail = supportRepaired
+        ? ' after restoring its changed support'
+        : restoration.changedBlocksCleared > 0
+            ? ` after reopening ${restoration.changedBlocksCleared} changed corridor block${restoration.changedBlocksCleared === 1 ? '' : 's'}`
+            : restoration.fallingBlocksCleared > 0
+                ? ` after clearing ${restoration.fallingBlocksCleared} settled debris block${restoration.fallingBlocksCleared === 1 ? '' : 's'}`
+                : '';
     log(bot, success
-        ? `Returned through preserved mining cell ${target.x}, ${target.y}, ${target.z}${supportRepaired ? ' after restoring its changed support' : restoration.cleared > 0 ? ` after clearing ${restoration.cleared} settled debris block${restoration.cleared === 1 ? '' : 's'}` : ''}.`
+        ? `Returned through preserved mining cell ${target.x}, ${target.y}, ${target.z}${repairDetail}.`
         : `Could not settle on preserved mining cell ${target.x}, ${target.y}, ${target.z}.`);
+    return success;
+}
+
+export async function traverseMiningRouteSegment(bot, route, startIndex, endIndex) {
+    const cells = Array.isArray(route) ? route : [];
+    const start = Math.floor(Number(startIndex));
+    const end = Math.floor(Number(endIndex));
+    if (
+        start < 0
+        || end < 0
+        || start >= cells.length
+        || end >= cells.length
+        || ![cells[start]?.x, cells[start]?.y, cells[start]?.z].every(Number.isFinite)
+        || ![cells[end]?.x, cells[end]?.y, cells[end]?.z].every(Number.isFinite)
+    ) {
+        setActionEvidence(bot, {
+            kind: 'mining_return',
+            outcome: 'invalid_route_segment',
+            target: { name: 'mining_return_segment' },
+            segmentStartIndex: start,
+            segmentEndIndex: end,
+            retryable: false,
+        });
+        return false;
+    }
+
+    let cellsTraversed = 0;
+    const direction = end >= start ? 1 : -1;
+    const expectedCells = Math.abs(end - start) + 1;
+    for (
+        let index = start;
+        direction > 0 ? index <= end : index >= end;
+        index += direction
+    ) {
+        if (bot.interrupt_code || actionCancellationSignal()?.aborted) break;
+        const cell = cells[index];
+        if (!await traverseMiningRouteCell(bot, cell.x, cell.y, cell.z)) {
+            const failure = bot.lastActionEvidence || {};
+            const failureOutcome = failure.failureOutcome
+                || failure.outcome
+                || 'route_step_not_reached';
+            setActionEvidence(bot, {
+                ...failure,
+                kind: 'mining_return',
+                // Segment progress and the failing cell answer different
+                // questions. Preserve both so the Director can advance the
+                // return cursor without losing the causal recovery decision.
+                outcome: cellsTraversed > 0 ? 'route_segment_partial' : failureOutcome,
+                failureOutcome,
+                segmentStartIndex: start,
+                segmentEndIndex: end,
+                cellsTraversed,
+                retryable: cellsTraversed > 0 && !bot.interrupt_code,
+            });
+            return false;
+        }
+        cellsTraversed += 1;
+    }
+
+    const endpoint = cells[end];
+    const success = Boolean(
+        cellsTraversed === expectedCells
+        && physicallyOccupiesStandingCell(bot, new Vec3(endpoint.x, endpoint.y, endpoint.z))
+        && isMiningRouteCellReturnable(bot, new Vec3(endpoint.x, endpoint.y, endpoint.z))
+        && !bot.interrupt_code
+        && actionCancellationSignal()?.aborted !== true
+    );
+    const lastEvidence = bot.lastActionEvidence || {};
+    setActionEvidence(bot, {
+        ...lastEvidence,
+        kind: 'mining_return',
+        outcome: success ? 'route_cell_returned' : 'route_segment_incomplete',
+        target: {
+            name: 'mining_return_cell',
+            x: endpoint.x,
+            y: endpoint.y,
+            z: endpoint.z,
+        },
+        segmentStartIndex: start,
+        segmentEndIndex: end,
+        cellsTraversed,
+        returnable: success,
+        retryable: !success && !bot.interrupt_code,
+    });
+    log(bot, success
+        ? `Traversed ${cellsTraversed} preserved mining cells in one bounded ${direction > 0 ? 'forward' : 'return'} segment.`
+        : `The preserved mining segment ended after ${cellsTraversed} of ${expectedCells} cells.`);
     return success;
 }
 
@@ -18780,9 +20467,19 @@ function miningRouteInventoryRequirement(bot, plan, targetBlock) {
     };
 }
 
-async function executeMiningAccessPlan(bot, targetBlock, plan) {
+async function executeMiningAccessPlan(bot, targetBlock, plan, {
+    preservedReturnRoute = [],
+    acceptedFluidFrontier = null,
+} = {}) {
     const capacity = miningRouteInventoryRequirement(bot, plan, targetBlock);
-    if (bot.inventory.emptySlotCount() < capacity.requiredFreeSlots) {
+    const requiresCollectedOutputCapacity = Boolean(
+        targetBlock
+        && plan?.breakTarget === true
+    );
+    if (
+        requiresCollectedOutputCapacity
+        && bot.inventory.emptySlotCount() < capacity.requiredFreeSlots
+    ) {
         const protectedNames = new Set([
             ...familyInventoryEntries(bot, 'ores').map(entry => entry.name),
             ...(targetBlock?.drops || [])
@@ -18795,11 +20492,15 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
             capacity.requiredFreeSlots,
             {
                 allowLocalCache: false,
-                requireDisposalSeparation: false,
+                requireDisposalSeparation: true,
                 preferBulkNaturalFill: true,
-                // Toss redundant fill behind the route so native traversal
-                // immediately carries the bot away from passive pickup range.
-                resumePosition: plan.route?.[0]?.position || null,
+                // Capacity is a precondition for starting the route. Its first
+                // cell may still be solid and cannot serve as a return target
+                // before excavation; the planner's occupied origin is the only
+                // already-proven supported checkpoint. Leave the junk outside
+                // pickup range, then settle back there before opening the route.
+                resumePosition: plan.origin || observedSupportedStandingCell(bot),
+                preservedReturnRoute,
             },
         );
         if (!released || bot.inventory.emptySlotCount() < capacity.requiredFreeSlots) {
@@ -18813,6 +20514,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
         }
     }
     let excavated = 0;
+    let supportsPlaced = 0;
     let nextIndex = 0;
     let lastReachedIndex = -1;
     const fail = async (outcome, extra = {}) => {
@@ -18824,6 +20526,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 : outcome,
             failureOutcome: outcome,
             excavated,
+            supportsPlaced,
             retreat,
             ...extra,
         };
@@ -18850,6 +20553,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
         if (!occupiedCell) return await fail('position_unavailable');
         const assessment = assessMiningRouteStep(bot, step, liveTarget, {
             allowNaturalFoliage: plan.allowNaturalFoliageExcavation === true,
+            allowSupportPlacement: plan.allowSupportPlacement === true,
             protectedGeometry: plan.protectedGeometry,
         });
         if (!assessment.ok) {
@@ -18858,11 +20562,75 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 step: step.position,
             });
         }
+        const authorizedSupportPlacements = plan.stepSupportPlacements?.[nextIndex] || [];
+        const authorizedSupportKeys = new Set(
+            authorizedSupportPlacements.map(miningCellKey),
+        );
+        for (const supportPosition of assessment.supportPlacements || []) {
+            if (!authorizedSupportKeys.has(miningCellKey(supportPosition))) {
+                return await fail('support_placement_not_authorized', {
+                    stepIndex: nextIndex,
+                    step: step.position,
+                    support: supportPosition,
+                });
+            }
+            if (supportsPlaced >= (plan.supportPlacements?.length || 0)) {
+                return await fail('support_placement_budget_exceeded', {
+                    stepIndex: nextIndex,
+                    step: step.position,
+                    support: supportPosition,
+                });
+            }
+            const remainingPlacements = (plan.supportPlacements?.length || 0) - supportsPlaced;
+            const capacity = assessSurfaceSupportMaterialCapacity(bot, remainingPlacements);
+            const material = selectCarriedSurfaceSupportMaterial(bot);
+            if (!capacity.ok || !material) {
+                return await fail('insufficient_support_material', {
+                    stepIndex: nextIndex,
+                    step: step.position,
+                    support: supportPosition,
+                    supportMaterialCapacity: capacity,
+                });
+            }
+            const placed = await placeBlock(
+                bot,
+                material.name,
+                supportPosition.x,
+                supportPosition.y,
+                supportPosition.z,
+                'side',
+                true,
+                false,
+                material.slot,
+                occupiedCell,
+            );
+            const observedSupport = bot.blockAt(supportPosition);
+            if (!isAnchoredGameplaySupport(bot, observedSupport)) {
+                return await fail('route_support_not_placed', {
+                    stepIndex: nextIndex,
+                    step: step.position,
+                    support: supportPosition,
+                    material: material.name,
+                    placementEvidence: bot.lastActionEvidence || null,
+                });
+            }
+            if (!physicallyOccupiesStandingCell(bot, occupiedCell)) {
+                return await fail('support_placement_left_bound_stance', {
+                    stepIndex: nextIndex,
+                    step: step.position,
+                    support: supportPosition,
+                    observed: bot.entity?.position?.clone?.() || null,
+                });
+            }
+            if (placed) supportsPlaced += 1;
+        }
         let boundBlocks = [...assessment.blocks];
         const nextStep = plan.route[nextIndex + 1] || null;
         if (plan.stageFallingDebris === true && nextStep?.yOffset > 0) {
             const nextAssessment = assessMiningRouteStep(bot, nextStep, liveTarget, {
                 allowNaturalFoliage: plan.allowNaturalFoliageExcavation === true,
+                allowSupportPlacement: plan.allowSupportPlacement === true,
+                virtualSupportKeys: new Set(authorizedSupportKeys),
                 protectedGeometry: plan.protectedGeometry,
             });
             if (!nextAssessment.ok) {
@@ -18954,9 +20722,41 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                     requireHarvest: plan.allowUnharvestedBreaks !== true,
                     acceptFallingReplacement: true,
                     preserveTargetToolFor: liveTarget,
+                    preferMiningRouteTool: true,
+                    // The access planner already proved and occupied this exact
+                    // supported route cell. Let the break adapter retain that
+                    // authority when the live raycast confirms the block.
+                    boundStandingCell: occupiedCell,
                 },
-            )) return await fail('route_block_not_broken');
+            )) return await fail('route_block_not_broken', {
+                stepIndex: nextIndex,
+                step: step.position,
+                blockedBy: liveBlock.name,
+                blockedBlock: liveBlock.position,
+                breakEvidence: bot.lastActionEvidence || null,
+            });
             excavated += 1;
+        }
+
+        const fluidFrontier = observedMiningFluidFrontier(
+            bot,
+            step.position,
+            acceptedFluidFrontier,
+            targetBlock,
+        );
+        if (fluidFrontier) {
+            return {
+                success: true,
+                outcome: 'fluid_frontier_exposed',
+                excavated,
+                supportsPlaced,
+                reachedSteps: Math.max(0, lastReachedIndex + 1),
+                lastReachedIndex,
+                target: bot.blockAt(targetBlock.position),
+                observed: bot.entity?.position?.clone?.() || null,
+                returnable: true,
+                frontier: fluidFrontier,
+            };
         }
 
         const traversal = await traverseClearedMiningStep(bot, plan.route, nextIndex);
@@ -18968,6 +20768,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 reached: traversal.reached,
                 onGround: traversal.onGround,
                 movement: traversal.movement,
+                recovery: traversal.recovery || null,
             });
         }
         lastReachedIndex = traversal.landedIndex;
@@ -18990,6 +20791,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
             success: true,
             outcome: 'route_advanced',
             excavated,
+            supportsPlaced,
             reachedSteps: nextIndex,
             target: targetBlock?.position ? bot.blockAt(targetBlock.position) : null,
             observed: bot.entity?.position?.clone?.() || null,
@@ -19005,6 +20807,7 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
                 success: true,
                 outcome: 'stance_reached',
                 excavated,
+                supportsPlaced,
                 reachedSteps: nextIndex,
                 observed: bot.entity?.position?.clone?.() || null,
             }
@@ -19017,7 +20820,13 @@ async function executeMiningAccessPlan(bot, targetBlock, plan) {
     if (!isMiningTargetExposed(bot, finalTarget)) {
         return await fail('target_not_exposed');
     }
-    return { success: true, outcome: 'target_exposed', excavated, target: finalTarget };
+    return {
+        success: true,
+        outcome: 'target_exposed',
+        excavated,
+        supportsPlaced,
+        target: finalTarget,
+    };
 }
 
 async function reachKnownBlockByVoxelCorridor(
@@ -19233,6 +21042,7 @@ export async function mineSearchTunnel(
     const expectedProtectedRouteCells = Number.isFinite(options.expectedProtectedRouteCells)
         ? Math.max(0, Math.floor(options.expectedProtectedRouteCells))
         : null;
+    const accessOnly = options.accessOnly === true;
     if (
         expectedProtectedRouteCells !== null
         && expectedProtectedRouteCells !== preservedReturnRoute.length
@@ -19413,7 +21223,10 @@ export async function mineSearchTunnel(
         }
 
         const routeStart = bot.entity.position.clone();
-        const access = await executeMiningAccessPlan(bot, stagedTarget, plan);
+        const access = await executeMiningAccessPlan(bot, stagedTarget, plan, {
+            preservedReturnRoute,
+            acceptedFluidFrontier: accessOnly ? stagedTarget.name : null,
+        });
         if (!access.success) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
@@ -19457,6 +21270,44 @@ export async function mineSearchTunnel(
                 : '';
             log(bot, `Stopped the exact route to ${stagedTarget.name}: ${String(access.failureOutcome || access.outcome).replace(/_/g, ' ')}${failedStep} after ${access.excavated} block${access.excavated === 1 ? '' : 's'}.${returnDetail}`);
             return false;
+        }
+
+        if (access.outcome === 'fluid_frontier_exposed') {
+            const observed = observedSupportedStandingCell(bot);
+            const reachedRoute = plan.route.slice(0, Math.max(0, access.reachedSteps || 0));
+            const returnRoute = observed
+                ? miningReturnRoute(plan.origin || routeStart, reachedRoute, observed)
+                : [];
+            const returnable = Boolean(
+                access.returnable === true
+                && observed
+                && isMiningRouteCellReturnable(bot, observed)
+            );
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                targetBound: true,
+                outcome: `${stagedTarget.name}_frontier_exposed`,
+                target: {
+                    name: stagedTarget.name,
+                    x: stagedTarget.position.x,
+                    y: stagedTarget.position.y,
+                    z: stagedTarget.position.z,
+                },
+                routeSteps: reachedRoute.length,
+                excavated: access.excavated,
+                observedPosition: observed,
+                returnRoute,
+                returnable,
+                frontier: access.frontier,
+                routeDigging: access.excavated > 0,
+                boundary: { kind: 'fluid_frontier_established' },
+                retryable: false,
+            });
+            log(
+                bot,
+                `Exposed a verified ${stagedTarget.name} frontier from the dry return corridor; the liquid cell remains outside the travel spine.`,
+            );
+            return returnable;
         }
 
         if (partialAdvance) {
@@ -19516,6 +21367,41 @@ export async function mineSearchTunnel(
                 + `${stagedTarget.name}; the remaining route will be rebound from stable ground.`,
             );
             return true;
+        }
+
+        if (accessOnly) {
+            const observed = observedSupportedStandingCell(bot);
+            const returnable = Boolean(
+                observed
+                && isMiningRouteCellReturnable(bot, observed)
+            );
+            setActionEvidence(bot, {
+                kind: 'mining_search',
+                targetBound: true,
+                outcome: 'search_advanced',
+                target: {
+                    name: stagedTarget.name,
+                    x: stagedTarget.position.x,
+                    y: stagedTarget.position.y,
+                    z: stagedTarget.position.z,
+                },
+                routeSteps: plan.route.length,
+                excavated: access.excavated,
+                distance: bot.entity.position.distanceTo(routeStart),
+                observedPosition: observed,
+                returnRoute: observed
+                    ? miningReturnRoute(plan.origin || routeStart, plan.route, observed)
+                    : [],
+                returnable,
+                routeDigging: true,
+                boundary: { kind: 'target_access_established' },
+                retryable: false,
+            });
+            log(
+                bot,
+                `Established a verified ${plan.route.length}-step dry access corridor to the known ${stagedTarget.name} source without disturbing it.`,
+            );
+            return returnable && plan.route.length > 0;
         }
 
         const collected = await collectBlock(bot, access.target.name, 1, null, 8, {
@@ -19587,7 +21473,7 @@ export async function mineSearchTunnel(
         return true;
     }
 
-    const tunnelHeadings = orderedMiningHeadings(bot, requested)
+    const tunnelHeadings = orderedMiningHeadings(bot, requested, livePreferredTarget)
         .slice(0, MAX_MINING_ROUTE_HEADINGS);
     const origin = observedSupportedStandingCell(bot);
     if (!origin) {
@@ -19603,6 +21489,7 @@ export async function mineSearchTunnel(
     }
     const rejections = {};
     let toolRequirement = null;
+    const preservedReturnKeys = new Set(preservedReturnRoute.map(miningCellKey));
     for (const heading of tunnelHeadings) {
         if (bot.interrupt_code) break;
         const endpoint = origin.offset(
@@ -19610,6 +21497,12 @@ export async function mineSearchTunnel(
             0,
             heading.z * requestedLength,
         );
+        if (preservedReturnKeys.has(miningCellKey(endpoint))) {
+            rejections.search_frontier_already_open = (
+                rejections.search_frontier_already_open || 0
+            ) + 1;
+            continue;
+        }
         let plan = buildMiningAccessPlan(bot, null, requestedLength, {
             breakTarget: false,
             stances: [endpoint],
@@ -19631,7 +21524,18 @@ export async function mineSearchTunnel(
             }
             continue;
         }
-        const access = await executeMiningAccessPlan(bot, null, plan);
+        const novelRouteCells = plan.route.filter(step => (
+            !preservedReturnKeys.has(miningCellKey(step.position))
+        )).length;
+        if (novelRouteCells < 1) {
+            rejections.search_frontier_already_open = (
+                rejections.search_frontier_already_open || 0
+            ) + 1;
+            continue;
+        }
+        const access = await executeMiningAccessPlan(bot, null, plan, {
+            preservedReturnRoute,
+        });
         if (!access.success) {
             setActionEvidence(bot, {
                 kind: 'mining_search',
@@ -19670,6 +21574,7 @@ export async function mineSearchTunnel(
             observedPosition: observed,
             returnRoute: miningReturnRoute(plan.origin || origin, plan.route, observed),
             routeSteps: plan.route.length,
+            novelRouteCells,
             excavated: access.excavated,
             distance,
             durability: plan.durability,
@@ -19699,6 +21604,1534 @@ export async function mineSearchTunnel(
         ? 'Stopped the mining search tunnel.'
         : `No preflighted natural-fill corridor could advance while searching for ${requested || 'the requested resource'}.`);
     return false;
+}
+
+function fluidSourceLevel(block) {
+    const properties = typeof block?.getProperties === 'function'
+        ? block.getProperties()
+        : block?._properties;
+    const level = Number(properties?.level);
+    return Number.isFinite(level) ? level : null;
+}
+
+function loadedFluidSources(bot, name, range = 64, count = 256) {
+    const type = bot.registry.blocksByName?.[name]?.id;
+    if (!Number.isInteger(type)) return [];
+    let positions = [];
+    try {
+        positions = bot.findBlocks({
+            matching: type,
+            maxDistance: Math.max(8, Math.min(192, Math.floor(Number(range) || 64))),
+            count: Math.max(1, Math.min(512, Math.floor(Number(count) || 256))),
+        });
+    } catch {
+        return [];
+    }
+    return positions
+        .map(position => bot.blockAt(position))
+        .filter(block => block?.name === name && fluidSourceLevel(block) === 0);
+}
+
+function horizontalFluidSourceNeighbours(bot, block, name) {
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        .map(([x, z]) => bot.blockAt(block.position.offset(x, 0, z)))
+        .filter(candidate => candidate?.name === name && fluidSourceLevel(candidate) === 0);
+}
+
+function farmlandNear(bot, position, radius = 2) {
+    for (let x = -radius; x <= radius; x += 1) {
+        for (let y = -1; y <= 1; y += 1) {
+            for (let z = -radius; z <= radius; z += 1) {
+                if (bot.blockAt(position.offset(x, y, z))?.name === 'farmland') return true;
+            }
+        }
+    }
+    return false;
+}
+
+function waterBucketInteractionStances(bot, block) {
+    const targetPoint = block.position.offset(0.5, 0.5, 0.5);
+    const candidates = [];
+    const keys = new Set();
+    for (let horizontal = 1; horizontal <= 3; horizontal += 1) {
+        for (let x = -horizontal; x <= horizontal; x += 1) {
+            for (let z = -horizontal; z <= horizontal; z += 1) {
+                if (Math.max(Math.abs(x), Math.abs(z)) !== horizontal) continue;
+                for (const y of [1, 0, 2, -1]) {
+                    const stance = block.position.offset(x, y, z);
+                    const key = miningCellKey(stance);
+                    if (keys.has(key)) continue;
+                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance))) continue;
+                    if (!isObservedStandingCellClear(bot, bot.blockAt(stance.offset(0, 1, 0)))) continue;
+                    const support = bot.blockAt(stance.offset(0, -1, 0));
+                    if (!isSafeGameplaySupport(support) || support.openable) continue;
+                    const eye = stance.offset(0.5, 1.62, 0.5);
+                    if (eye.distanceTo(targetPoint) > 4.5) continue;
+                    keys.add(key);
+                    candidates.push(stance);
+                }
+            }
+        }
+    }
+    return candidates;
+}
+
+function nonDestructiveSurfaceMovements(bot) {
+    const movements = safeMovements(bot);
+    movements.canDig = false;
+    movements.canPlaceBlocks = false;
+    movements.allow1by1towers = false;
+    movements.allowParkour = false;
+    return movements;
+}
+
+export async function fillWaterBucket(bot, range = 128) {
+    const beforeBuckets = inventoryCount(bot, 'bucket');
+    const beforeWater = inventoryCount(bot, 'water_bucket');
+    if (beforeBuckets < 1) {
+        setActionEvidence(bot, {
+            kind: 'liquid_collection',
+            outcome: 'bucket_missing',
+            target: { name: 'water' },
+            retryable: true,
+        });
+        return false;
+    }
+    // A prior casting attempt may have left Kevin's own placed source in the
+    // chamber. It is intentionally isolated, so the generic renewable-source
+    // filter below must not hide it from the water prerequisite that gates the
+    // next cast. Recover that exact owned source before planning new travel.
+    const strandedCastingWater = await recoverStrandedCastingWater(
+        bot,
+        Math.min(24, Math.max(8, Math.floor(Number(range) || 128))),
+    );
+    if (strandedCastingWater.success && inventoryCount(bot, 'water_bucket') > beforeWater) {
+        setActionEvidence(bot, {
+            kind: 'liquid_collection',
+            outcome: 'casting_water_recovered',
+            target: {
+                name: 'water',
+                x: strandedCastingWater.position.x,
+                y: strandedCastingWater.position.y,
+                z: strandedCastingWater.position.z,
+            },
+            inventoryBefore: beforeWater,
+            inventoryAfter: inventoryCount(bot, 'water_bucket'),
+            attempted: strandedCastingWater.attempted,
+            retryable: false,
+        });
+        log(bot, 'Recovered the water source left by the active obsidian casting site.');
+        return true;
+    }
+    const sources = loadedFluidSources(bot, 'water', range, 256)
+        .filter(block => !farmlandNear(bot, block.position))
+        .map(block => ({
+            block,
+            neighbours: horizontalFluidSourceNeighbours(bot, block, 'water').length,
+            distance: bot.entity.position.distanceTo(block.position),
+        }))
+        // Removing from a connected source sheet is recoverable; taking the
+        // single irrigation cell from a farm or an isolated player feature is
+        // not. Two adjacent source cells already prove renewability. Prefer
+        // the nearest such sheet so a huge underground aquifer cannot crowd
+        // every reachable surface source out of the bounded stance search.
+        .filter(candidate => candidate.neighbours >= 2)
+        .sort((left, right) => (
+            left.distance - right.distance
+            || right.neighbours - left.neighbours
+        ));
+    if (sources.length === 0) {
+        setActionEvidence(bot, {
+            kind: 'liquid_collection',
+            outcome: 'water_source_not_found',
+            target: { name: 'water' },
+            range: Math.max(8, Math.min(192, Math.floor(Number(range) || 128))),
+            retryable: true,
+        });
+        log(bot, 'No renewable non-farm water source is loaded within the bounded search range.');
+        return false;
+    }
+
+    const verticallyLocalSources = sources.filter(candidate => (
+        Math.abs(candidate.block.position.y - bot.entity.position.y) <= 8
+    ));
+    const stanceSources = verticallyLocalSources.length > 0
+        ? verticallyLocalSources
+        : sources;
+    const interactions = [];
+    const interactionKeys = new Set();
+    for (const candidate of stanceSources.slice(0, 32)) {
+        for (const stance of waterBucketInteractionStances(bot, candidate.block)) {
+            const key = miningCellKey(stance);
+            if (interactionKeys.has(key)) continue;
+            interactionKeys.add(key);
+            interactions.push({ ...candidate, stance });
+        }
+    }
+    interactions.sort((left, right) => (
+        bot.entity.position.distanceTo(left.stance)
+        - bot.entity.position.distanceTo(right.stance)
+        || right.neighbours - left.neighbours
+    ));
+
+    let lastEvidence = null;
+    for (const candidate of interactions.slice(0, 12)) {
+        if (bot.interrupt_code) break;
+        await goToGoal(
+            bot,
+            new pf.goals.GoalBlock(
+                candidate.stance.x,
+                candidate.stance.y,
+                candidate.stance.z,
+            ),
+            {
+                movements: () => nonDestructiveSurfaceMovements(bot),
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        );
+        const settled = await waitForStableSupportedStandingCell(
+            bot,
+            NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS,
+        );
+        if (!settled?.equals?.(candidate.stance)) continue;
+        const collected = await useToolOnBlock(bot, 'bucket', candidate.block, {
+            boundStandingCell: candidate.stance,
+        });
+        lastEvidence = bot.lastActionEvidence || null;
+        const afterWater = inventoryCount(bot, 'water_bucket');
+        if (collected && afterWater > beforeWater) {
+            setActionEvidence(bot, {
+                kind: 'liquid_collection',
+                outcome: 'water_bucket_collected',
+                target: {
+                    name: 'water',
+                    x: candidate.block.position.x,
+                    y: candidate.block.position.y,
+                    z: candidate.block.position.z,
+                },
+                inventoryBefore: beforeWater,
+                inventoryAfter: afterWater,
+                renewableSourceNeighbours: candidate.neighbours,
+                retryable: false,
+            });
+            log(bot, 'Filled one bucket from a connected renewable water source.');
+            return true;
+        }
+    }
+    setActionEvidence(bot, {
+        kind: 'liquid_collection',
+        outcome: bot.interrupt_code ? 'interrupted' : 'water_collection_failed',
+        target: { name: 'water' },
+        inventoryBefore: beforeWater,
+        inventoryAfter: inventoryCount(bot, 'water_bucket'),
+        lastInteraction: lastEvidence,
+        retryable: !bot.interrupt_code,
+    });
+    return false;
+}
+
+function loadedBlockPositions(bot, name, center, radius = 10) {
+    const type = bot.registry.blocksByName?.[name]?.id;
+    if (!Number.isInteger(type)) return [];
+    try {
+        return bot.findBlocks({
+            matching: type,
+            point: center,
+            maxDistance: radius,
+            count: 512,
+        });
+    } catch {
+        return [];
+    }
+}
+
+function loadedBlockCount(bot, name, center, radius = 10) {
+    return loadedBlockPositions(bot, name, center, radius).length;
+}
+
+function lavaCastingSites(bot, range = 64, { protectedGeometry = new Set() } = {}) {
+    const sources = loadedFluidSources(bot, 'lava', range, 384);
+    const sites = new Map();
+    for (const lava of sources) {
+        for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const shore = bot.blockAt(lava.position.offset(x, 0, z));
+            if (!shore?.position) continue;
+            const waterPosition = shore.position.offset(0, 1, 0);
+            const waterCell = bot.blockAt(waterPosition);
+            const waterHead = bot.blockAt(waterPosition.offset(0, 1, 0));
+            const spillPosition = lava.position.offset(0, 1, 0);
+            const spillCell = bot.blockAt(spillPosition);
+            if (
+                !waterCell
+                || !waterHead
+                || !spillCell
+                || !isReplaceableGameplayBlock(waterCell)
+                || !isReplaceableGameplayBlock(waterHead)
+                || !isReplaceableGameplayBlock(spillCell)
+                || isLiquidGameplayBlock(waterCell)
+                || isLiquidGameplayBlock(waterHead)
+                || isLiquidGameplayBlock(spillCell)
+                || physicallyOccupiesStandingCell(bot, waterPosition)
+            ) continue;
+            const protectedConflict = [
+                shore.position,
+                waterPosition,
+                waterPosition.offset(0, 1, 0),
+                spillPosition,
+                lava.position,
+            ]
+                .some(position => protectedGeometry?.has?.(miningCellKey(position)));
+            if (protectedConflict) continue;
+
+            let supportPosition = null;
+            if (isSafeGameplaySupport(shore) && !isProtectedGameplayBlock(shore)) {
+                supportPosition = null;
+            } else {
+                const anchor = bot.blockAt(shore.position.offset(0, -1, 0));
+                const canPrepareSupport = (
+                    isReplaceableGameplayBlock(shore)
+                    && !isLiquidGameplayBlock(shore)
+                    && !physicallyOccupiesStandingCell(bot, shore.position)
+                    && isSafeGameplaySupport(anchor)
+                    && !isProtectedGameplayBlock(anchor)
+                );
+                if (!canPrepareSupport) continue;
+                supportPosition = shore.position;
+            }
+            const key = miningCellKey(waterPosition);
+            if (!sites.has(key)) {
+                sites.set(key, {
+                    waterPosition,
+                    shore: shore.position,
+                    supportPosition,
+                    lavaSources: 1,
+                    distance: bot.entity.position.distanceTo(waterPosition),
+                    sourcePosition: lava.position,
+                    spillPosition,
+                });
+            }
+        }
+    }
+    return [...sites.values()].sort((left, right) => (
+        Number(Boolean(left.supportPosition)) - Number(Boolean(right.supportPosition))
+        || right.lavaSources - left.lavaSources
+        || left.distance - right.distance
+        || left.waterPosition.x - right.waterPosition.x
+        || left.waterPosition.z - right.waterPosition.z
+    ));
+}
+
+async function recoverStrandedCastingWater(bot, range = 24) {
+    if (inventoryCount(bot, 'bucket') < 1) return { success: false, attempted: 0 };
+    const candidates = loadedFluidSources(bot, 'water', range, 64)
+        .filter(water => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => (
+            bot.blockAt(water.position.offset(x, -1, z))?.name === 'obsidian'
+        )))
+        .sort((left, right) => (
+            bot.entity.position.distanceTo(left.position)
+            - bot.entity.position.distanceTo(right.position)
+        ));
+    let attempted = 0;
+    for (const water of candidates.slice(0, 4)) {
+        if (bot.interrupt_code) break;
+        attempted += 1;
+        if (
+            await useToolOnBlock(bot, 'bucket', water)
+            && inventoryCount(bot, 'water_bucket') > 0
+        ) {
+            return { success: true, attempted, position: water.position };
+        }
+    }
+    return { success: false, attempted };
+}
+
+function safeCreatedObsidianHarvestBindings(bot, positions) {
+    const bindings = [];
+    const seen = new Set();
+    for (const position of positions || []) {
+        const block = bot.blockAt(position);
+        if (block?.name !== 'obsidian') continue;
+        const assessment = assessStableMiningCollectionTarget(bot, block);
+        if (
+            !assessment?.safe
+            || assessment.code !== 'safe_stance_available'
+            || !Array.isArray(assessment.stances)
+        ) continue;
+        for (const stance of assessment.stances) {
+            const key = `${miningCellKey(block.position)}@${miningCellKey(stance)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            bindings.push({ block, stance, assessment });
+        }
+    }
+    return bindings.sort((left, right) => (
+        bot.entity.position.distanceTo(left.stance)
+        - bot.entity.position.distanceTo(right.stance)
+        || bot.entity.position.distanceTo(left.block.position)
+            - bot.entity.position.distanceTo(right.block.position)
+    ));
+}
+
+function preparableLavaCastingSites(bot, range = 64, { protectedGeometry = new Set() } = {}) {
+    const movements = safeMovements(bot);
+    const sources = loadedFluidSources(bot, 'lava', range, 384)
+        .sort((left, right) => (
+            bot.entity.position.distanceTo(left.position)
+            - bot.entity.position.distanceTo(right.position)
+        ))
+        .slice(0, MAX_CASTING_CHAMBER_SOURCE_CANDIDATES);
+    const sites = new Map();
+    for (const lava of sources) {
+        for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const shore = bot.blockAt(lava.position.offset(x, 0, z));
+            if (
+                !shore?.position
+                || !isSafeGameplaySupport(shore)
+                || isProtectedGameplayBlock(shore)
+            ) continue;
+            const waterPosition = shore.position.offset(0, 1, 0);
+            const spillPosition = lava.position.offset(0, 1, 0);
+            const chamberPositions = [
+                waterPosition,
+                waterPosition.offset(0, 1, 0),
+                spillPosition,
+            ].filter((position, index, positions) => (
+                positions.findIndex(candidate => sameMiningCell(candidate, position)) === index
+            ));
+            if (
+                chamberPositions.some(position => physicallyOccupiesStandingCell(bot, position))
+                || [shore.position, lava.position, ...chamberPositions]
+                    .some(position => protectedGeometry.has(miningCellKey(position)))
+            ) continue;
+            const chamberBlocks = chamberPositions.map(position => bot.blockAt(position));
+            if (chamberBlocks.some(block => !block || isLiquidGameplayBlock(block))) continue;
+            const clearanceBlocks = chamberBlocks.filter(block => !isCollectionStandingCellClear(block));
+            if (clearanceBlocks.some(block => (
+                isProtectedGameplayBlock(block)
+                || isHazardousGameplayBlock(block)
+                || !movements.safeToBreak(block)
+            ))) continue;
+            const key = miningCellKey(waterPosition);
+            if (!sites.has(key)) {
+                sites.set(key, {
+                    waterPosition,
+                    shore: shore.position,
+                    supportPosition: null,
+                    lavaSources: 1,
+                    distance: bot.entity.position.distanceTo(waterPosition),
+                    clearancePositions: clearanceBlocks.map(block => block.position),
+                    sourcePosition: lava.position,
+                    spillPosition,
+                });
+            }
+        }
+    }
+    return [...sites.values()].sort((left, right) => (
+        left.distance - right.distance
+        || left.clearancePositions.length - right.clearancePositions.length
+        || left.waterPosition.x - right.waterPosition.x
+        || left.waterPosition.z - right.waterPosition.z
+    ));
+}
+
+function castingChamberClearanceSafe(bot, block, stance, site, protectedGeometry) {
+    if (!block?.position) return false;
+    const reserved = [
+        stance,
+        stance.offset(0, 1, 0),
+        stance.offset(0, -1, 0),
+        site.shore,
+        site.sourcePosition,
+    ].some(position => sameMiningCell(position, block.position));
+    const sourceBoundSpill = Boolean(
+        site.spillPosition
+        && site.sourcePosition
+        && sameMiningCell(site.spillPosition, block.position)
+        && sameMiningCell(site.sourcePosition, block.position.offset(0, -1, 0))
+        && bot.blockAt(site.sourcePosition)?.name === 'lava'
+        && isMiningRouteCellReturnable(bot, stance)
+    );
+    return Boolean(
+        !reserved
+        && !isLiquidGameplayBlock(block)
+        && !isHazardousGameplayBlock(block)
+        && !isProtectedGameplayBlock(block)
+        && !protectedGeometry.has(miningCellKey(block.position))
+        // The chamber's declared spill cell deliberately touches exactly its
+        // bound source from above. All travel cells and incidental connectors
+        // remain subject to the generic liquid-adjacency prohibition.
+        && (
+            !miningRouteTouchesLiquid(bot, [block.position])
+            || sourceBoundSpill
+        )
+    );
+}
+
+function castingChamberRaySafeFromStance(bot, stance, site, protectedGeometry) {
+    const eye = stance.offset(0.5, 1.62, 0.5);
+    const virtualBodyCells = new Set([
+        miningCellKey(stance),
+        miningCellKey(stance.offset(0, 1, 0)),
+    ]);
+    return (site.clearancePositions || []).every(position => {
+        const target = bot.blockAt(position);
+        if (!target || isCollectionStandingCellClear(target)) return true;
+        const targetPoint = target.position.offset(0.5, 0.5, 0.5);
+        const direction = targetPoint.minus(eye);
+        const distance = direction.norm();
+        if (!Number.isFinite(distance) || distance <= 0.25 || distance > 4.5) return false;
+        const unit = direction.scaled(1 / distance);
+        let firstBlock = null;
+        let previousKey = null;
+        for (let travelled = 0.125; travelled <= distance + 0.001; travelled += 0.125) {
+            const cell = eye.plus(unit.scaled(Math.min(distance, travelled))).floored();
+            const key = miningCellKey(cell);
+            if (key === previousKey || virtualBodyCells.has(key)) continue;
+            previousKey = key;
+            const observed = bot.blockAt(cell);
+            if (!observed) return false;
+            if (!isCollectionStandingCellClear(observed)) {
+                firstBlock = observed;
+                break;
+            }
+        }
+        firstBlock ||= target;
+        return castingChamberClearanceSafe(
+            bot,
+            firstBlock,
+            stance,
+            site,
+            protectedGeometry,
+        );
+    });
+}
+
+function lavaCastingPlacementFaceReachable(bot, stance, site) {
+    if (!stance?.offset || !site?.waterPosition?.offset) return false;
+    const eye = stance.offset(0.5, 1.62, 0.5);
+    const supportDirections = [
+        new Vec3(0, -1, 0),
+        new Vec3(0, 1, 0),
+        new Vec3(0, 0, -1),
+        new Vec3(0, 0, 1),
+        new Vec3(-1, 0, 0),
+        new Vec3(1, 0, 0),
+    ].filter(direction => {
+        const support = bot.blockAt(site.waterPosition.plus(direction));
+        return Boolean(
+            support
+            && !isReplaceableGameplayBlock(support)
+            && !support.name.endsWith('_door')
+        );
+    });
+    if (supportDirections.length > 0) {
+        try {
+            const goal = new pf.goals.GoalPlaceBlock(site.waterPosition, bot.world, {
+                range: 4.5,
+                faces: supportDirections,
+                // Chamber clearance is verified separately against the exact
+                // future ray. Here we need Mineflayer's native clicked-face
+                // distance, including shape centers, without rejecting a
+                // safely removable connector that has not been cleared yet.
+                LOS: false,
+            });
+            if (goal.getFaceAndRef(eye)) return true;
+        } catch {
+            // Fall through to a prospective support face when applicable.
+        }
+    }
+    const prospectiveBottomSupport = Boolean(
+        site.supportPosition
+        && sameMiningCell(
+            site.supportPosition,
+            site.waterPosition.offset(0, -1, 0),
+        )
+    );
+    return prospectiveBottomSupport
+        && eye.distanceTo(site.waterPosition.offset(0.5, 0, 0.5)) <= 4.5;
+}
+
+export function settledCastingAccessProgress(access) {
+    const excavated = Math.max(0, Number(access?.excavated) || 0);
+    const safelyReturned = access?.retreat?.success === true;
+    const observed = access?.retreat?.observed || null;
+    if (
+        excavated < 1
+        || !safelyReturned
+        || ![observed?.x, observed?.y, observed?.z].every(Number.isFinite)
+    ) return null;
+    return Object.freeze({
+        advanced: true,
+        outcome: 'casting_access_advanced',
+        routeSteps: Math.max(
+            1,
+            Number(access?.reachedSteps) || 0,
+            Number(access?.retreat?.retreatedSteps) || 0,
+        ),
+        excavated,
+        returnable: true,
+        // The body settled back on the already-protected origin. The cleared
+        // geometry is the progress; no unoccupied route delta is invented.
+        returnRoute: [],
+        observedPosition: observed,
+    });
+}
+
+export function castingWaterRecoveryStandingCell(bot, waterPosition, observedStance) {
+    const distance = bot?.entity?.position?.distanceTo?.(waterPosition);
+    return observedStance && Number.isFinite(distance) && distance <= 4.5
+        ? observedStance
+        : null;
+}
+
+export function castingBindingsAfterNoFaceFailure(bindings, plan, access) {
+    if (
+        !Array.isArray(bindings)
+        || bindings.length < 2
+        || !plan?.stance
+        || (access?.failureOutcome || access?.outcome) !== 'route_block_not_broken'
+        || Math.max(0, Number(access?.excavated) || 0) !== 0
+        || Math.max(0, Number(access?.supportsPlaced) || 0) !== 0
+        || access?.retreat?.success !== true
+        || access?.breakEvidence?.kind !== 'break'
+        || access?.breakEvidence?.outcome !== 'unreachable'
+    ) return null;
+    const remaining = bindings.filter(binding => (
+        !sameMiningCell(binding?.stance, plan.stance)
+    ));
+    return remaining.length > 0 && remaining.length < bindings.length
+        ? remaining
+        : null;
+}
+
+async function bindLavaCastingInteractionStance(bot, candidateSites, {
+    preservedReturnRoute = [],
+    protectedGeometry = new Set(),
+    excludedStanceKeys = new Set(),
+    bindingRouteAttempts = 0,
+} = {}) {
+    const origin = observedSupportedStandingCell(bot);
+    if (!origin) return { success: false, outcome: 'casting_origin_unavailable' };
+
+    const bindings = [];
+    const seenStances = new Set();
+    let candidateStances = 0;
+    let prospectiveStances = 0;
+    let rayRejectedStances = 0;
+    let placementReachRejectedStances = 0;
+    let protectedRejectedStances = 0;
+    const rankedSites = [...candidateSites]
+        .sort((left, right) => (
+            left.distance - right.distance
+            || Number(Boolean(left.supportPosition)) - Number(Boolean(right.supportPosition))
+            || right.lavaSources - left.lavaSources
+        ))
+        .slice(0, MAX_CASTING_SITE_CANDIDATES);
+    for (const site of rankedSites) {
+        const waterTarget = bot.blockAt(site.waterPosition);
+        if (!waterTarget) continue;
+        const clearStances = waterBucketInteractionStances(bot, waterTarget);
+        const prospective = prospectiveMiningStandingPositions(bot, waterTarget);
+        prospectiveStances += prospective.length;
+        const stances = [...new Map([...clearStances, ...prospective]
+            .map(stance => [miningCellKey(stance), stance])).values()]
+            .sort((left, right) => (
+                bot.entity.position.distanceTo(left) - bot.entity.position.distanceTo(right)
+            ))
+            .slice(0, MAX_CASTING_STANCES_PER_SITE);
+        candidateStances += stances.length;
+        for (const stance of stances) {
+            const key = miningCellKey(stance);
+            if (seenStances.has(key) || excludedStanceKeys.has(key)) continue;
+            const eye = stance.offset(0.5, 1.62, 0.5);
+            if (!lavaCastingPlacementFaceReachable(bot, stance, site)) {
+                placementReachRejectedStances += 1;
+                continue;
+            }
+            if ((site.clearancePositions || []).some(position => (
+                eye.distanceTo(position.offset(0.5, 0.5, 0.5)) > 4.5
+            ))) continue;
+            // Reject an interaction stance whose first chamber ray already
+            // crosses a protected, hazardous, or incidental liquid-adjacent
+            // connector. This lets the route planner choose another angle or
+            // source before excavation instead of learning the same terminal
+            // failure after each safe partial clear.
+            if (!castingChamberRaySafeFromStance(bot, stance, site, protectedGeometry)) {
+                rayRejectedStances += 1;
+                continue;
+            }
+            const occupied = physicallyOccupiesStandingCell(bot, stance);
+            const protectedConflict = [
+                stance,
+                stance.offset(0, 1, 0),
+                stance.offset(0, -1, 0),
+            ].some(position => protectedGeometry.has(miningCellKey(position)));
+            if (protectedConflict && !occupied) {
+                protectedRejectedStances += 1;
+                continue;
+            }
+            seenStances.add(key);
+            bindings.push({ site, stance });
+        }
+    }
+    if (bindings.length === 0) {
+        return {
+            success: false,
+            outcome: 'casting_interaction_stance_unavailable',
+            observedSites: rankedSites.length,
+            candidateStances,
+            prospectiveStances,
+            rayRejectedStances,
+            placementReachRejectedStances,
+            protectedRejectedStances,
+        };
+    }
+
+    const occupiedBinding = bindings.find(binding => (
+        physicallyOccupiesStandingCell(bot, binding.stance)
+        && isMiningRouteCellReturnable(bot, binding.stance)
+    ));
+    if (occupiedBinding) {
+        return {
+            success: true,
+            outcome: 'casting_interaction_stance_bound',
+            ...occupiedBinding,
+            routeSteps: 0,
+            excavated: 0,
+            returnable: true,
+            returnRoute: miningReturnRoute(origin, [], origin),
+            observedPosition: origin,
+        };
+    }
+
+    const maximumRequiredSteps = Math.max(...bindings.map(({ stance }) => (
+        Math.abs(stance.x - origin.x)
+        + Math.abs(stance.y - origin.y)
+        + Math.abs(stance.z - origin.z)
+    )));
+    let plan = buildMiningAccessPlan(bot, null, maximumRequiredSteps, {
+        breakTarget: false,
+        stances: bindings.map(binding => binding.stance),
+        // Candidate discovery already bounds the loaded lava region and the
+        // corridor search has independent expansion limits. A second fixed
+        // 64-step cap contradicted that discovery radius and rejected every
+        // valid stance before the existing deadline-prefix owner could split a
+        // long route into returnable action leases. Bind the route budget to
+        // the actual candidate geometry; execution remains bounded by the
+        // action deadline and returns a verified prefix when the full chamber
+        // stance cannot be reached in one lease.
+        maxRouteSteps: maximumRequiredSteps + MAX_MINING_CORRIDOR_DETOUR,
+        maxSearchExcavationBlocks: Math.min(
+            MAX_MINING_EXCAVATION_BLOCKS * 4,
+            (maximumRequiredSteps + MAX_MINING_CORRIDOR_DETOUR) * 3,
+        ),
+        preservedReturnRoute,
+    });
+    let partialAdvance = false;
+    if (!plan.ok && plan.outcome === 'route_deadline_insufficient') {
+        const prefix = selectMiningDeadlinePrefix(plan, remainingActionTimeMs());
+        if (prefix) {
+            plan = prefix;
+            partialAdvance = true;
+        }
+    }
+    if (!plan.ok) {
+        return {
+            success: false,
+            outcome: plan.outcome || 'casting_access_route_unavailable',
+            consideredRoutes: plan.consideredRoutes || 0,
+            consideredStates: plan.consideredStates || 0,
+            expandedStates: plan.expandedStates || 0,
+            routeOutcomes: plan.routeOutcomes || null,
+            searchRejections: plan.searchRejections || null,
+        };
+    }
+
+    const access = await executeMiningAccessPlan(bot, null, plan, { preservedReturnRoute });
+    if (!access.success) {
+        const settledProgress = settledCastingAccessProgress(access);
+        const alternateBindings = castingBindingsAfterNoFaceFailure(bindings, plan, access);
+        if (
+            !settledProgress
+            && alternateBindings
+            && bindingRouteAttempts + 1 < MAX_CASTING_BINDING_ROUTE_ATTEMPTS
+            && remainingActionTimeMs() > 5_000
+        ) {
+            const nextExcludedStances = new Set(excludedStanceKeys);
+            nextExcludedStances.add(miningCellKey(plan.stance));
+            return await bindLavaCastingInteractionStance(bot, candidateSites, {
+                preservedReturnRoute,
+                protectedGeometry,
+                excludedStanceKeys: nextExcludedStances,
+                bindingRouteAttempts: bindingRouteAttempts + 1,
+            });
+        }
+        return {
+            success: false,
+            ...(settledProgress || { outcome: access.outcome }),
+            access,
+            bindingRouteAttempts: bindingRouteAttempts + 1,
+        };
+    }
+    const observed = observedSupportedStandingCell(bot);
+    const reachedSteps = Math.min(
+        plan.route.length,
+        Math.max(0, Number(access.reachedSteps) || 0),
+    );
+    const returnRoute = observed
+        ? miningReturnRoute(plan.origin || origin, plan.route.slice(0, reachedSteps), observed)
+        : [];
+    const returnable = Boolean(observed && isMiningRouteCellReturnable(bot, observed));
+    if (!returnable) {
+        return {
+            success: false,
+            outcome: 'casting_access_endpoint_unsafe',
+            routeSteps: reachedSteps,
+            excavated: access.excavated,
+            observedPosition: observed,
+        };
+    }
+    if (partialAdvance || plan.partial === true) {
+        return {
+            success: false,
+            advanced: true,
+            outcome: 'casting_access_advanced',
+            routeSteps: reachedSteps,
+            excavated: access.excavated,
+            returnable: true,
+            returnRoute,
+            observedPosition: observed,
+        };
+    }
+
+    const binding = bindings.find(candidate => sameMiningCell(candidate.stance, plan.stance));
+    if (!binding || !physicallyOccupiesStandingCell(bot, binding.stance)) {
+        return {
+            success: false,
+            outcome: 'casting_interaction_stance_unverified',
+            routeSteps: reachedSteps,
+            excavated: access.excavated,
+            returnable: true,
+            returnRoute,
+            observedPosition: observed,
+        };
+    }
+    return {
+        success: true,
+        outcome: 'casting_interaction_stance_bound',
+        ...binding,
+        routeSteps: reachedSteps,
+        excavated: access.excavated,
+        returnable: true,
+        returnRoute,
+        observedPosition: observed,
+    };
+}
+
+async function clearCastingChamberBlockFromBoundStance(
+    bot,
+    targetPosition,
+    stance,
+    site,
+    protectedGeometry,
+) {
+    let cleared = 0;
+    for (let attempt = 0; attempt < MAX_CASTING_CHAMBER_RAY_CLEARS; attempt += 1) {
+        const target = bot.blockAt(targetPosition);
+        if (!target || isCollectionStandingCellClear(target)) {
+            return { success: true, cleared };
+        }
+        const eye = bot.entity.position.offset(0, Number(bot.entity.eyeHeight) || 1.62, 0);
+        const targetPoint = target.position.offset(0.5, 0.5, 0.5);
+        const direction = targetPoint.minus(eye);
+        const distance = direction.norm();
+        let block = target;
+        if (
+            typeof bot.canSeeBlock === 'function'
+            && !bot.canSeeBlock(target)
+            && bot.world?.raycast
+            && Number.isFinite(distance)
+            && distance > 0.25
+        ) {
+            block = bot.world.raycast(
+                eye,
+                direction.scaled(1 / distance),
+                Math.min(4.5, distance),
+            ) || target;
+        }
+        if (!castingChamberClearanceSafe(bot, block, stance, site, protectedGeometry)) {
+            return {
+                success: false,
+                outcome: 'casting_chamber_connector_unsafe',
+                blockedPosition: block.position,
+                cleared,
+            };
+        }
+        if (!await breakBlockAt(
+            bot,
+            block.position.x,
+            block.position.y,
+            block.position.z,
+            {
+                requireHarvest: false,
+                boundStandingCell: stance,
+            },
+        )) {
+            return {
+                success: false,
+                outcome: 'casting_chamber_block_not_cleared',
+                blockedPosition: block.position,
+                cleared,
+            };
+        }
+        cleared += 1;
+    }
+    return {
+        success: isCollectionStandingCellClear(bot.blockAt(targetPosition)),
+        outcome: 'casting_chamber_clearance_limit',
+        blockedPosition: targetPosition,
+        cleared,
+    };
+}
+
+async function prepareLavaCastingChamber(bot, candidateSites, {
+    preservedReturnRoute = [],
+    protectedGeometry = new Set(),
+} = {}) {
+    const binding = await bindLavaCastingInteractionStance(bot, candidateSites, {
+        preservedReturnRoute,
+        protectedGeometry,
+    });
+    if (!binding.success) return binding;
+
+    const site = binding.site;
+    const stance = binding.stance;
+    let chamberCleared = 0;
+    const clearancePositions = [...(site.clearancePositions || [])]
+        .sort((left, right) => right.y - left.y);
+    for (const position of clearancePositions) {
+        const clearance = await clearCastingChamberBlockFromBoundStance(
+            bot,
+            position,
+            stance,
+            site,
+            protectedGeometry,
+        );
+        chamberCleared += clearance.cleared || 0;
+        if (!clearance.success) {
+            return {
+                ...binding,
+                success: false,
+                outcome: clearance.outcome || 'casting_chamber_block_not_cleared',
+                blockedPosition: clearance.blockedPosition || position,
+                chamberCleared,
+            };
+        }
+    }
+
+    const preparedSite = lavaCastingSites(bot, 72, { protectedGeometry })
+        .find(candidate => (
+            candidate.waterPosition.equals(site.waterPosition)
+            && candidate.sourcePosition?.equals?.(site.sourcePosition)
+        ));
+    if (!preparedSite) {
+        return {
+            ...binding,
+            success: false,
+            outcome: 'casting_chamber_not_rebound',
+            waterPosition: site.waterPosition,
+            chamberCleared,
+        };
+    }
+    return {
+        ...binding,
+        success: true,
+        outcome: 'casting_chamber_prepared',
+        site: preparedSite,
+        chamberCleared,
+    };
+}
+
+export async function castObsidianSource(bot, quantity = 10, options = {}) {
+    const requested = Math.max(1, Math.min(16, Math.floor(Number(quantity) || 10)));
+    const preservedReturnRoute = normalizePreservedMiningReturnRoute(
+        options.preservedReturnRoute,
+    );
+    const expectedProtectedRouteCells = Number.isFinite(options.expectedProtectedRouteCells)
+        ? Math.max(0, Math.floor(options.expectedProtectedRouteCells))
+        : null;
+    if (
+        expectedProtectedRouteCells !== null
+        && expectedProtectedRouteCells !== preservedReturnRoute.length
+    ) {
+        setActionEvidence(bot, {
+            kind: 'obsidian_casting',
+            outcome: 'preserved_return_route_changed',
+            target: { name: 'obsidian' },
+            expectedProtectedRouteCells,
+            observedProtectedRouteCells: preservedReturnRoute.length,
+            retryable: true,
+        });
+        return false;
+    }
+    let strandedWaterRecovery = null;
+    if (inventoryCount(bot, 'water_bucket') < 1 && inventoryCount(bot, 'bucket') > 0) {
+        strandedWaterRecovery = await recoverStrandedCastingWater(bot);
+    }
+    if (inventoryCount(bot, 'water_bucket') < 1) {
+        setActionEvidence(bot, {
+            kind: 'obsidian_casting',
+            outcome: 'water_bucket_missing',
+            target: { name: 'obsidian' },
+            ...(strandedWaterRecovery ? { strandedWaterRecovery } : {}),
+            retryable: true,
+        });
+        return false;
+    }
+    if (inventoryToolTier(bot, 'pickaxe') < TOOL_TIER.diamond) {
+        setActionEvidence(bot, {
+            kind: 'obsidian_casting',
+            outcome: 'diamond_pickaxe_missing',
+            target: { name: 'obsidian' },
+            retryable: true,
+        });
+        return false;
+    }
+
+    let activeReturnRoute = preservedReturnRoute;
+    let protectedReturnGeometry = protectedMiningReturnGeometry(activeReturnRoute);
+    let sites = lavaCastingSites(bot, 72, { protectedGeometry: protectedReturnGeometry });
+    const visibleLavaSources = loadedFluidSources(bot, 'lava', 72, 384);
+    let searchEvidence = null;
+    let castingAccessEvidence = null;
+    let returnRouteDelta = [];
+    if (sites.length === 0 && visibleLavaSources.length > 0) {
+        const preparableSites = preparableLavaCastingSites(bot, 72, {
+            protectedGeometry: protectedReturnGeometry,
+        });
+        if (preparableSites.length > 0) {
+            const chamber = await prepareLavaCastingChamber(bot, preparableSites, {
+                preservedReturnRoute: activeReturnRoute,
+                protectedGeometry: protectedReturnGeometry,
+            });
+            castingAccessEvidence = chamber;
+            if (chamber.advanced === true) {
+                returnRouteDelta = normalizePreservedMiningReturnRoute(chamber.returnRoute || []);
+                setActionEvidence(bot, {
+                    kind: 'obsidian_casting',
+                    outcome: 'lava_casting_access_advanced',
+                    target: { name: 'lava_casting_chamber' },
+                    routeDigging: chamber.excavated > 0,
+                    returnable: chamber.returnable === true,
+                    returnRoute: returnRouteDelta,
+                    routeSteps: chamber.routeSteps || 0,
+                    excavated: chamber.excavated || 0,
+                    observedPosition: chamber.observedPosition || null,
+                    retryable: false,
+                });
+                log(bot, `Advanced ${chamber.routeSteps || 0} protected corridor step${chamber.routeSteps === 1 ? '' : 's'} toward an enclosed lava casting chamber.`);
+                return true;
+            }
+            if (!chamber.success) {
+                const clearanceAdvanced = Boolean(
+                    Number(chamber.chamberCleared) > 0
+                    && chamber.returnable === true
+                    && [
+                        chamber.observedPosition?.x,
+                        chamber.observedPosition?.y,
+                        chamber.observedPosition?.z,
+                    ].every(Number.isFinite)
+                );
+                if (clearanceAdvanced) {
+                    returnRouteDelta = normalizePreservedMiningReturnRoute(chamber.returnRoute || []);
+                    const cleared = Math.max(1, Number(chamber.chamberCleared) || 0);
+                    setActionEvidence(bot, {
+                        kind: 'obsidian_casting',
+                        outcome: 'lava_casting_clearance_advanced',
+                        target: {
+                            name: 'lava_casting_spill_cell',
+                            ...(chamber.site?.spillPosition || chamber.blockedPosition || {}),
+                        },
+                        observedLavaSources: visibleLavaSources.length,
+                        castingAccessEvidence: chamber,
+                        routeDigging: true,
+                        returnable: true,
+                        returnRoute: returnRouteDelta,
+                        routeSteps: chamber.routeSteps || 0,
+                        excavated: Math.max(0, Number(chamber.excavated) || 0) + cleared,
+                        chamberCleared: cleared,
+                        observedPosition: chamber.observedPosition,
+                        retryable: false,
+                    });
+                    log(bot, `Cleared ${cleared} source-bound casting chamber block${cleared === 1 ? '' : 's'} while preserving the return spine.`);
+                    return true;
+                }
+                setActionEvidence(bot, {
+                    kind: 'obsidian_casting',
+                    outcome: chamber.outcome || 'casting_chamber_preparation_failed',
+                    target: { name: 'lava_casting_chamber' },
+                    observedLavaSources: visibleLavaSources.length,
+                    castingAccessEvidence: chamber,
+                    routeDigging: chamber.excavated > 0,
+                    returnable: chamber.returnable === true,
+                    returnRoute: chamber.returnRoute || [],
+                    routeSteps: chamber.routeSteps || 0,
+                    excavated: chamber.excavated || 0,
+                    observedPosition: chamber.observedPosition || null,
+                    retryable: !bot.interrupt_code,
+                });
+                return false;
+            }
+            activeReturnRoute = normalizePreservedMiningReturnRoute([
+                ...activeReturnRoute,
+                ...(chamber.returnRoute || []),
+            ]);
+            returnRouteDelta = normalizePreservedMiningReturnRoute(chamber.returnRoute || []);
+            protectedReturnGeometry = protectedMiningReturnGeometry(activeReturnRoute);
+            sites = [
+                chamber.site,
+                ...lavaCastingSites(bot, 72, { protectedGeometry: protectedReturnGeometry })
+                    .filter(candidate => !candidate.waterPosition.equals(chamber.site.waterPosition)),
+            ];
+        }
+    }
+    if (sites.length === 0) {
+        const preferredLavaSource = [...visibleLavaSources]
+            .sort((left, right) => (
+                bot.entity.position.distanceTo(left.position)
+                - bot.entity.position.distanceTo(right.position)
+            ))[0] || null;
+        const advanced = await mineSearchTunnel(bot, 'lava', 12, preferredLavaSource, {
+            preservedReturnRoute,
+            expectedProtectedRouteCells,
+            accessOnly: true,
+        });
+        searchEvidence = bot.lastActionEvidence || null;
+        const searchProgressed = Boolean(
+            advanced
+            && ['search_advanced', 'lava_frontier_exposed'].includes(searchEvidence?.outcome)
+            && searchEvidence?.returnable === true
+        );
+        if (!searchProgressed) {
+            setActionEvidence(bot, {
+                kind: 'obsidian_casting',
+                outcome: searchEvidence?.outcome || (visibleLavaSources.length > 0
+                    ? 'lava_source_access_failed'
+                    : 'lava_source_not_found'),
+                target: { name: 'lava' },
+                observedLavaSources: visibleLavaSources.length,
+                searchEvidence,
+                routeDigging: searchEvidence?.routeDigging === true,
+                returnable: searchEvidence?.returnable === true,
+                returnRoute: searchEvidence?.returnRoute || [],
+                routeSteps: searchEvidence?.routeSteps || 0,
+                observedPosition: searchEvidence?.observedPosition || null,
+                retryable: !bot.interrupt_code,
+            });
+            return false;
+        }
+
+        activeReturnRoute = normalizePreservedMiningReturnRoute([
+            ...preservedReturnRoute,
+            ...(searchEvidence.returnRoute || []),
+        ]);
+        returnRouteDelta = normalizePreservedMiningReturnRoute(searchEvidence.returnRoute || []);
+        protectedReturnGeometry = protectedMiningReturnGeometry(activeReturnRoute);
+        sites = lavaCastingSites(bot, 72, { protectedGeometry: protectedReturnGeometry });
+        if (sites.length === 0) {
+            const frontierExposed = searchEvidence.outcome === 'lava_frontier_exposed';
+            setActionEvidence(bot, {
+                kind: 'obsidian_casting',
+                outcome: frontierExposed ? 'lava_frontier_exposed' : 'lava_search_advanced',
+                target: { name: 'lava' },
+                observedLavaSources: loadedFluidSources(bot, 'lava', 72, 384).length,
+                searchEvidence,
+                frontier: searchEvidence.frontier || null,
+                routeDigging: searchEvidence.routeDigging === true,
+                returnable: true,
+                // GoalDirector owns the accumulated spine. Action evidence is
+                // deliberately one local delta so receipt bounds cannot cut
+                // the live endpoint off a long expedition route.
+                returnRoute: returnRouteDelta,
+                routeSteps: searchEvidence.routeSteps || 0,
+                excavated: searchEvidence.excavated || 0,
+                observedPosition: searchEvidence.observedPosition || null,
+                retryable: false,
+            });
+            return true;
+        }
+    }
+
+    const beforeObsidian = loadedBlockCount(bot, 'obsidian', bot.entity.position, 16);
+    const inventoryBeforeObsidian = inventoryCount(bot, 'obsidian');
+    const createdPositions = new Set();
+    let harvested = 0;
+    let pours = 0;
+    let siteAttempts = 0;
+    let preparedSupports = 0;
+    let lastFailure = null;
+    while (
+        harvested < requested
+        && pours < 4
+        && siteAttempts < 12
+        && sites.length > 0
+    ) {
+        if (bot.interrupt_code) break;
+        siteAttempts += 1;
+        const binding = await bindLavaCastingInteractionStance(bot, sites, {
+            preservedReturnRoute: activeReturnRoute,
+            protectedGeometry: protectedReturnGeometry,
+        });
+        castingAccessEvidence = binding;
+        if (binding.advanced === true) {
+            activeReturnRoute = normalizePreservedMiningReturnRoute([
+                ...activeReturnRoute,
+                ...(binding.returnRoute || []),
+            ]);
+            returnRouteDelta = normalizePreservedMiningReturnRoute([
+                ...returnRouteDelta,
+                ...(binding.returnRoute || []),
+            ]);
+            setActionEvidence(bot, {
+                kind: 'obsidian_casting',
+                outcome: 'lava_casting_access_advanced',
+                target: { name: 'lava_casting_site' },
+                routeDigging: binding.excavated > 0,
+                returnable: binding.returnable === true,
+                returnRoute: returnRouteDelta,
+                routeSteps: binding.routeSteps || 0,
+                excavated: binding.excavated || 0,
+                observedPosition: binding.observedPosition || null,
+                retryable: false,
+            });
+            log(bot, `Advanced ${binding.routeSteps || 0} protected corridor step${binding.routeSteps === 1 ? '' : 's'} toward one bound lava-casting stance.`);
+            return true;
+        }
+        if (!binding.success) {
+            lastFailure = {
+                kind: 'obsidian_casting',
+                outcome: binding.outcome || 'casting_access_route_unavailable',
+                access: binding.access || null,
+                routeOutcomes: binding.routeOutcomes || null,
+                searchRejections: binding.searchRejections || null,
+            };
+            break;
+        }
+        if (Array.isArray(binding.returnRoute) && binding.returnRoute.length > 0) {
+            activeReturnRoute = normalizePreservedMiningReturnRoute([
+                ...activeReturnRoute,
+                ...binding.returnRoute,
+            ]);
+            returnRouteDelta = normalizePreservedMiningReturnRoute([
+                ...returnRouteDelta,
+                ...binding.returnRoute,
+            ]);
+            protectedReturnGeometry = protectedMiningReturnGeometry(activeReturnRoute);
+        }
+        let site = binding.site;
+        const interactionStance = binding.stance;
+        if (site.supportPosition) {
+            const capacity = assessSurfaceSupportMaterialCapacity(bot, 1);
+            const material = selectCarriedSurfaceSupportMaterial(bot);
+            if (!capacity.ok || !material) {
+                lastFailure = {
+                    kind: 'obsidian_casting',
+                    outcome: 'casting_support_material_missing',
+                    supportMaterialCapacity: capacity,
+                };
+                sites = sites.slice(1);
+                continue;
+            }
+            const supportPlaced = await placeBlock(
+                bot,
+                material.name,
+                site.supportPosition.x,
+                site.supportPosition.y,
+                site.supportPosition.z,
+                'bottom',
+                true,
+                false,
+                material.slot,
+                interactionStance,
+            );
+            const preparedSupport = bot.blockAt(site.supportPosition);
+            if (!supportPlaced || !isSafeGameplaySupport(preparedSupport)) {
+                lastFailure = bot.lastActionEvidence || {
+                    kind: 'obsidian_casting',
+                    outcome: 'casting_support_preparation_failed',
+                };
+                sites = sites.slice(1);
+                continue;
+            }
+            preparedSupports += 1;
+            const preparedSite = lavaCastingSites(bot, 72, {
+                protectedGeometry: protectedReturnGeometry,
+            }).find(candidate => (
+                candidate.waterPosition.equals(site.waterPosition)
+                && candidate.sourcePosition?.equals?.(site.sourcePosition)
+            ));
+            if (!preparedSite || preparedSite.supportPosition) {
+                lastFailure = {
+                    kind: 'obsidian_casting',
+                    outcome: 'casting_support_not_rebound',
+                    supportPosition: site.supportPosition,
+                };
+                sites = sites.slice(1);
+                continue;
+            }
+            site = preparedSite;
+        }
+        const siteObsidianBefore = new Set(
+            loadedBlockPositions(bot, 'obsidian', site.waterPosition, 12)
+                .map(miningCellKey),
+        );
+        const placed = await placeBlock(
+            bot,
+            'water',
+            site.waterPosition.x,
+            site.waterPosition.y,
+            site.waterPosition.z,
+            'bottom',
+            true,
+            false,
+            null,
+            interactionStance,
+        );
+        if (!placed || bot.blockAt(site.waterPosition)?.name !== 'water') {
+            lastFailure = bot.lastActionEvidence || null;
+            sites = sites.slice(1);
+            continue;
+        }
+        pours += 1;
+        await waitForWorldCondition(
+            bot,
+            () => loadedBlockPositions(bot, 'obsidian', site.waterPosition, 12)
+                .some(position => !siteObsidianBefore.has(miningCellKey(position))),
+            5_000,
+            100,
+        );
+        await interruptibleDelay(bot, 750);
+        const siteCreatedPositions = [];
+        for (const position of loadedBlockPositions(bot, 'obsidian', site.waterPosition, 12)) {
+            const key = miningCellKey(position);
+            if (!siteObsidianBefore.has(key)) {
+                createdPositions.add(key);
+                siteCreatedPositions.push(position);
+            }
+        }
+        if (
+            site.sourcePosition
+            && bot.blockAt(site.sourcePosition)?.name !== 'obsidian'
+            && siteCreatedPositions.length === 0
+        ) {
+            lastFailure = {
+                kind: 'obsidian_casting',
+                outcome: 'casting_contact_not_observed',
+                sourcePosition: site.sourcePosition,
+                spillPosition: site.spillPosition || null,
+                observedSource: bot.blockAt(site.sourcePosition)?.name || 'unloaded',
+                observedSpill: site.spillPosition
+                    ? bot.blockAt(site.spillPosition)?.name || 'unloaded'
+                    : null,
+            };
+        }
+
+        // Lava-pool obsidian is commonly supported by more lava. Recovering
+        // the water before mining strands a source that the generic collector
+        // correctly rejects as an unsafe drop. Keep the shield active, harvest
+        // the exact source this site bound, collect its exact drop, and only
+        // then recover the renewable water.
+        let harvestFailure = null;
+        const harvestBinding = safeCreatedObsidianHarvestBindings(
+            bot,
+            siteCreatedPositions,
+        )[0] || null;
+        if (harvestBinding) {
+            let harvestStance = observedSupportedStandingCell(bot);
+            if (!physicallyOccupiesStandingCell(bot, harvestBinding.stance)) {
+                await goToPosition(
+                    bot,
+                    harvestBinding.stance.x,
+                    harvestBinding.stance.y,
+                    harvestBinding.stance.z,
+                    0.35,
+                );
+                harvestStance = observedSupportedStandingCell(bot);
+            }
+            const sourceBlock = bot.blockAt(harvestBinding.block.position);
+            if (sourceBlock?.name !== 'obsidian') {
+                harvestFailure = {
+                    kind: 'obsidian_casting',
+                    outcome: 'cast_source_changed_before_harvest',
+                    sourcePosition: harvestBinding.block.position,
+                    observedSource: sourceBlock?.name || 'unloaded',
+                };
+            }
+            const expectedDropTypes = new Set(
+                (Array.isArray(sourceBlock?.drops) ? sourceBlock.drops : [])
+                    .filter(type => Number.isInteger(type)),
+            );
+            const beforeDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+            const priorDropEntityIds = droppedItemEntityIds(bot);
+            const broken = Boolean(
+                !harvestFailure
+                && harvestStance
+                && physicallyOccupiesStandingCell(bot, harvestBinding.stance)
+                && await breakBlockAt(
+                    bot,
+                    sourceBlock.position.x,
+                    sourceBlock.position.y,
+                    sourceBlock.position.z,
+                    {
+                        requireHarvest: true,
+                        boundStandingCell: harvestStance,
+                    },
+                )
+            );
+            const collectedDrop = Boolean(
+                broken
+                && expectedDropTypes.size > 0
+                && await waitForExpectedDropPickup(
+                    bot,
+                    expectedDropTypes,
+                    beforeDropCount,
+                    {
+                        timeoutMs: 3_000,
+                        targetPosition: sourceBlock.position,
+                        priorEntityIds: priorDropEntityIds,
+                        // The selected stance is already within pickup range
+                        // and has verified drop support. Chasing a water-driven
+                        // item abandons both that proof and the casting stance.
+                        allowApproach: false,
+                    },
+                )
+            );
+            const afterDropCount = inventoryCountByTypes(bot, expectedDropTypes);
+            if (!harvestFailure && collectedDrop && afterDropCount > beforeDropCount) {
+                harvested += afterDropCount - beforeDropCount;
+            } else if (!harvestFailure) {
+                harvestFailure = {
+                    kind: 'obsidian_casting',
+                    outcome: broken ? 'cast_drop_not_collected' : 'cast_source_not_harvested',
+                    sourcePosition: site.sourcePosition,
+                    beforeDropCount,
+                    afterDropCount,
+                };
+            }
+        } else if (siteCreatedPositions.length > 0) {
+            harvestFailure = {
+                kind: 'obsidian_casting',
+                outcome: 'cast_harvest_stance_unavailable',
+                createdPositions: siteCreatedPositions,
+            };
+        }
+
+        let returnedToCastingStance = physicallyOccupiesStandingCell(bot, interactionStance);
+        if (!returnedToCastingStance) {
+            await goToPosition(
+                bot,
+                interactionStance.x,
+                interactionStance.y,
+                interactionStance.z,
+                0.35,
+            );
+            returnedToCastingStance = physicallyOccupiesStandingCell(bot, interactionStance);
+        }
+        const waterSource = bot.blockAt(site.waterPosition);
+        const recoveryStance = observedSupportedStandingCell(bot);
+        // GoalNear may settle a fraction across the original cell boundary.
+        // Bucket recovery owns the supported cell the body actually occupies,
+        // not the stale planned coordinate. Fluids have no visible solid face,
+        // so discarding this exact stance makes generic interaction search fail
+        // even while the source is in bucket range.
+        const boundRecoveryStance = castingWaterRecoveryStandingCell(
+            bot,
+            site.waterPosition,
+            recoveryStance,
+        );
+        const recoveryOptions = boundRecoveryStance
+            ? { boundStandingCell: boundRecoveryStance }
+            : {};
+        const recovered = waterSource?.name === 'water'
+            && await useToolOnBlock(bot, 'bucket', waterSource, recoveryOptions);
+        if (!recovered || inventoryCount(bot, 'water_bucket') < 1) {
+            setActionEvidence(bot, {
+                kind: 'obsidian_casting',
+                outcome: 'casting_water_recovery_failed',
+                target: {
+                    name: 'water',
+                    x: site.waterPosition.x,
+                    y: site.waterPosition.y,
+                    z: site.waterPosition.z,
+                },
+                created: createdPositions.size,
+                collected: harvested,
+                pours,
+                returnedToCastingStance,
+                routeDigging: returnRouteDelta.length > 0,
+                returnable: binding.returnable === true,
+                returnRoute: returnRouteDelta,
+                routeSteps: returnRouteDelta.length,
+                observedPosition: recoveryStance || null,
+                ...(harvestFailure ? { harvestFailure } : {}),
+                retryable: true,
+            });
+            log(bot, 'Obsidian formed, but the bound casting water source was not recovered.');
+            return false;
+        }
+        if (harvestFailure) {
+            lastFailure = harvestFailure;
+            break;
+        }
+        if (harvested >= requested) break;
+        sites = lavaCastingSites(bot, 72, { protectedGeometry: protectedReturnGeometry })
+            .filter(candidate => !candidate.waterPosition.equals(site.waterPosition));
+    }
+
+    const afterObsidian = loadedBlockCount(bot, 'obsidian', bot.entity.position, 24);
+    const verifiedCreated = createdPositions.size;
+    const inventoryAfterObsidian = inventoryCount(bot, 'obsidian');
+    const verifiedHarvested = Math.max(
+        harvested,
+        inventoryAfterObsidian - inventoryBeforeObsidian,
+    );
+    const success = verifiedHarvested > 0;
+    const routeProgressEvidence = castingAccessEvidence?.excavated > 0
+        ? castingAccessEvidence
+        : searchEvidence?.routeDigging === true
+            ? searchEvidence
+            : null;
+    setActionEvidence(bot, {
+        kind: 'obsidian_casting',
+        outcome: success ? 'obsidian_harvested' : 'obsidian_not_collected',
+        target: { name: 'obsidian' },
+        requested,
+        created: verifiedCreated,
+        collected: verifiedHarvested,
+        pours,
+        siteAttempts,
+        preparedSupports,
+        beforeObsidian,
+        afterObsidian,
+        inventoryBefore: inventoryBeforeObsidian,
+        inventoryAfter: inventoryAfterObsidian,
+        waterRecovered: inventoryCount(bot, 'water_bucket') > 0,
+        ...(routeProgressEvidence ? {
+            searchEvidence,
+            castingAccessEvidence,
+            routeDigging: true,
+            returnable: routeProgressEvidence.returnable === true,
+            returnRoute: returnRouteDelta,
+            routeSteps: routeProgressEvidence.routeSteps || 0,
+        } : {}),
+        lastFailure,
+        retryable: !success && !bot.interrupt_code,
+    });
+    log(bot, success
+        ? `Minecraft confirmed ${verifiedHarvested} obsidian cast, harvested under flowing-water protection, and collected with the water source recovered.`
+        : 'No cast obsidian entered inventory during the bounded lava-water transaction.');
+    return success;
 }
 
 /**
@@ -19861,6 +23294,48 @@ export async function collectExposedOreAt(
     return settled;
 }
 
+async function repairPreservedMiningRouteEndpoint(bot, routeEndpoint, preservedReturnRoute) {
+    const protectedPrefix = preservedReturnRoute.slice(0, -1);
+    const plan = buildMiningAccessPlan(
+        bot,
+        null,
+        MAX_MINING_PROGRESS_ROUTE_STEPS,
+        {
+            breakTarget: false,
+            stances: [routeEndpoint],
+            maxRouteSteps: MAX_MINING_PROGRESS_ROUTE_STEPS,
+            allowSupportPlacement: true,
+            preservedReturnRoute: protectedPrefix,
+        },
+    );
+    if (!plan.ok) {
+        return {
+            success: false,
+            outcome: plan.outcome || 'route_endpoint_repair_unavailable',
+            plan,
+        };
+    }
+    const access = await executeMiningAccessPlan(bot, null, plan, {
+        preservedReturnRoute: protectedPrefix,
+    });
+    const success = Boolean(
+        access.success
+        && physicallyOccupiesStandingCell(bot, routeEndpoint)
+        && isMiningRouteCellReturnable(bot, routeEndpoint)
+    );
+    return {
+        success,
+        outcome: success
+            ? 'route_endpoint_repaired'
+            : access.failureOutcome || access.outcome || 'route_endpoint_repair_failed',
+        excavated: access.excavated || 0,
+        supportsPlaced: access.supportsPlaced || 0,
+        observed: bot.entity?.position?.clone?.() || null,
+        planOutcome: plan.outcome || null,
+        access,
+    };
+}
+
 export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     const boundedY = Math.max(-60, Math.min(300, Math.floor(Number(targetY) || 0)));
     const boundedRange = Math.max(16, Math.min(128, Math.floor(Number(range) || 64)));
@@ -19926,16 +23401,69 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     // cleared endpoint after interruption/restart and keep A* excavation off.
     const routeEndpoint = preservedReturnRoute.at(-1) || null;
     if (routeEndpoint && !sameMiningCell(origin, routeEndpoint)) {
-        const rejoined = await goToGoal(
-            bot,
-            new pf.goals.GoalBlock(routeEndpoint.x, routeEndpoint.y, routeEndpoint.z),
-            {
-                movements: () => clearedMiningMovements(bot),
-                stallTimeoutMs: NAVIGATION_STALL_TIMEOUT_MS,
-                allowHealthBoundedDescent: false,
-                allowLocalRecovery: false,
-            },
-        );
+        // Combat, survival reflexes, and restart settlement may move the body a
+        // few cells away from an otherwise intact spine. Use the route owner's
+        // exact-cell traversal here: it can restore bounded changed geometry,
+        // place missing support through the approved movement policy, and use
+        // the same jump/pulse recovery already proven by return traversal.
+        // Plain Pathfinder supplied none of those workarounds and repeatedly
+        // timed out three blocks from the preserved endpoint.
+        const endpointIndex = preservedReturnRoute.length - 1;
+        let occupiedRouteIndex = preservedReturnRoute.findLastIndex(cell => (
+            physicallyOccupiesStandingCell(bot, new Vec3(cell.x, cell.y, cell.z))
+        ));
+        if (occupiedRouteIndex < 0) {
+            const nearestRouteCell = preservedReturnRoute
+                .map((cell, index) => ({
+                    cell,
+                    index,
+                    distance: bot.entity.position.distanceTo(new Vec3(cell.x, cell.y, cell.z)),
+                }))
+                .filter(candidate => candidate.distance <= 4)
+                .sort((left, right) => left.distance - right.distance || right.index - left.index)[0]
+                || null;
+            if (nearestRouteCell && await traverseMiningRouteCell(
+                bot,
+                nearestRouteCell.cell.x,
+                nearestRouteCell.cell.y,
+                nearestRouteCell.cell.z,
+            )) {
+                occupiedRouteIndex = nearestRouteCell.index;
+            }
+        }
+        let rejoined = occupiedRouteIndex >= 0
+            ? occupiedRouteIndex === endpointIndex
+                || await traverseMiningRouteSegment(
+                    bot,
+                    preservedReturnRoute,
+                    occupiedRouteIndex + 1,
+                    endpointIndex,
+                )
+            : await traverseMiningRouteCell(
+                bot,
+                routeEndpoint.x,
+                routeEndpoint.y,
+                routeEndpoint.z,
+            );
+        let endpointRepair = null;
+        if (
+            !rejoined
+            && !bot.interrupt_code
+            && observedSupportedStandingCell(bot)
+        ) {
+            // Collection can expose a route support defect after the body has
+            // already settled below the old endpoint. Replaying Pathfinder at
+            // the same unsupported cell cannot repair that geometry. Give the
+            // deterministic mining owner one bounded connection plan, with the
+            // rest of the preserved spine protected, so it can replace the
+            // missing floor and return to the exact checkpoint.
+            endpointRepair = await repairPreservedMiningRouteEndpoint(
+                bot,
+                routeEndpoint,
+                preservedReturnRoute,
+            );
+            rejoined = endpointRepair.success;
+        }
         await waitForWorldCondition(
             bot,
             () => physicallyOccupiesStandingCell(bot, routeEndpoint),
@@ -19954,6 +23482,8 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
                     z: routeEndpoint.z,
                 },
                 observedY: bot.entity?.position?.y ?? null,
+                routeRejoin: bot.lastActionEvidence || null,
+                endpointRepair,
                 routeDigging: false,
                 returnable: false,
                 retryable: !bot.interrupt_code,
@@ -19962,6 +23492,12 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
                 ? 'Stopped before the preserved mining-route endpoint settled.'
                 : 'Could not rejoin the exact preserved mining-route endpoint without excavation.');
             return false;
+        }
+        if (endpointRepair?.success) {
+            log(
+                bot,
+                `Repaired and rejoined preserved mining-route endpoint ${routeEndpoint.x}, ${routeEndpoint.y}, ${routeEndpoint.z}.`,
+            );
         }
         origin = observedSupportedStandingCell(bot) || routeEndpoint;
     }
@@ -20095,6 +23631,25 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
     }
 
     if (boundedY < bot.entity.position.y - 6) {
+        if (preservedReturnRoute.length === 0) {
+            const staging = await stageMiningStaircase(bot);
+            if (!staging?.success) {
+                setActionEvidence(bot, {
+                    kind: 'mining_relocation',
+                    outcome: staging?.outcome || 'no_stable_staging_cell',
+                    target,
+                    routeDigging: false,
+                    retryable: staging?.retryable !== false && !bot.interrupt_code,
+                    routeStatus: staging?.routeStatus || null,
+                    returnRouteStatus: staging?.returnRouteStatus || null,
+                });
+                log(bot, bot.interrupt_code
+                    ? 'Stopped before a natural mining entrance was selected.'
+                    : 'No reachable natural-support stance can safely own the mining entrance from here.');
+                return false;
+            }
+            origin = observedSupportedStandingCell(bot) || origin;
+        }
         const staircase = await carveExploratoryDepthRoute(bot, boundedY, { preservedReturnRoute });
         const verticalProgress = Number.isFinite(staircase.observedY)
             ? origin.y - staircase.observedY
@@ -20151,6 +23706,9 @@ export async function goToMiningDepth(bot, targetY, range=64, options = {}) {
             retryable: !bot.interrupt_code,
             rejections: staircase.rejections || null,
             retreat: staircase.retreat || null,
+            excavated: Math.max(0, Math.floor(Number(staircase.excavated) || 0)),
+            geometryChanged: staircase.geometryChanged === true,
+            returnable: staircase.returnable === true,
             ...(staircase.toolRequirement ? { toolRequirement: staircase.toolRequirement } : {}),
         });
         log(bot, `No preflighted returnable staircase leg advances toward y=${boundedY} from here.`);
@@ -21009,6 +24567,11 @@ export async function rideToPosition(bot, x, y, z, minDistance=2) {
     let outcome = 'ride_timeout';
 
     try {
+        bot.emit?.('vehicle_control_start', {
+            vehicleId,
+            vehicleName,
+            target: { x, y, z },
+        });
         while (Date.now() - startedAt < RIDE_MAX_DURATION_MS) {
             if (bot.interrupt_code) {
                 outcome = 'interrupted';
@@ -21066,6 +24629,7 @@ export async function rideToPosition(bot, x, y, z, minDistance=2) {
         }
     } finally {
         try { bot.moveVehicle(0, 0); } catch { /* disconnected or dismounted */ }
+        bot.emit?.('vehicle_control_stop', { vehicleId, vehicleName, outcome });
     }
 
     const arrived = outcome === 'arrived';
@@ -25135,17 +28699,29 @@ function shelterPosition(position) {
  * three-deep pocket with a supported cap, or when the bot lacks the one block
  * that must remain available after excavation.
  */
-export function assessShelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
+export function assessShelterInPlace(bot, {
+    depth = 3,
+    allowDig = true,
+    position = null,
+} = {}) {
     const requestedDepth = Math.floor(Number(depth));
     if (requestedDepth !== 3) {
         return shelterReceipt(false, 'unsupported_enclosure_depth', { depth: requestedDepth });
     }
-    const feet = bot?.entity?.position?.floored?.();
+    const requestedPosition = position || bot?.entity?.position;
+    const feet = requestedPosition?.floored?.() || (
+        [requestedPosition?.x, requestedPosition?.y, requestedPosition?.z].every(Number.isFinite)
+            ? new Vec3(
+                Math.floor(requestedPosition.x),
+                Math.floor(requestedPosition.y),
+                Math.floor(requestedPosition.z),
+            )
+            : null
+    );
     if (!feet || typeof bot?.blockAt !== 'function') {
         return shelterReceipt(false, 'position_unavailable', { depth: requestedDepth });
     }
-    const covered = [2, 3].some(height => overheadCoverBlock(bot.blockAt(feet.offset(0, height, 0))));
-    if (covered) {
+    if (occupiesDefensiveShelter(bot, feet)) {
         return shelterReceipt(true, 'already_sheltered', {
             depth: requestedDepth,
             position: shelterPosition(feet),
@@ -25266,8 +28842,12 @@ export function assessShelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
     });
 }
 
-function shelterPocketSealed(bot) {
-    const feet = bot?.entity?.position?.floored?.();
+export function occupiesDefensiveShelter(bot, position = bot?.entity?.position) {
+    const feet = position?.floored?.() || (
+        [position?.x, position?.y, position?.z].every(Number.isFinite)
+            ? new Vec3(Math.floor(position.x), Math.floor(position.y), Math.floor(position.z))
+            : null
+    );
     if (!feet) return false;
     if (!overheadCoverBlock(bot.blockAt(feet.offset(0, 2, 0)))) return false;
     if (!isSafeGameplaySupport(bot.blockAt(feet.offset(0, -1, 0)))) return false;
@@ -25277,6 +28857,62 @@ function shelterPocketSealed(bot) {
             return overheadCoverBlock(wall);
         })
     ));
+}
+
+export function findShelterInPlaceStances(bot, {
+    radius = 10,
+    count = 8,
+    maxAssessments = 64,
+} = {}) {
+    const origin = bot?.entity?.position?.floored?.();
+    if (!origin || typeof bot?.blockAt !== 'function') return [];
+    const boundedRadius = Math.max(2, Math.min(16, Math.floor(Number(radius) || 10)));
+    const boundedCount = Math.max(1, Math.min(16, Math.floor(Number(count) || 8)));
+    const boundedAssessments = Math.max(
+        boundedCount,
+        Math.min(128, Math.floor(Number(maxAssessments) || 64)),
+    );
+    const offsets = [];
+    for (let dx = -boundedRadius; dx <= boundedRadius; dx += 1) {
+        for (let dz = -boundedRadius; dz <= boundedRadius; dz += 1) {
+            if (dx === 0 && dz === 0) continue;
+            offsets.push({ dx, dz, distance: Math.hypot(dx, dz) });
+        }
+    }
+    offsets.sort((left, right) => (
+        left.distance - right.distance
+        || left.dx - right.dx
+        || left.dz - right.dz
+    ));
+
+    const standingCells = [];
+    for (const offset of offsets) {
+        let candidate = null;
+        for (let dy = 3; dy >= -4; dy -= 1) {
+            const feet = origin.offset(offset.dx, dy, offset.dz);
+            if (!isReplaceableGameplayBlock(bot.blockAt(feet))) continue;
+            if (!isReplaceableGameplayBlock(bot.blockAt(feet.offset(0, 1, 0)))) continue;
+            if (!isSafeGameplaySupport(bot.blockAt(feet.offset(0, -1, 0)))) continue;
+            candidate = feet;
+            break;
+        }
+        if (candidate) standingCells.push(candidate);
+    }
+
+    const feasible = [];
+    for (const candidate of standingCells.slice(0, boundedAssessments)) {
+        const assessment = assessShelterInPlace(bot, { position: candidate });
+        if (assessment.feasible !== true) continue;
+        feasible.push(Object.freeze({
+            x: candidate.x,
+            y: candidate.y,
+            z: candidate.z,
+            distance: origin.distanceTo(candidate),
+            feasibilityCode: assessment.code,
+        }));
+        if (feasible.length >= boundedCount) break;
+    }
+    return feasible;
 }
 
 /**
@@ -25344,7 +28980,7 @@ export async function shelterInPlace(bot, { depth = 3, allowDig = true } = {}) {
 
     const sealAt = bot.entity.position.floored().offset(0, 2, 0);
     const placed = await placeBlock(bot, material, sealAt.x, sealAt.y, sealAt.z, 'side', true);
-    const sealed = placed && await waitForWorldCondition(bot, () => shelterPocketSealed(bot), 1_500, 50);
+    const sealed = placed && await waitForWorldCondition(bot, () => occupiesDefensiveShelter(bot), 1_500, 50);
     setActionEvidence(bot, {
         kind: 'shelter',
         outcome: sealed ? 'sheltered_in_place' : bot.interrupt_code ? 'interrupted' : 'seal_unconfirmed',
@@ -25668,12 +29304,22 @@ function incrementalSurfaceCorridorStances(bot, origin, surfaceTarget) {
         .map(candidate => candidate.stance);
 }
 
-function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY, origin) {
+function bindSurfaceCorridorPlan(
+    bot,
+    surfaceTarget,
+    minY,
+    maxY,
+    origin,
+    excludedStanceKeys = new Set(),
+) {
     if (!origin || !physicallyOccupiesStandingCell(bot, origin)) {
         return { ok: false, outcome: 'position_unavailable' };
     }
-    const stances = surfaceCorridorStances(bot, origin, surfaceTarget, minY, maxY);
-    const incrementalStances = incrementalSurfaceCorridorStances(bot, origin, surfaceTarget);
+    const isAvailable = stance => !excludedStanceKeys.has(miningCellKey(stance));
+    const stances = surfaceCorridorStances(bot, origin, surfaceTarget, minY, maxY)
+        .filter(isAvailable);
+    const incrementalStances = incrementalSurfaceCorridorStances(bot, origin, surfaceTarget)
+        .filter(isAvailable);
     if (stances.length === 0 && incrementalStances.length === 0) {
         return { ok: false, outcome: 'no_safe_surface_stance' };
     }
@@ -25686,6 +29332,7 @@ function bindSurfaceCorridorPlan(bot, surfaceTarget, minY, maxY, origin) {
             stances: candidateStances,
             allowUnharvestedBreaks: true,
             allowNaturalFoliageExcavation: true,
+            allowSupportPlacement: true,
             stageFallingDebris: true,
             ...(Number.isFinite(maxRouteSteps) ? { maxRouteSteps } : {}),
         },
@@ -25732,6 +29379,7 @@ function surfaceArrivalObservation(
     minY,
     maxY,
     probeSurfaceEgress = probeSafeNavigationStances,
+    { requireOpenSurface = false } = {},
 ) {
     const observed = bot.entity?.position?.clone?.() || null;
     const supported = observedSupportedStandingCell(bot);
@@ -25747,7 +29395,14 @@ function surfaceArrivalObservation(
         maxY,
         probeSurfaceEgress,
     );
-    const occupiedUsableSurface = accessObservation.surface;
+    const occupiedUsableSurface = requireOpenSurface
+        // Open sky over an occupied ravine or pit floor is not restored food
+        // access. The stronger request requires both literal open sky and the
+        // same complete native ground-egress proof as ordinary usable surface.
+        ? occupiedOpenSurface && accessObservation.surface
+            ? accessObservation.surface
+            : null
+        : accessObservation.surface;
     const scan = occupiedUsableSurface
         ? { target: supported, diagnostics: null }
         : observed
@@ -25773,17 +29428,106 @@ function surfaceArrivalObservation(
     };
 }
 
+export function occupiesUsableSurfaceStance(
+    bot,
+    probeSurfaceEgress = probeSafeNavigationStances,
+) {
+    const minY = Number.isFinite(Number(bot.game?.minY)) ? Number(bot.game.minY) : -64;
+    const height = Number.isFinite(Number(bot.game?.height)) ? Number(bot.game.height) : 384;
+    const maxY = minY + Math.max(1, height) - 1;
+    return surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress).arrived;
+}
+
+async function stabilizeUnsettledSurfaceRecoveryBody(
+    bot,
+    settleSupportedStandingCell = waitForStableSupportedStandingCell,
+) {
+    const position = bot.entity?.position;
+    const floored = position?.floored?.();
+    if (!position || !floored || bot.interrupt_code) {
+        return { success: false, outcome: 'surface_body_unavailable' };
+    }
+    const candidateCells = [floored, floored.offset(0, 1, 0)]
+        .filter((candidate, index, cells) => (
+            Math.abs(position.y - candidate.y) <= 0.35
+            && cells.findIndex(cell => miningCellKey(cell) === miningCellKey(candidate)) === index
+        ));
+    const material = selectCarriedSurfaceSupportMaterial(bot);
+    if (!material) return { success: false, outcome: 'surface_body_support_material_missing' };
+
+    for (const feet of candidateCells) {
+        const support = feet.offset(0, -1, 0);
+        const supportBlock = bot.blockAt(support);
+        if (
+            !isObservedStandingCellClear(bot, bot.blockAt(feet))
+            || !isObservedStandingCellClear(bot, bot.blockAt(feet.offset(0, 1, 0)))
+            || !supportBlock
+            || !isReplaceableGameplayBlock(supportBlock)
+            || isLiquidGameplayBlock(supportBlock)
+            || isHazardousGameplayBlock(supportBlock)
+            || !hasSurfaceSupportPlacementAnchor(bot, support)
+        ) continue;
+
+        const placed = await placeBlock(
+            bot,
+            material.name,
+            support.x,
+            support.y,
+            support.z,
+            'side',
+            true,
+            false,
+            material.slot,
+            feet,
+            { allowUnsettledSupportUnderBody: true },
+        );
+        const placementEvidence = bot.lastActionEvidence || null;
+        const observedSupport = bot.blockAt(support);
+        if (!placed || !isAnchoredGameplaySupport(bot, observedSupport)) {
+            return {
+                success: false,
+                outcome: 'surface_body_support_not_placed',
+                target: support,
+                material: material.name,
+                placementEvidence,
+            };
+        }
+        const settled = await settleSupportedStandingCell(
+            bot,
+            GROUND_SETTLE_TIMEOUT_MS,
+            SUPPORTED_STANCE_STABILITY_MS,
+        );
+        const success = Boolean(settled?.equals?.(feet));
+        return {
+            success,
+            outcome: success
+                ? 'surface_body_support_restored'
+                : 'surface_body_support_settlement_unverified',
+            target: support,
+            material: material.name,
+            settledStance: settled,
+            placementEvidence,
+        };
+    }
+    return { success: false, outcome: 'surface_body_support_anchor_unavailable' };
+}
+
 export async function goToSurface(bot, {
     navigateGoal = goToGoal,
     settleSupportedStandingCell = waitForStableSupportedStandingCell,
     prepareSurfaceTool = prepareTool,
     probeSurfaceEgress = probeSafeNavigationStances,
+    requireOpenSurface = false,
 } = {}) {
     const origin = bot.entity.position.clone();
     const minY = Number.isFinite(Number(bot.game?.minY)) ? Number(bot.game.minY) : -64;
     const height = Number.isFinite(Number(bot.game?.height)) ? Number(bot.game.height) : 384;
     const maxY = minY + Math.max(1, height) - 1;
     let lastTarget = null;
+    // One action may evaluate several safe corridor methods from the same
+    // occupied cell. A route whose live interaction face fails after a safe
+    // retreat is rejected for that origin; it is never blindly selected again.
+    const rejectedCorridorStances = new Map();
 
     const finishReached = (arrival, leg, routeDigging = false) => {
         const support = bot.blockAt(arrival.supported.offset(0, -1, 0));
@@ -25836,7 +29580,13 @@ export async function goToSurface(bot, {
     while (!bot.interrupt_code && remainingActionTimeMs() > 0) {
         const leg = completedLegs + 1;
         completedLegs = leg;
-        const before = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+        const before = surfaceArrivalObservation(
+            bot,
+            minY,
+            maxY,
+            probeSurfaceEgress,
+            { requireOpenSurface },
+        );
         if (before.inconclusive) return finishEgressUnproven(before, leg - 1);
         if (before.arrived) return finishReached(before, leg - 1);
         const target = before.target;
@@ -25895,7 +29645,13 @@ export async function goToSurface(bot, {
                 ),
             );
         }
-        let arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+        let arrival = surfaceArrivalObservation(
+            bot,
+            minY,
+            maxY,
+            probeSurfaceEgress,
+            { requireOpenSurface },
+        );
         if (arrival.inconclusive) return finishEgressUnproven(arrival, leg);
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg);
@@ -25905,6 +29661,27 @@ export async function goToSurface(bot, {
             && arrival.supported?.equals?.(settledStance)
         );
         if (!bot.interrupt_code && !settlementRetained) {
+            const bodySupportRecovery = await stabilizeUnsettledSurfaceRecoveryBody(
+                bot,
+                settleSupportedStandingCell,
+            );
+            if (bodySupportRecovery.success) {
+                settledStance = bodySupportRecovery.settledStance;
+                arrival = surfaceArrivalObservation(
+                    bot,
+                    minY,
+                    maxY,
+                    probeSurfaceEgress,
+                    { requireOpenSurface },
+                );
+                if (arrival.inconclusive) return finishEgressUnproven(arrival, leg);
+                if (arrival.target) lastTarget = arrival.target;
+                if (arrival.arrived) return finishReached(arrival, leg, true);
+                if (arrival.supported?.equals?.(settledStance)) {
+                    log(bot, 'Restored one anchored support beneath the unsettled surface-recovery body; rebinding the escape from the verified stance.');
+                    continue;
+                }
+            }
             setActionEvidence(bot, {
                 kind: 'surface_navigation',
                 outcome: 'surface_settlement_unverified',
@@ -25916,6 +29693,7 @@ export async function goToSurface(bot, {
                 legs: leg,
                 verticalProgress: nativeRise,
                 supported: Boolean(arrival.supported),
+                bodySupportRecovery,
                 retryable: true,
             });
             log(bot, 'Native movement did not settle on one stable supported standing cell; corridor planning was not attempted.');
@@ -25927,7 +29705,16 @@ export async function goToSurface(bot, {
         }
         if (bot.interrupt_code) break;
 
-        let plan = bindSurfaceCorridorPlan(bot, target, minY, maxY, settledStance);
+        let corridorOriginKey = miningCellKey(settledStance);
+        let rejectedFromOrigin = rejectedCorridorStances.get(corridorOriginKey) || new Set();
+        let plan = bindSurfaceCorridorPlan(
+            bot,
+            target,
+            minY,
+            maxY,
+            settledStance,
+            rejectedFromOrigin,
+        );
         const corridorToolRequirement = surfaceCorridorToolRequirement(bot, plan);
         if (corridorToolRequirement) {
             log(
@@ -25947,7 +29734,13 @@ export async function goToSurface(bot, {
                     remainingActionTimeMs(NAVIGATION_FAILURE_SETTLE_TIMEOUT_MS),
                 ),
             );
-            arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+            arrival = surfaceArrivalObservation(
+                bot,
+                minY,
+                maxY,
+                probeSurfaceEgress,
+                { requireOpenSurface },
+            );
             if (arrival.inconclusive) return finishEgressUnproven(arrival, leg);
             if (
                 !settledStance
@@ -25970,7 +29763,16 @@ export async function goToSurface(bot, {
                 return false;
             }
             if (arrival.arrived) return finishReached(arrival, leg);
-            plan = bindSurfaceCorridorPlan(bot, target, minY, maxY, settledStance);
+            corridorOriginKey = miningCellKey(settledStance);
+            rejectedFromOrigin = rejectedCorridorStances.get(corridorOriginKey) || new Set();
+            plan = bindSurfaceCorridorPlan(
+                bot,
+                target,
+                minY,
+                maxY,
+                settledStance,
+                rejectedFromOrigin,
+            );
         }
         if (!plan.ok) {
             const toolRequirement = (
@@ -26024,6 +29826,35 @@ export async function goToSurface(bot, {
         const corridorStart = bot.entity.position.clone();
         const access = await executeMiningAccessPlan(bot, null, plan);
         if (!access.success) {
+            // A later route or retreat step can fail after the requested
+            // surface outcome is already physically true. Reconcile the body
+            // before reporting the internal route failure; surface navigation
+            // owns arrival, not completion of a now-obsolete deeper corridor.
+            const failureArrival = surfaceArrivalObservation(
+                bot,
+                minY,
+                maxY,
+                probeSurfaceEgress,
+                { requireOpenSurface },
+            );
+            if (failureArrival.inconclusive) return finishEgressUnproven(failureArrival, leg, true);
+            if (failureArrival.arrived) return finishReached(failureArrival, leg, true);
+            const failureOutcome = access.failureOutcome || access.outcome;
+            const safelyReturned = access.retreat?.success === true;
+            if (
+                safelyReturned
+                && REBINDABLE_SURFACE_CORRIDOR_FAILURES.has(failureOutcome)
+                && plan.stance
+                && remainingActionTimeMs() > MINING_ROUTE_DEADLINE_RESERVE_MS
+            ) {
+                rejectedFromOrigin.add(miningCellKey(plan.stance));
+                rejectedCorridorStances.set(corridorOriginKey, rejectedFromOrigin);
+                log(
+                    bot,
+                    `One surface corridor lost its live ${String(failureOutcome).replace(/^route_|^support_placement_/, '').replace(/_/g, ' ')} contract and was safely unwound; rejecting that route and binding a different escape from ${corridorOriginKey}.`,
+                );
+                continue;
+            }
             const observed = access.observed || bot.entity.position;
             const movementOutcome = String(access.movement?.outcome || 'unknown');
             const routeFailureStage = ['path_not_found', 'unreachable'].includes(movementOutcome)
@@ -26075,7 +29906,13 @@ export async function goToSurface(bot, {
             return false;
         }
 
-        arrival = surfaceArrivalObservation(bot, minY, maxY, probeSurfaceEgress);
+        arrival = surfaceArrivalObservation(
+            bot,
+            minY,
+            maxY,
+            probeSurfaceEgress,
+            { requireOpenSurface },
+        );
         if (arrival.inconclusive) return finishEgressUnproven(arrival, leg, true);
         if (arrival.target) lastTarget = arrival.target;
         if (arrival.arrived) return finishReached(arrival, leg, true);
@@ -26126,7 +29963,11 @@ export async function goToSurface(bot, {
     );
     setActionEvidence(bot, {
         kind: 'surface_navigation',
-        outcome: bot.interrupt_code ? 'interrupted' : 'surface_progress_incomplete',
+        outcome: bot.interrupt_code
+            ? 'interrupted'
+            : verifiedProgress
+                ? 'surface_advanced'
+                : 'surface_progress_incomplete',
         ...(lastTarget ? { target: { x: lastTarget.x, y: lastTarget.y, z: lastTarget.z } } : {}),
         observed: { x: observed.x, y: observed.y, z: observed.z },
         legs: completedLegs,
@@ -26144,7 +29985,7 @@ export async function goToSurface(bot, {
     log(bot, bot.interrupt_code
         ? 'Surface navigation was interrupted before verified arrival.'
         : `Surface navigation made bounded progress but did not reach a verified surface before its owning deadline after ${completedLegs} route legs.`);
-    return false;
+    return verifiedProgress;
 }
 
 function compactStateFingerprint(value) {
@@ -26437,12 +30278,16 @@ export async function useItem(bot, itemName, durationMs = 0, requestedHand = 'ma
     return true;
 }
 
- export async function useToolOnBlock(bot, toolName, block) {
+export async function useToolOnBlock(bot, toolName, block, options = {}) {
     /**
      * Use a tool on a specific block.
      * @param {MinecraftBot} bot
      * @param {string} toolName - item name of the tool to equip, or "hand" for no tool.
      * @param {Block} block - the block reference to use the tool on.
+     * @param {object} options
+     * @param {Vec3|null} options.boundStandingCell - exact supported stance already owned by the caller
+     * @param {Vec3|null} options.interactionFace - exact face of the target block to activate
+     * @param {boolean} options.sneak - keep block activation from opening an interactable support
      * @returns {Promise<boolean>} true if action succeeded
      */
 
@@ -26452,18 +30297,79 @@ export async function useItem(bot, itemName, durationMs = 0, requestedHand = 'ma
         return false;
     }
     const target = { name: block.name, x: block.position.x, y: block.position.y, z: block.position.z };
-    const distance = toolName === 'water_bucket' && block.name !== 'lava' ? 1.5 : 2;
-    const reached = await goToPosition(bot, block.position.x, block.position.y, block.position.z, distance);
-    if (!reached) {
-        setActionEvidence(bot, { kind: 'tool_use', outcome: 'unreachable', target, tool: toolName, retryable: true });
-        log(bot, `Cannot reach ${block.name} to use ${toolName}.`);
+    const requestedFace = options?.interactionFace;
+    const interactionFace = requestedFace
+        && [requestedFace.x, requestedFace.y, requestedFace.z].every(Number.isFinite)
+        && Math.abs(requestedFace.x) + Math.abs(requestedFace.y) + Math.abs(requestedFace.z) === 1
+        ? new Vec3(requestedFace.x, requestedFace.y, requestedFace.z)
+        : null;
+    const interactionCursor = interactionFace
+        ? new Vec3(
+            0.5 + interactionFace.x * 0.5,
+            0.5 + interactionFace.y * 0.5,
+            0.5 + interactionFace.z * 0.5,
+        )
+        : null;
+    const interactionGoal = new pf.goals.GoalLookAtBlock(block.position, bot.world, {
+        reach: 4.5,
+    });
+    const occupiedCell = observedSupportedStandingCell(bot);
+    const boundStandingCell = options?.boundStandingCell;
+    const occupiesBoundStandingCell = Boolean(
+        occupiedCell
+        && boundStandingCell
+        && miningCellKey(occupiedCell) === miningCellKey(boundStandingCell)
+    );
+    const interactionStance = occupiesBoundStandingCell
+        ? interactionStanceReady({
+            kind: 'tool_use',
+            target,
+            candidateCount: 1,
+            code: 'bound_interaction_stance',
+            selectedStance: occupiedCell,
+            pathStatus: 'bound_interaction_stance',
+            pathLength: 0,
+        })
+        : await reachInteractionStance(bot, {
+            kind: 'tool_use',
+            target,
+            goal: interactionGoal,
+            navigationOptions: {
+                allowHealthBoundedDescent: false,
+                allowLocalRecovery: false,
+            },
+        });
+    if (interactionStance.status !== 'ready') {
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'tool_use',
+            outcome: interactionStance.status === 'interrupted' ? 'interrupted' : 'unreachable',
+            target,
+            tool: toolName,
+            retryable: interactionStance.status !== 'interrupted',
+        }, interactionStance));
+        log(bot, `Cannot reach a usable stance for ${toolName} on ${block.name}.`);
         return false;
     }
     const lookAtTarget = async () => {
-        await bot.lookAt(block.position.offset(0.5, 0.5, 0.5));
+        await bot.lookAt(interactionCursor
+            ? block.position.plus(interactionCursor)
+            : block.position.offset(0.5, 0.5, 0.5));
         const cursor = bot.blockAtCursor(5);
+        // Fluids have an empty collision box, so Mineflayer's generic block
+        // cursor can legally ray through the exact water/lava cell a bucket
+        // must target. A prebound supported stance plus exact range owns that
+        // one exception; the post-interaction inventory/world delta remains
+        // authoritative. Solid targets still require cursor identity.
+        const boundLiquidTarget = Boolean(
+            occupiesBoundStandingCell
+            && isLiquidGameplayBlock(block)
+            && bot.entity?.position?.distanceTo?.(block.position) <= 4.5
+        );
         return {
-            visible: Boolean(cursor?.position?.equals(block.position)),
+            visible: Boolean(
+                cursor?.position?.equals(block.position)
+                || boundLiquidTarget
+            ),
             cursor,
         };
     };
@@ -26483,48 +30389,18 @@ export async function useItem(bot, itemName, durationMs = 0, requestedHand = 'ma
         return false;
     }
     if (!sight.visible) {
-        const offsets = [
-            [1, 0],
-            [-1, 0],
-            [0, 1],
-            [0, -1],
-            [1, 1],
-            [1, -1],
-            [-1, 1],
-            [-1, -1],
-        ]
-            .map(([x, z]) => block.position.offset(x, 0, z))
-            .sort((left, right) => (
-                left.distanceTo(bot.entity.position) - right.distanceTo(bot.entity.position)
-            ))
-            .slice(0, 2);
-        let lastLookError = null;
-        for (const candidate of offsets) {
-            if (bot.interrupt_code) break;
-            if (!await goToPosition(bot, candidate.x, candidate.y, candidate.z, 1)) continue;
-            try {
-                sight = await lookAtTarget();
-            } catch (error) {
-                lastLookError = String(error?.message || error).slice(0, 240);
-                continue;
-            }
-            if (sight.visible) break;
-        }
-        if (!sight?.visible) {
-            setActionEvidence(bot, {
-                kind: 'tool_use',
-                outcome: bot.interrupt_code ? 'interrupted' : 'line_of_sight_blocked',
-                target,
-                tool: toolName,
-                obstruction: sight?.cursor?.name || null,
-                ...(lastLookError ? { error: lastLookError } : {}),
-                retryable: !bot.interrupt_code,
-            });
-            log(bot, bot.interrupt_code
-                ? `Stopped before using ${toolName} on ${block.name}.`
-                : `${block.name} is not visible from any bounded reachable interaction position.`);
-            return false;
-        }
+        setActionEvidence(bot, evidenceWithInteractionStance({
+            kind: 'tool_use',
+            outcome: bot.interrupt_code ? 'interrupted' : 'line_of_sight_blocked',
+            target,
+            tool: toolName,
+            obstruction: sight?.cursor?.name || null,
+            retryable: !bot.interrupt_code,
+        }, interactionStance));
+        log(bot, bot.interrupt_code
+            ? `Stopped before using ${toolName} on ${block.name}.`
+            : `${block.name} changed visibility after reaching its bound interaction stance.`);
+        return false;
     }
 
     const equipped = await equip(bot, toolName);
@@ -26549,7 +30425,26 @@ export async function useItem(bot, itemName, durationMs = 0, requestedHand = 'ma
     const interactionTarget = { blockPosition: currentBlock.position };
     const before = interactionSnapshot(bot, toolName, interactionTarget);
     try {
-        if (toolName.includes('bucket')) {
+        if (toolName.includes('bucket') && interactionFace) {
+            const wasSneaking = bot.getControlState?.('sneak') === true;
+            if (options?.sneak) bot.setControlState('sneak', true);
+            try {
+                // Filled buckets are item-use mechanics, but their server-side
+                // ray trace must still resolve the selected support face. Aim
+                // again after equipping, allow that rotation/slot binding to
+                // reach the server, then send Mineflayer's sequenced use-item
+                // packet. activateBlock cannot own this: it overwrites the aim
+                // with the support center immediately before sending.
+                await bot.lookAt(currentBlock.position.plus(interactionCursor), true);
+                await bot.waitForTicks?.(1);
+                await bot.activateItem();
+            } finally {
+                if (options?.sneak && !wasSneaking) bot.setControlState('sneak', false);
+            }
+        }
+        else if (toolName.includes('bucket')) {
+            // Empty-bucket source collection intentionally keeps the normal
+            // look-directed use-item packet because fluids have no solid face.
             await bot.activateItem();
         }
         else {

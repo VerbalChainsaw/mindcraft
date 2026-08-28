@@ -226,14 +226,16 @@ function announceAccompanimentHandoff(agent, message) {
 }
 
 /**
- * Once tactical combat has physically disengaged from the exact hostile that
- * caused a safety incident, let the survival-owned rendezvous/cover action
- * finish. A new hit moves the incident back to `threat_response`, and a
- * different entity never matches this gate, so genuine new danger can still
- * preempt immediately.
+ * Once tactical combat has physically disengaged, the Safety supervisor owns
+ * the next decision. It may retain the exact hostile recovery or escalate a
+ * critical body across multiple attackers into structural shelter. Both the
+ * standing-companion and ordinary self-defense paths consult the same owner.
  */
 export function selfDefenseRecoveryOwnsSameThreat(agent, threat) {
     const director = agent?.survival_director;
+    if (typeof director?.ownsSafetyRecoveryForThreat === 'function') {
+        return director.ownsSafetyRecoveryForThreat(threat) === true;
+    }
     const snapshot = director?.snapshot?.() || null;
     const incident = director?.safetyIncident || snapshot?.safetyIncident;
     const status = director?.status || snapshot;
@@ -350,9 +352,109 @@ export function rearmOpenWaterDrowningEscape(mode, agent, execution) {
         || skill?.retryable !== true
         || !stillInWater
     ) return false;
-    mode.next_retry_at = 0;
-    agent?.behavior_arbiter?.wake?.('open_water_drowning_escape');
+    mode.failed_drowning_trigger = Object.freeze({
+        botPosition: reflexBlockPosition(bot?.entity?.position),
+        dimension: String(bot?.game?.dimension || '').replace(/^minecraft:/, ''),
+        health: Number.isFinite(Number(bot?.health)) ? Number(bot.health) : null,
+        oxygen: Number.isFinite(Number(bot?.oxygenLevel)) ? Number(bot.oxygenLevel) : null,
+        shoreOutcome: String(skill?.shore?.outcome || '').slice(0, 64),
+        shoreCandidates: Number.isFinite(Number(skill?.shore?.candidates))
+            ? Number(skill.shore.candidates)
+            : null,
+        goalId: typeof agent?.goal_director?.activeGoal?.id === 'string'
+            ? agent.goal_director.activeGoal.id.slice(0, 120)
+            : null,
+        miningReturnIndex: Number.isFinite(Number(
+            agent?.goal_director?.activeGoal?.checkpoint?.miningReturnIndex,
+        ))
+            ? Number(agent.goal_director.activeGoal.checkpoint.miningReturnIndex)
+            : null,
+    });
+    // Keep the ordinary failed-reflex backoff installed by execute(). Waking
+    // the arbiter is still useful: the exact durable Goal can take the body
+    // during that handoff instead of waiting for another scheduler interval.
+    agent?.behavior_arbiter?.wake?.('open_water_drowning_handoff');
     return true;
+}
+
+function durableMiningReturnPending(agent, failedReceipt) {
+    const goal = agent?.goal_director?.activeGoal;
+    const route = goal?.checkpoint?.miningReturnRoute;
+    const index = Number(goal?.checkpoint?.miningReturnIndex);
+    return Boolean(
+        goal?.id
+        && failedReceipt?.goalId === goal.id
+        && ['assess', 'execute', 'verify'].includes(goal.phase)
+        && Array.isArray(route)
+        && route.length > 0
+        && Number.isFinite(index)
+        && index >= -1
+    );
+}
+
+/**
+ * A completed open-water escape attempt may be retried only after physical
+ * evidence changes. While an exact persisted mining-return Goal is ready, the
+ * emergency band yields so that Goal can acquire ActionManager and let native
+ * Pathfinder own the swim. Without that handoff, the emergency band remains a
+ * truthful non-dispatching wait until oxygen, health, position, dimension, or
+ * water settlement changes.
+ */
+export function openWaterDrowningEscapeDecision(mode, agent, {
+    managedNavigationActive = (Number(agent?.bot?.mindcraftManagedNavigationDepth) || 0) > 0,
+} = {}) {
+    const failed = mode?.failed_drowning_trigger;
+    if (!failed) {
+        return Object.freeze({ eligible: true, blocking: false, code: 'open_water_escape_unblocked' });
+    }
+    const bot = agent?.bot;
+    const position = reflexBlockPosition(bot?.entity?.position);
+    const dimension = String(bot?.game?.dimension || '').replace(/^minecraft:/, '');
+    const health = Number(bot?.health);
+    const oxygen = Number(bot?.oxygenLevel);
+    const stillInWater = Boolean(
+        bot?.entity?.isInWater
+        || bot?.blockAt?.(bot?.entity?.position)?.name === 'water'
+    );
+    const moved = failed.botPosition && position
+        ? Math.hypot(
+            position.x - failed.botPosition.x,
+            position.y - failed.botPosition.y,
+            position.z - failed.botPosition.z,
+        ) >= 2
+        : failed.botPosition !== position;
+    const activeGoal = agent?.goal_director?.activeGoal;
+    const currentReturnIndex = Number(activeGoal?.checkpoint?.miningReturnIndex);
+    const materiallyChanged = Boolean(
+        !stillInWater
+        || managedNavigationActive
+        || dimension !== failed.dimension
+        || moved
+        || (Number.isFinite(health) && failed.health !== null && health !== failed.health)
+        || (Number.isFinite(oxygen) && oxygen <= DROWNING_REFLEX_OXYGEN)
+        || (activeGoal?.id || null) !== (failed.goalId || null)
+        || (
+            Number.isFinite(currentReturnIndex)
+            && failed.miningReturnIndex !== null
+            && currentReturnIndex !== failed.miningReturnIndex
+        )
+    );
+    if (materiallyChanged) {
+        mode.failed_drowning_trigger = null;
+        return Object.freeze({ eligible: true, blocking: false, code: 'open_water_escape_material_changed' });
+    }
+    if (durableMiningReturnPending(agent, failed)) {
+        return Object.freeze({
+            eligible: false,
+            blocking: false,
+            code: 'open_water_mining_return_handoff',
+        });
+    }
+    return Object.freeze({
+        eligible: false,
+        blocking: true,
+        code: 'open_water_escape_waiting_for_material_change',
+    });
 }
 
 function getImmediateExplosiveThreat(agent) {
@@ -526,6 +628,9 @@ function peekAttributedProtectionThreat(agent, now = Date.now()) {
 
 function safetyRecoveryOwnsThreat(agent, threat) {
     const director = agent?.survival_director;
+    if (typeof director?.ownsSafetyRecoveryForThreat === 'function') {
+        return director.ownsSafetyRecoveryForThreat(threat) === true;
+    }
     const incident = director?.safetyIncident || director?.snapshot?.()?.safetyIncident;
     return Boolean(
         incident?.active === true
@@ -819,6 +924,7 @@ const modes_list = [
         last_retreat_at: 0,
         stale_explosive_trigger: null,
         failed_tactical_trigger: null,
+        failed_drowning_trigger: null,
         update: function (agent, { skipAttributedAccompaniment = false } = {}) {
             const bot = agent.bot;
             let explosiveThreat = null;
@@ -829,6 +935,9 @@ const modes_list = [
             const oxygen = Number(bot.oxygenLevel);
             const health = Number(bot.health);
             const managedNavigationActive = (Number(bot.mindcraftManagedNavigationDepth) || 0) > 0;
+            const drowningDecision = openWaterDrowningEscapeDecision(this, agent, {
+                managedNavigationActive,
+            });
             const criticalWaterExposure = bot.entity.isInWater
                 && Number.isFinite(health)
                 && health <= LOW_HEALTH_RETREAT_THRESHOLD
@@ -847,6 +956,12 @@ const modes_list = [
                 (blockAbove.name === 'water' && Number.isFinite(oxygen) && oxygen <= DROWNING_REFLEX_OXYGEN)
                 || criticalWaterExposure
             ) {
+                if (!drowningDecision.eligible) {
+                    return {
+                        code: drowningDecision.code,
+                        blocking: drowningDecision.blocking,
+                    };
+                }
                 say(agent, criticalWaterExposure && blockAbove.name !== 'water'
                     ? 'I need stable shore before I can fight.'
                     : 'I need air!');
@@ -1375,7 +1490,11 @@ async function execute(mode, agent, func, timeout=-1, { handoffMessage = null } 
                 );
             }
             return await func();
-        }, { timeout, owner: 'reflex' });
+        }, {
+            timeout,
+            owner: 'reflex',
+            specialist: COMBAT_REFLEX_MODES.includes(mode.name) ? 'pvp' : null,
+        });
     } catch (error) {
         const detail = String(error?.stack || error?.message || error).slice(0, 4096);
         console.error(`[mode:${mode.name}] Mode execution failed: ${detail}`);
@@ -1605,6 +1724,15 @@ class ModeController {
                 const result = await mode.update(agent, options);
                 if (result && typeof result === 'object' && typeof result.code === 'string') {
                     inactiveCode = result.code;
+                }
+                if (result?.blocking === true) {
+                    return {
+                        active: false,
+                        scheduled: false,
+                        blocking: true,
+                        mode: mode.name,
+                        code: result.code || 'mode_waiting_for_material_change',
+                    };
                 }
                 const scheduled = result === true
                     || mode.active

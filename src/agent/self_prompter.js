@@ -281,18 +281,27 @@ export class SelfPrompter {
         if (commandAssignsPersistentJob(commandName)) {
             this.interruptForManualCommand();
         }
-        let output;
+        let execution;
         try {
-            output = await executeCommand(this.agent, command, { owner: 'autonomy' });
+            execution = await executeCommand(this.agent, command, {
+                owner: 'autonomy',
+                routeOrigin: 'self-prompter',
+                returnExecution: true,
+            });
         } catch (error) {
-            output = `Autonomy command ${commandName} failed: ${String(error?.message || error).slice(0, 280)}`;
+            const output = `Autonomy command ${commandName} failed: ${String(error?.message || error).slice(0, 280)}`;
+            this.last_command_output = ledgerText(output);
+            await this.agent.history.add('system', output);
+            this.agent.history.save();
+            return Object.freeze({ executed: true, result: null });
         }
+        const output = execution?.value;
         this.last_command_output = ledgerText(output);
         if (typeof output === 'string' && output.trim()) {
             await this.agent.history.add('system', output.trim().slice(0, 2_000));
         }
         this.agent.history.save();
-        return true;
+        return Object.freeze({ executed: true, result: execution?.result || null });
     }
 
     async startLoop() {
@@ -320,8 +329,8 @@ export class SelfPrompter {
                     await waitForBotEvent(this.agent.bot, 'idle', this.cooldown);
                     continue;
                 }
-                const previousActionId = this.agent.last_action_result?.actionId || null;
                 let used_command;
+                let exactResult = null;
                 try {
                     this.last_turn_at = Date.now();
                     this.processing_turn = true;
@@ -330,7 +339,13 @@ export class SelfPrompter {
                     const recentContext = this.agent.history.getHistory().slice(-8);
                     used_command = await this.agent.prompter.promptAutonomy(recentContext);
                     if (typeof used_command === 'string' && used_command.trim()) {
-                        used_command = await this.executeAutonomyResponse(used_command);
+                        const execution = await this.executeAutonomyResponse(used_command);
+                        if (execution && typeof execution === 'object') {
+                            used_command = execution.executed === true;
+                            exactResult = execution.result || null;
+                        } else {
+                            used_command = false;
+                        }
                     } else {
                         used_command = false;
                     }
@@ -365,8 +380,8 @@ export class SelfPrompter {
                 }
                 if (this.interrupt || this.state !== ACTIVE) break;
 
-                const result = this.agent.last_action_result;
-                const resultChanged = Boolean(result?.actionId && result.actionId !== previousActionId);
+                const result = exactResult;
+                const resultChanged = Boolean(result?.actionId);
                 const requestPending = resultChanged && result.phase === 'requested';
                 const terminalFailure = resultChanged && result.phase !== 'succeeded' && result.retryable === false;
                 this.recordGoalAttempt(resultChanged ? result : null);

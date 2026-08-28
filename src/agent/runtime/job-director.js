@@ -1131,6 +1131,17 @@ export class JobDirector extends RoleDirector {
     }
   }
 
+  currentControlCommitment(action = {}) {
+    const order = this.activeOrder;
+    if (!order || !PLAYER_JOB_SOURCES.has(order.source)) return null;
+    return {
+      owner: 'player_job',
+      obligationId: order.id || order.orderId,
+      phase: order.phase || null,
+      ownsCurrentAction: action.owner === 'job',
+    };
+  }
+
   snapshot() {
     const order = this.activeOrder || this.lastOrder;
     return {
@@ -1944,6 +1955,12 @@ export class JobDirector extends RoleDirector {
             return;
           }
           const preempted = isPreemption(result);
+          const safetySuspended = preempted
+            && this.agent.behavior_arbiter?.matchesControlSuspension?.({
+              owner: 'player_job',
+              obligationId: orderAtDispatch.id || orderAtDispatch.orderId,
+              actionId: result.actionId,
+            }) === true;
           const transferred = Math.max(0, Math.floor(Number(outcome?.verification?.transferred) || 0));
           const transferCheckpoint = step.checkpointOnVerifiedTransfer;
           let successCheckpoint = null;
@@ -1991,6 +2008,7 @@ export class JobDirector extends RoleDirector {
             previousActionId: orderAtDispatch.evidence?.actionId || null,
             nextPhase: step.nextPhase,
             recoveryAction: step.recoveryAction === true,
+            safetySuspended,
             ...acquisitionRecovery,
             now: this.now(),
           });
@@ -2023,19 +2041,25 @@ export class JobDirector extends RoleDirector {
                 : 'failed';
           this.setStatus(
             status,
-            result?.code || (preempted ? 'job_preempted' : succeeded ? 'job_phase_succeeded' : 'job_phase_failed'),
+            safetySuspended
+              ? 'safety_suspended'
+              : result?.code || (preempted ? 'job_preempted' : succeeded ? 'job_phase_succeeded' : 'job_phase_failed'),
             step.target?.name || advanced.target?.name,
-            result?.detail || (
+            safetySuspended
+              ? 'Survival owns the body until the active safety incident settles; this work order will then resume from current world state.'
+              : result?.detail || (
               preempted
                 ? 'Survival interrupted the action; the durable work order remains active.'
                 : succeeded
                   ? 'Verified job phase completed.'
                   : 'Job phase did not verify.'
-            ),
+              ),
             preempted || advanced.phase === 'recover',
           );
           this.nextAttemptAt = this.now() + (
-            preempted
+            safetySuspended
+              ? 0
+              : preempted
               ? JOB_PREEMPTION_MS
               : succeeded
                 ? JOB_SUCCESS_MS

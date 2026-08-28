@@ -888,6 +888,7 @@ export function advanceWorkOrder(order, result, {
   failedTarget = null,
   failedTargets = null,
   recoveryAction = false,
+  safetySuspended = false,
   now = Date.now(),
 } = {}) {
   const current = normalizeWorkOrder(order);
@@ -913,6 +914,21 @@ export function advanceWorkOrder(order, result, {
     ? (current.resumePhase || 'assess')
     : current.phase;
   if (!result?.actionId || result.actionId === previousActionId) return current;
+  if (safetySuspended === true) {
+    return normalizeWorkOrder({
+      ...current,
+      evidence: {
+        actionId: result.actionId,
+        phase: 'interrupted',
+        code: 'safety_suspended',
+        detail: result.detail || 'Survival took exclusive control; the work order remains at its current phase.',
+      },
+      // Unlike generic repeated preemption, a named Safety incident has an
+      // owning terminal condition. It therefore spends neither productive nor
+      // anti-spin budgets; the arbiter releases this same order when safe.
+      updatedAt: now,
+    });
+  }
   const surfaceRecovery = surfaceRecoveryObservation(result);
   if (surfaceRecovery?.reached && nextPhase && PHASES.has(nextPhase)) {
     // Reaching the surface satisfies a physical access prerequisite; it is not

@@ -105,10 +105,12 @@ test('Given an idle target-bearing reaction, gesture uses the action boundary wi
     deliverText: () => true,
     executeGesture: (_agent, command) => {
       commands.push(command);
-      agent.last_action_result = {
-        actionId: 'gesture-1',
-        phase: 'succeeded',
-        code: 'looked',
+      return {
+        result: {
+          actionId: 'gesture-1',
+          phase: 'succeeded',
+          code: 'looked',
+        },
       };
     },
     getContext: () => ({ inConversation: false, witnesses: ['Guard'] }),

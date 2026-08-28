@@ -31,12 +31,15 @@ import {
   buildPrerequisitePlan,
   plannedInventoryCount,
 } from './prerequisite-planner.js';
+import { miningKnowledge } from './jobs/miner-plan.js';
+import { loopEraseMiningRouteCells } from './mining-corridor-planner.js';
 import { isSafeProcedureCommand, ProcedureStore } from './procedure-store.js';
 import { qualifyStrategicBranch } from './strategic-branch-qualification.js';
 import { isNightTime } from './survival-policy.js';
 import {
   deliberateEntityHarvestCombatEnvironment,
   deliberateEntityHarvestTargetQualification,
+  occupiesUsableSurfaceStance,
 } from '../library/skills.js';
 import { normalizeWorkstationTransactionReceipt } from './workstation-transaction.js';
 
@@ -56,6 +59,7 @@ const FAILED_TARGET_COOLDOWN_MS = 90_000;
 const FAILED_TARGET_RETENTION_MS = 10 * 60_000;
 const MAX_FAILED_TARGETS = 24;
 const FAILED_TARGET_EXCLUSION_RADIUS = 4;
+const MAX_MINING_RETURN_SEGMENT_CELLS = 16;
 const SOURCE_ACCESS_RECHECK_DISTANCE = 2;
 // Collection binds candidates inside a 64-block physical scan. A 32-block
 // retreat leaves most of that candidate field unchanged, so repeated failures
@@ -90,10 +94,39 @@ const MAX_LOCAL_VERTICAL_INTERACTION_REACH = 4.5;
 // spends productive budget without changing strategy; relocate once and let
 // the next plan bind a genuinely different region instead.
 const MAX_LOCAL_CONCRETE_TARGET_FAILURES = 1;
+const MAX_LOCAL_MINING_TARGET_FAILURES = 4;
 const MAX_MINING_RETURN_CELLS = 512;
+const MINING_ROUTE_REJOIN_MAX_DISTANCE = 64;
+const MINING_ROUTE_REJOIN_INDEX_SEPARATION = 8;
 const TERMINAL_FRONTIER_SEARCHES = 12;
 const TERMINAL_PHASES = new Set(['complete', 'failed', 'cancelled']);
 const GOAL_ONLY_RECOVERY_COMMANDS = new Set(['!recoverDeathItems', '!goToPlayer']);
+const INVALID_MINING_RETURN_CODES = new Set([
+  'skill_return_route_support_changed',
+  'skill_return_route_support_repair_failed',
+  'skill_return_route_changed',
+  'skill_return_route_liquid_risk',
+  'skill_return_route_settlement_changed',
+  'skill_route_step_not_reached',
+  'skill_protected_block_in_route',
+]);
+const INVALID_MINING_RETURN_OUTCOMES = new Set([
+  'return_route_support_changed',
+  'return_route_support_repair_failed',
+  'return_route_changed',
+  'return_route_liquid_risk',
+  'return_route_settlement_changed',
+  'route_step_not_reached',
+  'protected_block_in_route',
+  'hazardous_block_in_route',
+  'return_route_block_not_diggable',
+  'return_route_geometry_limit',
+  'return_route_repair_stance_missing',
+  'return_route_geometry_not_cleared',
+  'return_route_debris_unsettled',
+  'return_route_debris_limit',
+  'return_route_debris_not_cleared',
+]);
 
 function boundedText(value, maximum = 280, fallback = '') {
   return Array.from(String(value ?? fallback), character => {
@@ -166,40 +199,33 @@ function checkpointWithVerifiedMiningRoute(checkpoint, result, bot) {
     || skill.returnRoute.length < 1
   ) return checkpoint;
 
-  const incoming = [];
-  for (const rawCell of skill.returnRoute) {
-    if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
-    const cell = {
-      x: Math.floor(rawCell.x),
-      y: Math.floor(rawCell.y),
-      z: Math.floor(rawCell.z),
-    };
-    if (!sameMiningRouteCell(incoming.at(-1), cell)) incoming.push(cell);
-  }
+  const incoming = loopEraseMiningRouteCells(
+    skill.returnRoute,
+    { limit: MAX_MINING_RETURN_CELLS },
+  );
   if (incoming.length < 1) return checkpoint;
 
   const prior = Array.isArray(checkpoint?.miningReturnRoute)
     && Number(checkpoint?.miningReturnIndex) >= 0
-    ? [...checkpoint.miningReturnRoute]
+    ? loopEraseMiningRouteCells(
+        checkpoint.miningReturnRoute.slice(
+          0,
+          Math.min(
+            checkpoint.miningReturnRoute.length,
+            Math.floor(Number(checkpoint.miningReturnIndex)) + 1,
+          ),
+        ),
+        { limit: MAX_MINING_RETURN_CELLS },
+      )
     : [];
-  // A later leg can safely backtrack along the preserved corridor before it
-  // extends again. Splice at that exact shared cell so the original exit is
-  // retained while the superseded inner tail is replaced.
-  const overlapIndex = prior.findLastIndex(cell => sameMiningRouteCell(cell, incoming[0]));
-  // A later action can cross an already-open tunnel before excavating its
-  // reported fragment. Preserve the earlier exit route when there is no exact
-  // overlap; traverseMiningRouteCell owns no-dig Pathfinder verification of
-  // the open gap on the way back.
-  const combined = prior.length > 0
-    ? overlapIndex >= 0
-      ? prior.slice(0, overlapIndex + 1)
-      : prior
-    : [];
-  for (const cell of incoming) {
-    if (sameMiningRouteCell(combined.at(-1), cell)) continue;
-    if (combined.length >= MAX_MINING_RETURN_CELLS) break;
-    combined.push(cell);
-  }
+  // The return spine is a path, not a travel log. Revisiting any earlier cell
+  // closes a loop, so erase that cycle before persisting the new frontier.
+  // This retains the original exit and current endpoint without allowing
+  // harmless backtracking to consume the entire bounded checkpoint.
+  const combined = loopEraseMiningRouteCells(
+    [...prior, ...incoming],
+    { limit: MAX_MINING_RETURN_CELLS },
+  );
   if (combined.length < 1) return checkpoint;
   const dimension = normalizedDimension(bot?.game?.dimension);
   return {
@@ -213,7 +239,6 @@ function checkpointWithVerifiedMiningRoute(checkpoint, result, bot) {
 function checkpointAfterMiningReturnStep(checkpoint, result, actingSubgoal) {
   if (
     actingSubgoal?.kind !== 'recover'
-    || actingSubgoal.commandName !== '!traverseMiningRouteCell'
     || result?.phase !== 'succeeded'
   ) return checkpoint;
   const route = checkpoint?.miningReturnRoute || [];
@@ -221,12 +246,38 @@ function checkpointAfterMiningReturnStep(checkpoint, result, actingSubgoal) {
     ? Math.min(route.length - 1, Math.floor(checkpoint.miningReturnIndex))
     : route.length - 1;
   if (index < 0) return checkpoint;
+  if (
+    actingSubgoal.commandName === '!goToCoordinates'
+    && /^mining-route-rejoin:(?:[^:]+:)?\d+$/.test(String(actingSubgoal.learningKey || ''))
+  ) {
+    // Rejoining an earlier route cell during acquisition relocates the body;
+    // it does not erase the still-valid forward suffix. Keep the endpoint
+    // cursor so the next mining action traverses that known spine before
+    // excavating again. A completed goal rewinds the cursor from live occupied
+    // route state in update(), where return direction is known.
+    return checkpoint;
+  }
+  if (actingSubgoal.commandName !== '!traverseMiningRouteCell') return checkpoint;
   const target = actionResultEvidence(result)?.target;
-  if (!sameMiningRouteCell(route[index], target)) return checkpoint;
+  const targetIndex = route.findLastIndex((cell, candidateIndex) => (
+    candidateIndex <= index && sameMiningRouteCell(cell, target)
+  ));
+  if (targetIndex < 0) return checkpoint;
   return {
     ...checkpoint,
-    miningReturnIndex: index - 1,
+    miningReturnIndex: targetIndex - 1,
   };
+}
+
+function miningRouteIdentity(route, index) {
+  const origin = route?.[0];
+  const endpoint = route?.[index];
+  if (
+    !origin
+    || !endpoint
+    || ![origin.x, origin.y, origin.z, endpoint.x, endpoint.y, endpoint.z].every(Number.isFinite)
+  ) return '';
+  return `${index + 1}@${origin.x},${origin.y},${origin.z}@${endpoint.x},${endpoint.y},${endpoint.z}`;
 }
 
 function pendingMiningReturn(goal) {
@@ -235,7 +286,106 @@ function pendingMiningReturn(goal) {
     ? Math.min(route.length - 1, Math.floor(goal.checkpoint.miningReturnIndex))
     : route.length - 1;
   if (index < 0 || !route[index]) return null;
-  return { cell: route[index], index };
+  const segmentEndIndex = Math.max(0, index - MAX_MINING_RETURN_SEGMENT_CELLS + 1);
+  return {
+    cell: route[segmentEndIndex],
+    index: segmentEndIndex,
+    startIndex: index,
+    cells: index - segmentEndIndex + 1,
+  };
+}
+
+function miningRouteRejoinDecision(goal, bot) {
+  const route = goal?.checkpoint?.miningReturnRoute || [];
+  const index = Number.isFinite(goal?.checkpoint?.miningReturnIndex)
+    ? Math.min(route.length - 1, Math.floor(goal.checkpoint.miningReturnIndex))
+    : route.length - 1;
+  const position = physicalPosition(bot?.entity?.position);
+  if (index < 0 || !position || route.length < 1) return null;
+  const routeDimension = normalizedDimension(goal.checkpoint?.miningReturnDimension);
+  const currentDimension = normalizedDimension(bot?.game?.dimension);
+  if (routeDimension && currentDimension && routeDimension !== currentDimension) {
+    return { state: 'dimension_changed', routeDimension, currentDimension };
+  }
+  const candidates = route
+    .slice(0, index + 1)
+    .map((cell, candidateIndex) => ({
+      cell,
+      index: candidateIndex,
+      distance: distanceBetween(position, physicalPosition(cell)),
+    }))
+    .filter(candidate => Number.isFinite(candidate.distance))
+    .sort((left, right) => left.distance - right.distance || right.index - left.index);
+  const nearest = candidates[0];
+  const occupied = candidates.find(candidate => sameMiningRouteCell(position, candidate.cell));
+  if (occupied && occupied.index < index) {
+    return { state: 'occupied', ...occupied };
+  }
+  if (!nearest || nearest.distance <= 4) return null;
+  if (nearest.distance > MINING_ROUTE_REJOIN_MAX_DISTANCE) {
+    return { state: 'out_of_range', distance: nearest.distance };
+  }
+  const routeIdentity = miningRouteIdentity(route, index);
+  const learningKeyPrefix = routeIdentity
+    ? `mining-route-rejoin:${routeIdentity}:`
+    : '';
+  const failedIndexes = (goal.subgoals || [])
+    .filter(subgoal => (
+      subgoal.kind === 'recover'
+      && subgoal.commandName === '!goToCoordinates'
+      && subgoal.state === 'failed'
+      && learningKeyPrefix
+      && String(subgoal.learningKey || '').startsWith(learningKeyPrefix)
+    ))
+    .map(subgoal => Number(String(subgoal.learningKey).split(':').at(-1)))
+    .filter(Number.isFinite);
+  const candidate = candidates.find(entry => (
+    failedIndexes.every(failedIndex => (
+      Math.abs(entry.index - failedIndex) >= MINING_ROUTE_REJOIN_INDEX_SEPARATION
+    ))
+  ));
+  return candidate
+    ? { state: 'ready', ...candidate }
+    : { state: 'exhausted', distance: nearest.distance };
+}
+
+function capabilityRequiresSurface(step) {
+  return step?.capability?.access?.requiresSurface === true;
+}
+
+function surfaceAccessConfirmedAfterMiningReturn(goal) {
+  let lastReturnAt = 0;
+  let lastSurfaceAt = 0;
+  for (const subgoal of goal?.subgoals || []) {
+    if (subgoal.state !== 'succeeded') continue;
+    const finishedAt = Number(subgoal.finishedAt) || 0;
+    if (subgoal.commandName === '!traverseMiningRouteCell') {
+      lastReturnAt = Math.max(lastReturnAt, finishedAt);
+    }
+    if (
+      subgoal.commandName === '!goToSurface'
+      && ['skill_surface_reached', 'capability_effects_verified'].includes(subgoal.code)
+    ) {
+      lastSurfaceAt = Math.max(lastSurfaceAt, finishedAt);
+    }
+  }
+  return lastSurfaceAt > lastReturnAt;
+}
+
+function repeatsRejectedDepthCapability(goal, step) {
+  if (step?.capability?.id !== 'reach_mining_depth') return false;
+  const latest = goal?.subgoals?.at(-1);
+  return Boolean(
+    latest?.kind === 'plan'
+    && latest.state === 'failed'
+    && latest.commandName === '!goToMiningDepth'
+    && [
+      'skill_no_safe_depth_corridor',
+      'skill_no_stable_staging_cell',
+      'skill_staging_unreachable',
+      'skill_origin_support_unsafe',
+    ].includes(latest.code)
+  );
 }
 
 function goalOutputReadyForHandoff(bot, goal) {
@@ -252,19 +402,31 @@ function goalOutputReadyForHandoff(bot, goal) {
 function verifiedMiningRouteProgress(kind, skill) {
   return Boolean(
     kind === 'plan'
-    && skill?.kind === 'mining_search'
-    && skill?.outcome === 'search_advanced'
-    && skill?.routeDigging === true
-    && skill?.returnable === true
-    && Number(skill?.routeSteps) > 0
-    && [
-      skill?.target?.x,
-      skill?.target?.y,
-      skill?.target?.z,
-      skill?.observedPosition?.x,
-      skill?.observedPosition?.y,
-      skill?.observedPosition?.z,
-    ].every(Number.isFinite)
+    && (
+      (
+        skill?.kind === 'mining_search'
+        && skill?.outcome === 'search_advanced'
+        && skill?.routeDigging === true
+        && skill?.returnable === true
+        && Number(skill?.routeSteps) > 0
+        && [
+          skill?.target?.x,
+          skill?.target?.y,
+          skill?.target?.z,
+          skill?.observedPosition?.x,
+          skill?.observedPosition?.y,
+          skill?.observedPosition?.z,
+        ].every(Number.isFinite)
+      )
+      || (
+        skill?.kind === 'mining_relocation'
+        && skill?.outcome === 'no_safe_depth_corridor'
+        && skill?.routeDigging === true
+        && skill?.geometryChanged === true
+        && skill?.returnable === true
+        && Number(skill?.excavated) > 0
+      )
+    )
   );
 }
 
@@ -311,7 +473,7 @@ function resultRejectsCollectionTarget(result, target) {
   ));
 }
 
-class GoalStateStore {
+export class GoalStateStore {
   constructor(agentName, { root = './bots' } = {}) {
     if (!SAFE_AGENT_NAME.test(String(agentName || ''))) {
       throw new TypeError('Goal-state bot name is invalid.');
@@ -322,7 +484,7 @@ class GoalStateStore {
     mkdirSync(this.directory, { recursive: true });
   }
 
-  load() {
+  load({ allowStaleActiveGoal = false } = {}) {
     this.lastError = null;
     if (!existsSync(this.filePath)) return { activeGoal: null, lastGoal: null, protectedGoalId: null };
     try {
@@ -336,8 +498,16 @@ class GoalStateStore {
       // An active goal is in-flight activity and expires with the session;
       // lastGoal / protectedGoalId are completion history and are preserved.
       const activeGoalStale = document.activeGoal && isStaleActivityState(document.savedAt);
-      if (activeGoalStale) this.lastError = staleActivityReason('goal state', document.savedAt);
-      const activeGoal = document.activeGoal && !activeGoalStale
+      const lifecycleResumeAuthorized = Boolean(
+        activeGoalStale
+        && allowStaleActiveGoal === true
+        && Number.isFinite(Number(document.savedAt))
+        && Number(document.savedAt) > 0
+      );
+      if (activeGoalStale && !lifecycleResumeAuthorized) {
+        this.lastError = staleActivityReason('goal state', document.savedAt);
+      }
+      const activeGoal = document.activeGoal && (!activeGoalStale || lifecycleResumeAuthorized)
         ? normalizeGoalContract(document.activeGoal)
         : null;
       const lastGoal = document.lastGoal ? normalizeGoalContract(document.lastGoal) : null;
@@ -379,15 +549,14 @@ function restoredGoal(goal) {
   const interrupted = [...goal.subgoals]
     .reverse()
     .find(subgoal => subgoal.state === 'acting') || null;
-  const resumePhase = interrupted?.kind === 'recover' ? 'recover' : 'assess';
   return normalizeGoalContract({
     ...goal,
     // Fresh Minecraft state must always be verified after restart. A recovery
-    // action is different from an opaque productive action, though: its last
-    // productive failure still selects the strategy. Preserve that lifecycle
-    // phase so restart resumes deterministic recovery instead of replaying the
-    // acquisition that already proved it was inaccessible from this region.
-    phase: resumePhase,
+    // subgoal is historical evidence, not a command to replay. Re-enter the
+    // causal assessment owner for every ordinary restored goal; it can inspect
+    // the last productive failure, current inventory, the preserved mining
+    // route, and live world state before selecting either recovery or work.
+    phase: 'assess',
     subgoals: goal.subgoals.map(subgoal => (
       subgoal.state === 'acting'
         ? {
@@ -403,9 +572,7 @@ function restoredGoal(goal) {
       actionId: '',
       phase: 'assess',
       code: 'restart_revalidation',
-      detail: interrupted?.kind === 'recover'
-        ? 'Restored goal requires fresh Minecraft-state verification before resuming deterministic recovery.'
-        : 'Restored goal requires fresh Minecraft-state verification.',
+      detail: 'Restored goal requires fresh Minecraft-state verification before causal replanning.',
       verified: false,
       at: now,
     },
@@ -464,6 +631,18 @@ function needsSurfaceRecovery(goal, bot) {
   const dimension = String(bot?.game?.dimension || '').replace(/^minecraft:/, '');
   const y = Number(bot?.entity?.position?.y);
   const latestSubgoal = goal?.subgoals?.at(-1);
+  const latestPlan = latestFailedPlanSubgoal(goal);
+  const hasVerifiedMiningReturn = Boolean(pendingMiningReturn(goal));
+  const miningReturnRoute = goal?.checkpoint?.miningReturnRoute;
+  const exhaustedVerifiedMiningReturn = Boolean(
+    Array.isArray(miningReturnRoute)
+    && miningReturnRoute.length > 0
+    && Number(goal?.checkpoint?.miningReturnIndex) === -1
+  );
+  const undergroundResourceMissOnVerifiedRoute = Boolean(
+    hasVerifiedMiningReturn
+    && /(?:resource_not_found|search_exhausted)/.test(String(latestPlan?.code || ''))
+  );
   // Once a concrete acquisition failure has handed control to surface
   // recovery, the persisted recovery subgoal is the durable latch. Altitude
   // heuristics may start that recovery, but only Minecraft-verified arrival at
@@ -474,9 +653,10 @@ function needsSurfaceRecovery(goal, bot) {
     latestSubgoal?.kind === 'recover'
     && latestSubgoal.commandName === '!goToSurface'
     && latestSubgoal.code !== 'skill_surface_reached'
+    && !undergroundResourceMissOnVerifiedRoute
   );
-  const latestPlan = latestFailedPlanSubgoal(goal);
   const code = `${goal?.evidence?.code || ''} ${latestPlan?.code || ''}`;
+  const treeTerrainSettlementPending = /tree_terrain_settlement_unverified/.test(code);
   const failedTarget = latestPlanFailedTarget(goal);
   const targetY = Number(failedTarget?.position?.y);
   const targetAboveLocalInteraction = (
@@ -494,15 +674,20 @@ function needsSurfaceRecovery(goal, bot) {
     && y < UNDERGROUND_SURFACE_RECOVERY_Y
     && /(?:unreachable|no_path|path_|stuck)/.test(code)
   );
+  const invalidatedMiningReturn = /mining_return_route_invalidated/.test(code);
   return dimension === 'overworld'
     && Number.isFinite(y)
     && (
       surfaceRecoveryLatched
+      || treeTerrainSettlementPending
       ||
       (
         y < UNDERGROUND_SURFACE_RECOVERY_Y
         && /(?:resource_not_found|search_exhausted)/.test(code)
+        && !hasVerifiedMiningReturn
       )
+      || (y < UNDERGROUND_SURFACE_RECOVERY_Y && exhaustedVerifiedMiningReturn)
+      || invalidatedMiningReturn
       || failedAboveGroundAccess
       || undergroundDeliveryRouteBlocked
     );
@@ -565,6 +750,21 @@ function recoveryCommand(goal, bot, memoryBank = null) {
 function plannedDisengagementCommand(goal, bot) {
   const code = String(goal.evidence?.code || '');
   if (needsSurfaceRecovery(goal, bot)) return '!goToSurface';
+  // A verified mining-return route means the body is already inside one
+  // bounded, recoverable acquisition region. `moveAway(..., true)` searches
+  // for a distinct loaded surface region; issuing it from the corridor turns
+  // one rejected ore body into an unrelated and usually impossible locomotion
+  // problem. Failed-target memory already excludes the exact source, so keep
+  // the body on its proven route and let assessment bind another source from
+  // live underground state.
+  if (pendingMiningReturn(goal)) return null;
+  // A failed natural-ore coordinate is a mining-strategy signal, not evidence
+  // that the whole acquisition region is bad. Keep the body underground and
+  // let the exclusion-aware prerequisite planner hand off to the depth/corridor
+  // spine once local exact candidates are exhausted. Surface relocation here
+  // discarded the useful descent and recreated the same ore search elsewhere.
+  const failedMiningTarget = latestPlanFailedTarget(goal);
+  if (failedMiningTarget?.name && miningKnowledge(failedMiningTarget.name)) return null;
   if (
     goal.subgoals.at(-1)?.kind === 'plan'
     && /(?:source_not_found|resource_not_found|search_exhausted)/.test(code)
@@ -616,10 +816,137 @@ function consecutiveLocalPlanFailures(goal) {
   return failures;
 }
 
-function repeatedFailedPlannerMethods(goal, threshold = 2) {
+function plannerFailureScope(result) {
+  if (classifyMethodOutcome(result) !== 'method_failure') return null;
+  if (actionResultTargetFailures(result).length > 0) return 'target';
+  const skill = actionResultEvidence(result);
+  if (skill?.toolRequirement || skill?.workstationRequirement || skill?.accessRequirement) {
+    return 'prerequisite';
+  }
+  if (skill?.outcome === 'tree_terrain_settlement_unverified') return 'region';
+  if (skill?.kind === 'mining_relocation') return 'region';
+  return 'method';
+}
+
+function legacyPlannerFailureScope(goal, subgoal, index) {
+  if (subgoal.failureScope) return subgoal.failureScope;
+  if (
+    subgoal.commandName === '!goToMiningDepth'
+    && /(?:no_safe_depth_corridor|no_stable_staging_cell|staging_unreachable|origin_support_unsafe)/
+      .test(String(subgoal.code || ''))
+  ) return 'region';
+  const finishedAt = Number(subgoal.finishedAt);
+  const nextStartedAt = Number(goal?.subgoals?.[index + 1]?.startedAt);
+  if (
+    Number.isFinite(finishedAt)
+    && (goal?.memory?.failedTargets || []).some(target => (
+      Number(target.lastFailedAt) >= finishedAt
+      && (!Number.isFinite(nextStartedAt) || Number(target.lastFailedAt) <= nextStartedAt)
+    ))
+  ) return 'target';
+  return 'method';
+}
+
+function pendingMiningRegionRecovery(goal) {
+  const subgoals = goal?.subgoals || [];
+  const lastRelocationIndex = subgoals.findLastIndex(subgoal => (
+    subgoal.kind === 'recover'
+    && String(subgoal.learningKey || '').startsWith('mining-region-relocation:')
+  ));
+  const lastRelocation = subgoals[lastRelocationIndex] || null;
+  if (lastRelocation?.state === 'failed') {
+    return { state: 'failed', failure: lastRelocation };
+  }
+  const regionStartIndex = lastRelocationIndex + 1;
+  const lastSurfaceStaging = subgoals.findLast(subgoal => (
+    subgoal.kind === 'recover'
+    && String(subgoal.learningKey || '').startsWith('mining-region-surface:')
+  ));
+  if (lastSurfaceStaging?.state === 'failed') {
+    return { state: 'surface_failed', failure: lastSurfaceStaging };
+  }
+  let regionalFailureIndex = -1;
+  let localMiningFailures = 0;
+  for (let index = subgoals.length - 1; index >= regionStartIndex; index -= 1) {
+    const subgoal = subgoals[index];
+    if (
+      subgoal.kind === 'plan'
+      && subgoal.state === 'failed'
+      && subgoal.commandName === '!goToMiningDepth'
+      && legacyPlannerFailureScope(goal, subgoal, index) === 'region'
+    ) {
+      regionalFailureIndex = index;
+      break;
+    }
+    if (subgoal.kind !== 'plan' || subgoal.state === 'cancelled') continue;
+    if (subgoal.state === 'succeeded') break;
+    const collection = /^collect:([^>]+)->[a-z0-9_]+$/.exec(String(subgoal.learningKey || ''));
+    if (
+      subgoal.state === 'failed'
+      && legacyPlannerFailureScope(goal, subgoal, index) === 'target'
+      && collection
+      && miningKnowledge(collection[1])
+    ) {
+      localMiningFailures += 1;
+      if (localMiningFailures >= MAX_LOCAL_MINING_TARGET_FAILURES) {
+        regionalFailureIndex = index;
+        break;
+      }
+      continue;
+    }
+    break;
+  }
+  if (regionalFailureIndex < 0) return null;
+  return {
+    state: goal.attempts >= goal.maxAttempts ? 'exhausted' : 'pending',
+    failure: subgoals[regionalFailureIndex],
+  };
+}
+
+export function failedPlannerMethodExclusions(goal, threshold = 2) {
   const signatures = new Map();
   const excluded = new Set();
-  for (const subgoal of goal?.subgoals || []) {
+  const clearMethod = learningKey => {
+    for (const signature of [...signatures.keys()]) {
+      if (signature.startsWith(`${learningKey}\u0000`)) signatures.delete(signature);
+    }
+    excluded.delete(learningKey);
+  };
+  const clearAcquisitionForTarget = targetName => {
+    const target = String(targetName || '').trim().toLowerCase();
+    if (!target) return;
+    const ownsTarget = learningKey => (
+      /^(collect|harvest):/.test(learningKey)
+      && learningKey.endsWith(`->${target}`)
+    );
+    for (const signature of [...signatures.keys()]) {
+      const separator = signature.indexOf('\u0000');
+      const learningKey = separator >= 0 ? signature.slice(0, separator) : signature;
+      if (ownsTarget(learningKey)) signatures.delete(signature);
+    }
+    for (const learningKey of [...excluded]) {
+      if (ownsTarget(learningKey)) excluded.delete(learningKey);
+    }
+  };
+  for (const [index, subgoal] of (goal?.subgoals || []).entries()) {
+    if (
+      subgoal.kind === 'plan'
+      && subgoal.state === 'succeeded'
+      && subgoal.learningKey
+    ) {
+      // A succeeded plan action has already passed its capability verifier;
+      // inventory is only one possible material effect. World construction,
+      // returnable access, and source creation must clear the same method's
+      // earlier no-progress streak too.
+      clearMethod(subgoal.learningKey);
+      if (/^skill_[a-z0-9_]+_source_created$/.test(String(subgoal.code || ''))) {
+        // Production changes the premise of earlier "resource not found"
+        // failures. Re-enable collection for that target immediately so a
+        // producer/collector composition cannot suppress its own second half.
+        clearAcquisitionForTarget(subgoal.targetName);
+      }
+      continue;
+    }
     if (
       subgoal.kind !== 'plan'
       || subgoal.state !== 'failed'
@@ -627,6 +954,7 @@ function repeatedFailedPlannerMethods(goal, threshold = 2) {
       || subgoal.targetInventoryAfter > subgoal.targetInventoryBefore
       || isPreemption({ phase: 'failed', code: subgoal.code })
       || classifyMethodOutcome({ phase: 'failed', code: subgoal.code }) !== 'method_failure'
+      || legacyPlannerFailureScope(goal, subgoal, index) !== 'method'
     ) continue;
     const signature = `${subgoal.learningKey}\u0000${subgoal.code || 'unknown'}`;
     const failures = (signatures.get(signature) || 0) + 1;
@@ -773,6 +1101,12 @@ function goalCompletionIdentity(goal) {
 }
 
 function prerequisitePlannerOptions(agent, goal, quantity) {
+  const miningReturnRoute = Array.isArray(goal.checkpoint?.miningReturnRoute)
+    ? goal.checkpoint.miningReturnRoute
+    : [];
+  const miningReturnIndex = Number.isFinite(Number(goal.checkpoint?.miningReturnIndex))
+    ? Math.min(miningReturnRoute.length - 1, Math.floor(Number(goal.checkpoint.miningReturnIndex)))
+    : miningReturnRoute.length - 1;
   return {
     target: goal.target.inventoryName,
     quantity,
@@ -784,11 +1118,21 @@ function prerequisitePlannerOptions(agent, goal, quantity) {
     accessRequirement: goal.memory?.accessRequirement,
     workstationConstraint: goal.workstationConstraint,
     workstationTransaction: goal.checkpoint?.workstationTransaction,
+    miningReturnRoute: miningReturnIndex >= 0
+      ? miningReturnRoute.slice(0, miningReturnIndex + 1)
+      : [],
+    miningExcludedTargets: (goal.memory?.failedTargets || [])
+      .filter(target => target.kind === 'collect')
+      .map(target => ({
+        name: target.name,
+        ...target.position,
+        radius: FAILED_TARGET_EXCLUSION_RADIUS,
+      })),
     // One retry after a region change is useful evidence. Repeating the same
     // no-progress method after that is not: temporarily exclude it for this
     // goal so the catalogue must bind a genuinely different method or report
     // that none exists.
-    excludedMethods: repeatedFailedPlannerMethods(goal),
+    excludedMethods: failedPlannerMethodExclusions(goal),
   };
 }
 
@@ -1097,7 +1441,12 @@ export class GoalDirector {
       at: this.now(),
     };
 
-    const persisted = this.store.load();
+    const persisted = this.store.load({
+      // Fresh starts still reject old activity. Only AgentProcess' explicit
+      // lifecycle-restart marker may revive the exact active Goal; Agenda then
+      // requires that same executor id before its stale queue can follow.
+      allowStaleActiveGoal: this.agent.lifecycle_restart === true,
+    });
     this.activeGoal = restoredGoal(persisted.activeGoal);
     this.lastGoal = persisted.lastGoal;
     this.protectedGoalId = persisted.protectedGoalId === this.lastGoal?.id
@@ -1125,6 +1474,17 @@ export class GoalDirector {
       detail: boundedText(detail, 280),
       retryable: retryable === true,
       at: this.now(),
+    };
+  }
+
+  currentControlCommitment(action = {}) {
+    const goal = this.activeGoal;
+    if (!goal?.id) return null;
+    return {
+      owner: 'player_goal',
+      obligationId: goal.id,
+      phase: goal.phase || null,
+      ownsCurrentAction: action.owner === 'player',
     };
   }
 
@@ -1160,6 +1520,41 @@ export class GoalDirector {
     this.activeGoal = normalizeGoalContract(raw);
     this.store.save(this.activeGoal, this.lastGoal, this.protectedGoalId);
     return this.activeGoal;
+  }
+
+  adoptMiningContinuationCheckpoint(checkpoint, reason = 'Reconciled a persisted mining route.') {
+    if (
+      !this.activeGoal
+      || this.inFlight
+      || (this.activeGoal.checkpoint?.miningReturnRoute?.length || 0) > 0
+    ) return false;
+    const candidate = normalizeGoalContract({
+      ...this.activeGoal,
+      phase: 'assess',
+      checkpoint: {
+        ...this.activeGoal.checkpoint,
+        ...(checkpoint || {}),
+      },
+      evidence: {
+        actionId: '',
+        phase: 'assess',
+        code: 'mining_return_checkpoint_reconciled',
+        detail: boundedText(reason, 280, 'Reconciled a persisted mining route.'),
+        verified: false,
+        at: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    if ((candidate.checkpoint?.miningReturnRoute?.length || 0) < 1) return false;
+    this.persist(candidate);
+    this.nextAttemptAt = 0;
+    this.setStatus(
+      'planning',
+      'mining_return_checkpoint_reconciled',
+      'The active Goal recovered its exact Agenda-owned mining spine and will rejoin it from live position.',
+      true,
+    );
+    return true;
   }
 
   hasProtectedCompletion() {
@@ -1332,11 +1727,16 @@ export class GoalDirector {
       return true;
     }
 
-    const attempts = goal.attempts + 1;
+    // A persisted inventory-bearing death is not yet a failed productive
+    // attempt. The post-respawn recovery action owns that verdict; charging
+    // here can terminalize the Goal before its deliberately delayed inventory
+    // observation establishes that the carried work survived.
+    const pendingDeathRecovery = persistedRecoverableDeath && observedRecoverableItems > 0;
+    const attempts = pendingDeathRecovery ? goal.attempts : goal.attempts + 1;
     this.persist({
       ...goal,
       attempts,
-      phase: attempts >= goal.maxAttempts ? goal.phase : 'recover',
+      phase: pendingDeathRecovery || attempts < goal.maxAttempts ? 'recover' : goal.phase,
       evidence: {
         actionId: result.actionId,
         phase: result.phase,
@@ -1349,6 +1749,11 @@ export class GoalDirector {
     });
     if (!persistedRecoverableDeath) {
       this.fail(resultCode, detail, { retryable: false });
+      return true;
+    }
+    if (pendingDeathRecovery) {
+      this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+      this.setStatus('recover', 'goal_owner_died', detail, true);
       return true;
     }
     if (attempts >= goal.maxAttempts) {
@@ -1616,7 +2021,7 @@ export class GoalDirector {
             capability: boundedText(planner.nextStep.capability?.id, 80) || null,
             target: boundedText(planner.nextStep.target, 80) || null,
           } : null,
-          excluded: repeatedFailedPlannerMethods(goal),
+          excluded: failedPlannerMethodExclusions(goal),
           planRevision: this.planRevision,
         },
         lastAction: latestSubgoal ? {
@@ -1785,6 +2190,9 @@ export class GoalDirector {
       state: result.phase === 'succeeded' ? 'succeeded' : 'failed',
       actionId: result.actionId || null,
       code: result.code || 'unknown',
+      failureScope: current.kind === 'plan' && result.phase !== 'succeeded'
+        ? plannerFailureScope(result)
+        : null,
       detail: result.detail || '',
       targetInventoryAfter,
       inventoryAfter: this.currentInventory(),
@@ -1821,6 +2229,50 @@ export class GoalDirector {
         console.warn(`[goal-learning] Could not remember ${current.learningKey}: ${boundedText(error?.message || error)}`);
       }
     }
+    return persisted;
+  }
+
+  suspendLatestSubgoal(result) {
+    const subgoals = [...this.activeGoal.subgoals];
+    const index = subgoals.length - 1;
+    if (index < 0) return this.activeGoal;
+    const current = subgoals[index];
+    const finishedAt = this.now();
+    subgoals[index] = {
+      ...current,
+      state: 'cancelled',
+      actionId: result.actionId || null,
+      code: 'safety_suspended',
+      detail: result.detail || 'Survival took exclusive control of the body.',
+      targetInventoryAfter: current.targetName
+        ? plannedInventoryCount(this.agent.bot, current.targetName, current.targetFamily)
+        : current.targetInventoryAfter,
+      inventoryAfter: this.currentInventory(),
+      finishedAt,
+    };
+    const persisted = this.persist({
+      ...this.activeGoal,
+      subgoals,
+      evidence: {
+        actionId: result.actionId || '',
+        phase: 'interrupted',
+        code: 'safety_suspended',
+        detail: result.detail || 'Survival took exclusive control; the goal remains at its current phase.',
+        verified: false,
+        at: finishedAt,
+      },
+      // Preserve phase, attempts, checkpoint, and learned method state. When
+      // Survival closes the incident the arbiter wakes this same goal, which
+      // re-derives its next action from the live world exactly once.
+      updatedAt: finishedAt,
+    });
+    this.nextAttemptAt = 0;
+    this.setStatus(
+      'waiting',
+      'safety_suspended',
+      'Survival owns the body until the active safety incident settles; this goal will then resume from current world state.',
+      true,
+    );
     return persisted;
   }
 
@@ -2047,9 +2499,11 @@ export class GoalDirector {
   }
 
   collectionExclusions() {
-    const now = this.now();
     return (this.activeGoal?.memory?.failedTargets || [])
-      .filter(entry => entry.kind === 'collect' && entry.avoidUntil > now)
+      // A clock tick is not material evidence that an unchanged block became
+      // reachable. Failed collection coordinates remain excluded for this goal;
+      // a new goal or verified physical progress supplies the changed context.
+      .filter(entry => entry.kind === 'collect')
       // A failed block inside a vein or tree is evidence about that local
       // source, not merely one coordinate. Exclude the compact source region
       // so replanning cannot select an adjacent block in the same candidate.
@@ -2157,8 +2611,46 @@ export class GoalDirector {
         updatedAt: this.now(),
       });
     }
+    const safetySuspended = effectiveResult.phase !== 'succeeded'
+      && isPreemption(effectiveResult)
+      && this.agent.behavior_arbiter?.matchesControlSuspension?.({
+        owner: 'player_goal',
+        obligationId: this.activeGoal.id,
+        actionId: effectiveResult.actionId,
+      }) === true;
+    if (safetySuspended) {
+      this.suspendLatestSubgoal(effectiveResult);
+      return;
+    }
     this.finishLatestSubgoal(effectiveResult);
     const finishedSkill = actionResultEvidence(effectiveResult);
+    const pendingDeathRecovery = Boolean(
+      effectiveResult.code === 'goal_owner_died'
+      && finishedSkill?.kind === 'death_reconciliation'
+      && Number(finishedSkill.recoverableItems) > 0
+      && Number.isSafeInteger(Number(finishedSkill.recordedAt))
+      && Number(finishedSkill.recordedAt) > 0
+    );
+    if (pendingDeathRecovery) {
+      const goal = this.activeGoal;
+      this.persist({
+        ...goal,
+        checkpoint: durableActionCheckpoint,
+        phase: 'recover',
+        // The recovery action, not the death notification, settles whether
+        // this productive attempt was actually lost.
+        attempts: goal.attempts,
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+      this.setStatus(
+        'recover',
+        'goal_owner_died',
+        effectiveResult.detail || 'The bot died with a persisted recoverable inventory; recovery owns the pending attempt verdict.',
+        true,
+      );
+      return;
+    }
     if (
       kind === 'plan'
       && finishedSkill?.kind === 'entity_harvest'
@@ -2317,6 +2809,28 @@ export class GoalDirector {
       // capability. A tree transaction that left connected logs, temporary
       // scaffolding, or an unsafe body stance is not complete merely because
       // the requested item floor happened to be reached.
+      const recoverableTreeTerrain = skill?.kind === 'collect'
+        && skill?.outcome === 'tree_terrain_settlement_unverified';
+      if (recoverableTreeTerrain) {
+        this.persist({
+          ...goal,
+          checkpoint,
+          phase: 'recover',
+          evidence: {
+            ...goal.evidence,
+            completionBlocked: true,
+          },
+          updatedAt: this.now(),
+        });
+        this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+        this.setStatus(
+          'recover',
+          effectiveResult.code || 'tree_terrain_settlement_unverified',
+          'The tree transaction remains incomplete until surface recovery verifies a usable nearby terrain stance.',
+          true,
+        );
+        return;
+      }
       this.persist({
         ...goal,
         checkpoint,
@@ -2341,6 +2855,9 @@ export class GoalDirector {
       this.persist({
         ...goal,
         checkpoint,
+        memory: surfaceRecoveryProgress
+          ? { ...goal.memory, surfaceRecoveryFailure: null }
+          : goal.memory,
         // A successful relocation changes the search area, not the goal's
         // material state. Preserve the failure budget until acquisition or
         // delivery makes verified progress, otherwise recovery can loop forever.
@@ -2369,32 +2886,132 @@ export class GoalDirector {
     const preemptionRecovery = isPreemption(effectiveResult);
     const miningReturnFailure = kind === 'recover'
       && actingSubgoal?.commandName === '!traverseMiningRouteCell';
+    const miningReturnRejoin = miningReturnFailure
+      ? miningRouteRejoinDecision({ ...goal, checkpoint }, this.agent.bot)
+      : null;
     const surfaceRecoveryFailure = kind === 'recover'
       && actingSubgoal?.commandName === '!goToSurface'
       && needsSurfaceRecovery(goal, this.agent.bot);
-    const dynamicDeliveryReturnFailure = miningReturnFailure
-      && goal.kind === 'deliver'
+    const surfaceFailureSkill = surfaceRecoveryFailure
+      ? actionResultEvidence(effectiveResult)
+      : null;
+    const observedSurfaceFailureCell = surfaceFailureSkill?.observed
       && [
-        'skill_return_route_support_changed',
-        'skill_return_route_support_repair_failed',
-        'skill_return_route_changed',
-        'skill_return_route_liquid_risk',
-        'skill_return_route_settlement_changed',
-        'skill_route_step_not_reached',
-      ].includes(effectiveResult.code);
-    const relocationFailure = kind === 'recover';
+        surfaceFailureSkill.observed.x,
+        surfaceFailureSkill.observed.y,
+        surfaceFailureSkill.observed.z,
+      ].every(Number.isFinite)
+      ? {
+          x: Math.floor(surfaceFailureSkill.observed.x),
+          y: Math.floor(surfaceFailureSkill.observed.y),
+          z: Math.floor(surfaceFailureSkill.observed.z),
+        }
+      : null;
+    const previousSurfaceFailure = goal.memory?.surfaceRecoveryFailure || null;
+    const repeatedUnchangedSurfaceFailure = Boolean(
+      surfaceRecoveryFailure
+      && previousSurfaceFailure
+      && previousSurfaceFailure.code === (effectiveResult.code || 'surface_recovery_leg_failed')
+      && previousSurfaceFailure.detail === (effectiveResult.detail || '')
+      && previousSurfaceFailure.cell
+      && observedSurfaceFailureCell
+      && previousSurfaceFailure.cell.x === observedSurfaceFailureCell.x
+      && previousSurfaceFailure.cell.y === observedSurfaceFailureCell.y
+      && previousSurfaceFailure.cell.z === observedSurfaceFailureCell.z
+    );
+    const miningReturnFailureOutcome = skill?.failureOutcome || skill?.outcome || '';
+    const invalidMiningReturnFailure = miningReturnFailure
+      && (
+        INVALID_MINING_RETURN_CODES.has(effectiveResult.code)
+        || INVALID_MINING_RETURN_OUTCOMES.has(miningReturnFailureOutcome)
+      );
+    const deathRecoveryFailure = kind === 'recover'
+      && actingSubgoal?.commandName === '!recoverDeathItems';
+    const deathRecoveryProgress = Boolean(
+      deathRecoveryFailure
+      && skill?.kind === 'death_recovery'
+      && skill?.outcome === 'items_partially_recovered'
+      && Number.isFinite(Number(skill.recovered))
+      && Number(skill.recovered) > Number(goal.memory?.deathRecovery?.recovered || 0)
+    );
+    const relocationFailure = kind === 'recover' && !deathRecoveryFailure;
     // Being outranked is not an attempt at the goal. Charging one meant a few
     // fights on the way to the iron drained the same budget a genuinely
     // unreachable target does, and the goal gave up on work that was fine.
-    const deathFailure = [
-      'goal_owner_died',
-      'death_recovery_persistence_failed',
-    ].includes(effectiveResult.code);
-    const attempts = deathFailure
+    const deathFailure = effectiveResult.code === 'death_recovery_persistence_failed';
+    const targetScopedPlanFailure = kind === 'plan'
+      && this.activeGoal?.subgoals?.at(-1)?.failureScope === 'target';
+    if (deathRecoveryProgress) {
+      const recovered = Math.max(0, Math.floor(Number(skill.recovered) || 0));
+      const missing = Math.max(0, Math.floor(Number(skill.missing) || 0));
+      this.persist({
+        ...goal,
+        checkpoint,
+        memory: {
+          ...goal.memory,
+          deathRecovery: {
+            ...goal.memory?.deathRecovery,
+            recovered,
+            missing,
+          },
+        },
+        // A strictly larger cumulative manifest is real progress on the
+        // pending death obligation. Preserve the productive Goal attempt; an
+        // unchanged later recovery result still spends the bounded budget.
+        attempts: goal.attempts,
+        phase: 'recover',
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+      this.setStatus(
+        'recover',
+        'death_recovery_progress',
+        `Recovered ${recovered} recorded item${recovered === 1 ? '' : 's'}; ${missing} remain on the bound death manifest.`,
+        true,
+      );
+      return;
+    }
+    const attempts = deathFailure || deathRecoveryFailure
       ? goal.attempts + 1
-      : (preemptionRecovery || relocationFailure || prerequisiteBlocked || capacityBlocked)
+      : (
+          preemptionRecovery
+          || relocationFailure
+          || prerequisiteBlocked
+          || capacityBlocked
+          || targetScopedPlanFailure
+        )
         ? goal.attempts
         : goal.attempts + 1;
+    if (deathRecoveryFailure) {
+      this.persist({
+        ...goal,
+        checkpoint,
+        attempts,
+        phase: attempts < goal.maxAttempts && effectiveResult.retryable === true
+          ? 'recover'
+          : goal.phase,
+        updatedAt: this.now(),
+      });
+      if (attempts < goal.maxAttempts && effectiveResult.retryable === true) {
+        this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
+        this.setStatus(
+          'recover',
+          effectiveResult.code || 'death_recovery_failed',
+          effectiveResult.detail || 'The recorded death inventory was not recovered; retrying within the bounded Goal budget.',
+          true,
+        );
+        return;
+      }
+      const exhausted = attempts >= goal.maxAttempts;
+      this.fail(
+        exhausted ? 'goal_attempts_exhausted' : effectiveResult.code || 'death_recovery_failed',
+        exhausted
+          ? `${effectiveResult.detail || 'The recorded death inventory was not recovered.'} The goal exhausted its ${goal.maxAttempts} bounded attempts.`
+          : effectiveResult.detail || 'The recorded death inventory could not be recovered.',
+        { retryable: false },
+      );
+      return;
+    }
     if (capacityBlocked) {
       // The collection primitive has already exhausted its bounded safe release
       // policy. Inventory capacity is a physical precondition, not a failed ore
@@ -2465,11 +3082,58 @@ export class GoalDirector {
       );
       return;
     }
-    if (dynamicDeliveryReturnFailure) {
+    if (
+      miningReturnFailure
+      && !invalidMiningReturnFailure
+      && ['ready', 'occupied'].includes(miningReturnRejoin?.state)
+    ) {
+      const rejoinCheckpoint = miningReturnRejoin.state === 'occupied'
+        ? {
+            ...checkpoint,
+            miningReturnIndex: miningReturnRejoin.index,
+          }
+        : checkpoint;
+      const detail = miningReturnRejoin.state === 'occupied'
+        ? `The interrupted return settled on preserved route cell ${miningReturnRejoin.index + 1}; continuing from that verified cursor instead of replaying the failed segment.`
+        : `The interrupted return displaced the body from its retained spine; scheduling another bounded route rejoin before continuing the same expedition.`;
+      const continuationPhase = miningReturnRejoin.state === 'occupied'
+        ? 'assess'
+        : 'recover';
+      this.persist({
+        ...goal,
+        checkpoint: rejoinCheckpoint,
+        attempts,
+        phase: continuationPhase,
+        evidence: {
+          actionId: effectiveResult.actionId || '',
+          phase: continuationPhase,
+          code: miningReturnRejoin.state === 'occupied'
+            ? 'mining_route_rebound'
+            : 'mining_route_rejoin_required',
+          detail,
+          verified: miningReturnRejoin.state === 'occupied',
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus(
+        miningReturnRejoin.state === 'occupied' ? 'planning' : 'recover',
+        miningReturnRejoin.state === 'occupied'
+          ? 'mining_route_rebound'
+          : 'mining_route_rejoin_required',
+        detail,
+        true,
+      );
+      return;
+    }
+    if (invalidMiningReturnFailure) {
       // The exact mined corridor is evidence, not a prison. Once its live
       // geometry changes and the cell-level repair cannot restore it, discard
-      // only that stale route. The still-active delivery then returns to the
-      // broader player-bound Pathfinder action from the body's current stance.
+      // only that stale route. Delivery returns to its player-bound action;
+      // productive work underground hands to live surface recovery before the
+      // same Goal is reassessed. Neither path replays the invalid cell or
+      // spends a productive attempt.
       const rerouteCheckpoint = {
         ...checkpoint,
         miningReturnRoute: [],
@@ -2481,27 +3145,46 @@ export class GoalDirector {
           at: this.now(),
         },
       };
+      const rerouteEvidence = {
+        actionId: effectiveResult.actionId || '',
+        phase: 'assess',
+        code: goal.kind === 'deliver'
+          ? 'mining_return_dynamic_reroute'
+          : 'mining_return_route_invalidated',
+        detail: effectiveResult.detail
+          || 'The preserved mining route changed; continuing the same Goal from live position.',
+        verified: false,
+        at: this.now(),
+      };
+      const continuationPhase = goal.kind === 'deliver'
+        ? 'deliver'
+        : needsSurfaceRecovery({
+            ...goal,
+            checkpoint: rerouteCheckpoint,
+            evidence: rerouteEvidence,
+          }, this.agent.bot)
+          ? 'recover'
+          : 'assess';
       this.persist({
         ...goal,
         checkpoint: rerouteCheckpoint,
         attempts,
-        phase: 'deliver',
+        phase: continuationPhase,
         evidence: {
-          actionId: effectiveResult.actionId || '',
-          phase: 'deliver',
-          code: 'mining_return_dynamic_reroute',
-          detail: effectiveResult.detail
-            || 'The preserved mining route changed; continuing the player-bound delivery from live position.',
-          verified: false,
-          at: this.now(),
+          ...rerouteEvidence,
+          phase: continuationPhase,
         },
         updatedAt: this.now(),
       });
       this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
       this.setStatus(
-        'deliver',
-        'mining_return_dynamic_reroute',
-        'The exact return cell changed; continuing the same delivery through a fresh live route.',
+        continuationPhase,
+        rerouteEvidence.code,
+        goal.kind === 'deliver'
+          ? 'The exact return cell changed; continuing the same delivery through a fresh live route.'
+          : continuationPhase === 'recover'
+            ? 'The exact return cell changed underground; handing the same Goal to live surface recovery.'
+            : 'The exact return cell changed; reassessing the same Goal from live state.',
         true,
       );
       return;
@@ -2524,6 +3207,25 @@ export class GoalDirector {
       return;
     }
     if (surfaceRecoveryFailure) {
+      if (repeatedUnchangedSurfaceFailure) {
+        // A second identical settlement from the same physical cell is not a
+        // new surface leg. End the method instead of manufacturing an infinite
+        // retry budget around one unchanged corridor failure.
+        const detail = effectiveResult.detail
+          || 'The same surface-recovery method failed twice from the same occupied cell without physical progress.';
+        this.persist({
+          ...goal,
+          checkpoint,
+          attempts,
+          updatedAt: this.now(),
+        });
+        this.recordTerminalBoundary('surface_recovery_method_exhausted', {
+          code: 'surface_recovery_method_exhausted',
+          detail,
+        });
+        this.fail('surface_recovery_method_exhausted', detail, { retryable: false });
+        return;
+      }
       // Surface escape is a multi-leg body objective. A retryable leg can end
       // after settling or changing corridor geometry without gaining height.
       // Returning to delivery here drives the body into the same blocked edge.
@@ -2532,6 +3234,15 @@ export class GoalDirector {
         checkpoint,
         attempts,
         phase: 'recover',
+        memory: {
+          ...goal.memory,
+          surfaceRecoveryFailure: {
+            code: effectiveResult.code || 'surface_recovery_leg_failed',
+            detail: effectiveResult.detail || '',
+            cell: observedSurfaceFailureCell,
+            at: this.now(),
+          },
+        },
         updatedAt: this.now(),
       });
       this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
@@ -2948,8 +3659,174 @@ export class GoalDirector {
     }
     if (this.now() < this.nextAttemptAt) return;
 
+    const pendingDeathRecordedAt = Number(this.activeGoal.memory?.deathRecovery?.recordedAt);
+    const pendingDeathRecovery = hasPendingDeathItems(
+      this.agent.memory_bank,
+      pendingDeathRecordedAt,
+    );
+    if (
+      pendingDeathRecovery
+      && (
+        this.activeGoal.phase !== 'recover'
+        || this.activeGoal.evidence?.code !== 'goal_owner_died'
+      )
+    ) {
+      this.persist({
+        ...this.activeGoal,
+        phase: 'recover',
+        evidence: {
+          actionId: '',
+          phase: 'recover',
+          code: 'goal_owner_died',
+          detail: `The persisted death inventory ${pendingDeathRecordedAt} is still pending; recover it before replanning the active goal.`,
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+    }
+    const miningRegionRecovery = pendingMiningRegionRecovery(this.activeGoal);
+    if (miningRegionRecovery?.state === 'failed') {
+      this.fail(
+        'mining_region_relocation_failed',
+        miningRegionRecovery.failure.detail
+          || 'The bounded region relocation could not establish a different safe mining region.',
+        { retryable: false },
+      );
+      return;
+    }
+    if (miningRegionRecovery?.state === 'surface_failed') {
+      this.fail(
+        'mining_region_surface_staging_failed',
+        miningRegionRecovery.failure.detail
+          || 'The companion could not establish a usable surface stance before changing mining region.',
+        { retryable: false },
+      );
+      return;
+    }
+    if (miningRegionRecovery?.state === 'exhausted') {
+      this.fail(
+        'mining_region_attempts_exhausted',
+        `The local mining corridor was unsafe and the goal exhausted its ${this.activeGoal.maxAttempts} bounded productive attempts.`,
+        { retryable: false },
+      );
+      return;
+    }
+    // A recorded death owns the next body action. Route geometry belongs to
+    // the pre-death body and must not overwrite the persisted recovery before
+    // the dropped inventory has been reconciled at its exact death identity.
+    const routeRejoin = pendingDeathRecovery
+      ? null
+      : miningRouteRejoinDecision(this.activeGoal, this.agent.bot);
+    if (
+      routeRejoin?.state === 'occupied'
+      && (
+        goalOutputReadyForHandoff(this.agent.bot, this.activeGoal)
+        || miningRegionRecovery?.state === 'pending'
+      )
+    ) {
+      const { index, distance } = routeRejoin;
+      const detail = `The body already occupies preserved mining route cell ${index + 1}; rewinding the return cursor to that verified cell before continuing the expedition.`;
+      this.persist({
+        ...this.activeGoal,
+        phase: 'assess',
+        checkpoint: {
+          ...this.activeGoal.checkpoint,
+          miningReturnIndex: index,
+        },
+        evidence: {
+          actionId: '',
+          phase: 'assess',
+          code: 'mining_route_rebound',
+          detail,
+          verified: distance === 0,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus('planning', 'mining_route_rebound', detail, true);
+      return;
+    }
+    if (routeRejoin?.state === 'dimension_changed') {
+      this.fail(
+        'mining_route_rejoin_dimension_changed',
+        `The preserved mining spine is in ${routeRejoin.routeDimension}, but Kevin is in ${routeRejoin.currentDimension}; refusing a cross-dimension rejoin guess.`,
+      );
+      return;
+    }
+    if (['out_of_range', 'exhausted'].includes(routeRejoin?.state)) {
+      this.persist({
+        ...this.activeGoal,
+        phase: 'assess',
+        checkpoint: {
+          ...this.activeGoal.checkpoint,
+          miningReturnRoute: [],
+          miningReturnIndex: -1,
+          miningReturnDimension: null,
+        },
+        evidence: {
+          actionId: '',
+          phase: 'assess',
+          code: routeRejoin.state === 'out_of_range'
+            ? 'mining_route_rejoin_out_of_range'
+            : 'mining_route_rejoin_exhausted',
+          detail: routeRejoin.state === 'out_of_range'
+            ? `The body is ${Math.round(routeRejoin.distance * 10) / 10} blocks from the nearest preserved route cell, outside the bounded ${MINING_ROUTE_REJOIN_MAX_DISTANCE}-block rejoin range; releasing that disconnected spine before surface recovery.`
+            : 'Every separated native route-rejoin target failed; releasing the disconnected spine before surface recovery.',
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.nextAttemptAt = this.now() + PREEMPTION_RESUME_MS;
+      this.setStatus(
+        'planning',
+        this.activeGoal.evidence.code,
+        this.activeGoal.evidence.detail,
+        true,
+      );
+      return;
+    }
+    if (routeRejoin?.state === 'ready') {
+      const { cell, index, distance } = routeRejoin;
+      const route = this.activeGoal.checkpoint?.miningReturnRoute || [];
+      const routeCursor = Number.isFinite(this.activeGoal.checkpoint?.miningReturnIndex)
+        ? Math.min(route.length - 1, Math.floor(this.activeGoal.checkpoint.miningReturnIndex))
+        : route.length - 1;
+      const routeIdentity = miningRouteIdentity(route, routeCursor);
+      this.persist({
+        ...this.activeGoal,
+        phase: 'recover',
+        evidence: {
+          actionId: '',
+          phase: 'recover',
+          code: 'mining_route_rejoin_pending',
+          detail: `Combat displaced the body ${Math.round(distance * 10) / 10} blocks from the retained spine; rebinding route cell ${index + 1} before continuing the same expedition.`,
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.dispatch(
+        'recover',
+        `!goToCoordinates(${cell.x}, ${cell.y}, ${cell.z}, 1)`,
+        {
+          learningKey: `mining-route-rejoin:${routeIdentity}:${index}`,
+          reason: `Rejoin preserved mining route cell ${index + 1} after bounded hostile displacement.`,
+        },
+      );
+      return;
+    }
+
     const returnStep = pendingMiningReturn(this.activeGoal);
-    if (returnStep && goalOutputReadyForHandoff(this.agent.bot, this.activeGoal)) {
+    if (
+      returnStep
+      && (
+        goalOutputReadyForHandoff(this.agent.bot, this.activeGoal)
+        || miningRegionRecovery?.state === 'pending'
+      )
+    ) {
       const routeDimension = normalizedDimension(this.activeGoal.checkpoint.miningReturnDimension);
       const currentDimension = normalizedDimension(this.agent.bot?.game?.dimension);
       if (routeDimension && currentDimension && routeDimension !== currentDimension) {
@@ -2963,7 +3840,9 @@ export class GoalDirector {
         ...returnStep.cell,
         dimension: routeDimension || currentDimension,
       }, {
-        reason: 'Exit the exact verified mining route before releasing the completed player outcome.',
+        reason: miningRegionRecovery?.state === 'pending'
+          ? 'Return through the exact verified mining route before changing the failed mining region.'
+          : 'Exit the exact verified mining route before releasing the completed player outcome.',
       });
       this.persist({
         ...this.activeGoal,
@@ -2971,14 +3850,73 @@ export class GoalDirector {
         evidence: {
           actionId: '',
           phase: 'recover',
-          code: 'mining_return_pending',
-          detail: `Returning through preserved mining cell ${returnStep.index + 1} of ${this.activeGoal.checkpoint.miningReturnRoute.length}.`,
+          code: miningRegionRecovery?.state === 'pending'
+            ? 'mining_region_return_pending'
+            : 'mining_return_pending',
+          detail: miningRegionRecovery?.state === 'pending'
+            ? `The local depth corridor failed; returning through preserved mining cell ${returnStep.index + 1} of ${this.activeGoal.checkpoint.miningReturnRoute.length} before changing region.`
+            : `Returning through preserved mining cell ${returnStep.index + 1} of ${this.activeGoal.checkpoint.miningReturnRoute.length}.`,
           verified: false,
           at: this.now(),
         },
         updatedAt: this.now(),
       });
       this.dispatch('recover', route.command || null, route);
+      return;
+    }
+    if (miningRegionRecovery?.state === 'pending') {
+      const failedAt = Number(miningRegionRecovery.failure.finishedAt) || this.now();
+      let atUsableSurface = false;
+      try {
+        atUsableSurface = occupiesUsableSurfaceStance(this.agent.bot);
+      } catch {
+        atUsableSurface = false;
+      }
+      if (!atUsableSurface) {
+        this.persist({
+          ...this.activeGoal,
+          phase: 'recover',
+          evidence: {
+            actionId: '',
+            phase: 'recover',
+            code: 'mining_region_surface_pending',
+            detail: 'The failed mining corridor is unwound, but region relocation requires a verified usable surface stance first.',
+            verified: false,
+            at: this.now(),
+          },
+          updatedAt: this.now(),
+        });
+        this.dispatch(
+          'recover',
+          '!goToSurface',
+          {
+            learningKey: `mining-region-surface:${failedAt}`,
+            reason: 'Establish a verified usable surface stance before changing mining region.',
+          },
+        );
+        return;
+      }
+      this.persist({
+        ...this.activeGoal,
+        phase: 'recover',
+        evidence: {
+          actionId: '',
+          phase: 'recover',
+          code: 'mining_region_relocation_pending',
+          detail: 'The local mining region has been unwound; changing to a bounded different search region before retrying the same valid acquisition method.',
+          verified: false,
+          at: this.now(),
+        },
+        updatedAt: this.now(),
+      });
+      this.dispatch(
+        'recover',
+        `!moveAway(${ACQUISITION_REGION_RELOCATION_DISTANCE}, true)`,
+        {
+          learningKey: `mining-region-relocation:${failedAt}`,
+          reason: 'Change physical mining region after a region-scoped depth-corridor failure.',
+        },
+      );
       return;
     }
 
@@ -3125,10 +4063,15 @@ export class GoalDirector {
           this.dispatch('recover', command);
           return;
         }
-        if (/^(?:action_)?interrupted$/.test(String(goal.evidence?.code || ''))) {
+        if (/^(?:(?:action_)?interrupted|safety_suspended)$/.test(String(goal.evidence?.code || ''))) {
           this.persist({ ...goal, phase: 'assess', updatedAt: this.now() });
           this.nextAttemptAt = this.now() + RETRY_DELAY_MS;
-          this.setStatus('waiting', 'preemption_cleared', 'Deterministic goal will resume after the higher-priority action releases ownership.', true);
+          this.setStatus(
+            'waiting',
+            'preemption_cleared',
+            'Deterministic goal recovery will be reassessed from live state after the higher-priority action releases ownership.',
+            true,
+          );
           return;
         }
         if (/delivery_player_(?:absent|ambiguous)|skill_(?:lost_target|missing_item|family_missing|pickup_unverified)|delivery_unverified/.test(String(goal.evidence?.code || ''))) {
@@ -3309,6 +4252,16 @@ export class GoalDirector {
             );
             return;
           }
+          if (repeatsRejectedDepthCapability(goal, plan.nextStep)) {
+            const detail = 'The unchanged mining-depth capability already rejected this body position without physical progress; an ore alias does not authorize the same geometry again.';
+            this.recordTerminalBoundary('causal_plan_blocked', {
+              code: 'mining_depth_method_exhausted',
+              detail,
+              plan,
+            });
+            this.fail('mining_depth_method_exhausted', detail);
+            return;
+          }
           this.setStatus(
             'planning',
             plan.code || 'causal_plan_ready',
@@ -3360,6 +4313,93 @@ export class GoalDirector {
               true,
             );
             return;
+          }
+          if (capabilityRequiresSurface(plan.nextStep)) {
+            const route = goal.checkpoint?.miningReturnRoute || [];
+            const atUsableSurface = occupiesUsableSurfaceStance(this.agent.bot);
+            if (atUsableSurface && route.length > 0) {
+              // Current Minecraft state outranks historical locomotion. A
+              // surface-bound prerequisite that is already standing on proven
+              // usable terrain must not walk backward into an old mine merely
+              // because the earlier acquisition retained an exit route.
+              this.persist({
+                ...goal,
+                checkpoint: {
+                  ...goal.checkpoint,
+                  miningReturnRoute: [],
+                  miningReturnIndex: -1,
+                  miningReturnDimension: null,
+                },
+                evidence: {
+                  actionId: '',
+                  phase: 'assess',
+                  code: 'mining_return_superseded_by_surface_state',
+                  detail: `Current Minecraft state already proves a usable surface stance; releasing the obsolete mining return before ${plan.nextStep.capability.id}.`,
+                  verified: true,
+                  at: this.now(),
+                },
+                updatedAt: this.now(),
+              });
+            }
+            const returnStep = atUsableSurface ? null : pendingMiningReturn(goal);
+            if (returnStep) {
+              const routeDimension = normalizedDimension(goal.checkpoint.miningReturnDimension);
+              const currentDimension = normalizedDimension(this.agent.bot?.game?.dimension);
+              if (routeDimension && currentDimension && routeDimension !== currentDimension) {
+                this.fail(
+                  'mining_return_dimension_changed',
+                  `The preserved mining route is in ${routeDimension}, but the bot is now in ${currentDimension}; refusing to guess a cross-dimension surface transition.`,
+                );
+                return;
+              }
+              const traversal = createCapabilityRequest('traverse_mining_route_cell', {
+                ...returnStep.cell,
+                dimension: routeDimension || currentDimension,
+              }, {
+                reason: 'Exit the verified mining corridor before dispatching a surface-bound prerequisite.',
+              });
+              this.persist({
+                ...goal,
+                phase: 'recover',
+                evidence: {
+                  actionId: '',
+                  phase: 'recover',
+                  code: 'mining_surface_prerequisite_return',
+                  detail: `Returning through mining cell ${returnStep.index + 1} of ${route.length} before ${plan.nextStep.capability.id}.`,
+                  verified: false,
+                  at: this.now(),
+                },
+                updatedAt: this.now(),
+              });
+              this.dispatch('recover', traversal.command || null, traversal);
+              return;
+            }
+            if (
+              !atUsableSurface
+              &&
+              route.length > 0
+              && !surfaceAccessConfirmedAfterMiningReturn(goal)
+              && goal.memory?.accessRequirement?.kind !== 'surface'
+            ) {
+              this.persist({
+                ...goal,
+                phase: 'assess',
+                memory: {
+                  ...goal.memory,
+                  accessRequirement: { kind: 'surface' },
+                },
+                evidence: {
+                  actionId: '',
+                  phase: 'assess',
+                  code: 'surface_access_required_after_mining_return',
+                  detail: `The preserved mining route is exhausted; establishing a supported surface stance before ${plan.nextStep.capability.id}.`,
+                  verified: false,
+                  at: this.now(),
+                },
+                updatedAt: this.now(),
+              });
+              continue;
+            }
           }
           this.dispatch('plan', null, plan.nextStep);
           return;

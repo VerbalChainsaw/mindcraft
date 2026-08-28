@@ -27,11 +27,20 @@ export const queryList = [
                 .slice(0, 12)
                 .join(', ') || 'empty';
             const action = agent.isIdle() ? 'idle' : agent.actions.currentActionLabel;
+            const goal = agent.goal_director?.snapshot?.() || null;
+            const selfPromptState = agent.self_prompter?.isStopped?.()
+                ? 'stopped'
+                : agent.self_prompter?.isPaused?.()
+                    ? 'paused'
+                    : agent.self_prompter?.isActive?.()
+                        ? 'active'
+                        : 'unknown';
             return pad(
                 `STATUS\n- Position: ${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`
                 + `\n- Health/Hunger: ${Math.round(bot.health)}/20, ${Math.round(bot.food)}/20`
                 + `\n- Action: ${action || 'idle'}`
                 + `\n- Operator stop: ${agent.isOperatorHeld?.() ? 'active' : 'inactive'}`
+                + `\n- Goal runtime: ${goal?.goal ? `${goal.goal.phase}/${goal.code}; in-flight=${goal.inFlight}` : 'none'}; self-prompt=${selfPromptState}`
                 + `\n- Inventory: ${carried}`,
             );
         }

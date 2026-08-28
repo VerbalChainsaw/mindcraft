@@ -985,6 +985,13 @@ test('a disengaged incident keeps its same-hostile recovery action from combat r
   incident.stage = 'disengaged';
   agent.actions.currentActionOwner = 'player';
   assert.equal(selfDefenseRecoveryOwnsSameThreat(agent, { id: 2055 }), false);
+
+  agent.survival_director.ownsSafetyRecoveryForThreat = threat => threat.id === 2056;
+  assert.equal(
+    selfDefenseRecoveryOwnsSameThreat(agent, { id: 2056 }),
+    true,
+    'the shared supervisor can escalate a different attacker before another reflex starts',
+  );
 });
 
 function createChildFactory(children) {
@@ -1557,6 +1564,16 @@ test('Given a legacy profile without runtime behavior, when default-goal seeding
     ),
     false,
   );
+
+  assert.equal(
+    shouldSeedLegacyDefaultGoal(
+      { name: 'andy' },
+      { role: 'companion', autonomy: 'balanced' },
+      { default_goal: 'Gather and explore.' },
+      { hasTypedGoal: true },
+    ),
+    false,
+  );
 });
 
 test('Given autonomy output containing think tags, when the autonomy generator strips them, then the command survives without throwing', async () => {
@@ -2014,25 +2031,25 @@ test('explicit held-work resume preserves the paused Agenda', () => {
   assert.equal(releases, 1);
 });
 
-test('a failed construction compiler releases only its exact temporary Hold for queued continuation', () => {
-  const makeHarness = ({ holdGeneration = 7, currentGeneration = 7, unfinished = true } = {}) => {
+test('a failed construction compiler releases only its exact internal assignment block', () => {
+  const makeHarness = ({ blockGeneration = 7, currentGeneration = 7, unfinished = true } = {}) => {
     let releases = 0;
     const harness = {
-      operator_hold: true,
-      operator_hold_generation: currentGeneration,
-      isCurrentOperatorHold(generation) {
-        return this.operator_hold && this.operator_hold_generation === generation;
+      operator_hold: false,
+      internal_control_block: { generation: currentGeneration },
+      isCurrentInternalControlBlock(generation) {
+        return this.internal_control_block?.generation === generation;
       },
-      releaseOperatorHold() {
+      releaseInternalControlBlock() {
         releases += 1;
-        this.operator_hold = false;
+        this.internal_control_block = null;
         return true;
       },
       agenda_director: { hasUnfinished: () => unfinished },
     };
-    const released = Agent.prototype.releaseFailedConstructionCompilationHold.call(
+    const released = Agent.prototype.releaseFailedConstructionCompilationBlock.call(
       harness,
-      { kind: 'construction', holdGeneration },
+      { kind: 'construction', controlBlockGeneration: blockGeneration },
       { settled: true, state: 'failed', retryable: false },
     );
     return { harness, released, releases };
@@ -2041,16 +2058,16 @@ test('a failed construction compiler releases only its exact temporary Hold for 
   const exact = makeHarness();
   assert.equal(exact.released, true);
   assert.equal(exact.releases, 1);
-  assert.equal(exact.harness.operator_hold, false);
+  assert.equal(exact.harness.internal_control_block, null);
 
-  const newerStop = makeHarness({ currentGeneration: 8 });
-  assert.equal(newerStop.released, false);
-  assert.equal(newerStop.releases, 0, 'a newer player Stop must remain authoritative');
-  assert.equal(newerStop.harness.operator_hold, true);
+  const newerBlock = makeHarness({ currentGeneration: 8 });
+  assert.equal(newerBlock.released, false);
+  assert.equal(newerBlock.releases, 0, 'a newer internal block must remain authoritative');
+  assert.equal(newerBlock.harness.internal_control_block.generation, 8);
 
   const noContinuation = makeHarness({ unfinished: false });
   assert.equal(noContinuation.released, false);
-  assert.equal(noContinuation.releases, 0, 'without later work the failed compiler stays safely held');
+  assert.equal(noContinuation.releases, 0, 'the caller owns terminal cleanup when no continuation exists');
 });
 
 test('a held construction request keeps physical Stop until a valid work order exists', async () => {

@@ -75,6 +75,65 @@ test('executeCommand creates unique immutable request contexts after command val
   assert.equal(Object.isFrozen(contexts[0].args), true);
 });
 
+test('autonomous dialogue cannot invoke operator process controls while explicit player stop remains available', async () => {
+  const calls = [];
+  const agent = {
+    holdPosition(reason, options) {
+      calls.push({ type: 'hold', reason, options });
+      return 7;
+    },
+    isCurrentOperatorHold(generation) {
+      calls.push({ type: 'hold-check', generation });
+      return true;
+    },
+    clearBotLogs() {
+      calls.push({ type: 'clear-logs' });
+    },
+    actions: {
+      runWithOwner(owner, operation) {
+        calls.push({ type: 'owner', owner });
+        return operation();
+      },
+      runWithRequestContext(context, operation) {
+        calls.push({ type: 'request', context });
+        return operation();
+      },
+      async stop(options) {
+        calls.push({ type: 'stop', options });
+        return { stopped: true, superseded: false };
+      },
+      cancelResume() {
+        calls.push({ type: 'cancel-resume' });
+      },
+    },
+  };
+
+  for (const command of ['!stop', '!restart', '!leaveGame("done")', '!spawnBots("Helper", 1)']) {
+    const execution = await executeCommand(agent, command, {
+      owner: 'autonomy',
+      routeOrigin: 'model-selected',
+      returnExecution: true,
+    });
+    assert.match(execution.value, /^Blocked \(operator_authority_required\):/);
+    assert.equal(execution.requestContext.routeOrigin, 'model-selected');
+  }
+  assert.deepEqual(calls, []);
+
+  const explicitStop = await executeCommand(agent, '!stop', {
+    owner: 'player',
+    routeOrigin: 'explicit-command',
+  });
+  assert.equal(explicitStop, 'Agent stopped. It will remain held until you give a new command or goal.');
+  assert.deepEqual(calls.map(call => call.type), [
+    'owner',
+    'request',
+    'hold',
+    'stop',
+    'clear-logs',
+    'cancel-resume',
+  ]);
+});
+
 test('an internal bounded player approach cannot erase a standing directive, while a player approach can', async () => {
   const mutations = [];
   const bot = new EventEmitter();

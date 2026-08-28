@@ -545,6 +545,14 @@ export function getSurvivalDirectorState(agent) {
                     username: String(rawIncident.source.username || '').slice(0, 32) || null,
                 }
                 : null,
+            sources: Array.isArray(rawIncident.sources)
+                ? rawIncident.sources.slice(-8).map(source => ({
+                    kind: String(source?.kind || 'unknown').slice(0, 32),
+                    id: Number.isFinite(source?.id) ? source.id : null,
+                    name: String(source?.name || '').slice(0, 64) || null,
+                    username: String(source?.username || '').slice(0, 32) || null,
+                }))
+                : [],
             lastAction: rawIncident.lastAction && typeof rawIncident.lastAction === 'object'
                 ? {
                     actionId: String(rawIncident.lastAction.actionId || '').slice(0, 80) || null,
@@ -559,6 +567,22 @@ export function getSurvivalDirectorState(agent) {
             resolvedAt: Number.isFinite(rawIncident.resolvedAt) ? rawIncident.resolvedAt : null,
         }
         : null;
+    const rawGuard = status.containedThreatGuard && typeof status.containedThreatGuard === 'object'
+      && !Array.isArray(status.containedThreatGuard)
+        ? status.containedThreatGuard
+        : null;
+    const containedThreatGuard = rawGuard
+        ? {
+            incidentId: String(rawGuard.incidentId || '').slice(0, 96) || null,
+            containedAt: Number.isFinite(rawGuard.containedAt) ? rawGuard.containedAt : null,
+            sourceIds: Array.isArray(rawGuard.sources)
+                ? rawGuard.sources
+                    .map(source => Number.isFinite(source?.id) ? source.id : null)
+                    .filter(id => id !== null)
+                    .slice(-8)
+                : [],
+        }
+        : null;
     return {
         name: String(status.name || 'survival').slice(0, 40),
         phase: String(status.phase || 'unknown').slice(0, 24),
@@ -569,6 +593,7 @@ export function getSurvivalDirectorState(agent) {
         nextEligibleAt: Number.isFinite(status.nextEligibleAt) ? status.nextEligibleAt : null,
         decision,
         safetyIncident,
+        containedThreatGuard,
     };
 }
 

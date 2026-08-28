@@ -144,6 +144,12 @@ export const AGENDA_KINDS = Object.freeze({
   // One owned livestock action keeps attraction, gate state, breeding, and
   // final enclosure verification inside the same cancellation lease.
   settle_livestock: Object.freeze({ executor: 'direct', needsTarget: true, needsQuantity: true, needsPoint: true, needsPen: true }),
+  // Portal construction and the dimension round trip are separate Activities:
+  // the first publishes a verified world fixture and the second consumes it.
+  // Persist typed parameters rather than a command string so a restart cannot
+  // replace the portal operation or change the promised quartz quantity.
+  portal_build: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false, needsRadius: true }),
+  nether_round_trip: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: true }),
   sleep: Object.freeze({ executor: 'direct', needsTarget: false, needsQuantity: false }),
   // Coordinates are validated numbers, never text, so a patrol step cannot
   // smuggle anything executable through the store.
@@ -230,6 +236,21 @@ function normalizeAcquisitionCheckpoint(raw, {
     targetInventory,
     ...normalizeMiningReturnCheckpoint(raw),
   });
+}
+
+function normalizeGoalContinuationCheckpoint(raw, { kind } = {}) {
+  if (raw == null) return null;
+  if (kind !== 'inventory_checklist') {
+    throw new TypeError('A goal continuation checkpoint is only valid for an inventory checklist.');
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('A goal continuation checkpoint must be an object.');
+  }
+  const checkpoint = normalizeMiningReturnCheckpoint(raw);
+  if (!checkpoint.miningReturnRoute?.length) {
+    throw new TypeError('A goal continuation checkpoint requires a mining return route.');
+  }
+  return checkpoint;
 }
 
 function normalizeBindingRequest(raw) {
@@ -715,6 +736,10 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
     quantity,
     quantityMode,
   });
+  const goalContinuationCheckpoint = normalizeGoalContinuationCheckpoint(
+    raw.goalContinuationCheckpoint,
+    { kind },
+  );
   const rawWorkstation = ['craft', 'smelt', 'prepare_food', 'cook_fish'].includes(kind)
     ? raw.workstationConstraint
     : null;
@@ -926,6 +951,7 @@ export function normalizeAgendaEntry(raw, { now = Date.now, sequence = null, kno
     } : {}),
     ...(kind === 'acquire' ? { quantityMode } : {}),
     ...(acquisitionCheckpoint ? { acquisitionCheckpoint } : {}),
+    ...(goalContinuationCheckpoint ? { goalContinuationCheckpoint } : {}),
     ...(baselineInventory ? { baselineInventory } : {}),
     ...(baselineOutputInventory ? { baselineOutputInventory } : {}),
     ...(kind === 'prepare_food'
@@ -1036,6 +1062,8 @@ export function describeAgendaEntry(entry) {
       : `explore and light a cave, collect ${entry.quantity} ${readable}, return, and store the result`;
     case 'scout': return `scout for ${entry.findings.join(' and ')}, remember the verified locations, return, and guide ${entry.requester} to ${entry.guideFinding || entry.findings[0]}`;
     case 'settle_livestock': return `bring ${entry.quantity} ${readable} to the selected pen, breed ${entry.breedingPairs} pair, and close the gate`;
+    case 'portal_build': return 'construct and ignite the expedition portal';
+    case 'nether_round_trip': return `enter the Nether, secure ${entry.quantity} new quartz, and return alive to the Overworld`;
     case 'craft': return `craft ${entry.quantity} ${readable}`;
     case 'smelt': return `smelt ${entry.quantity} ${readable}`;
     case 'farm_visit': return 'go to the remembered farm';
@@ -1063,6 +1091,31 @@ export function describeAgendaEntry(entry) {
   }
 }
 
+function isExplicitlyResumableStaleFailedChain(entries) {
+  if (!Array.isArray(entries) || entries.length < 1) return false;
+  const ids = new Set();
+  for (const entry of entries) {
+    const id = String(entry?.id || '');
+    if (!id || ids.has(id)) return false;
+    ids.add(id);
+  }
+  const rootIndex = entries.findIndex(entry => entry?.state === 'failed');
+  if (rootIndex < 0 || entries.some(entry => entry?.state === 'active')) return false;
+
+  const resumableIds = new Set([String(entries[rootIndex].id)]);
+  for (const entry of entries.slice(rootIndex + 1)) {
+    const dependency = String(entry?.dependsOnEntryId || '');
+    if (!dependency || !resumableIds.has(dependency)) continue;
+    if (!['pending', 'failed'].includes(String(entry?.state || ''))) return false;
+    resumableIds.add(String(entry.id));
+  }
+  return entries.every((entry, index) => {
+    if (index < rootIndex) return isTerminalAgendaState(entry?.state);
+    if (resumableIds.has(String(entry?.id || ''))) return true;
+    return isTerminalAgendaState(entry?.state);
+  });
+}
+
 export class AgendaStore {
   constructor(agentName, { root = './bots' } = {}) {
     if (!SAFE_AGENT_NAME.test(String(agentName || ''))) {
@@ -1071,11 +1124,15 @@ export class AgendaStore {
     this.directory = path.resolve(root, agentName);
     this.filePath = path.join(this.directory, 'agenda.json');
     this.lastError = null;
+    this.reconciledStaleActivity = false;
+    this.explicitStaleResume = false;
     mkdirSync(this.directory, { recursive: true });
   }
 
-  load() {
+  load({ freshExecutorIds = [], allowStaleFailedChain = false } = {}) {
     this.lastError = null;
+    this.reconciledStaleActivity = false;
+    this.explicitStaleResume = false;
     if (!existsSync(this.filePath)) return [];
     try {
       if (statSync(this.filePath).size > MAX_STORE_BYTES) {
@@ -1091,8 +1148,31 @@ export class AgendaStore {
       // agenda.json on 2026-08-16 still held a failed `goto` with an empty
       // target. See activity-freshness.js.
       if (document.entries.length > 0 && isStaleActivityState(document.savedAt)) {
-        this.lastError = staleActivityReason('agenda', document.savedAt);
-        return [];
+        const liveExecutorIds = new Set(
+          (Array.isArray(freshExecutorIds) ? freshExecutorIds : [])
+            .map(value => String(value || ''))
+            .filter(Boolean),
+        );
+        const correlatedActiveEntry = document.entries.some(entry => (
+          entry?.state === 'active'
+          && entry.executorId
+          && liveExecutorIds.has(String(entry.executorId))
+        ));
+        // Agenda and Goal/Job are independent atomic stores. A long active
+        // mechanic can advance its executor for more than the generic activity
+        // window without changing the queue itself. Restore an old queue only
+        // when a separately fresh active executor or terminal receipt has the
+        // exact active entry ID; this preserves stale-session rejection while
+        // allowing one real in-flight chain to survive a process restart and
+        // settle work that completed immediately before the process stopped.
+        const explicitFailedChainResume = allowStaleFailedChain === true
+          && isExplicitlyResumableStaleFailedChain(document.entries);
+        if (!correlatedActiveEntry && !explicitFailedChainResume) {
+          this.lastError = staleActivityReason('agenda', document.savedAt);
+          return [];
+        }
+        if (correlatedActiveEntry) this.reconciledStaleActivity = true;
+        if (explicitFailedChainResume) this.explicitStaleResume = true;
       }
       const restored = [];
       for (const raw of document.entries.slice(0, MAX_ENTRIES)) {

@@ -234,14 +234,13 @@ export class ReactionDirector {
         };
         return;
       }
-      const previousActionId = this.agent.last_action_result?.actionId || null;
-      await this.executeGesture(
+      const execution = await this.executeGesture(
         this.agent,
         `!lookAtPosition(${target.x}, ${target.y}, ${target.z})`,
-        { owner: 'background' },
+        { owner: 'background', returnExecution: true },
       );
-      const result = this.agent.last_action_result;
-      if (result?.actionId && result.actionId !== previousActionId && result.phase === 'succeeded') {
+      const result = execution?.result || null;
+      if (result?.actionId && result.phase === 'succeeded') {
         this.gestureTimes.push(this.now());
         this.status.gestures += 1;
       }

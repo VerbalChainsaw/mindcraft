@@ -396,6 +396,22 @@ export class CompanionContext {
     this.attention = null;
   }
 
+  currentControlCommitment(action = {}) {
+    const directive = String(this.directive || '').toLowerCase();
+    const username = String(this.canonicalUsername || '').trim().toLowerCase();
+    if (
+      !['follow', 'guard'].includes(directive)
+      || !username
+      || !Number.isFinite(this.directiveAuthorizedAt)
+    ) return null;
+    return {
+      owner: 'player_directive',
+      obligationId: `${directive}:${username}:${this.directiveAuthorizedAt}`,
+      phase: directive,
+      ownsCurrentAction: action.owner === 'player',
+    };
+  }
+
   snapshot() {
     const now = this.now();
     if (this.protection && now >= this.protection.expiresAt) this.clearProtection('expired');

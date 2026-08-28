@@ -80,6 +80,7 @@ const LANE_TICK_MS = Object.freeze({
   degraded: 500,
   idle: 500,
   operator_hold: 600,
+  internal_control: 300,
   stopped: 600,
   initializing: 300,
 });
@@ -252,6 +253,7 @@ export class BehaviorArbiter {
     monotonicNow = () => performance.now(),
     trace = null,
     heldNoHumanUnloadGraceMs = HELD_NO_HUMAN_UNLOAD_GRACE_MS,
+    commitmentProviders = [],
   } = {}) {
     this.agent = agent;
     this.now = now;
@@ -261,6 +263,14 @@ export class BehaviorArbiter {
     this.directiveResumeRequested = false;
     this.directiveResumeRequest = null;
     this.directiveMaterialChangeBlocker = null;
+    // Survival incidents transfer control of the body; they do not replace the
+    // player's durable obligation. The arbiter owns that transfer so Goal,
+    // Job, Mission, and standing-directive loops do not each invent their own
+    // attack/recovery protocol.
+    this.controlSuspension = null;
+    this.lastControlSuspension = null;
+    this.controlCommitmentProviders = [];
+    for (const provider of commitmentProviders) this.registerControlCommitmentProvider(provider);
     this.terminalHandoff = null;
     this.terminalHandoffGeneration = 0;
     this.tick = 0;
@@ -331,6 +341,7 @@ export class BehaviorArbiter {
     this.directiveResumeRequested = false;
     this.directiveResumeRequest = null;
     this.directiveMaterialChangeBlocker = null;
+    this.controlSuspension = null;
     this.terminalHandoff = null;
     this.comportmentPauseUntil = 0;
     this.wasActing = false;
@@ -618,6 +629,128 @@ export class BehaviorArbiter {
     };
   }
 
+  playerCommitment(action = this.actionState()) {
+    let fallback = null;
+    for (const provider of this.controlCommitmentProviders) {
+      let candidate;
+      try {
+        candidate = typeof provider === 'function'
+          ? provider(action)
+          : provider?.currentControlCommitment?.(action);
+      } catch (error) {
+        console.warn(`[arbiter] Control commitment provider failed safely: ${boundedText(error?.message || error)}`);
+        continue;
+      }
+      const obligationId = boundedText(candidate?.obligationId);
+      const owner = boundedText(candidate?.owner);
+      if (!obligationId || !owner) continue;
+      const commitment = {
+        owner,
+        obligationId,
+        phase: boundedText(candidate.phase) || null,
+        ownsCurrentAction: candidate.ownsCurrentAction === true,
+      };
+      if (commitment.ownsCurrentAction) return commitment;
+      if (!fallback) fallback = commitment;
+    }
+    return fallback;
+  }
+
+  registerControlCommitmentProvider(provider) {
+    if (
+      !provider
+      || (
+        typeof provider !== 'function'
+        && typeof provider.currentControlCommitment !== 'function'
+      )
+      || this.controlCommitmentProviders.includes(provider)
+    ) return false;
+    this.controlCommitmentProviders.push(provider);
+    return true;
+  }
+
+  beginSafetySuspension(incident = this.agent?.survival_director?.safetyIncident) {
+    const incidentId = boundedText(incident?.id);
+    if (this.stopped || incident?.active !== true || !incidentId) return null;
+    if (this.controlSuspension?.incidentId === incidentId) {
+      return { ...this.controlSuspension };
+    }
+
+    const action = this.actionState();
+    const commitment = this.playerCommitment(action);
+    if (!commitment?.obligationId) return null;
+    const now = this.now();
+    if (this.controlSuspension) {
+      this.lastControlSuspension = Object.freeze({
+        ...this.controlSuspension,
+        state: 'superseded',
+        releaseCode: 'new_safety_incident',
+        releasedAt: now,
+      });
+    }
+    this.controlSuspension = Object.freeze({
+      id: `suspension:${incidentId}`.slice(0, 128),
+      incidentId,
+      owner: commitment.owner,
+      obligationId: commitment.obligationId,
+      phase: commitment.phase,
+      actionId: commitment.ownsCurrentAction ? action.actionId : null,
+      actionLabel: commitment.ownsCurrentAction ? action.label : null,
+      state: 'suspended',
+      startedAt: now,
+    });
+    return { ...this.controlSuspension };
+  }
+
+  matchesControlSuspension({ owner, obligationId, actionId = null } = {}) {
+    const normalizedObligationId = boundedText(obligationId);
+    const settledActionId = boundedText(actionId);
+    const active = this.controlSuspension;
+    if (
+      active?.state === 'suspended'
+      && active.owner === owner
+      && active.obligationId === normalizedObligationId
+    ) {
+      const expectedActionId = boundedText(active.actionId);
+      return !expectedActionId || !settledActionId || expectedActionId === settledActionId;
+    }
+    // The survival remedy can settle and release in the same event turn as
+    // the interrupted player's Promise. Preserve correlation to that exact
+    // old action across the release edge, but never let a later action from the
+    // same obligation inherit the old suspension.
+    const released = this.lastControlSuspension;
+    const releasedActionId = boundedText(released?.actionId);
+    return Boolean(
+      released?.state === 'released'
+      && released.owner === owner
+      && released.obligationId === normalizedObligationId
+      && releasedActionId
+      && settledActionId
+      && releasedActionId === settledActionId
+    );
+  }
+
+  releaseSafetySuspension(incident, code = null) {
+    const suspension = this.controlSuspension;
+    if (!suspension) return false;
+    const incidentId = boundedText(incident?.id || incident);
+    if (incidentId && suspension.incidentId !== incidentId) return false;
+    const now = this.now();
+    this.lastControlSuspension = Object.freeze({
+      ...suspension,
+      state: 'released',
+      releaseCode: boundedText(code || incident?.resolutionCode, 'survival_incident_resolved'),
+      releasedAt: now,
+    });
+    this.controlSuspension = null;
+    this.wake('safety_suspension_released');
+    return true;
+  }
+
+  currentControlSuspension() {
+    return this.controlSuspension ? { ...this.controlSuspension } : null;
+  }
+
   select(selectedLane, code, reason, lowerLanesSuppressed = false, perception = null) {
     const action = this.actionState();
     const observedAt = perception?.observedAt ?? this.status.observedAt;
@@ -660,6 +793,10 @@ export class BehaviorArbiter {
   }
 
   recordActionStart(action) {
+    // Usually SurvivalDirector captures the transfer synchronously when it
+    // creates the incident. This closes the event-ordering seam for adapters
+    // that register an incident immediately before starting the reflex.
+    this.beginSafetySuspension();
     return this.traceRecorder.linkAction(action);
   }
 
@@ -907,7 +1044,7 @@ export class BehaviorArbiter {
     this.traceRecorder.startLane(lane);
     try {
       const result = await this.agent.bot?.modes?.updateBand?.(names, options);
-      if (result?.active || result?.scheduled) {
+      if (result?.active || result?.scheduled || result?.blocking) {
         this.traceRecorder.finishLane(lane, {
           status: 'eligible',
           reasonCode: result.code || 'mode_scheduled',
@@ -917,7 +1054,9 @@ export class BehaviorArbiter {
         return this.select(
           lane,
           result.code || 'mode_scheduled',
-          `${result.mode || lane} owns the selected mode band.`,
+          result.blocking
+            ? `${result.mode || lane} is waiting for material safety evidence before lower physical work may run.`
+            : `${result.mode || lane} owns the selected mode band.`,
           true,
           perception,
         );
@@ -1107,6 +1246,36 @@ export class BehaviorArbiter {
         if (selected) return selected;
       }
 
+      const survival = this.agent.survival_director;
+      let survivalEvaluated = false;
+
+      // Safety suspension is a control-plane gate, not a hint from one leaf.
+      // Once an attributed incident has suspended durable player work, only
+      // reflexes above this boundary and Survival itself may move the body.
+      // The gate disappears only when Survival closes the same incident.
+      if (this.currentControlSuspension()) {
+        survivalEvaluated = true;
+        this.traceRecorder.startLane('basic_survival');
+        try {
+          survival?.update?.();
+        } catch (error) {
+          return this.select('basic_survival', 'safety_suspension_update_failed', `Safety recovery failed safely: ${boundedText(error?.message || error)}`, true, perception);
+        }
+        if (this.currentControlSuspension()) {
+          return this.select(
+            'basic_survival',
+            survival?.status?.code || 'safety_suspension_active',
+            'An unresolved Safety incident exclusively owns the body until safe settlement.',
+            true,
+            perception,
+          );
+        }
+        this.traceRecorder.finishLane('basic_survival', {
+          status: 'observed',
+          reasonCode: 'safety_suspension_released',
+        });
+      }
+
       const heldPresence = this.observeHeldPresence();
       const heldSurfaceStance = this.updateHeldSurfaceStance(heldPresence);
       this.traceRecorder.startLane('operator_hold');
@@ -1175,8 +1344,22 @@ export class BehaviorArbiter {
       }
       this.traceRecorder.finishLane('operator_hold', { status: 'ineligible', reasonCode: 'operator_not_held' });
 
-      const survival = this.agent.survival_director;
-      let survivalEvaluated = false;
+      this.traceRecorder.startLane('internal_control');
+      const internalControl = this.agent.currentInternalControlBlock?.() || null;
+      if (internalControl?.blocksBody) {
+        this.directiveResumeRequested = false;
+        this.directiveResumeRequest = null;
+        return this.select(
+          'internal_control',
+          internalControl.kind === 'quarantine'
+            ? 'internal_body_quarantined'
+            : 'internal_assignment_wait',
+          internalControl.reason || 'An internal control boundary is waiting to settle.',
+          true,
+          perception,
+        );
+      }
+      this.traceRecorder.finishLane('internal_control', { status: 'ineligible', reasonCode: 'internal_control_clear' });
 
       // Player and job actions already own a serialized ActionManager turn.
       // Release any stale terminal handoff as soon as fresh player-authorized
@@ -1193,7 +1376,7 @@ export class BehaviorArbiter {
         this.releaseTerminalHandoff('Fresh player-authorized action owns the body.', false);
       }
 
-      if (this.urgency === 'critical') {
+      if (this.urgency === 'critical' && !survivalEvaluated) {
         survivalEvaluated = true;
         this.traceRecorder.startLane('basic_survival');
         if (survival?.update) {
@@ -1716,6 +1899,8 @@ export class BehaviorArbiter {
       nextTickDelayMs: this.nextTickDelayMs,
       comportment: this.comportment().preset,
       terminalHandoff: this.currentTerminalHandoff(),
+      controlSuspension: this.currentControlSuspension(),
+      lastControlSuspension: this.lastControlSuspension ? { ...this.lastControlSuspension } : null,
       heldSurfaceStance: { ...this.heldSurfaceStance },
       decisionTrace: this.traceRecorder.snapshot(16),
     };

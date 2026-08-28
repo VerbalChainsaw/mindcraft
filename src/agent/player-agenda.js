@@ -141,6 +141,12 @@ const FISHING_BREAKFAST_CUES = Object.freeze([
   /\b(?:furnace|stove|smelter)\b/i,
   /\b(?:bring|deliver|give)\b[\s\S]*\b(?:me|us)\b/i,
 ]);
+const NETHER_EXPEDITION_CUES = Object.freeze([
+  /\bnether\b/i,
+  /\b(?:portal|cross[- ]dimension|another dimension)\b/i,
+  /\bquartz\b/i,
+  /\b(?:return|come back|head back|round trip|back home)\b/i,
+]);
 
 const PRESERVATION_CUE = /\b(?:avoid|do not|don't|dont|keep|leave|only|preserve|protect|reuse|without)\b/i;
 
@@ -719,6 +725,100 @@ function explicitInventoryKitPlan(playerName, message, context) {
             quantity: output.quantity,
           })),
           terminalDisposition: 'hold_position',
+        },
+        dependency: { policy: 'requires_success' },
+      },
+    ],
+  };
+}
+
+function requestedNetherQuartzCount(message) {
+  const match = String(message || '').match(
+    /\b(?:at\s+least\s+)?(one|two|three|four|five|six|seven|eight|[1-8])\s+(?:nether\s+)?quartz\b/i,
+  );
+  if (!match) return 8;
+  const words = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+  };
+  return words[match[1].toLowerCase()] || Number(match[1]);
+}
+
+/**
+ * One cross-dimensional player promise, compiled onto the existing Agenda.
+ * The checklist owns live prerequisite reconciliation; the two physical
+ * Activities keep portal construction distinct from portal consumption, and
+ * every later edge requires the predecessor's verified success.
+ */
+function netherExpeditionPlan(playerName, message) {
+  const text = normalizeMessage(message).trim();
+  if (!NETHER_EXPEDITION_CUES.every(pattern => pattern.test(text))) return null;
+
+  const quartzCount = requestedNetherQuartzCount(text);
+  // Compile only load-bearing downstream preconditions. "Safe kit" is an
+  // outcome constraint, not permission to invent an exact shopping list: the
+  // portal builder consumes obsidian plus ignition, the round trip needs the
+  // diamond pickaxe that can acquire that obsidian and mine quartz, and
+  // survival relies on shield plus food. A bucket and a separate iron sword
+  // are useful gear, but neither is required by this chain; gating on them
+  // turned the expedition into unrelated serial iron errands.
+  const inventoryRequirements = [
+    { target: 'shield', quantity: 1 },
+    { target: 'diamond_pickaxe', quantity: 1 },
+    { target: 'obsidian', quantity: 10 },
+    { target: 'flint_and_steel', quantity: 1 },
+    { target: 'bread', quantity: 6 },
+  ];
+
+  return {
+    steps: [
+      {
+        segment: 'reconcile the complete Nether expedition kit',
+        command: null,
+        response: 'I will provision the complete expedition kit from live inventory and verified acquisition paths.',
+        entry: {
+          kind: 'inventory_checklist',
+          requester: playerName,
+          inventoryRequirements,
+          note: 'Nether expedition kit',
+        },
+      },
+      {
+        segment: 'construct and ignite the expedition portal',
+        command: '!buildNetherPortal(12)',
+        response: 'I will construct and verify one active portal near the operating base.',
+        entry: {
+          kind: 'portal_build',
+          requester: playerName,
+          radius: 12,
+        },
+        dependency: { policy: 'requires_success' },
+      },
+      {
+        segment: `enter the Nether, secure ${quartzCount} new quartz, and return alive`,
+        command: `!completeNetherQuartzRun(${quartzCount})`,
+        response: `I will cross dimensions, secure ${quartzCount} new quartz, and return through the paired portal.`,
+        entry: {
+          kind: 'nether_round_trip',
+          requester: playerName,
+          quantity: quartzCount,
+        },
+        dependency: { policy: 'requires_success' },
+      },
+      {
+        segment: 'return to the requester after the expedition',
+        command: `!goToPlayer(${JSON.stringify(playerName)}, 3)`,
+        response: `I will return to ${playerName} after the expedition settles.`,
+        entry: {
+          kind: 'goto',
+          requester: playerName,
+          recipient: playerName,
         },
         dependency: { policy: 'requires_success' },
       },
@@ -1904,6 +2004,10 @@ export function directiveToAgendaEntry(command, { requester = '' } = {}) {
       return entry('maintain_farm', {});
     case 'recoverDeathItems':
       return entry('recover_death', {});
+    case 'buildNetherPortal':
+      return entry('portal_build', { radius: asQuantity(args[0]) ?? 12 });
+    case 'completeNetherQuartzRun':
+      return entry('nether_round_trip', { quantity: asQuantity(args[0]) ?? 1 });
     case 'putInChest':
       return entry('deposit', { target: unquote(args[0]), quantity: asQuantity(args[1]) ?? 64 });
     case 'assignMiningJob':
@@ -2050,6 +2154,16 @@ export function parsePlayerAgenda(playerName, message, context = {}, {
   const body = disposition === 'interrupt'
     ? (text.replace(INTERRUPT_LEADING, '').trim() || text)
     : text;
+  const netherExpedition = netherExpeditionPlan(playerName, body);
+  if (netherExpedition?.steps) {
+    return {
+      owner: 'nether_expedition',
+      disposition,
+      multiStep: true,
+      steps: netherExpedition.steps,
+      unresolved: [],
+    };
+  }
   const accessRepair = existingAccessRepairPlan(playerName, body, context);
   if (accessRepair?.rejection) {
     return {

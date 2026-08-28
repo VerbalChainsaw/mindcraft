@@ -41,7 +41,7 @@ this plan was reconciled:
   re-inspected before each implementation change; supporting docs avoid binding
   claims to mutable line offsets.
 
-### 2.1 Current phase and proof ledger (2026-08-26)
+### 2.1 Current phase and proof ledger (2026-08-27)
 
 Only the states below are current. `docs/CAMPAIGN-RECORD.md` owns the detailed
 physical evidence and accepted non-regression outcomes; `docs/HANDOFF.md` owns the
@@ -68,8 +68,11 @@ one active tranche, if any.
 | Outcome-directed confidence coverage across new and old mechanics | `ACTIVE` | Saved accepted evidence remains valid. Controlled runs are authorized when they can change a mechanic owner, repair, composition verdict, or significant risk; fixed-count and reassurance-only reruns are not. |
 | Phase 5 controlled variance matrix | `PENDING` | The stopped API-routed attempt preserved four local reports but used the wrong frozen-model provider. The corrected `codex/gpt-5.6-luna` OAuth matrix has not started and has no variance verdict; it remains separately authorized and does not displace current gameplay work. |
 | Phase 7 composition strengthening through the operational workshop expedition | `ACTIVE — PARTIAL` | Saved current state now outranks the earlier active-Explorer cursor: the cave/resource entry, iron-pickaxe goal, and shield goal completed; the bucket goal failed `inventory_capacity_blocked`; the three deposits and requester return were later cancelled by the player. The project is preserved incomplete evidence, not the current gameplay cursor and not acceptance. `CS-1` through `CS-5` have forward source implementations with static syntax/module evidence only; `CS-6` remains physically open. |
-| Phase 7B deterministic compound livestock project | `ACTIVE` | The newest player-valued outcome is one ordinary request: build and secure a catalogue animal pen, scout and remember at least two requested adult animals, return and guide the requester to them, prepare the exact attraction food, move and breed the animals, close the gate, and return. Saved gameplay proves the old language path fell through to improvised commands and the first pen Builder order stopped at 37/49 on `spruce_fence`; the typed Agenda/compiler, requested-population scout contract, exact deferred pen/source binding, and unchanged-placement containment are the active owning seams below. |
-| Remaining Phase 7 specialist boundaries | `PENDING` | Craft, Furnace, PvP, Vehicle, and Container's open-window interruption boundary close only when their package-specific cancellation, physical settlement, partial-effect truth, and composed player-visible behavior are actually traversed. Placement remains closed. |
+| Phase 7B deterministic compound livestock project | `ACTIVE — PARTIAL` | The exact pen completed 49/49, two cows were verified and remembered, requester return/guidance completed, and wheat custody verified. Settlement exposed and repaired completed-structure gate binding plus the owned Pathfinder's mixed-height walk execution; the Director ended the livestock action before relocation/breeding/gate closure/return, so those remaining predicates stay open without remaining the gameplay cursor. |
+| Safety supervisory interruption and exact continuation | `ACCEPTED / CLOSED` | Current-source physical composition covers both terminal safety exits. A complete seal released exact Goal `goal-d2eb2c84-a621-41f6-ad42-18ba7a9178ce` as `safety_structurally_contained` while a hostile remained loaded. After the final Kevin-only restart, an exposed tunnel episode enrolled Zombie and Skeleton sources, ran one bounded combat response, released as `safety_stably_disengaged` after every loaded source stayed outside line of sight without new damage or closing separation, and returned the exact `player_goal` at attempts `0`. A later failed response absorbed four Zombies into one episode and another absorbed Skeleton plus Creeper; each released once and resumed the Goal without spending an attempt. The current focused orchestration/food suite passes `24/24`, including generic commitment publication, hard gating, multi-source ownership, passive guards, concurrent exact-result isolation, internal-block/Hold separation, and PvP/Vehicle settlement. |
+| Phase 7C continuity, recovery, and operator-authority tranche | `ACCEPTED / CLOSED` | Current source proved four owner-level corrections without replacing the single-owner architecture: Safety remembers an offline requester across incidents and deaths and falls through to local shelter instead of redispatching `goToPlayer`; death recovery accumulates recovered custody and spends an attempt only when a retry makes no recovery progress; autonomous/model dispatch cannot invoke operator process commands such as `!stop`; and a mining segment preserves its causal protected/hazard/geometry failure so GoalDirector retires the stale return spine and hands off to `!goToSurface`. Fresh closeout checks pass Safety `10/10`, command authority `11/11`, combined Goal death/mining recovery `11/11`, and segmented death/mining recovery `8/8`. Live current-source composition additionally proved one multi-hostile Safety episode, explicit model `!stop` rejection while Kevin remained connected, protected-cell spine retirement, physical ascent y61 -> y66, and same-Goal continuation. These cases are frozen; repeat them only after changed ownership, contradictory evidence, or a new composed failure. |
+| Phase 7C autonomous cross-dimensional expedition | `ACTIVE — PARTIAL` | Explicit `!resumeAgenda` restored the saved expedition without manufacturing a replacement promise. The current productive Goal is `goal-9d151ab6-1166-4ded-8492-96cfd3640551`, phase `acquire`, attempts `0/4`, with 54 subgoals, a verified 154-cell mining-return spine ending at `(955,-32,-473)`, and 15 distinct failed diamond targets. The same chain physically collected iron, smelted three ingots, crafted its table/sticks/iron pickaxe, descended, searched changing diamond candidates, survived critical multi-hostile interruption, and resumed. The Director explicitly paused the run while `!collectBlocksInRange` was acting for three diamonds; Kevin was then stopped cleanly while Paper/control plane stayed running. No obsidian, portal, Nether entry, quartz custody, or requester return is claimed. Agenda semantic deduplication and temporary-workstation cleanup remain open adjacent defects. |
+| Remaining Phase 7 specialist boundaries | `ACTIVE` | PvP and Vehicle now have first-class ActionManager halt/settlement adapters, and `goToSurface` declares Pathfinder ownership; focused lifecycle checks prove lease retention until PvP target+pursuit or vehicle input settles. Craft, Furnace, Container open-window interruption, and player-visible physical traversal of the new PvP/Vehicle boundaries remain open. Placement remains closed. |
 
 The Scenario Lab catalog describes registered scenario definitions and executor
 availability. Its static `not-run` values are not an acceptance ledger and must
@@ -156,9 +159,27 @@ Utility may rank peers only within one band. It cannot make optional work outran
 a player Mission or survival outrank Operator Hold. Deterministic policy may
 forbid an action and must name the rule; it may not declare physical impossibility.
 
-Reflex suppresses the current Activity, resolves one hazard, and returns control.
-The Mission resumes by planning from current reality, never by replaying a stale
-closure or specialist call.
+Safety is one supervisory interrupt above all ordinary body owners, not another
+peer behavior. Durable owners publish one generic control-commitment descriptor;
+the arbiter does not inspect Goal, Agenda, Job, Mission, or directive internals.
+The first qualifying threat snapshots the exact descriptor once. A bounded
+emergency reflex may create immediate separation; Safety then exclusively owns the
+body until the threat is destroyed, safely escaped, structurally contained, or
+absent through a bounded calm window. Every attributed source belongs to the same
+episode and participates in release truth; later attackers cannot reset failed
+routes, retry budgets, origin, or suspension.
+
+A roof or transient line-of-sight break is not terminal refuge. Structural
+containment requires support, overhead, and sealed body/head faces. When every
+loaded incident source remains outside line of sight, no new damage arrives, and
+its separation does not close beyond the bounded tolerance through a stability
+window, Safety releases once even if the sources remain loaded. A per-source
+passive guard prevents the same source from immediately reacquiring the body while
+the structural seal or stable separation still holds; new damage, lost separation,
+breached refuge, or a distinct live threat opens a new incident.
+Critical bodily recovery and the suspended commitment then reassess current reality
+with the same identity and unspent logical budgets; neither replays a stale closure,
+specialist call, or previously settled phase.
 
 ### 3.4 ActivityExecutive owns one physical body lease
 
@@ -1047,9 +1068,8 @@ promise and cannot inherit acceptance by prose.
 
 #### Phase 7B — deterministic compound livestock project
 
-**State: `ACTIVE`; current gameplay frontier locked 2026-08-26.** The Director's
-newest gameplay request supersedes the workshop as the execution cursor without
-erasing its verified partial results. This is one compound outcome, not separate
+**State: `ACTIVE — PARTIAL`; superseded as gameplay cursor 2026-08-26.** This is
+one compound outcome, not separate
 pen, cow-search, wheat, breeding, gate, and return demonstrations. Use the existing
 Agenda, JobDirector, GoalDirector, Capability catalogue, Builder, livestock
 specialist, and ActionManager. Do not add another planner, scheduler, command
@@ -1066,10 +1086,12 @@ The required chain is:
 | `LB-5` | **Contain Builder placement failure at its owner.** Preserve exact interaction-stage evidence and the durable material-change circuit already installed in WorkOrder/JobDirector. | The old fence-cell failure cannot consume three identical retries from a generic `skill_unreachable` string. Exact `no_legal_stance` evidence terminalizes the impossible cell; a route/environment failure retains its causal stage and cannot reopen from scheduler delay alone; a fresh request may resume the same compatible partial Builder order after a material code/world change. No cell-specific or spruce-specific geometry patch is allowed without discriminating evidence. |
 | `LB-6` | **Complete the player outcome.** Run only after explicit runtime resumption. | The exact pen completes; at least two requested adults are scouted and remembered; Kevin returns and guides the requester; the exact breeding food is carried; the adults enter the bound pen; one pair breeds; Kevin exits; the exact gate is closed; final animal count is verified; Kevin returns; all Agenda/Job/Goal/Activity/ActionManager ownership settles. |
 
-The source implementation of `LB-1` through `LB-5` currently has syntax and module-
-load evidence only. That is forward implementation evidence, not physical
-acceptance. Kevin and Paper remain preserved under the Director's pause; do not
-restart or mutate the world from documentation work.
+Physical execution completed `LB-1` through requester guidance and wheat custody.
+It then exposed and repaired completed-structure gate selection and package-native
+mixed-height walk execution. The Director ended the active livestock action before
+relocation, breeding, gate closure, and requester return. Preserve the verified
+partial effects and remaining predicates; do not keep livestock as the campaign
+cursor or replay its completed prefix.
 
 **Definition of done:** one persisted project identity owns the complete five-step
 chain; the partial pen is resumed rather than discarded when compatible; exact
@@ -1079,6 +1101,73 @@ runs before its producer settles; no unchanged failure is redispatched; no stale
 or nearest-object fallback can satisfy a binding; no unexplained inventory, entity,
 gate, path, window, terrain, or body lease remains. Then and only then mark Phase
 7B `ACCEPTED / CLOSED` in this file, the campaign record, and the handoff together.
+
+#### Phase 7C — autonomous cross-dimensional expedition
+
+**State: `ACTIVE — PARTIAL`; current gameplay frontier advanced 2026-08-27.** This tranche
+raises composition across dimensions. It is not separate diamond, obsidian, portal,
+quartz, or return demonstrations. One ordinary player promise compiles into typed,
+persisted Agenda Activities, and the existing directors solve live prerequisites
+without losing the final expedition objective.
+
+Explicit `!resumeAgenda` restored the saved expedition through its existing owner;
+no replacement Goal or parallel plan was manufactured. The integrated run then
+advanced the same promise through navigation, iron collection, smelting three raw
+iron into three ingots, crafting planks/sticks/table/iron pickaxe, long descent,
+diamond search, protected-route invalidation, physical surface recovery, hostile
+interruption, eating, and exact Goal resumption. The current Goal is
+`goal-9d151ab6-1166-4ded-8492-96cfd3640551`, phase `acquire`, attempts `0/4`, with
+54 subgoals, a verified 154-cell return spine whose endpoint is `(955,-32,-473)`,
+and 15 distinct failed diamond targets. This is changing search state, not a stall.
+
+Four owning corrections from this continuation are now closed. Safety records a
+canonical offline requester after one nonretryable `skill_target_offline` result
+and routes later incidents and post-death recovery to the existing local-shelter
+ladder until positive presence clears the fact. Death recovery persists cumulative
+recovered and missing custody; larger partial recovery keeps the productive attempt,
+while an unchanged retry spends the existing bounded attempt. Central command
+dispatch denies operator process commands (`!stop`, `!restart`, `!leaveGame`, and
+`!spawnBots`) when the caller is autonomy, while explicit player authority remains
+unchanged. Mining-route segments now retain their causal protected/hazard/geometry
+failure beneath `route_segment_partial`, allowing GoalDirector to retire a stale
+spine and hand the same Goal to the existing `!goToSurface` recovery rather than
+replaying the invalid cell.
+
+Fresh closeout checks pass Safety `10/10`, command authority `11/11`, combined
+Goal death/mining recovery `11/11`, and segmented death/mining recovery `8/8`.
+Current-source physical
+proof showed one tactical Safety handoff across multiple hostiles; the model's
+attempted `!stop` was rejected while Kevin stayed connected; a protected mining
+cell retired the stale spine; `!goToSurface` climbed y61 -> y66 in 21.8 seconds;
+and a later Zombie/Skeleton episode recovered health 1.9 -> 17 before the same Goal
+resumed. These are accepted owner boundaries and must not be replayed as isolated
+demonstrations without a material new question.
+
+The Director explicitly paused the run while the Goal was acting on
+`!collectBlocksInRange` for three diamonds. Kevin was stopped cleanly through the
+control plane; Paper and the control plane remained running, and Operator Hold
+remained false. The persisted Agenda now contains ten entries because the model
+appended semantically equivalent item-plan entries after resume. That duplicate-
+intent behavior is an open Agenda semantic-deduplication defect; do not delete or
+rewrite the persisted chain to hide it. Temporary crafting-table cleanup also
+reported `workstation_left_in_world` / `workstation_drop_unreachable`; treat that
+as an open workstation-custody defect, not as expedition completion or a reason to
+replay already closed mechanics.
+
+| ID | Required action and owner | Acceptance criteria |
+|---|---|---|
+| `NE-1` | **Own the complete language effect.** The deterministic player compiler installs one expedition plan. | One immutable intent ledger and one Agenda dependency chain contain kit reconciliation, portal build, Nether round trip, and requester return. No clause falls through to provider improvisation or isolated command sequencing. |
+| `NE-2` | **Reconcile readiness from live state.** Agenda's aggregate inventory checklist delegates each load-bearing missing floor to GoalDirector. | Shield, diamond pickaxe, ten obsidian, ignition, and food are verified together. These are the actual portal, quartz, and survival dependencies; broad language such as "safe kit" must not invent redundant exact-item gates. Existing items are reused; only missing floors are acquired; a restart or safety interruption preserves the same checklist and final objective. |
+| `NE-3` | **Publish one portal fixture.** The existing portal builder owns placement and ignition under one Activity lease. | A safe supported footprint is selected, the frame and activation are physically verified, partial effects are truthful, and the next Activity cannot dispatch before success. |
+| `NE-4` | **Cross, collect, and return.** The existing Nether round-trip specialist consumes the active portal. | Kevin enters `the_nether`, secures eight newly collected quartz, survives or executes bounded tactical escape, reacquires the paired return portal, exits onto safe Overworld ground, and retains the expedition objective through interruption. |
+| `NE-5` | **Settle the player outcome.** Agenda returns Kevin to the requester only after the dimension Activity succeeds. | Kevin, quartz custody, dimension, portal state, body lease, Goal/Agenda state, and final player return all reconcile without an unexplained active owner or blind retry. |
+
+**Definition of done:** the complete persisted chain advances from current inventory
+through verified Overworld return and requester rendezvous on current source; every
+failure is classified at its owning boundary; completed prerequisites are not
+replayed; no provider turn, restart, safety response, death, or dimension transition
+can erase or silently substitute the final promise. Only then mark Phase 7C
+`ACCEPTED / CLOSED` in all three authorities.
 
 ### Phase 8 — demote directors and collapse lanes
 
@@ -1171,11 +1260,18 @@ runtime observations. Do not create a confidence scheduler, statistical assuranc
 engine, parallel verifier framework, or broad certification course. Phase 6
 movement composition, Phase 6B dynamic escape, the autonomous village expedition,
 the Phase 7 compounded Placement shelter, and functional-base commissioning are
-closed. Phase 7B deterministic compound livestock is the active technical/gameplay
-tranche. Its single acceptance vehicle resumes or completes one catalogue pen,
-verifies and remembers the requested adult-animal population, returns and guides,
-acquires attraction food, moves and breeds the animals, closes the exact gate,
-returns to the requester, and settles. The Phase 7A workshop's partial results,
+closed. Phase 7B livestock retains verified partial effects but is no longer the
+gameplay cursor. Phase 7C autonomous cross-dimensional expedition is the active
+technical/gameplay tranche. Explicit resume, Safety continuity, cumulative death
+recovery, operator-only process authority, and causal mining-return handoff are
+closed owner boundaries. The current cursor is the persisted diamond-pickaxe Goal
+`goal-9d151ab6-1166-4ded-8492-96cfd3640551` at attempts `0/4`, paused during a
+three-diamond collection action after 154 verified return-spine cells and 15
+distinct excluded targets. Kevin is intentionally stopped; Paper and the control
+plane remain running. Preserve the saved chain and resume its existing owner; do
+not manufacture a replacement Goal or plan. Agenda semantic deduplication and
+temporary-workstation cleanup are open adjacent owners. Obsidian custody, portal
+construction, dimension travel, quartz, and requester return remain open. The Phase 7A workshop's partial results,
 Container custody chain, and bounded Phase 5 question remain preserved; none should
 be replayed merely to delay this compound gameplay outcome.
 Begin Phase 8 collapse only as replacement evidence covers the specialists'

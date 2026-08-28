@@ -15,7 +15,13 @@ import {
 } from '../../utils/recipe-families.js';
 import { createCapabilityPlanAction } from './capability-catalogue.js';
 import { completionRequirementSatisfied } from './goal-contract.js';
+import {
+  downwardMiningDepthTarget,
+  miningKnowledge,
+  miningOutputName,
+} from './jobs/miner-plan.js';
 import { normalizeWorkstationTransactionReceipt } from './workstation-transaction.js';
+import { loopEraseMiningRouteCells } from './mining-corridor-planner.js';
 
 const DEFAULT_RANGE = 64;
 const DEFAULT_MAX_DEPTH = 24;
@@ -28,6 +34,11 @@ const DEFAULT_MAX_ACTIONS = 64;
 const DEFAULT_FRONTIER_SEARCHES = 64;
 const MAX_COMPLETION_IDENTITY_LENGTH = 2_048;
 const PLANNER_PROXIMITY_RANGE = 16;
+const OBSIDIAN_CASTING_DEPTH = -54;
+const OBSIDIAN_CASTING_PICK_DURABILITY = 64;
+const WATER_BUCKET_METHOD = 'fill:nearest_surface_or_owned_casting_water->water_bucket';
+const DEEP_LAVA_ACCESS_METHOD = 'access:deep_lava_band';
+const OBSIDIAN_CASTING_METHOD = 'cast:safe_stance_atomic_lava_water->obsidian';
 const TOOL_TIER = Object.freeze({
   wooden: 1,
   golden: 2,
@@ -410,6 +421,41 @@ function nearbyBlock(bot, name, range = PLANNER_PROXIMITY_RANGE, cache = null) {
   }
 }
 
+function nearbyUnexcludedBlock(
+  bot,
+  name,
+  range = PLANNER_PROXIMITY_RANGE,
+  exclusions = [],
+  cache = null,
+) {
+  const relevant = (Array.isArray(exclusions) ? exclusions : []).filter(exclusion => (
+    (!exclusion?.name || exclusion.name === name)
+    && [exclusion?.x, exclusion?.y, exclusion?.z].every(Number.isFinite)
+  ));
+  if (relevant.length === 0) return nearbyBlock(bot, name, range, cache);
+
+  const boundedRange = plannerProximityRange(range);
+  const block = bot.registry?.blocksByName?.[name];
+  if (!block || typeof bot.findBlocks !== 'function') return null;
+  try {
+    const positions = bot.findBlocks({
+      matching: block.id,
+      maxDistance: boundedRange,
+      count: 64,
+    }) || [];
+    return positions.find(position => !relevant.some(exclusion => {
+      const radius = Math.max(0, Math.min(16, Math.floor(Number(exclusion.radius) || 0)));
+      return Math.max(
+        Math.abs(position.x - exclusion.x),
+        Math.abs(position.y - exclusion.y),
+        Math.abs(position.z - exclusion.z),
+      ) <= radius;
+    })) || null;
+  } catch {
+    return null;
+  }
+}
+
 function sourceBlocks(bot, target) {
   const item = bot.registry?.itemsByName?.[target];
   if (!item) return [];
@@ -778,9 +824,15 @@ function planUnboundPlankFamily(bot, context, target, amount, recipes, trail) {
   if (!family) return null;
 
   const hasConcreteBinding = family.some(entry => {
-    if (ledgerCount(context, entry.plank.name) > 0) return true;
-    if (immediateCarriedProduction(bot, context, entry.plank.name) > 0) return true;
-    return false;
+    const batches = Math.max(1, Math.ceil(amount / recipeOutputCount(entry.recipe)));
+    const requiredPlanks = entry.plank.count * batches;
+    const carried = ledgerCount(context, entry.plank.name);
+    const immediatelyProducible = immediateCarriedProduction(
+      bot,
+      context,
+      entry.plank.name,
+    );
+    return carried + immediatelyProducible >= requiredPlanks;
   });
   if (hasConcreteBinding) return null;
 
@@ -1164,6 +1216,87 @@ function planUnboundSmeltingLogFamily(bot, context, target, amount, inputs, trai
     : { candidate, logInputs };
 }
 
+function normalizedMiningDimension(value) {
+  const dimension = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^minecraft:/, '');
+  return dimension === 'nether' ? 'the_nether' : dimension;
+}
+
+/**
+ * Delegate an unobserved natural ore leaf to the same mining spine used by
+ * durable Miner work orders. The generic collector is still the right owner
+ * for a locally observed, unfailed block; a loaded coordinate already rejected
+ * by this goal is not evidence that generic collection remains viable.
+ */
+function planFromMiningStrategy(bot, context, source, target, amount, trail) {
+  const knowledge = miningKnowledge(source.name);
+  if (!knowledge || miningOutputName(source.name) !== target) return null;
+  if (nearbyUnexcludedBlock(
+    bot,
+    source.name,
+    context.range,
+    context.miningExcludedTargets,
+    context.blockProximityCache,
+  )) return null;
+
+  const expectedDimension = normalizedMiningDimension(knowledge.dimension);
+  const currentDimension = normalizedMiningDimension(bot.game?.dimension);
+  if (expectedDimension && currentDimension && expectedDimension !== currentDimension) {
+    return {
+      handled: true,
+      failure: blocked(
+        `wrong_dimension_${expectedDimension}`,
+        `${source.name} requires the ${expectedDimension} mining strategy, but the body is in ${currentDimension}.`,
+        target,
+        [...trail, target, source.name],
+      ),
+    };
+  }
+
+  const learningKey = sourceLearningKey(source.name, target);
+  const targetY = downwardMiningDepthTarget(
+    knowledge,
+    Number(bot.entity?.position?.y),
+    10,
+  );
+  if (targetY !== null) {
+    const failure = addCapabilityAction(bot, context, 'reach_mining_depth', {
+      targetY,
+      range: Math.max(16, Math.min(128, context.range)),
+      preservedReturnRoute: context.miningReturnRoute,
+    }, {
+      kind: 'mining_access',
+      target: source.name,
+      expectedName: null,
+      expectedIncrease: 0,
+      reason: `${target} has no locally observed source; descend through a verified returnable route to the ${source.name} search band before collection.`,
+      trail: [...trail, target, source.name, `depth:${targetY}`],
+      learningKey,
+    });
+    return { handled: true, failure };
+  }
+
+  const failure = addCapabilityAction(bot, context, 'advance_mining_corridor', {
+    source: source.name,
+    output: target,
+    length: 12,
+    preservedReturnRoute: context.miningReturnRoute,
+    excludedTargets: context.miningExcludedTargets,
+  }, {
+    kind: 'collect',
+    target,
+    expectedName: target,
+    expectedIncrease: amount,
+    reason: `${target} has no locally observed source at the productive depth; advance one verified returnable ${source.name} corridor and replan from its physical effect.`,
+    trail: [...trail, target, source.name, 'mining_corridor'],
+    learningKey,
+  });
+  if (!failure) setLedgerCount(context, target, ledgerCount(context, target) + amount);
+  return { handled: true, failure };
+}
+
 function planFromWorldSource(bot, context, target, amount, trail) {
   const crop = mc.matureCropHarvestForOutput(target);
   const cropLearningKey = crop ? `harvest:${crop.crop}->${target}` : null;
@@ -1190,14 +1323,25 @@ function planFromWorldSource(bot, context, target, amount, trail) {
     }
   }
 
-  const sources = sourceBlocks(bot, target)
-    .filter(source => placedBlockSourceIsGrounded(bot, context, source, target, trail))
+  const connectedSources = sourceBlocks(bot, target)
+    .filter(source => placedBlockSourceIsGrounded(bot, context, source, target, trail));
+  const sources = connectedSources
     .filter(source => !methodExcluded(context, sourceLearningKey(source.name, target)))
     .sort((left, right) => (
-      sourceScore(context, right, target) - sourceScore(context, left, target)
+      Number(Boolean(nearbyBlock(bot, right.name, context.range, context.blockProximityCache)))
+        - Number(Boolean(nearbyBlock(bot, left.name, context.range, context.blockProximityCache)))
+      || sourceScore(context, right, target) - sourceScore(context, left, target)
       || left.name.localeCompare(right.name)
     ));
   if (sources.length === 0) {
+    if (connectedSources.length > 0) {
+      return blocked(
+        'acquisition_methods_exhausted',
+        `Every verified block-drop source for ${target} is temporarily excluded by repeated no-progress evidence in this goal.`,
+        target,
+        [...trail, target],
+      );
+    }
     return blocked(
       'unsupported_acquisition_leaf',
       `No crafting, smelting, or verified block-drop source is known for ${target} in the connected Minecraft version.`,
@@ -1223,6 +1367,23 @@ function planFromWorldSource(bot, context, target, amount, trail) {
         failures.push(toolFailure);
       }
       if (!toolPrepared) continue;
+    }
+
+    const miningStrategy = planFromMiningStrategy(
+      bot,
+      candidate,
+      source,
+      target,
+      amount,
+      trail,
+    );
+    if (miningStrategy?.handled) {
+      if (miningStrategy.failure) {
+        failures.push(miningStrategy.failure);
+        continue;
+      }
+      acceptContext(context, candidate);
+      return null;
     }
 
     const actionFailure = addCapabilityAction(bot, candidate, 'collect_block', {
@@ -1360,10 +1521,136 @@ function compareDerivedPlans(left, right, baselineActionCount, baselineLedger = 
     || left.kind.localeCompare(right.kind);
 }
 
+function planWaterBucket(bot, context, amount, trail) {
+  if (methodExcluded(context, WATER_BUCKET_METHOD)) {
+    return blocked(
+      'acquisition_methods_exhausted',
+      'The renewable-water bucket method is excluded by repeated no-progress evidence.',
+      'water_bucket',
+      trail,
+    );
+  }
+  const needed = Math.max(1, Math.min(4, Math.floor(Number(amount) || 1)));
+  const bucketFailure = ensureItem(bot, context, 'bucket', needed, [...trail, 'water_bucket:container']);
+  if (bucketFailure) return bucketFailure;
+  for (let index = 0; index < needed; index += 1) {
+    const failure = addCapabilityAction(bot, context, 'fill_water_bucket', {
+      range: 128,
+    }, {
+      kind: 'collect',
+      target: 'water_bucket',
+      expectedName: 'water_bucket',
+      expectedIncrease: 1,
+      reason: 'Fill one carried empty bucket from a connected renewable non-farm water source.',
+      trail: [...trail, 'water_bucket', `fill:${index + 1}`],
+      learningKey: WATER_BUCKET_METHOD,
+    });
+    if (failure) return failure;
+    setLedgerCount(context, 'bucket', ledgerCount(context, 'bucket') - 1);
+    setLedgerCount(context, 'water_bucket', ledgerCount(context, 'water_bucket') + 1);
+  }
+  return null;
+}
+
+function planObsidianCasting(bot, context, amount, trail) {
+  if (methodExcluded(context, OBSIDIAN_CASTING_METHOD)) {
+    return blocked(
+      'acquisition_methods_exhausted',
+      'The bounded lava-water casting method is excluded by repeated no-progress evidence.',
+      'obsidian',
+      trail,
+    );
+  }
+  // A raw inventory count is not a usable tool contract. The access corridor
+  // can consume substantial durability before the first obsidian block is
+  // mined, and the skills owner deliberately excludes worn tools. Remove an
+  // unusable carried pick from the planning ledger so the existing causal
+  // recipe/mining chain must produce a replacement instead of dispatching a
+  // capability that is guaranteed to refuse it.
+  if (usableDurableItemCount(
+    bot,
+    'diamond_pickaxe',
+    OBSIDIAN_CASTING_PICK_DURABILITY,
+  ) < 1) {
+    setLedgerCount(context, 'diamond_pickaxe', 0);
+  }
+  const pickaxeFailure = ensureItem(
+    bot,
+    context,
+    'diamond_pickaxe',
+    1,
+    [...trail, 'obsidian:tool'],
+  );
+  if (pickaxeFailure) return pickaxeFailure;
+  const waterFailure = ensureItem(
+    bot,
+    context,
+    'water_bucket',
+    1,
+    [...trail, 'obsidian:water'],
+  );
+  if (waterFailure) return waterFailure;
+
+  const observedY = Number(bot.entity?.position?.y);
+  if (!Number.isFinite(observedY) || Math.abs(observedY - OBSIDIAN_CASTING_DEPTH) > 8) {
+    const depthFailure = addCapabilityAction(bot, context, 'reach_mining_depth', {
+      targetY: OBSIDIAN_CASTING_DEPTH,
+      range: 128,
+      preservedReturnRoute: context.miningReturnRoute,
+    }, {
+      kind: 'mining_access',
+      target: 'lava',
+      expectedName: null,
+      expectedIncrease: 0,
+      reason: 'Reach the modern deep-lava band through a verified returnable route before casting obsidian.',
+      trail: [...trail, 'obsidian', `lava_depth:${OBSIDIAN_CASTING_DEPTH}`],
+      learningKey: DEEP_LAVA_ACCESS_METHOD,
+    });
+    if (depthFailure) return depthFailure;
+  }
+
+  const castFailure = addCapabilityAction(bot, context, 'cast_obsidian_source', {
+    quantity: Math.max(1, Math.min(16, Math.floor(Number(amount) || 1))),
+    preservedReturnRoute: context.miningReturnRoute,
+  }, {
+    kind: 'collect',
+    target: 'obsidian',
+    expectedName: 'obsidian',
+    expectedIncrease: amount,
+    reason: 'Use renewable water at a safe lava shore to cast and harvest the exact obsidian source under flowing-water protection, collect its drop, then recover the water.',
+    trail: [...trail, 'obsidian', 'lava_water_cast'],
+    learningKey: OBSIDIAN_CASTING_METHOD,
+  });
+  if (castFailure) return castFailure;
+  setLedgerCount(context, 'obsidian', ledgerCount(context, 'obsidian') + amount);
+  return null;
+}
+
 function produceItem(bot, context, target, amount, trail) {
   const nodeFailure = enterNode(context, target, trail);
   if (nodeFailure) return nodeFailure;
   const nextTrail = [...trail, target];
+
+  if (target === 'water_bucket') {
+    return planWaterBucket(bot, context, amount, nextTrail);
+  }
+  const viableObservedObsidianSource = target === 'obsidian' && [
+    'obsidian',
+    'ender_chest',
+  ].some(sourceName => (
+    Boolean(nearbyBlock(bot, sourceName, context.range, context.blockProximityCache))
+    && !methodExcluded(context, sourceLearningKey(sourceName, target))
+  ));
+  if (
+    target === 'obsidian'
+    && !viableObservedObsidianSource
+  ) {
+    // Obsidian is not an ore vein. The old generic mining fallback spent 54
+    // actions and 507 seconds advancing y=10 corridors with zero yield. When
+    // no still-viable obsidian/ender-chest source is loaded, the connected
+    // gameplay method is water-over-lava casting at the deep lava band.
+    return planObsidianCasting(bot, context, amount, nextTrail);
+  }
 
   const smeltingFailures = [];
   const viableSmeltingInputs = smeltingInputCandidates(bot, context, target)
@@ -1909,6 +2196,8 @@ export function buildPrerequisitePlan(bot, {
   workstationConstraint = null,
   workstationTransaction = null,
   blockProximityCache = null,
+  miningReturnRoute = [],
+  miningExcludedTargets = [],
   allowEntityAlternatives = false,
   allowUnobservedSelfDropRoot = true,
   excludedMethods = [],
@@ -2051,6 +2340,10 @@ export function buildPrerequisitePlan(bot, {
     allowUnobservedSelfDropRoot: allowUnobservedSelfDropRoot === true,
     proximityCache: new Map(),
     blockProximityCache: blockProximityCache instanceof Map ? blockProximityCache : new Map(),
+    miningReturnRoute: loopEraseMiningRouteCells(miningReturnRoute, { limit: 512 }),
+    miningExcludedTargets: Array.isArray(miningExcludedTargets)
+      ? miningExcludedTargets.slice(-24)
+      : [],
     workstationRequirement: {
       name: canonicalName(workstationRequirement?.name),
       carried: workstationRequirement?.carried === true,

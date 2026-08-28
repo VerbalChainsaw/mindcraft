@@ -359,6 +359,85 @@ test('a final inventory checklist repairs a floor consumed by a later step and r
   assert.equal(saved.at(-1).state, 'complete');
 });
 
+test('an active checklist retires a mining continuation after GoalDirector releases that exact spine', () => {
+  let adopted = 0;
+  let saved = [];
+  const goalDirector = {
+    activeGoal: {
+      id: 'goal-route-release',
+      checkpoint: { baselineInventory: 0, targetInventory: 10, delivered: 0 },
+      evidence: { code: 'mining_route_rejoin_exhausted' },
+    },
+    inFlight: false,
+    adoptMiningContinuationCheckpoint() {
+      adopted += 1;
+      return true;
+    },
+  };
+  const agent = {
+    name: 'TestBot',
+    bot: {
+      entity: { position: { x: 12, y: 64, z: 12 } },
+      game: { dimension: 'minecraft:overworld' },
+      inventory: { slots: [] },
+    },
+    actions: { executing: false },
+    goal_director: goalDirector,
+    job_director: { activeOrder: null },
+    isOperatorHeld: () => false,
+  };
+  const director = new AgendaDirector(agent, {
+    store: {
+      lastError: null,
+      load: () => [],
+      save(entries) {
+        saved = JSON.parse(JSON.stringify(entries));
+        return true;
+      },
+    },
+  });
+  const added = director.add({
+    kind: 'inventory_checklist',
+    requester: 'Director',
+    inventoryRequirements: [{ target: 'obsidian', quantity: 10 }],
+  });
+  director.replace(added.id, {
+    state: 'active',
+    startedAt: 1,
+    executorId: goalDirector.activeGoal.id,
+    goalContinuationCheckpoint: {
+      miningReturnRoute: [
+        { x: 10, y: 64, z: 10 },
+        { x: 11, y: 63, z: 10 },
+      ],
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+  });
+
+  assert.equal(director.reconcileActiveGoalMiningContinuation(director.activeEntry()), false);
+  assert.equal(adopted, 0);
+  assert.equal(director.activeEntry().goalContinuationCheckpoint, undefined);
+  assert.equal(saved[0].goalContinuationCheckpoint, undefined);
+
+  goalDirector.activeGoal.evidence.code = 'mining_return_route_invalidated';
+  director.replace(added.id, {
+    goalContinuationCheckpoint: {
+      miningReturnRoute: [
+        { x: 10, y: 64, z: 10 },
+        { x: 11, y: 63, z: 10 },
+      ],
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+  });
+
+  assert.equal(director.reconcileActiveGoalMiningContinuation(director.activeEntry()), false);
+  assert.equal(adopted, 0);
+  assert.equal(director.activeEntry().goalContinuationCheckpoint, undefined);
+  assert.equal(saved[0].goalContinuationCheckpoint, undefined);
+});
+
 test('a synchronously verified final inventory checklist applies its durable terminal wait', () => {
   const holds = [];
   const messages = [];

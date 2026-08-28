@@ -35,8 +35,68 @@ test('Given an eligible agent, a director acquires one in-flight action and publ
     target: { name: 'bread' },
     detail: 'Ate bread.',
     retryable: false,
+    inFlight: false,
+    dispatchLease: null,
     nextEligibleAt: null,
   });
+});
+
+test('a director dispatch lease adopts terminal actuator truth and fails open when orphaned', () => {
+  const agent = createAgent();
+  agent.actions = {
+    executing: true,
+    currentActionLabel: 'action:test',
+    currentActivity: null,
+    lastActivity: null,
+    lastResult: null,
+  };
+  const director = new BehaviorDirector(agent, { name: 'survival' });
+  assert.equal(director.begin('recovering'), true);
+  const lease = director.beginDispatchLease({
+    owner: 'survival',
+    missionId: 'survival:return_home',
+    activityId: 'return_home',
+    now: 1_000,
+  });
+  agent.actions.currentActivity = {
+    missionId: lease.missionId,
+    activityId: lease.activityId,
+    actionId: 'action-1',
+    startedAt: 1_001,
+  };
+  assert.equal(director.reconcileDispatchLease({ now: 1_100 }).state, 'active');
+
+  agent.actions.executing = false;
+  agent.actions.currentActionLabel = '';
+  agent.actions.lastActivity = { ...agent.actions.currentActivity };
+  agent.actions.currentActivity = null;
+  agent.actions.lastResult = {
+    actionId: 'action-1',
+    phase: 'succeeded',
+    code: 'skill_arrived',
+  };
+  const terminal = director.reconcileDispatchLease({ now: 1_200 });
+  assert.equal(terminal.state, 'terminal');
+  assert.equal(terminal.result, agent.actions.lastResult);
+  assert.equal(director.claimDispatchSettlement(lease), true);
+  director.finish(terminal.result);
+
+  assert.equal(director.begin('recovering'), true);
+  const orphan = director.beginDispatchLease({
+    owner: 'survival',
+    missionId: 'survival:return_home',
+    activityId: 'return_home',
+    now: 2_000,
+  });
+  agent.actions.lastActivity = null;
+  agent.actions.lastResult = null;
+  const orphaned = director.reconcileDispatchLease({ now: 3_501 });
+  assert.equal(orphaned.state, 'orphaned');
+  assert.equal(orphaned.elapsedMs, 1_501);
+  assert.equal(director.claimDispatchSettlement(orphan), true);
+  director.fail('dispatch_orphaned', 'No actuator activity started.', true);
+  assert.equal(director.inFlight, false);
+  assert.equal(director.canSchedule(), true);
 });
 
 test('Given malformed terminal status, a director fails closed and bounds public fields', () => {

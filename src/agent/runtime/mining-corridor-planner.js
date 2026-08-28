@@ -11,6 +11,33 @@ function cellKey(position) {
   return `${position.x}:${position.y}:${position.z}`;
 }
 
+export function loopEraseMiningRouteCells(value, { limit = 512 } = {}) {
+  const maximum = Math.max(1, Math.min(4096, Math.floor(Number(limit) || 512)));
+  const route = [];
+  const indexByKey = new Map();
+  for (const rawCell of Array.isArray(value) ? value : []) {
+    if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
+    const cell = {
+      x: Math.floor(rawCell.x),
+      y: Math.floor(rawCell.y),
+      z: Math.floor(rawCell.z),
+    };
+    const key = cellKey(cell);
+    const existingIndex = indexByKey.get(key);
+    if (Number.isInteger(existingIndex)) {
+      for (let index = route.length - 1; index > existingIndex; index -= 1) {
+        indexByKey.delete(cellKey(route[index]));
+      }
+      route.length = existingIndex + 1;
+      continue;
+    }
+    if (route.length >= maximum) break;
+    indexByKey.set(key, route.length);
+    route.push(cell);
+  }
+  return route;
+}
+
 function compareQueueEntries(left, right) {
   return left.priority - right.priority
     // For equal-cost A* frontiers, finish the state that has materially
@@ -351,7 +378,13 @@ export function searchSupportedMiningVoxelCorridors({
         heading: candidate.heading,
         yOffset: candidate.yOffset,
       };
-      const assessment = assessStep(step);
+      const assessment = assessStep(step, {
+        // The caller may admit an exact, previously planned support placement
+        // as the anchor for a later step. This is route state, not world
+        // mutation: execution still has to place and verify each support in
+        // order before Pathfinder may traverse the corresponding cell.
+        virtualSupportKeys: new Set(state.supports),
+      });
       if (!assessment?.ok) {
         const outcome = assessment?.outcome || 'route_step_rejected';
         countOutcome(
@@ -361,8 +394,14 @@ export function searchSupportedMiningVoxelCorridors({
         continue;
       }
 
+      const assessedSupports = [
+        ...(assessment.supportBlocks || []),
+        ...(assessment.supportPlacements || []).map(position => ({ position })),
+      ];
       const supportKeys = new Set(
-        (assessment.supportBlocks || [{ position: candidate.position.offset(0, -1, 0) }])
+        (assessedSupports.length > 0
+          ? assessedSupports
+          : [{ position: candidate.position.offset(0, -1, 0) }])
           .filter(block => block?.position)
           .map(block => cellKey(block.position)),
       );

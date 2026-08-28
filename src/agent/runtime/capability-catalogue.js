@@ -937,6 +937,7 @@ function verifyExactStorage(_before, _after, binding, { result } = {}) {
 
 defineCapability({
   id: 'collect_wood',
+  access: immutable({ requiresSurface: true }),
   parameters: {
     count: { type: 'integer', minimum: 1, maximum: 64 },
     range: { type: 'integer', minimum: 16, maximum: 512 },
@@ -972,17 +973,31 @@ defineCapability({
 
 function verifySurfaceAccess(_before, _after, _binding, { result } = {}) {
   const skill = result?.evidence?.skill;
-  const verified = Boolean(
+  const reached = Boolean(
     skill?.kind === 'surface_navigation'
     && skill?.outcome === 'surface_reached'
     && [skill?.target?.x, skill?.target?.y, skill?.target?.z].every(Number.isFinite)
   );
+  const advanced = Boolean(
+    skill?.kind === 'surface_navigation'
+    && skill?.outcome === 'surface_advanced'
+    && skill?.supported === true
+    && Number(skill?.verticalProgress) >= 1
+    && [skill?.observed?.x, skill?.observed?.y, skill?.observed?.z].every(Number.isFinite)
+  );
+  const verified = reached || advanced;
   return immutable({
     ok: verified,
-    code: verified ? 'surface_access_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
-    detail: verified
+    code: reached
+      ? 'surface_access_verified'
+      : advanced
+        ? 'surface_access_progress_verified'
+        : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: reached
       ? `Minecraft confirmed a supported surface stance at ${skill.target.x}, ${skill.target.y}, ${skill.target.z}.`
-      : 'Minecraft did not confirm a supported surface stance.',
+      : advanced
+        ? `Minecraft confirmed ${Number(skill.verticalProgress)} supported vertical block(s) of surface progress.`
+        : 'Minecraft did not confirm supported surface progress.',
   });
 }
 
@@ -1065,6 +1080,134 @@ function verifyMiningCorridor(before, after, binding, { result } = {}) {
     observedIncrease,
     corridorAdvanced,
     resourceCollected,
+  });
+}
+
+function verifyWaterBucketCollection(before, after, _binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const previous = Math.max(0, Number(before?.inventory?.get('water_bucket')) || 0);
+  const current = Math.max(0, Number(after?.inventory?.get('water_bucket')) || 0);
+  const observedIncrease = Math.max(0, current - previous);
+  const verified = Boolean(
+    skill?.kind === 'liquid_collection'
+    && skill?.outcome === 'water_bucket_collected'
+    && observedIncrease >= 1
+  );
+  return immutable({
+    ok: verified,
+    code: verified ? 'water_bucket_collection_verified' : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: verified
+      ? 'Minecraft confirmed one additional water bucket from a renewable source.'
+      : 'Minecraft did not confirm the required water-bucket inventory increase.',
+    observedIncrease,
+  });
+}
+
+function verifyObsidianCasting(before, after, _binding, { result } = {}) {
+  const skill = result?.evidence?.skill;
+  const previousInventory = Math.max(0, Number(before?.inventory?.get('obsidian')) || 0);
+  const currentInventory = Math.max(0, Number(after?.inventory?.get('obsidian')) || 0);
+  const observedIncrease = Math.max(0, currentInventory - previousInventory);
+  const harvested = Boolean(
+    skill?.kind === 'obsidian_casting'
+    && skill?.outcome === 'obsidian_harvested'
+    && Number(skill?.collected) >= 1
+    && observedIncrease >= 1
+    && skill?.waterRecovered === true
+  );
+  // Compatibility for receipts produced before casting and water-shielded
+  // harvesting became one transaction. New code does not emit this outcome.
+  const sourceCreated = Boolean(
+    skill?.kind === 'obsidian_casting'
+    && skill?.outcome === 'obsidian_source_created'
+    && Number(skill?.created) >= 1
+    && skill?.waterRecovered === true
+  );
+  const searchAdvanced = Boolean(
+    skill?.kind === 'obsidian_casting'
+    && skill?.outcome === 'lava_search_advanced'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.routeSteps) >= 1
+    && [
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
+  const frontierExposed = Boolean(
+    skill?.kind === 'obsidian_casting'
+    && skill?.outcome === 'lava_frontier_exposed'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.excavated) >= 1
+    && Number(skill?.observedLavaSources) >= 1
+    && skill?.frontier?.fluid === 'lava'
+    && [
+      skill?.frontier?.source?.x,
+      skill?.frontier?.source?.y,
+      skill?.frontier?.source?.z,
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
+  const castingAccessAdvanced = Boolean(
+    skill?.kind === 'obsidian_casting'
+    && skill?.outcome === 'lava_casting_access_advanced'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.routeSteps) >= 1
+    && Number(skill?.excavated) >= 1
+    && [
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
+  const castingClearanceAdvanced = Boolean(
+    skill?.kind === 'obsidian_casting'
+    && skill?.outcome === 'lava_casting_clearance_advanced'
+    && skill?.routeDigging === true
+    && skill?.returnable === true
+    && Number(skill?.chamberCleared) >= 1
+    && Number(skill?.excavated) >= 1
+    && [
+      skill?.observedPosition?.x,
+      skill?.observedPosition?.y,
+      skill?.observedPosition?.z,
+    ].every(Number.isFinite)
+  );
+  return immutable({
+    ok: harvested || sourceCreated || searchAdvanced || frontierExposed || castingAccessAdvanced || castingClearanceAdvanced,
+    code: harvested
+      ? 'obsidian_harvest_verified'
+      : sourceCreated
+        ? 'obsidian_source_verified'
+      : searchAdvanced
+        ? 'lava_search_progress_verified'
+        : frontierExposed
+          ? 'lava_frontier_progress_verified'
+          : castingAccessAdvanced
+            ? 'lava_casting_access_progress_verified'
+            : castingClearanceAdvanced
+              ? 'lava_casting_clearance_progress_verified'
+              : CAPABILITY_OUTCOME_CODES.VERIFICATION,
+    detail: harvested
+      ? `Minecraft confirmed ${observedIncrease} obsidian cast, harvested under flowing-water protection, collected, and the casting water recovered.`
+      : sourceCreated
+        ? `Minecraft confirmed ${Number(skill.created)} new obsidian source block(s) and recovery of the casting water.`
+      : searchAdvanced
+        ? `Minecraft confirmed a returnable ${Number(skill.routeSteps)}-step lava-search advance.`
+        : frontierExposed
+          ? 'Minecraft confirmed a bound lava source at a newly excavated frontier while the occupied return corridor remained dry and returnable.'
+          : castingAccessAdvanced
+            ? `Minecraft confirmed a returnable ${Number(skill.routeSteps)}-step corridor advance toward one bound lava-casting interaction stance.`
+            : castingClearanceAdvanced
+              ? `Minecraft confirmed ${Number(skill.chamberCleared)} source-bound casting chamber block(s) cleared while the return spine remained valid.`
+              : 'Minecraft confirmed neither new obsidian nor returnable lava-search progress.',
+    created: harvested || sourceCreated ? Number(skill.created) : 0,
+    collected: harvested ? observedIncrease : 0,
   });
 }
 
@@ -1156,6 +1299,75 @@ defineCapability({
   execute: executeBoundCommand,
   verify: verifyMiningCorridor,
   cost: (_snapshot, args) => args.length,
+});
+
+defineCapability({
+  id: 'fill_water_bucket',
+  access: immutable({ requiresSurface: true }),
+  parameters: {
+    range: { type: 'integer', minimum: 16, maximum: 192 },
+  },
+  normalizeArguments: args => immutable({
+    range: boundedInteger(args?.range, 128, 16, 192),
+  }),
+  preconditions: snapshot => preconditionReport([
+    {
+      requirement: 'carried empty bucket',
+      satisfied: (Number(snapshot.inventory.get('bucket')) || 0) >= 1,
+    },
+    { requirement: 'connected supported stance', satisfied: Boolean(snapshot.position) },
+  ]),
+  expectedEffects: () => [immutable({
+    kind: 'inventory_increase',
+    item: 'water_bucket',
+    minimumIncrease: 1,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!fillWaterBucket',
+    command: `!fillWaterBucket(${args.range})`,
+    target: { name: 'water_bucket' },
+  }),
+  execute: executeBoundCommand,
+  verify: verifyWaterBucketCollection,
+  cost: (_snapshot, args) => Math.max(4, Math.ceil(args.range / 24)),
+});
+
+defineCapability({
+  id: 'cast_obsidian_source',
+  parameters: {
+    quantity: { type: 'integer', minimum: 1, maximum: 16 },
+    preservedReturnRoute: { type: 'point_list', maximum: 512 },
+  },
+  normalizeArguments: args => immutable({
+    quantity: boundedInteger(args?.quantity, 10, 1, 16),
+    preservedReturnRoute: normalizeMiningReturnRoute(args?.preservedReturnRoute),
+  }),
+  preconditions: snapshot => preconditionReport([
+    {
+      requirement: 'carried water bucket',
+      satisfied: (Number(snapshot.inventory.get('water_bucket')) || 0) >= 1,
+    },
+    {
+      requirement: 'carried diamond pickaxe',
+      satisfied: (Number(snapshot.inventory.get('diamond_pickaxe')) || 0) >= 1,
+    },
+    { requirement: 'connected supported stance', satisfied: Boolean(snapshot.position) },
+  ]),
+  expectedEffects: (_snapshot, args) => [immutable({
+    kind: 'obsidian_source_progress',
+    requested: args.quantity,
+  })],
+  bind: (_context, args) => immutable({
+    ok: true,
+    commandName: '!castObsidianSource',
+    command: `!castObsidianSource(${args.quantity}, ${args.preservedReturnRoute.length})`,
+    target: { name: 'obsidian' },
+    preservedReturnRouteCells: args.preservedReturnRoute.length,
+  }),
+  execute: executeBoundCommand,
+  verify: verifyObsidianCasting,
+  cost: (_snapshot, args) => Math.max(8, args.quantity * 2),
 });
 
 defineCapability({
@@ -1916,6 +2128,7 @@ export function createCapabilityRequest(id, argumentsValue, metadata = {}) {
     capability: immutable({
       id: definition.id,
       arguments: definition.normalizeArguments(argumentsValue),
+      ...(definition.access ? { access: definition.access } : {}),
     }),
   });
 }
@@ -1938,6 +2151,7 @@ export function createCapabilityPlanAction(id, argumentsValue, metadata = {}, {
     capability: immutable({
       id: definition.id,
       arguments: args,
+      ...(definition.access ? { access: definition.access } : {}),
       preconditions,
       expectedEffects,
       binding: { ...binding, expectedEffects },

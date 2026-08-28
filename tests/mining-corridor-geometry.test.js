@@ -10,6 +10,7 @@ import {
     assessMiningRouteStep,
     assessMiningRouteDurability,
     goToSurface,
+    miningBlockFaceReachableFromStandingCell,
     observedSupportedStandingCell,
     orderMiningExcavationBlocks,
     selectMiningDeadlinePrefix,
@@ -301,6 +302,59 @@ test('surface recovery accepts an occupied open stance with a complete native gr
     assert.equal(bot.lastActionEvidence.legs, 0);
 });
 
+test('open-surface recovery does not accept an open pit without a native ground-egress route', async () => {
+    const blocks = new Map();
+    const put = (x, y, z, name, boundingBox = 'block') => {
+        const position = new Vec3(x, y, z);
+        blocks.set(key(position), { name, boundingBox, shapes: [], position });
+    };
+    put(4, 61, -3, 'stone');
+    put(10, 66, -3, 'grass_block');
+    const bot = {
+        interrupt_code: false,
+        entity: {
+            position: new Vec3(4.5, 62, -2.5),
+            width: 0.6,
+            height: 1.8,
+        },
+        game: { minY: -64, height: 384 },
+        inventory: { items: () => [] },
+        blockAt(position) {
+            return blocks.get(key(position.floored())) || {
+                name: 'air',
+                boundingBox: 'empty',
+                shapes: [],
+                position: position.floored(),
+            };
+        },
+        output: '',
+    };
+    let navigationCalls = 0;
+
+    const reached = await goToSurface(bot, {
+        requireOpenSurface: true,
+        async navigateGoal() {
+            navigationCalls += 1;
+            return false;
+        },
+        async settleSupportedStandingCell() {
+            return null;
+        },
+        probeSurfaceEgress() {
+            return {
+                reachable: false,
+                conclusive: true,
+                status: 'noPath',
+                pathLength: 0,
+            };
+        },
+    });
+
+    assert.equal(reached, false);
+    assert.equal(navigationCalls, 1);
+    assert.equal(bot.lastActionEvidence.outcome, 'surface_settlement_unverified');
+});
+
 test('surface recovery requires one shared responsive pick only for a bound unharvested stone corridor', () => {
     const stone = {
         name: 'stone',
@@ -394,6 +448,22 @@ test('surface corridor binds and clears Gravel above an authorized Diorite plug 
     );
 });
 
+test('mining corridor rejects an initial block whose face is occluded from its bound body cell', () => {
+    const stance = new Vec3(709, -36, -773);
+    const target = { position: new Vec3(710, -33, -773) };
+    const bot = {
+        entity: { eyeHeight: 1.62 },
+        world: {
+            raycast() {
+                return { position: new Vec3(709, -34, -773) };
+            },
+        },
+    };
+    assert.equal(miningBlockFaceReachableFromStandingCell(bot, target, stance), false);
+    bot.world.raycast = () => ({ position: target.position });
+    assert.equal(miningBlockFaceReachableFromStandingCell(bot, target, stance), true);
+});
+
 test('corridor binding preserves the ore-tier pick when a capable stone pick is carried', () => {
     const stonePick = {
         name: 'stone_pickaxe',
@@ -441,7 +511,7 @@ test('corridor replacement prefers a fresh stone pick that is craftable from car
         type: 1,
         slot: 10,
         maxDurability: 59,
-        durabilityUsed: 43,
+        durabilityUsed: 39,
     };
     const stonePick = {
         name: 'stone_pickaxe',
@@ -455,7 +525,7 @@ test('corridor replacement prefers a fresh stone pick that is craftable from car
         stonePick,
         { name: 'cobblestone', type: 20, slot: 12, count: 64 },
         { name: 'stick', type: 21, slot: 13, count: 2 },
-        { name: 'crafting_table', type: 22, slot: 14, count: 1 },
+        { name: 'oak_planks', type: 22, slot: 14, count: 4 },
     ];
     const bot = {
         inventory: { items: () => carried, slots: carried },
@@ -473,7 +543,7 @@ test('corridor replacement prefers a fresh stone pick that is craftable from car
         canHarvest: type => [1, 2, 3, 4].includes(type),
     };
 
-    const assessment = assessMiningRouteDurability(bot, Array(5).fill(stone));
+    const assessment = assessMiningRouteDurability(bot, Array(7).fill(stone));
 
     assert.equal(assessment.ok, false);
     assert.equal(assessment.outcome, 'insufficient_tool_durability');

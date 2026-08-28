@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,10 @@ import {
 } from '../../src/agent/runtime/activity-freshness.js';
 import { CompanionDirectiveStateStore } from '../../src/agent/runtime/companion-directive-state.js';
 import { JobStateStore } from '../../src/agent/runtime/job-state-store.js';
+import { GoalStateStore } from '../../src/agent/runtime/goal-director.js';
+import { createItemGoalContract } from '../../src/agent/runtime/goal-contract.js';
+import { AgendaDirector } from '../../src/agent/runtime/agenda-director.js';
+import { AgendaStore, normalizeAgendaEntry } from '../../src/agent/runtime/agenda.js';
 
 const BOT = 'FreshnessBot';
 
@@ -94,6 +98,122 @@ test('JobStateStore still restores a work order after a crash restart', () => {
     assert.ok(restored, 'a five-second-old work order is still live work');
     assert.equal(restored.id, 'builder-2');
     assert.equal(store.lastError, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('GoalStateStore restores one stale active goal only for an explicit lifecycle restart', () => {
+  const activeGoal = createItemGoalContract({
+    kind: 'acquire',
+    requester: 'DirectorOps',
+    target: {
+      requestedName: 'obsidian',
+      canonicalName: 'obsidian',
+      inventoryName: 'obsidian',
+      acquisitionName: 'obsidian',
+      acquisitionKind: 'collect_block',
+    },
+    quantity: 10,
+    quantityMode: 'minimum',
+  });
+  const { root, cleanup } = seed('goal-state.json', {
+    version: 1,
+    activeGoal,
+    lastGoal: null,
+    protectedGoalId: null,
+    savedAt: Date.now() - (ACTIVITY_STATE_MAX_AGE_MS + 60_000),
+  });
+  try {
+    const ordinaryStart = new GoalStateStore(BOT, { root });
+    assert.equal(ordinaryStart.load().activeGoal, null, 'a fresh session still drops stale work');
+    assert.match(String(ordinaryStart.lastError || ''), /Discarded persisted goal state/);
+
+    const explicitRestart = new GoalStateStore(BOT, { root });
+    const restored = explicitRestart.load({ allowStaleActiveGoal: true });
+    assert.equal(restored.activeGoal?.id, activeGoal.id);
+    assert.equal(explicitRestart.lastError, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('explicit Agenda resume rehydrates only the exact stale failed dependency chain', () => {
+  const savedAt = Date.now() - (ACTIVITY_STATE_MAX_AGE_MS + 60_000);
+  const failed = normalizeAgendaEntry({
+    id: 'agenda-1000-1',
+    kind: 'inventory_checklist',
+    requester: 'DirectorOps',
+    inventoryRequirements: [{ target: 'obsidian', quantity: 10 }],
+    state: 'failed',
+    evidence: { code: 'goal_attempts_exhausted', retryable: false },
+  }, { now: () => savedAt });
+  const continuation = normalizeAgendaEntry({
+    id: 'agenda-1000-2',
+    kind: 'portal_build',
+    requester: 'DirectorOps',
+    radius: 12,
+    dependsOnEntryId: failed.id,
+    dependencyPolicy: 'requires_success',
+    state: 'pending',
+  }, { now: () => savedAt });
+  const { root, cleanup } = seed('agenda.json', {
+    version: 1,
+    entries: [failed, continuation],
+    savedAt,
+  });
+  try {
+    const store = new AgendaStore(BOT, { root });
+    const agent = {
+      name: BOT,
+      goal_director: { activeGoal: null, lastGoal: null },
+      job_director: { activeOrder: null, lastOrder: null },
+      behavior_arbiter: { wake() {} },
+    };
+    const director = new AgendaDirector(agent, { store });
+    assert.deepEqual(director.entries, [], 'ordinary startup must still reject stale player work');
+    assert.equal(director.status.code, 'agenda_load_failed');
+
+    const resumed = director.resumeFailedChain();
+    assert.deepEqual(resumed, { resumed: 2, rootId: failed.id });
+    assert.deepEqual(director.entries.map(entry => entry.id), [failed.id, continuation.id]);
+    assert.deepEqual(director.entries.map(entry => entry.state), ['pending', 'pending']);
+    assert.equal(store.explicitStaleResume, true);
+    const persisted = JSON.parse(readFileSync(store.filePath, 'utf8'));
+    assert.deepEqual(persisted.entries.map(entry => entry.id), [failed.id, continuation.id]);
+    assert.deepEqual(persisted.entries.map(entry => entry.state), ['pending', 'pending']);
+    assert.ok(persisted.savedAt > savedAt);
+  } finally {
+    cleanup();
+  }
+});
+
+test('explicit Agenda resume cannot resurrect unrelated stale pending work', () => {
+  const savedAt = Date.now() - (ACTIVITY_STATE_MAX_AGE_MS + 60_000);
+  const failed = normalizeAgendaEntry({
+    id: 'agenda-2000-1',
+    kind: 'inventory_checklist',
+    requester: 'DirectorOps',
+    inventoryRequirements: [{ target: 'obsidian', quantity: 10 }],
+    state: 'failed',
+  }, { now: () => savedAt });
+  const unrelated = normalizeAgendaEntry({
+    id: 'agenda-2000-2',
+    kind: 'goto',
+    requester: 'DirectorOps',
+    recipient: 'DirectorOps',
+    state: 'pending',
+  }, { now: () => savedAt });
+  const { root, cleanup } = seed('agenda.json', {
+    version: 1,
+    entries: [failed, unrelated],
+    savedAt,
+  });
+  try {
+    const store = new AgendaStore(BOT, { root });
+    assert.deepEqual(store.load({ allowStaleFailedChain: true }), []);
+    assert.equal(store.explicitStaleResume, false);
+    assert.match(String(store.lastError || ''), /Discarded persisted agenda/);
   } finally {
     cleanup();
   }

@@ -59,6 +59,8 @@ function inferActivitySpecialist(_actionLabel, requestedSpecialist = null) {
         || requested === 'craft'
         || requested === 'furnace'
         || requested === 'placement'
+        || requested === 'pvp'
+        || requested === 'vehicle'
     ) return requested;
     return null;
 }
@@ -539,6 +541,163 @@ class PlacementActivityAdapter extends PathfinderActivityAdapter {
     }
 }
 
+class PvpActivityAdapter extends PathfinderActivityAdapter {
+    start() {
+        super.start();
+        this.listen('startedAttacking', () => this.onProgress('pvp_started', {
+            targetId: Number.isFinite(this.bot?.pvp?.target?.id) ? this.bot.pvp.target.id : null,
+        }));
+        this.listen('attackedTarget', () => this.onProgress('pvp_attack', {
+            targetId: Number.isFinite(this.bot?.pvp?.target?.id) ? this.bot.pvp.target.id : null,
+        }));
+        this.listen('stoppedAttacking', () => this.onProgress('pvp_stopped', {}));
+    }
+
+    async requestHalt() {
+        let pvpEvidence = 'pvp_already_idle';
+        try {
+            await this.bot.pvp.stop();
+            pvpEvidence = 'pvp_stop_settled';
+        } catch {
+            pvpEvidence = 'pvp_stop_unconfirmed';
+        }
+        const pathfinder = await super.requestHalt();
+        const acknowledged = this.isSettled();
+        return {
+            acknowledged,
+            evidence: acknowledged
+                ? `${pvpEvidence}:pathfinder_idle`
+                : `pvp_halt_pending:${pathfinder?.evidence || pvpEvidence}`,
+        };
+    }
+
+    async forceHalt() {
+        try { this.bot.pvp.forceStop?.(); } catch { /* settlement check remains authoritative */ }
+        await super.forceHalt();
+        const acknowledged = this.isSettled();
+        return {
+            acknowledged,
+            evidence: acknowledged ? 'pvp_force_stopped_pathfinder_idle' : 'pvp_force_halt_pending',
+        };
+    }
+
+    isSettled() {
+        return this.bot?.pvp?.target == null
+            && this.bot?.pathfinder?.goal == null
+            && super.isSettled();
+    }
+
+    waitForSettlement(timeoutMs) {
+        if (this.isSettled()) return Promise.resolve({ settled: true, evidence: 'pvp_idle_pathfinder_idle' });
+        return new Promise(resolve => {
+            let finished = false;
+            const events = [
+                'stoppedAttacking',
+                'path_update',
+                'path_reset',
+                'path_stop',
+                'goal_reached',
+                'goal_updated',
+                'physicsTick',
+            ];
+            const cleanup = () => {
+                for (const event of events) this.bot.removeListener(event, check);
+                clearTimeout(timer);
+            };
+            const finish = result => {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve(result);
+            };
+            const check = () => {
+                if (this.isSettled()) finish({ settled: true, evidence: 'pvp_idle_pathfinder_idle' });
+            };
+            for (const event of events) this.bot.on(event, check);
+            const timer = setTimeout(
+                () => finish({ settled: false, evidence: 'pvp_settlement_timeout' }),
+                timeoutMs,
+            );
+            check();
+        });
+    }
+}
+
+class VehicleActivityAdapter {
+    constructor(bot, onProgress) {
+        this.bot = bot;
+        this.onProgress = onProgress;
+        this.listeners = [];
+        this.controlActive = false;
+    }
+
+    start() {
+        this.listen('vehicle_control_start', evidence => {
+            this.controlActive = true;
+            this.onProgress('vehicle_control_started', evidence || {});
+        });
+        this.listen('vehicle_control_stop', evidence => {
+            this.controlActive = false;
+            this.onProgress('vehicle_control_stopped', evidence || {});
+        });
+    }
+
+    listen(event, listener) {
+        this.bot.on(event, listener);
+        this.listeners.push([event, listener]);
+    }
+
+    requestHalt() {
+        try { this.bot.moveVehicle(0, 0); } catch { /* disconnected or dismounted */ }
+        this.controlActive = false;
+        try { this.bot.clearControlStates(); } catch { /* disconnected body */ }
+        return Promise.resolve({
+            acknowledged: this.isSettled(),
+            evidence: 'vehicle_input_zeroed',
+        });
+    }
+
+    forceHalt() {
+        return this.requestHalt();
+    }
+
+    isSettled() {
+        return this.controlActive === false && !activeControlState(this.bot);
+    }
+
+    waitForSettlement(timeoutMs) {
+        if (this.isSettled()) return Promise.resolve({ settled: true, evidence: 'vehicle_input_idle' });
+        return new Promise(resolve => {
+            let finished = false;
+            const events = ['vehicle_control_stop', 'dismount', 'physicsTick'];
+            const cleanup = () => {
+                for (const event of events) this.bot.removeListener(event, check);
+                clearTimeout(timer);
+            };
+            const finish = result => {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve(result);
+            };
+            const check = () => {
+                if (this.isSettled()) finish({ settled: true, evidence: 'vehicle_input_idle' });
+            };
+            for (const event of events) this.bot.on(event, check);
+            const timer = setTimeout(
+                () => finish({ settled: false, evidence: 'vehicle_settlement_timeout' }),
+                timeoutMs,
+            );
+            check();
+        });
+    }
+
+    dispose() {
+        for (const [event, listener] of this.listeners) this.bot.removeListener(event, listener);
+        this.listeners = [];
+    }
+}
+
 function stopPollDelayMs(attempt) {
     const index = Math.min(Math.max(0, attempt), STOP_POLL_LADDER_MS.length - 1);
     return STOP_POLL_LADDER_MS[index];
@@ -769,11 +928,19 @@ export class ActionManager {
             && typeof pathfinder?.isMoving === 'function'
             && typeof pathfinder?.isMining === 'function'
             && typeof pathfinder?.isBuilding === 'function';
-        if (selectedSpecialist && !pathfinderAvailable) return null;
+        if (selectedSpecialist && selectedSpecialist !== 'vehicle' && !pathfinderAvailable) return null;
         if (
             selectedSpecialist === 'collectblock'
             && typeof this.agent.bot?.collectBlock?.cancelTask !== 'function'
         ) return null;
+        if (
+            selectedSpecialist === 'pvp'
+            && (
+                typeof this.agent.bot?.pvp?.stop !== 'function'
+                || typeof this.agent.bot?.pvp?.forceStop !== 'function'
+            )
+        ) return null;
+        if (selectedSpecialist === 'vehicle' && typeof this.agent.bot?.moveVehicle !== 'function') return null;
         const record = {
             missionId: missionId || null,
             activityId: activityId || actionId,
@@ -812,6 +979,14 @@ export class ActionManager {
             }, selectedSpecialist)
             : selectedSpecialist === 'placement'
             ? new PlacementActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            })
+            : selectedSpecialist === 'pvp'
+            ? new PvpActivityAdapter(this.agent.bot, (kind, evidence) => {
+                this.observeActivityProgress(kind, evidence);
+            })
+            : selectedSpecialist === 'vehicle'
+            ? new VehicleActivityAdapter(this.agent.bot, (kind, evidence) => {
                 this.observeActivityProgress(kind, evidence);
             })
             : null;

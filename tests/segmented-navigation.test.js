@@ -21,6 +21,7 @@ import {
     segmentJourneyDestination,
     segmentWaypointCandidates,
     segmentWaypointSelection,
+    traverseMiningRouteSegment,
 } from '../src/agent/library/skills.js';
 
 const require = createRequire(import.meta.url);
@@ -1401,6 +1402,36 @@ test('mining staging requires physical settlement after a proven round trip', as
     assert.equal(bot.lastActionEvidence.retryable, true);
 });
 
+test('a partial mining return segment preserves the failing cell cause', async () => {
+    const { bot } = nativeJourneyBot();
+    bot.entity.onGround = true;
+    bot.blockAt = position => {
+        const x = Math.floor(position.x);
+        const y = Math.floor(position.y);
+        const name = x === 1 && y === 70
+            ? 'chest'
+            : y === 69
+                ? 'stone'
+                : 'air';
+        return {
+            name,
+            boundingBox: name === 'air' ? 'empty' : 'block',
+            diggable: name !== 'air',
+            position: position.clone(),
+        };
+    };
+
+    const returned = await traverseMiningRouteSegment(bot, [
+        { x: 0, y: 70, z: 0 },
+        { x: 1, y: 70, z: 0 },
+    ], 0, 1);
+
+    assert.equal(returned, false);
+    assert.equal(bot.lastActionEvidence.outcome, 'route_segment_partial');
+    assert.equal(bot.lastActionEvidence.failureOutcome, 'protected_block_in_route');
+    assert.equal(bot.lastActionEvidence.cellsTraversed, 1);
+});
+
 test('observed support loss after execution blocks every later segment', async () => {
     const { bot, gotoTargets } = nativeJourneyBot({ loseSupportAfterMove: true });
 
@@ -1482,6 +1513,28 @@ test('death recovery settles a pending record whose exact manifest is already ca
     assert.equal(bot.lastActionEvidence.completionSource, 'manifest_already_present');
     assert.deepEqual(bot.lastActionEvidence.recoveredByItem, { dirt: 1 });
     assert.deepEqual(bot.lastActionEvidence.gainedByItem, { dirt: 0 });
+});
+
+test('death recovery keeps cumulatively recovered items settled after survival consumes them', async () => {
+    const { bot } = nativeJourneyBot();
+
+    const recovered = await recoverDeathItems(bot, {
+        position: { x: 50, y: 70, z: 0 },
+        dimension: 'overworld',
+        inventory: { cooked_beef: 2, stick: 2 },
+        recoveredInventory: { cooked_beef: 2, stick: 2 },
+    }, {
+        navigateToPosition() {
+            assert.fail('a cumulatively recovered manifest must not be reopened after consumption');
+        },
+    });
+
+    assert.equal(recovered, true);
+    assert.equal(bot.lastActionEvidence.outcome, 'items_recovered');
+    assert.equal(bot.lastActionEvidence.completionSource, 'manifest_already_present');
+    assert.equal(bot.lastActionEvidence.recovered, 4);
+    assert.equal(bot.lastActionEvidence.missing, 0);
+    assert.deepEqual(bot.lastActionEvidence.gainedByItem, { cooked_beef: 0, stick: 0 });
 });
 
 test('death recovery clears only the bounded leaf column under exact local overhead drops', async () => {

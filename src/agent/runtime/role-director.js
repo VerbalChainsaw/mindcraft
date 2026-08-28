@@ -357,23 +357,21 @@ export class RoleDirector {
     this.sequence += 1;
     if (intent.behavior === 'resource_search') this.resourceSearchAttempts += 1;
     this.setStatus('acting', `role_${intent.behavior}`, intent.target, `Dispatching ${intent.behavior} through the verified command path.`, true);
-    const previousActionId = this.agent.last_action_result?.actionId || null;
-
     const actionOwner = roleIntentActionOwner(this.agent, intent);
     void Promise.resolve(executeCommand(this.agent, intent.command, {
       owner: actionOwner,
       routeOrigin: actionOwner === 'player' ? 'companion-directive' : 'role-director',
+      returnExecution: true,
     }))
-      .then(() => {
-        const result = this.agent.last_action_result;
-        const changed = Boolean(result?.actionId && result.actionId !== previousActionId);
-        const succeeded = changed && result.phase === 'succeeded';
+      .then(execution => {
+        const result = execution?.result || null;
+        const succeeded = result?.phase === 'succeeded';
         const activeFollow = CONTINUOUS_MOVEMENT_BEHAVIORS.has(intent.behavior) && !this.agent.isIdle();
         if (activeFollow) {
           this.setStatus('acting', `role_${intent.behavior}`, intent.target, 'Role movement is active.', true);
           return;
         }
-        if (!changed) {
+        if (!result?.actionId) {
           this.setStatus('failed', 'missing_action_result', intent.target, 'The role command returned without a structured action result.', true);
           return;
         }

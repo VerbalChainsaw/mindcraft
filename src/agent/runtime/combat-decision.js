@@ -96,6 +96,13 @@ function responseFor(threat, state) {
     if (rangedReady) {
       return { response: 'ranged', reason: 'explosive_standoff', desiredRange: 8 };
     }
+    if (shieldReady && meleeReady) {
+      return {
+        response: 'explosive_melee',
+        reason: 'shielded_explosive_kite',
+        desiredRange: 8,
+      };
+    }
     // Ten blocks clears the fuse radius but not the Creeper's pursuit or the
     // reflex admission envelope. Stopping there let the same live Creeper
     // catch up and repeatedly reacquire self-preservation until the bot died.

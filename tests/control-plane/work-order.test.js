@@ -520,6 +520,41 @@ test('Given endless preemption, the work order still fails instead of retrying f
   assert.ok(order.preemptions <= 24);
 });
 
+test('a named safety suspension holds the work order without spending any budget', () => {
+  const order = createWorkOrder({
+    id: 'suspended-mining-1',
+    role: 'miner',
+    kind: 'mine',
+    target: { name: 'iron_ore' },
+    quota: 8,
+    phase: 'execute',
+    attempts: 2,
+    recoveries: 1,
+    preemptions: 4,
+  });
+
+  const suspended = advanceWorkOrder(order, {
+    actionId: 'mine-action-1',
+    phase: 'interrupted',
+    code: 'interrupted',
+    detail: 'A skeleton started the safety incident.',
+    retryable: true,
+    continuation: { kind: 'resume_same' },
+  }, {
+    previousActionId: 'mine-action-0',
+    nextPhase: 'verify',
+    safetySuspended: true,
+    now: 12_000,
+  });
+
+  assert.equal(suspended.phase, 'execute');
+  assert.equal(suspended.attempts, 2);
+  assert.equal(suspended.recoveries, 1);
+  assert.equal(suspended.preemptions, 4);
+  assert.equal(suspended.evidence.code, 'safety_suspended');
+  assert.equal(suspended.evidence.actionId, 'mine-action-1');
+});
+
 test('an explicit player resume re-arms the same failed order and preserves its verified checkpoint', () => {
   const failed = createWorkOrder({
     id: 'builder-resume-1',

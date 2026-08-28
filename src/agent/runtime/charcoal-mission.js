@@ -229,6 +229,17 @@ export class CharcoalMissionController {
     return this.mode === 'active' && this.hasActiveMission();
   }
 
+  currentControlCommitment(action = {}) {
+    const mission = this.activeMission;
+    if (!mission?.missionId || !this.hasActiveMission()) return null;
+    return {
+      owner: 'player_mission',
+      obligationId: mission.missionId,
+      phase: mission.status || null,
+      ownsCurrentAction: action.owner === 'player',
+    };
+  }
+
   accept(request = {}) {
     if (this.mode === 'off') {
       return Promise.resolve({ accepted: false, code: 'charcoal_mission_disabled', detail: 'The charcoal Mission tranche is disabled.' });
@@ -397,7 +408,8 @@ export class CharcoalMissionController {
     }
     if (this.mode !== 'active' || this.agent.isOperatorHeld?.()) return false;
     if (this.now() < this.nextAttemptAt) return false;
-    if (mission.activities.length >= mission.constraints.maxActivities) {
+    const attemptedActivities = mission.activities.filter(activity => activity.state !== 'SUSPENDED').length;
+    if (attemptedActivities >= mission.constraints.maxActivities) {
       this.fail(mission, 'mission_activity_budget_exhausted',
         `Mission exhausted its ${mission.constraints.maxActivities}-Activity budget with ${inventoryCount(this.agent.bot, 'charcoal')} charcoal still in custody.`);
       return false;
@@ -487,17 +499,47 @@ export class CharcoalMissionController {
   settle(token, proposal, outcome) {
     const mission = this.activeMission;
     if (!mission || mission.missionId !== token.missionId || this.activeDispatch?.activityId !== token.activityId) return false;
-    const result = outcome?.result || this.agent.last_action_result || {
+    const result = outcome?.result || {
       phase: 'failed',
       code: 'mission_missing_action_result',
       detail: 'The Activity returned without a structured action result.',
       retryable: true,
     };
     const evidence = terminalEvidence(result);
+    const safetySuspended = result.phase === 'interrupted'
+      && this.agent.behavior_arbiter?.matchesControlSuspension?.({
+        owner: 'player_mission',
+        obligationId: mission.missionId,
+        actionId: result.actionId,
+      }) === true;
     const activities = mission.activities.map(activity => activity.activityId === token.activityId
-      ? immutable({ ...activity, state: String(result.phase || 'failed').toUpperCase(), finishedAt: this.now(), outcome: evidence })
+      ? immutable({
+          ...activity,
+          state: safetySuspended ? 'SUSPENDED' : String(result.phase || 'failed').toUpperCase(),
+          finishedAt: this.now(),
+          outcome: safetySuspended
+            ? immutable({ ...evidence, reasonCode: 'safety_suspended' })
+            : evidence,
+        })
       : activity);
-    this.store.update(mission.missionId, { activities, currentActivity: null, lastOutcome: evidence });
+    this.store.update(mission.missionId, {
+      activities,
+      currentActivity: null,
+      lastOutcome: safetySuspended
+        ? immutable({ ...evidence, reasonCode: 'safety_suspended' })
+        : evidence,
+    });
+
+    if (safetySuspended) {
+      this.nextAttemptAt = 0;
+      this.setStatus(
+        'waiting',
+        'safety_suspended',
+        'Survival owns the body until the active safety incident settles; this Mission will then replan from current world state.',
+        true,
+      );
+      return true;
+    }
 
     if (proposal.kind === 'deliver' && outcome?.verification?.ok === true && result.phase === 'succeeded') {
       this.succeed(this.activeMission, evidence);

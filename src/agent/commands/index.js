@@ -16,6 +16,15 @@ const COMMAND_REQUEST_ROUTE_ORIGINS = new Set([
     'job-director',
     'internal',
 ]);
+// Process lifecycle is operator authority. Prompt filtering keeps these controls
+// out of normal autonomy context, while this dispatch boundary prevents a model
+// from guessing one after a rejected or superseded action.
+const AUTONOMY_DENIED_PROCESS_COMMANDS = new Set([
+    '!stop',
+    '!restart',
+    '!leaveGame',
+    '!spawnBots',
+]);
 const MAX_COMMAND_REQUEST_ARGS = 8;
 const MAX_COMMAND_REQUEST_TEXT = 160;
 const SEMANTIC_CONSUMABLE_NAMES = new Set(['best_food', 'healing_potion']);
@@ -416,6 +425,13 @@ export async function executeCommand(agent, message, {
                 activityId,
                 materialToken,
             });
+            const normalizedOwner = boundedRequestText(owner, 40).toLowerCase();
+            if (normalizedOwner === 'autonomy' && AUTONOMY_DENIED_PROCESS_COMMANDS.has(parsed.commandName)) {
+                const value = `Blocked (operator_authority_required): ${parsed.commandName} is an operator/player process control. Autonomous dialogue must yield to the active Director instead.`;
+                return returnExecution
+                    ? Object.freeze({ value, result: null, requestContext, durableSubmission: null })
+                    : value;
+            }
             const perform = () => command.perform(agent, ...parsed.args);
             const performWithRequestContext = typeof agent.actions?.runWithRequestContext === 'function'
                 ? () => agent.actions.runWithRequestContext(requestContext, perform)

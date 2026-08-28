@@ -76,7 +76,10 @@ const HOLD_SAFE_COMMANDS = new Set([
     '!forgetRememberedPlace',
 ]);
 const COMPANION_CONTINUATION_COMMANDS = new Set(['!follow', '!followPlayer', '!guardPlayer', '!defend']);
-const HELD_WORK_RESUME_COMMANDS = new Set(['!resumeStructureJob']);
+const HELD_WORK_RESUME_COMMANDS = new Set([
+    '!resumeAgenda',
+    '!resumeStructureJob',
+]);
 const PLAYER_DESIGN_COMMANDS = new Set(['!buildStructure', '!designStructure']);
 const PLAYER_ITEM_PLAN_COMMANDS = new Set(['!queueItemPlan']);
 const PLAYER_STORAGE_PLAN_COMMANDS = new Set(['!queueStoragePlan']);
@@ -378,7 +381,13 @@ export function resolveCanonicalPlayerIdentity(source, bot, { isBotAgent = () =>
     return conservativeMatches.size === 1 ? [...conservativeMatches][0] : null;
 }
 
-export function shouldSeedLegacyDefaultGoal(profile, runtime, activeSettings = settings) {
+export function shouldSeedLegacyDefaultGoal(
+    profile,
+    runtime,
+    activeSettings = settings,
+    { hasTypedGoal = false } = {},
+) {
+    if (hasTypedGoal) return false;
     const goal = typeof activeSettings?.default_goal === 'string'
         ? activeSettings.default_goal.trim()
         : '';
@@ -409,6 +418,11 @@ export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
         this.last_sender = null;
         this.count_id = count_id;
+        // This marker is minted only by AgentProcess' restart path. It is set
+        // before the durable directors are constructed so GoalDirector may
+        // distinguish an explicit continuation of this runtime from an
+        // ordinary fresh launch that happens to find old activity on disk.
+        this.lifecycle_restart = init_message === 'Agent process restarted.';
         this._disconnectHandled = false;
         this._runtimeStopped = false;
         this._teardownPromise = null;
@@ -449,6 +463,8 @@ export class Agent {
         this.operator_hold = false;
         this.operator_hold_reason = '';
         this.operator_hold_generation = 0;
+        this.internal_control_block = null;
+        this.internal_control_generation = 0;
         this._chatDelivery = Promise.resolve();
         this._lastChatSentAt = 0;
 
@@ -597,6 +613,15 @@ export class Agent {
         this.behavior_arbiter = new BehaviorArbiter(this, {
             heldNoHumanUnloadGraceMs: settings.held_no_human_unload_grace_ms,
         });
+        for (const commitmentProvider of [
+            this.goal_director,
+            this.charcoal_mission,
+            this.job_director,
+            this.agenda_director,
+            this.companion_context,
+        ]) {
+            this.behavior_arbiter.registerControlCommitmentProvider(commitmentProvider);
+        }
         try {
             this.flight_recorder = new BehaviorFlightRecorder(this);
         } catch (error) {
@@ -704,7 +729,15 @@ export class Agent {
                 if (settings.task) {
                     if (!load_mem) this.task.initBotTask();
                     this.task.setAgentGoal();
-                } else if (shouldSeedLegacyDefaultGoal(this.prompter.profile, this.runtime, settings) && !this.self_prompter.prompt) {
+                } else if (
+                    shouldSeedLegacyDefaultGoal(
+                        this.prompter.profile,
+                        this.runtime,
+                        settings,
+                        { hasTypedGoal: Boolean(this.goal_director?.activeGoal) },
+                    )
+                    && !this.self_prompter.prompt
+                ) {
                     // No scripted task: seed a self-prompt goal so the bot
                     // autonomously pursues gameplay instead of only reacting to chat.
                     // Runtime-configured role bots use RoleDirector instead; seeding
@@ -908,6 +941,37 @@ export class Agent {
 
     isOperatorHeld() {
         return this.operator_hold === true;
+    }
+
+    beginInternalControlBlock(reason, { kind = 'assignment_wait', blocksBody = true } = {}) {
+        const generation = ++this.internal_control_generation;
+        this.internal_control_block = Object.freeze({
+            generation,
+            kind: String(kind || 'assignment_wait').slice(0, 48),
+            reason: String(reason || 'internal control wait').slice(0, 160),
+            blocksBody: blocksBody === true,
+            startedAt: Date.now(),
+        });
+        this.behavior_arbiter?.wake?.('internal_control_block_started');
+        return generation;
+    }
+
+    currentInternalControlBlock() {
+        return this.internal_control_block ? { ...this.internal_control_block } : null;
+    }
+
+    isCurrentInternalControlBlock(generation) {
+        return Number.isInteger(generation)
+            && this.internal_control_block?.generation === generation;
+    }
+
+    releaseInternalControlBlock(reason = 'internal work settled', generation = null) {
+        if (!this.internal_control_block) return false;
+        if (Number.isInteger(generation) && !this.isCurrentInternalControlBlock(generation)) return false;
+        this.internal_control_block = null;
+        this.internal_control_generation += 1;
+        this.behavior_arbiter?.wake?.(`internal_control_released:${String(reason || '').slice(0, 64)}`);
+        return true;
     }
 
     supersedeOpenPlayerRequest(reason = 'superseded') {
@@ -1166,17 +1230,20 @@ export class Agent {
         return this.operator_hold === true && this.operator_hold_generation === generation;
     }
 
-    releaseFailedConstructionCompilationHold(deferredAssignment, settlement) {
+    releaseFailedConstructionCompilationBlock(deferredAssignment, settlement) {
         if (
             deferredAssignment?.kind !== 'construction'
             || settlement?.settled !== true
             || settlement.state !== 'failed'
             || settlement.retryable !== false
-            || !Number.isInteger(deferredAssignment.holdGeneration)
-            || !this.isCurrentOperatorHold(deferredAssignment.holdGeneration)
+            || !Number.isInteger(deferredAssignment.controlBlockGeneration)
+            || !this.isCurrentInternalControlBlock(deferredAssignment.controlBlockGeneration)
             || this.agenda_director?.hasUnfinished?.() !== true
         ) return false;
-        return this.releaseOperatorHold('construction compilation settled with agenda continuation');
+        return this.releaseInternalControlBlock(
+            'construction compilation settled with agenda continuation',
+            deferredAssignment.controlBlockGeneration,
+        );
     }
 
     async takePersistentJobControl() {
@@ -1186,7 +1253,6 @@ export class Agent {
         if (stopOutcome.stopped) return { ready: true, detail: '' };
 
         const detail = `The current action '${this.actions.currentActionLabel || 'unknown'}' did not yield, so the new work order was not accepted.`;
-        this.holdPosition('persistent job handoff failed');
         return { ready: false, detail };
     }
 
@@ -1311,14 +1377,14 @@ export class Agent {
             companion: this.companion_context?.snapshot?.() || null,
         });
         if (!plan) return false;
-        // The scout entry is already the package owner for the complete
-        // observe -> remember -> return -> guide promise. Sending that owned
-        // contract back through free-form model command selection lets the
-        // provider split it into unrelated searches and stale coordinates.
-        // Other requests retain the configured model-first sequencing path.
+        // These typed project compilers already own their complete player
+        // promise. Sending one back through free-form model command selection
+        // lets the provider split it into unrelated elemental commands and
+        // discard durable dependency edges. Ordinary requests retain the
+        // configured model-first sequencing path.
         if (
             this.llm_sequencing
-            && !['scout', 'livestock'].includes(plan.owner)
+            && !['scout', 'livestock', 'nether_expedition'].includes(plan.owner)
             && bypassModelSequencing !== true
         ) return false;
         if (plan.rejection) {
@@ -1787,17 +1853,19 @@ export class Agent {
                         queuedConstruction.entryId,
                     );
                     if (compiling?.accepted !== true) {
-                        this.holdPosition('construction assignment could not begin');
-                        this.routeResponse(source, 'I could not safely begin that construction assignment, so I am holding position.');
+                        this.routeResponse(source, 'I could not begin that construction assignment; no work was started.');
                         return true;
                     }
                 }
-                if (!this.isOperatorHeld()) {
-                    this.holdPosition(`${assignmentKind.replace('_', ' ')} assignment pending`);
-                }
+                const controlBlockGeneration = this.isOperatorHeld()
+                    ? null
+                    : this.beginInternalControlBlock(
+                        `${assignmentKind.replace('_', ' ')} assignment pending`,
+                        { kind: 'assignment_compilation' },
+                    );
                 deferredModelAssignment = {
                     kind: assignmentKind,
-                    holdGeneration: this.operator_hold_generation,
+                    controlBlockGeneration,
                     agendaEntryId: queuedConstruction?.entryId || null,
                     agendaDisposition: deferredAgendaDisposition,
                     lastFailureSignature: '',
@@ -1915,11 +1983,14 @@ export class Agent {
         console.log('received message from', source, ':', message);
 
         const checkInterrupt = () => {
-            const retainedCompilationHold = Number.isInteger(deferredModelAssignment?.holdGeneration)
-                && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
+            const retainedCompilationBlock = Number.isInteger(deferredModelAssignment?.controlBlockGeneration)
+                && this.isCurrentInternalControlBlock(deferredModelAssignment.controlBlockGeneration);
             const retainedPlayerPromptHold = Number.isInteger(authorizedModelHoldGeneration)
                 && this.isCurrentOperatorHold(authorizedModelHoldGeneration);
-            return (this.isOperatorHeld() && !retainedCompilationHold && !retainedPlayerPromptHold)
+            const compilationBlockSuperseded = Number.isInteger(deferredModelAssignment?.controlBlockGeneration)
+                && !retainedCompilationBlock;
+            return compilationBlockSuperseded
+                || (this.isOperatorHeld() && !retainedPlayerPromptHold)
                 || this.self_prompter.shouldInterrupt(self_prompt)
                 || this.shut_up
                 || convoManager.responseScheduledFor(source);
@@ -2307,26 +2378,28 @@ export class Agent {
                     : persistentJobAccepted;
                 if (deferredAssignmentAccepted) {
                     const acceptedAssignmentKind = deferredModelAssignment.kind;
+                    const acceptedControlBlockGeneration = deferredModelAssignment.controlBlockGeneration;
                     if (acceptedAssignmentKind === 'construction' && deferredModelAssignment.agendaEntryId) {
                         const binding = this.agenda_director?.bindConstruction?.(
                             deferredModelAssignment.agendaEntryId,
                             submittedJob.activeOrderId,
                         );
                         if (binding?.accepted !== true) {
-                            const detail = `The structure job was accepted, but its durable agenda barrier could not be bound (${binding?.code || 'unknown error'}). I am holding position.`;
+                            const detail = `The structure job was accepted, but its durable agenda barrier could not be bound (${binding?.code || 'unknown error'}). Further automatic body work is quarantined.`;
                             await this.history.add('system', detail);
-                            this.holdPosition('construction agenda binding failed');
+                            this.beginInternalControlBlock('construction agenda binding failed', { kind: 'quarantine' });
                             this.routeResponse(source, detail);
                             break;
                         }
                     }
                     deferredModelAssignment = null;
-                    this.releaseOperatorHold(
+                    this.releaseInternalControlBlock(
                         acceptedAssignmentKind === 'item_plan'
                             ? 'player item plan accepted'
                             : acceptedAssignmentKind === 'storage_plan'
                                 ? 'player storage plan accepted'
                                 : 'player design work order accepted',
+                        acceptedControlBlockGeneration,
                     );
                     this.history.save();
                     break;
@@ -2377,15 +2450,10 @@ export class Agent {
                                 ? 'The storage request remains unassigned. Transcript claims are not durable work; only a correlated persisted Agenda plan may claim cleanup is queued.'
                                 : 'The construction request remains unassigned. Transcript claims are not durable work; only an active JobDirector order may claim construction is registered or underway.',
                     );
-                    const sameRetainedHold = deferredModelAssignment.holdGeneration !== null
-                        && this.isCurrentOperatorHold(deferredModelAssignment.holdGeneration);
-                    if (!this.isOperatorHeld() || sameRetainedHold) {
-                        this.holdPosition(compilingItemPlan
-                            ? 'player item plan was not compiled'
-                            : compilingStoragePlan
-                                ? 'player storage plan was not compiled'
-                                : 'player design request was not compiled');
-                    }
+                    this.releaseInternalControlBlock(
+                        'assignment compilation returned without durable work',
+                        deferredModelAssignment.controlBlockGeneration,
+                    );
                     this.history.save();
                     this.routeResponse(source, detail);
                 } else {
@@ -2480,16 +2548,15 @@ export class Agent {
                         detail,
                     );
                 }
-                const releasedForAgendaContinuation = this.releaseFailedConstructionCompilationHold?.(
+                const releasedForAgendaContinuation = this.releaseFailedConstructionCompilationBlock?.(
                     deferredModelAssignment,
                     constructionSettlement,
                 ) === true;
-                if (!this.isOperatorHeld() && !releasedForAgendaContinuation) {
-                    this.holdPosition(compilingItemPlan
-                        ? 'item plan assignment did not settle'
-                        : compilingStoragePlan
-                            ? 'storage plan assignment did not settle'
-                            : 'construction assignment did not settle');
+                if (!releasedForAgendaContinuation) {
+                    this.releaseInternalControlBlock(
+                        'assignment compilation ended without durable work',
+                        deferredModelAssignment.controlBlockGeneration,
+                    );
                 }
                 await this.history.add('system', detail);
                 deferredModelAssignment = null;

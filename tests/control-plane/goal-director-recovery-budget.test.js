@@ -6,7 +6,10 @@ import test from 'node:test';
 import minecraftData from 'minecraft-data';
 import Vec3 from 'vec3';
 
-import { GoalDirector } from '../../src/agent/runtime/goal-director.js';
+import {
+  failedPlannerMethodExclusions,
+  GoalDirector,
+} from '../../src/agent/runtime/goal-director.js';
 import { MemoryBank } from '../../src/agent/memory_bank.js';
 import { capabilityCommand } from '../../src/agent/runtime/capability-catalogue.js';
 import { createItemGoalContract, normalizeGoalContract } from '../../src/agent/runtime/goal-contract.js';
@@ -816,7 +819,7 @@ test('a settled source search persists exact replay authority and waits for a ne
   ]);
 });
 
-test('death charges a censored goal once, recovers recorded items, and ignores the late interruption', async () => {
+test('death defers the productive charge, recovers recorded items, and ignores the late interruption', async () => {
   const director = createDirector();
   let now = 100_000;
   const deathRecordedAt = 99_999;
@@ -836,16 +839,17 @@ test('death charges a censored goal once, recovers recorded items, and ignores t
     commands.push(command);
     if (command.startsWith('!collectBlocksInRange')) {
       await originalAction.promise;
-      agent.last_action_result = {
+      const result = {
         actionId: 'late-interrupted-action',
         phase: 'interrupted',
         code: 'interrupted',
         detail: 'Death cleanup stopped the old action.',
         retryable: true,
       };
-      return false;
+      agent.last_action_result = result;
+      return { value: false, result };
     }
-    agent.last_action_result = {
+    const result = {
       actionId: 'death-items-recovered',
       phase: 'succeeded',
       code: 'skill_items_recovered',
@@ -853,9 +857,26 @@ test('death charges a censored goal once, recovers recorded items, and ignores t
       retryable: false,
       evidence: { skill: { kind: 'death_recovery', outcome: 'items_recovered' } },
     };
-    return true;
+    agent.last_action_result = result;
+    return { value: true, result };
   };
-  director.activeGoal = boundaryGoal([]);
+  const censoredGoal = boundaryGoal([]);
+  const miningRoute = [
+    { x: 2, y: 32, z: 8 },
+    { x: 3, y: 31, z: 8 },
+  ];
+  director.agent.bot.entity = { position: new Vec3(8144, 67, 7929) };
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  director.activeGoal = normalizeGoalContract({
+    ...censoredGoal,
+    attempts: censoredGoal.maxAttempts - 1,
+    checkpoint: {
+      ...censoredGoal.checkpoint,
+      miningReturnRoute: miningRoute,
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+  });
 
   assert.equal(director.dispatch('plan', '!collectBlocksInRange("stone", 1, 64)'), true);
   assert.equal(director.reconcileDeath({
@@ -866,9 +887,23 @@ test('death charges a censored goal once, recovers recorded items, and ignores t
     deathPersistenceCode: 'death_recorded',
   }), true);
   assert.equal(director.activeGoal.phase, 'recover');
-  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.attempts, censoredGoal.maxAttempts - 1);
   assert.equal(director.activeGoal.evidence.code, 'goal_owner_died');
   assert.equal(director.activeGoal.subgoals.at(-1).code, 'goal_owner_died');
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute, miningRoute);
+
+  director.activeGoal = normalizeGoalContract({
+    ...director.activeGoal,
+    phase: 'assess',
+    evidence: {
+      actionId: '',
+      phase: 'assess',
+      code: 'restart_revalidation',
+      detail: 'Fresh process must revalidate the persisted death identity.',
+      verified: false,
+      at: now,
+    },
+  });
 
   now += 750;
   director.update();
@@ -879,15 +914,139 @@ test('death charges a censored goal once, recovers recorded items, and ignores t
     `!recoverDeathItems(${deathRecordedAt})`,
   ]);
   assert.equal(director.activeGoal.phase, 'assess');
-  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.attempts, censoredGoal.maxAttempts - 1);
   assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_items_recovered');
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute, miningRoute);
 
   originalAction.resolve();
   await settle();
   await settle();
   assert.equal(director.activeGoal.phase, 'assess');
-  assert.equal(director.activeGoal.attempts, 1);
+  assert.equal(director.activeGoal.attempts, censoredGoal.maxAttempts - 1);
   assert.equal(director.activeGoal.subgoals.at(-1).code, 'skill_items_recovered');
+});
+
+test('death without an acting subgoal defers its charge until recorded inventory recovery settles', () => {
+  const director = createDirector();
+  const deathRecordedAt = 119_999;
+  const goal = boundaryGoal([]);
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    attempts: goal.maxAttempts - 1,
+  });
+
+  assert.equal(director.reconcileDeath({
+    position: { x: 8144, y: 67, z: 7929 },
+    dimension: 'overworld',
+    recoverableItems: 10,
+    deathRecord: {
+      position: { x: 8144, y: 67, z: 7929 },
+      dimension: 'overworld',
+      inventory: { spruce_log: 5, stick: 4, string: 1 },
+      recordedAt: deathRecordedAt,
+      recoveredAt: null,
+    },
+    deathPersistenceCode: 'death_recorded',
+  }), true);
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, goal.maxAttempts - 1);
+  assert.equal(director.activeGoal.evidence.code, 'goal_owner_died');
+  assert.deepEqual(director.activeGoal.memory.deathRecovery, { recordedAt: deathRecordedAt });
+});
+
+test('an unrecovered death spends the bounded attempt and terminalizes only when exhausted', async () => {
+  const director = createDirector();
+  const goal = boundaryGoal([]);
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    attempts: goal.maxAttempts - 1,
+    phase: 'recover',
+    memory: {
+      ...goal.memory,
+      deathRecovery: { recordedAt: 129_999 },
+    },
+  });
+  director.executeGoalCommand = async agent => {
+    const result = {
+      actionId: 'death-items-unrecovered',
+      phase: 'failed',
+      code: 'skill_death_items_unrecovered',
+      detail: 'The recorded drops were not recovered.',
+      retryable: true,
+      evidence: { skill: { kind: 'death_recovery', outcome: 'items_unrecovered' } },
+    };
+    agent.last_action_result = result;
+    return { value: false, result };
+  };
+
+  assert.equal(director.dispatch('recover', '!recoverDeathItems(129999)'), true);
+  await settle();
+  await settle();
+
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.phase, 'failed');
+  assert.equal(director.lastGoal.attempts, goal.maxAttempts);
+  assert.equal(director.lastGoal.evidence.code, 'goal_attempts_exhausted');
+});
+
+test('partial death-manifest progress preserves the attempt while an unchanged retry still exhausts it', () => {
+  const director = createDirector();
+  const goal = boundaryGoal([{
+    ...subgoal('recover', 1, 'acting'),
+    commandName: '!recoverDeathItems',
+  }]);
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    attempts: goal.maxAttempts - 1,
+    phase: 'recover',
+    memory: {
+      ...goal.memory,
+      deathRecovery: { recordedAt: 139_999 },
+    },
+  });
+  const partialResult = actionId => ({
+    actionId,
+    phase: 'failed',
+    code: 'skill_items_partially_recovered',
+    detail: 'Most of the bound death manifest was recovered.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'death_recovery',
+        outcome: 'items_partially_recovered',
+        recovered: 725,
+        missing: 2,
+      },
+    },
+  });
+
+  director.handleResult('recover', partialResult('death-progress'));
+
+  assert.equal(director.activeGoal.attempts, goal.maxAttempts - 1);
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.deepEqual(director.activeGoal.memory.deathRecovery, {
+    recordedAt: 139_999,
+    recovered: 725,
+    missing: 2,
+  });
+  assert.equal(director.status.code, 'death_recovery_progress');
+
+  director.activeGoal = normalizeGoalContract({
+    ...director.activeGoal,
+    phase: 'recover',
+    subgoals: [
+      ...director.activeGoal.subgoals,
+      {
+        ...subgoal('recover', 2, 'acting'),
+        commandName: '!recoverDeathItems',
+      },
+    ],
+  });
+  director.handleResult('recover', partialResult('death-unchanged'));
+
+  assert.equal(director.activeGoal, null);
+  assert.equal(director.lastGoal.attempts, goal.maxAttempts);
+  assert.equal(director.lastGoal.evidence.code, 'goal_attempts_exhausted');
 });
 
 test('a full death ledger admits the current death and Goal binds its exact identity', () => {
@@ -939,7 +1098,7 @@ test('a full death ledger admits the current death and Goal binds its exact iden
       director.activeGoal.memory.deathRecovery.recordedAt,
       current.record.recordedAt,
     );
-    assert.equal(director.activeGoal.attempts, 1);
+    assert.equal(director.activeGoal.attempts, 0);
   } finally {
     rmSync(rootDir, { recursive: true, force: true });
   }
@@ -1144,6 +1303,47 @@ test('recovery history does not spend the productive-step ceiling, which still f
     z: 8,
   });
 
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([subgoal('plan', 1, 'acting')]),
+    attempts: 2,
+    checkpoint: {
+      baselineInventory: 0,
+      targetInventory: 1,
+      delivered: 0,
+      miningReturnRoute: [
+        { x: 783, y: 53, z: -737 },
+        { x: 788, y: 50, z: -737 },
+      ],
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+  });
+  director.handleResult('plan', {
+    actionId: 'safe-depth-geometry-change',
+    phase: 'failed',
+    code: 'skill_no_safe_depth_corridor',
+    detail: 'Cleared falling gravel from alternate headings and returned to the exact route endpoint.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'mining_relocation',
+        outcome: 'no_safe_depth_corridor',
+        routeDigging: true,
+        geometryChanged: true,
+        returnable: true,
+        excavated: 4,
+      },
+    },
+  });
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
+  assert.equal(director.activeGoal.evidence.phase, 'succeeded');
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute, [
+    { x: 783, y: 53, z: -737 },
+    { x: 788, y: 50, z: -737 },
+  ]);
+
   const redstoneTarget = {
     name: 'redstone_ore',
     position: { x: 40, y: -22, z: 18 },
@@ -1346,48 +1546,22 @@ test('a verified mining route survives a partially productive failure and must b
   assert.equal(dispatched[0].kind, 'recover');
   assert.equal(
     capabilityCommand(dispatched[0].step.capability),
-    '!traverseMiningRouteCell(3, 31, 8)',
+    '!traverseMiningRouteCell(2, 32, 8)',
   );
   assert.equal(dispatched[0].step.capability.id, 'traverse_mining_route_cell');
   assert.deepEqual(dispatched[0].step.capability.arguments, {
-    x: 3,
-    y: 31,
-    z: 8,
-    dimension: 'overworld',
-  });
-
-  director.appendActingSubgoal('recover', '!traverseMiningRouteCell(3, 31, 8)');
-  director.handleResult('recover', {
-    actionId: 'return-tail',
-    phase: 'succeeded',
-    code: 'skill_route_cell_returned',
-    detail: 'Returned through the inner route cell.',
-    retryable: false,
-    evidence: {
-      skill: {
-        kind: 'mining_return',
-        outcome: 'route_cell_returned',
-        target: { name: 'mining_return_cell', x: 3, y: 31, z: 8 },
-        returnable: true,
-      },
-    },
-  });
-  assert.equal(director.activeGoal.checkpoint.miningReturnIndex, 0);
-
-  director.nextAttemptAt = 0;
-  director.update();
-  assert.deepEqual(dispatched[1].step.capability.arguments, {
     x: 2,
     y: 32,
     z: 8,
     dimension: 'overworld',
   });
+
   director.appendActingSubgoal('recover', '!traverseMiningRouteCell(2, 32, 8)');
   director.handleResult('recover', {
-    actionId: 'return-origin',
+    actionId: 'return-route-segment',
     phase: 'succeeded',
     code: 'skill_route_cell_returned',
-    detail: 'Returned to the route origin.',
+    detail: 'Returned through the verified route segment to its origin.',
     retryable: false,
     evidence: {
       skill: {
@@ -1400,6 +1574,254 @@ test('a verified mining route survives a partially productive failure and must b
   });
   assert.equal(director.activeGoal.checkpoint.miningReturnIndex, -1);
   assert.equal(director.verify().code, 'inventory_goal_verified');
+});
+
+test('an acquisition rejoin keeps the verified forward mining spine', () => {
+  const director = createDirector();
+  const route = [
+    { x: 2, y: 32, z: 8 },
+    { x: 3, y: 31, z: 8 },
+    { x: 4, y: 30, z: 8 },
+  ];
+  director.activeGoal = normalizeGoalContract({
+    ...createItemGoalContract({
+      kind: 'acquire',
+      requester: 'Director',
+      target: {
+        requestedName: 'iron_ore',
+        canonicalName: 'iron_ore',
+        inventoryName: 'iron_ore',
+        acquisitionName: 'iron_ore',
+        family: null,
+        acquisitionKind: 'collect_block',
+      },
+      quantity: 1,
+    }),
+    phase: 'recover',
+    checkpoint: {
+      baselineInventory: 0,
+      targetInventory: 1,
+      delivered: 0,
+      miningReturnRoute: route,
+      miningReturnIndex: 2,
+      miningReturnDimension: 'overworld',
+    },
+    subgoals: [{
+      ...subgoal('recover', 1, 'acting'),
+      commandName: '!goToCoordinates',
+      learningKey: 'mining-route-rejoin:0',
+    }],
+  });
+
+  director.handleResult('recover', {
+    actionId: 'rejoin-route-origin',
+    phase: 'succeeded',
+    code: 'skill_arrived',
+    detail: 'Reached the earlier preserved route cell.',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'movement',
+        outcome: 'arrived',
+      },
+    },
+  });
+
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute, route);
+  assert.equal(director.activeGoal.checkpoint.miningReturnIndex, 2);
+  assert.equal(director.activeGoal.phase, 'assess');
+});
+
+test('an invalid underground return cell hands the same productive goal to surface recovery', () => {
+  const director = createDirector();
+  const route = [
+    { x: 835, y: 51, z: -619 },
+    { x: 841, y: 51, z: -615 },
+  ];
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  director.agent.bot.entity = { position: new Vec3(841.5, 50, -614.49) };
+  director.activeGoal = normalizeGoalContract({
+    ...createItemGoalContract({
+      kind: 'acquire',
+      requester: 'Director',
+      target: {
+        requestedName: 'diamond_pickaxe',
+        canonicalName: 'diamond_pickaxe',
+        inventoryName: 'diamond_pickaxe',
+        acquisitionName: 'diamond_pickaxe',
+        family: null,
+        acquisitionKind: 'craft',
+      },
+      quantity: 1,
+    }),
+    phase: 'recover',
+    checkpoint: {
+      baselineInventory: 0,
+      targetInventory: 1,
+      delivered: 0,
+      miningReturnRoute: route,
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+    subgoals: [{
+      ...subgoal('recover', 1, 'acting'),
+      commandName: '!traverseMiningRouteCell',
+    }],
+  });
+
+  director.handleResult('recover', {
+    actionId: 'broken-return-support',
+    phase: 'failed',
+    code: 'skill_return_route_support_repair_failed',
+    detail: 'The saved route cell lost its floor and could not be restored.',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'mining_return',
+        outcome: 'return_route_support_repair_failed',
+        target: route[1],
+        supportRepairNeeded: true,
+        supportRepaired: false,
+        returnable: false,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.id.startsWith('goal-'), true);
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute || [], []);
+  assert.equal(director.activeGoal.evidence.code, 'mining_return_route_invalidated');
+
+  const dispatched = [];
+  director.dispatch = (kind, command, step) => {
+    dispatched.push({ kind, command, step });
+    return true;
+  };
+  director.nextAttemptAt = 0;
+  director.update();
+
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0].kind, 'recover');
+  assert.equal(dispatched[0].command, '!goToSurface');
+  assert.equal(director.activeGoal.id.startsWith('goal-'), true);
+  assert.equal(director.activeGoal.attempts, 0);
+});
+
+test('a partial return segment keeps its protected-cell cause and retires the stale spine', () => {
+  const director = createDirector();
+  const route = [
+    { x: 835, y: 50, z: -619 },
+    { x: 841, y: 50, z: -615 },
+  ];
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  // The body occupies an earlier preserved cell after partial progress. The
+  // protected later cell still invalidates the spine; replaying it would loop.
+  director.agent.bot.entity = { position: new Vec3(835.5, 50, -618.5) };
+  director.activeGoal = normalizeGoalContract({
+    ...createItemGoalContract({
+      kind: 'acquire',
+      requester: 'Director',
+      target: {
+        requestedName: 'diamond_pickaxe',
+        canonicalName: 'diamond_pickaxe',
+        inventoryName: 'diamond_pickaxe',
+        acquisitionName: 'diamond_pickaxe',
+        family: null,
+        acquisitionKind: 'craft',
+      },
+      quantity: 1,
+    }),
+    phase: 'recover',
+    checkpoint: {
+      baselineInventory: 0,
+      targetInventory: 1,
+      delivered: 0,
+      miningReturnRoute: route,
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+    subgoals: [{
+      ...subgoal('recover', 1, 'acting'),
+      commandName: '!traverseMiningRouteCell',
+    }],
+  });
+
+  director.handleResult('recover', {
+    actionId: 'partial-protected-return',
+    phase: 'failed',
+    code: 'skill_route_segment_partial',
+    detail: 'Returned through one preserved cell; the next contains a protected block.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'mining_return',
+        outcome: 'route_segment_partial',
+        failureOutcome: 'protected_block_in_route',
+        target: route[1],
+        cellsTraversed: 1,
+        returnable: false,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute || [], []);
+  assert.equal(director.activeGoal.evidence.code, 'mining_return_route_invalidated');
+  assert.equal(director.status.code, 'mining_return_route_invalidated');
+});
+
+test('rejoin failures from a retired mining spine do not exhaust a new route', () => {
+  const director = createDirector();
+  const route = Array.from({ length: 10 }, (_, index) => ({
+    x: index,
+    y: 32 - index,
+    z: 8,
+  }));
+  director.agent.bot.entity = { position: new Vec3(0, 32, 28) };
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  director.activeGoal = normalizeGoalContract({
+    ...createItemGoalContract({
+      kind: 'acquire',
+      requester: 'Director',
+      target: {
+        requestedName: 'iron_ore',
+        canonicalName: 'iron_ore',
+        inventoryName: 'iron_ore',
+        acquisitionName: 'iron_ore',
+        family: null,
+        acquisitionKind: 'collect_block',
+      },
+      quantity: 1,
+    }),
+    phase: 'assess',
+    checkpoint: {
+      baselineInventory: 0,
+      targetInventory: 1,
+      delivered: 0,
+      miningReturnRoute: route,
+      miningReturnIndex: route.length - 1,
+      miningReturnDimension: 'overworld',
+    },
+    subgoals: [
+      { ...subgoal('recover', 1, 'failed'), commandName: '!goToCoordinates', learningKey: 'mining-route-rejoin:0' },
+      { ...subgoal('recover', 2, 'failed'), commandName: '!goToCoordinates', learningKey: 'mining-route-rejoin:8' },
+    ],
+  });
+  const dispatched = [];
+  director.dispatch = (kind, command, step) => {
+    dispatched.push({ kind, command, step });
+    return true;
+  };
+
+  director.update();
+
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0].kind, 'recover');
+  assert.match(dispatched[0].step.learningKey, /^mining-route-rejoin:10@0,32,8@9,23,8:\d+$/);
+  assert.deepEqual(director.activeGoal.checkpoint.miningReturnRoute, route);
+  assert.equal(director.activeGoal.evidence.code, 'mining_route_rejoin_pending');
 });
 
 test('an Agenda-owned goal failure settles upward without activating Hold or announcing a false terminal outcome', async () => {
@@ -1869,6 +2291,248 @@ test('one no-progress concrete failure relocates before the same regional signat
   assert.equal(director.activeGoal.subgoals.at(-1).state, 'succeeded');
 });
 
+test('target-local collection failures do not blacklist the whole block-drop method', () => {
+  const director = createDirector();
+  const now = Date.now();
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    maxSubgoals: 8,
+    subgoals: [
+      {
+        ...subgoal('plan', 1, 'failed'),
+        learningKey: 'collect:iron_ore->raw_iron',
+        targetName: 'raw_iron',
+        code: 'skill_unreachable',
+        failureScope: 'target',
+        startedAt: now - 400,
+        finishedAt: now - 350,
+      },
+      {
+        ...subgoal('plan', 2, 'failed'),
+        learningKey: 'collect:iron_ore->raw_iron',
+        targetName: 'raw_iron',
+        code: 'skill_unreachable',
+        failureScope: 'target',
+        startedAt: now - 300,
+        finishedAt: now - 250,
+      },
+      {
+        ...subgoal('plan', 3, 'failed'),
+        learningKey: 'collect:iron_ore->raw_iron',
+        targetName: 'raw_iron',
+        code: 'skill_unreachable',
+        failureScope: 'target',
+        startedAt: now - 200,
+        finishedAt: now - 150,
+      },
+      {
+        ...subgoal('plan', 4, 'failed'),
+        learningKey: 'collect:iron_ore->raw_iron',
+        targetName: 'raw_iron',
+        code: 'skill_unreachable',
+        failureScope: 'target',
+        startedAt: now - 100,
+        finishedAt: now - 50,
+      },
+    ],
+  });
+
+  assert.deepEqual(failedPlannerMethodExclusions(director.activeGoal), []);
+  const dispatched = [];
+  director.dispatch = (kind, command, step) => {
+    dispatched.push({ kind, command, step });
+    return true;
+  };
+  director.update();
+  assert.equal(dispatched[0].command, '!goToSurface');
+  assert.match(dispatched[0].step.learningKey, /^mining-region-surface:/);
+});
+
+test('a target-scoped plan failure spends target memory instead of the productive Goal budget', () => {
+  const director = createDirector();
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'acquire',
+    attempts: 2,
+    maxSubgoals: 8,
+  });
+  director.appendActingSubgoal(
+    'plan',
+    '!collectBlocksInRange("iron_ore", 2, 64)',
+    {
+      expectedName: 'raw_iron',
+      expectedIncrease: 2,
+      learningKey: 'collect:iron_ore->raw_iron',
+    },
+  );
+
+  director.handleResult('plan', {
+    actionId: 'different-local-iron-face',
+    phase: 'failed',
+    code: 'skill_unreachable',
+    detail: 'This exact iron face has no safe interaction stance.',
+    retryable: true,
+    evidence: {
+      skill: {
+        kind: 'collect',
+        outcome: 'unreachable',
+        target: { name: 'iron_ore', x: 12, y: 20, z: 8 },
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.activeGoal.subgoals.at(-1).failureScope, 'target');
+  assert.equal(director.activeGoal.phase, 'recover');
+});
+
+test('tree terrain settlement hands the unfinished Goal to surface recovery without weakening cleanup', () => {
+  const director = createDirector();
+  const commands = [];
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  director.agent.bot.entity = { position: new Vec3(12, 31, 8) };
+  director.executeGoalCommand = (_agent, command) => {
+    commands.push(command);
+    return new Promise(() => {});
+  };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'acquire',
+    attempts: 2,
+    maxSubgoals: 8,
+  });
+  director.appendActingSubgoal(
+    'plan',
+    '!collectWoodInRange(1, 64, false, true)',
+    {
+      expectedName: 'logs',
+      expectedFamily: 'logs',
+      expectedIncrease: 1,
+      learningKey: 'collect:logs->logs',
+    },
+  );
+
+  director.handleResult('plan', {
+    actionId: 'tree-body-unsettled',
+    phase: 'failed',
+    code: 'skill_tree_terrain_settlement_unverified',
+    detail: 'The completed tree transaction did not settle on verified nearby terrain.',
+    retryable: false,
+    evidence: {
+      skill: {
+        kind: 'collect',
+        outcome: 'tree_terrain_settlement_unverified',
+        completionBlocked: true,
+      },
+    },
+  });
+
+  assert.equal(director.activeGoal.phase, 'recover');
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.activeGoal.subgoals.at(-1).failureScope, 'region');
+  assert.equal(director.activeGoal.evidence.completionBlocked, true);
+
+  director.update();
+  assert.deepEqual(commands, ['!goToSurface']);
+  assert.equal(director.activeGoal.subgoals.at(-1).commandName, '!goToSurface');
+});
+
+test('a true repeated method failure remains excluded from causal replanning', () => {
+  const director = createDirector();
+  const now = Date.now();
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    maxSubgoals: 8,
+    subgoals: [
+      {
+        ...subgoal('plan', 1, 'failed'),
+        learningKey: 'craft:stone_pickaxe<-2xstick+3xcobblestone',
+        code: 'skill_recipe_unavailable',
+        failureScope: 'method',
+        startedAt: now - 400,
+        finishedAt: now - 350,
+      },
+      {
+        ...subgoal('plan', 2, 'failed'),
+        learningKey: 'craft:stone_pickaxe<-2xstick+3xcobblestone',
+        code: 'skill_recipe_unavailable',
+        failureScope: 'method',
+        startedAt: now - 300,
+        finishedAt: now - 250,
+      },
+    ],
+  });
+
+  assert.deepEqual(failedPlannerMethodExclusions(director.activeGoal), [
+    'craft:stone_pickaxe<-2xstick+3xcobblestone',
+  ]);
+
+  const prerequisiteGoal = normalizeGoalContract({
+    ...director.activeGoal,
+    subgoals: director.activeGoal.subgoals.map(subgoal => ({
+      ...subgoal,
+      failureScope: 'prerequisite',
+    })),
+  });
+  assert.deepEqual(failedPlannerMethodExclusions(prerequisiteGoal), []);
+});
+
+test('a region-scoped depth failure unwinds its return spine and relocates before retrying', async () => {
+  const director = createDirector();
+  const now = Date.now();
+  const route = [
+    { x: 10, y: 62, z: 10 },
+    { x: 12, y: 58, z: 10 },
+  ];
+  director.agent.bot.game = { dimension: 'minecraft:overworld' };
+  director.agent.bot.entity = { position: new Vec3(12, 58, 10) };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'recover',
+    attempts: 1,
+    maxSubgoals: 8,
+    checkpoint: {
+      baselineInventory: 0,
+      targetInventory: 1,
+      delivered: 0,
+      miningReturnRoute: route,
+      miningReturnIndex: 1,
+      miningReturnDimension: 'overworld',
+    },
+    subgoals: [{
+      ...subgoal('plan', 1, 'failed'),
+      commandName: '!goToMiningDepth',
+      learningKey: 'collect:deepslate_iron_ore->raw_iron',
+      code: 'skill_no_safe_depth_corridor',
+      failureScope: 'region',
+      startedAt: now - 200,
+      finishedAt: now - 150,
+    }],
+  });
+  const dispatched = [];
+  director.dispatch = (kind, command, step) => {
+    dispatched.push({ kind, command, step });
+    return true;
+  };
+
+  director.update();
+  assert.equal(dispatched[0].step.capability.id, 'traverse_mining_route_cell');
+  assert.equal(director.activeGoal.evidence.code, 'mining_region_return_pending');
+
+  director.activeGoal = normalizeGoalContract({
+    ...director.activeGoal,
+    phase: 'assess',
+    checkpoint: {
+      ...director.activeGoal.checkpoint,
+      miningReturnIndex: -1,
+    },
+  });
+  director.update();
+  assert.equal(dispatched[1].command, '!goToSurface');
+  assert.match(dispatched[1].step.learningKey, /^mining-region-surface:/);
+  assert.equal(director.activeGoal.evidence.code, 'mining_region_surface_pending');
+});
+
 test('a bot below an unreachable surface resource recovers before retrying it', async () => {
   const director = createDirector();
   const now = Date.now();
@@ -1951,6 +2615,94 @@ test('a bot below an unreachable surface resource recovers before retrying it', 
   }));
   assert.equal(director.activeGoal.phase, 'assess');
   assert.equal(director.activeGoal.attempts, 1);
+});
+
+test('a safety-owned interruption suspends the goal without spending or learning a failure', () => {
+  const director = createDirector();
+  let learned = 0;
+  director.agent.memory_bank = {
+    rememberOutcome() { learned += 1; },
+  };
+  director.agent.behavior_arbiter = {
+    matchesControlSuspension(commitment) {
+      assert.deepEqual(commitment, {
+        owner: 'player_goal',
+        obligationId: director.activeGoal.id,
+        actionId: 'goal-action-1',
+      });
+      return true;
+    },
+  };
+  director.activeGoal = normalizeGoalContract({
+    ...boundaryGoal([]),
+    phase: 'acquire',
+    attempts: 2,
+    subgoals: [{
+      ...subgoal('plan', 1, 'acting'),
+      commandName: '!collectBlocksInRange',
+      learningKey: 'collect:oak_log->oak_log',
+      targetName: 'oak_log',
+      targetInventoryBefore: 0,
+      targetInventoryAfter: 0,
+      inventoryBefore: {},
+      inventoryAfter: {},
+      startedAt: 90_000,
+      finishedAt: null,
+    }],
+  });
+  director.now = () => 100_000;
+
+  director.handleResult('plan', {
+    actionId: 'goal-action-1',
+    phase: 'interrupted',
+    code: 'interrupted',
+    detail: 'A zombie took control of the encounter.',
+    retryable: true,
+    continuation: { kind: 'resume_same' },
+  });
+
+  assert.equal(director.activeGoal.phase, 'acquire');
+  assert.equal(director.activeGoal.attempts, 2);
+  assert.equal(director.activeGoal.subgoals.at(-1).state, 'cancelled');
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'safety_suspended');
+  assert.equal(director.activeGoal.evidence.code, 'safety_suspended');
+  assert.equal(director.status.phase, 'waiting');
+  assert.equal(director.status.code, 'safety_suspended');
+  assert.equal(director.nextAttemptAt, 0);
+  assert.equal(learned, 0);
+});
+
+test('a safety suspension during regional recovery returns the same goal to live assessment', () => {
+  const director = createDirector();
+  const goal = boundaryGoal([]);
+  director.activeGoal = normalizeGoalContract({
+    ...goal,
+    phase: 'recover',
+    attempts: 0,
+    subgoals: [{
+      ...subgoal('recover', 1, 'cancelled'),
+      commandName: '!moveAway',
+      code: 'safety_suspended',
+      detail: 'Survival took exclusive control during regional relocation.',
+    }],
+    evidence: {
+      actionId: 'regional-relocation',
+      phase: 'interrupted',
+      code: 'safety_suspended',
+      detail: 'Survival took exclusive control during regional relocation.',
+      verified: false,
+      at: 100_000,
+    },
+  });
+  const goalId = director.activeGoal.id;
+
+  director.update();
+
+  assert.equal(director.activeGoal.id, goalId);
+  assert.equal(director.activeGoal.phase, 'assess');
+  assert.equal(director.activeGoal.attempts, 0);
+  assert.equal(director.activeGoal.subgoals.at(-1).code, 'safety_suspended');
+  assert.equal(director.status.code, 'preemption_cleared');
 });
 
 test('verified supported ascent stays latched below the old target-gap threshold', () => {

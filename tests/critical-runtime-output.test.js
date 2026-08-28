@@ -39,6 +39,7 @@ import { terminateOwnedProcessTree } from '../src/mindcraft/process-tree.js';
 import { stopMindcraftRuntime } from '../src/mindcraft/stack-shutdown.js';
 import {
   attemptLocalNavigationEscape,
+  goToGoal,
   goToPlayer,
   localNavigationEscapeStances,
   probeSafeNavigationGoal,
@@ -46,6 +47,63 @@ import {
   probeSafeRoundTripNavigationStances,
   ResponsiveFollowGoal,
 } from '../src/agent/library/skills.js';
+
+test('a stalled native navigation promise cannot retain action ownership after its goal is stopped', async () => {
+  let stoppedGoals = 0;
+  let clearedControls = 0;
+  const bot = new EventEmitter();
+  Object.assign(bot, {
+    output: '',
+    interrupt_code: false,
+    registry: minecraftData('1.21.11'),
+    entity: {
+      position: new Vec3(0.5, 66, 0.5),
+      isInLava: false,
+      isInWater: false,
+      onGround: true,
+      width: 0.6,
+      height: 1.8,
+    },
+    blockAt(position) {
+      return position.y <= 65
+        ? { name: 'stone', boundingBox: 'block', position: position.clone() }
+        : { name: 'air', boundingBox: 'empty', position: position.clone() };
+    },
+    clearControlStates() {
+      clearedControls += 1;
+    },
+  });
+  bot.pathfinder = {
+    setMovements() {},
+    setGoal(goal) {
+      if (goal === null) stoppedGoals += 1;
+    },
+    getLastStuckState: () => null,
+    goto() {
+      return new Promise(() => {});
+    },
+  };
+  const goal = {
+    x: 10,
+    y: 66,
+    z: 0,
+    isEnd: () => false,
+    heuristic: node => Math.abs(10 - node.x),
+  };
+
+  const startedAt = Date.now();
+  const reached = await goToGoal(bot, goal, { movements: {} });
+
+  assert.equal(reached, false);
+  assert.equal(
+    bot.lastActionEvidence.outcome,
+    'path_stalled',
+    JSON.stringify(bot.lastActionEvidence),
+  );
+  assert.ok(stoppedGoals >= 1);
+  assert.ok(clearedControls >= 1);
+  assert.ok(Date.now() - startedAt < 6_000, 'stopped navigation must return within its bounded settlement window');
+});
 
 test('critical action results preserve phase, sanitize output, and expose bounded telemetry', () => {
   const result = createActionResult({

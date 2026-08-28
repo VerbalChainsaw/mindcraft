@@ -1,7 +1,75 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import Vec3 from 'vec3';
 
-import { consume, prepareFood } from '../../src/agent/library/skills.js';
+import {
+  consume,
+  permitsSupervisedEmergencyHunt,
+  prepareFood,
+  foodSourceRequiresOpenSurface,
+  foodSourceRegionApproachRequired,
+  miningRouteSupportReturnConflict,
+} from '../../src/agent/library/skills.js';
+
+test('supervised emergency hunting opens only for immediate supply above the mortal floor', () => {
+  assert.equal(permitsSupervisedEmergencyHunt({ immediateSupply: true, health: 6 }), true);
+  assert.equal(permitsSupervisedEmergencyHunt({ immediateSupply: true, health: 4 }), false);
+  assert.equal(permitsSupervisedEmergencyHunt({ immediateSupply: false, health: 20 }), false);
+  assert.equal(permitsSupervisedEmergencyHunt({ immediateSupply: true, health: null }), false);
+});
+
+test('elevated food source preflight requires open-surface access before combat or harvesting', () => {
+  assert.equal(foodSourceRequiresOpenSurface({
+    bodyY: 59,
+    sourceY: 67,
+    occupiesOpenSurface: false,
+  }), true);
+  assert.equal(foodSourceRequiresOpenSurface({
+    bodyY: 59,
+    sourceY: 67,
+    occupiesOpenSurface: true,
+  }), false);
+  assert.equal(foodSourceRequiresOpenSurface({
+    bodyY: 64,
+    sourceY: 66,
+    sourceDistance: 12,
+    occupiesOpenSurface: false,
+  }), true);
+  assert.equal(foodSourceRequiresOpenSurface({
+    bodyY: 64,
+    sourceY: 64,
+    sourceDistance: 3,
+    occupiesOpenSurface: false,
+  }), false);
+});
+
+test('folded surface routes cannot place later support inside an earlier return body cell', () => {
+  const origin = new Vec3(719, 62, -777);
+  const conflict = miningRouteSupportReturnConflict(origin, [
+    { position: new Vec3(719, 62, -776) },
+    { position: new Vec3(719, 62, -775) },
+    { position: new Vec3(719, 63, -776) },
+    { position: new Vec3(718, 64, -776) },
+  ]);
+
+  assert.equal(conflict.routeIndex, 2);
+  assert.equal(conflict.returnRouteIndex, 0);
+  assert.deepEqual(
+    { x: conflict.support.x, y: conflict.support.y, z: conflict.support.z },
+    { x: 719, y: 62, z: -776 },
+  );
+  assert.equal(miningRouteSupportReturnConflict(origin, [
+    { position: new Vec3(720, 62, -777) },
+    { position: new Vec3(721, 63, -777) },
+  ]), null);
+});
+
+test('remote crop regions route before final interaction while nearby crops do not', () => {
+  assert.equal(foodSourceRegionApproachRequired({ distance: 23 }), true);
+  assert.equal(foodSourceRegionApproachRequired({ distance: 9 }), true);
+  assert.equal(foodSourceRegionApproachRequired({ distance: 4 }), false);
+  assert.equal(foodSourceRegionApproachRequired({ distance: null }), false);
+});
 
 test('best_food selects the strongest safe carried food and delegates native consumption', async () => {
   const apple = { name: 'apple', count: 1, type: 1 };

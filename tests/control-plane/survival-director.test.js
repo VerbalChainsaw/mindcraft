@@ -149,6 +149,64 @@ test('SurvivalDirector publishes the exact schedule gate and critical intent thr
   assert.deepEqual(commands, ['!prepareFood(1, 24)']);
 });
 
+test('SurvivalDirector adopts a released ActionManager result when the command Promise stalls', () => {
+  const agent = createAgent();
+  agent.bot.health = 6;
+  agent.bot.food = 12;
+  agent.actions = {
+    executing: false,
+    currentActionLabel: '',
+    currentActivity: null,
+    lastActivity: null,
+    lastResult: null,
+  };
+  let dispatches = 0;
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 6,
+      hunger: 12,
+      urgentDanger: false,
+      food: [{ name: 'bread', count: 1, foodPoints: 5, saturation: 6 }],
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: () => {
+      dispatches += 1;
+      return new Promise(() => {});
+    },
+  });
+  agent.survival_director = director;
+
+  director.update();
+  const lease = director.dispatchLease;
+  assert.equal(director.inFlight, true);
+  assert.equal(lease.activityId, 'eat');
+  agent.actions.lastActivity = {
+    missionId: lease.missionId,
+    activityId: lease.activityId,
+    actionId: 'consume-1',
+    startedAt: lease.startedAt + 1,
+  };
+  agent.actions.lastResult = {
+    actionId: 'consume-1',
+    phase: 'succeeded',
+    code: 'skill_consumed',
+    detail: 'Consumed bread.',
+    target: { name: 'bread' },
+    retryable: false,
+  };
+
+  director.update();
+
+  assert.equal(dispatches, 1);
+  assert.equal(director.inFlight, false);
+  assert.equal(director.dispatchLease, null);
+  assert.equal(director.snapshot().code, 'skill_consumed');
+});
+
 test('Given a critical body and an exact queued gift-food remedy, survival yields pickup and consumption to Agenda', () => {
   const agent = createAgent();
   agent.bot.registry = { foodsByName: { bread: { foodPoints: 5, saturation: 6 } } };
@@ -577,6 +635,414 @@ test('food recovery adopts a present non-attacking companion and keeps an interr
   assert.equal(director.foodSourceBlocker.returnAttempted, false);
 });
 
+test('food recovery establishes surface access before attempting a distant home route', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = { x: 10, y: 31, z: 10 };
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.home_state = {
+    snapshot: () => ({ home: { x: 400, y: 64, z: 400, dimension: 'overworld' } }),
+  };
+  const director = new SurvivalDirector(agent, {
+    isAtSurface: () => false,
+  });
+  director.foodSourceBlocker = {
+    position: { x: 10, y: 31, z: 10 },
+    dimension: 'overworld',
+    requester: null,
+    returnAttempted: false,
+    returnSucceeded: false,
+    surfaceAttempted: false,
+    surfaceSucceeded: false,
+    homeAttempted: false,
+    homeSucceeded: false,
+  };
+  const situation = {
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 8,
+    food: [],
+    healingConsumables: [],
+  };
+
+  const surface = director.foodRecoveryIntent(situation, POLICY);
+  assert.deepEqual(surface, {
+    kind: 'return_to_surface',
+    target: { name: 'usable_surface' },
+    reason: 'food_sources_exhausted_returning_to_surface',
+  });
+  director.settleFoodRecovery(surface, {
+    actionId: 'surface-failed',
+    phase: 'failed',
+    code: 'skill_surface_route_unproven',
+  });
+  const home = director.foodRecoveryIntent(situation, POLICY);
+  assert.equal(home.kind, 'return_home');
+  assert.equal(director.foodSourceBlocker.surfaceAttempted, true);
+});
+
+test('protective shelter outranks stale food-route memory at critical health', async () => {
+  const agent = createAgent();
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 6,
+      hunger: 12,
+      recentDamage: false,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      timeOfDay: 18_000,
+      dimension: 'overworld',
+      difficulty: 'normal',
+      weather: 'Clear',
+      sheltered: false,
+      shelters: [],
+      canShelterInPlace: true,
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      const result = {
+        actionId: 'critical-shelter',
+        phase: 'succeeded',
+        code: 'skill_sheltered',
+        retryable: false,
+      };
+      agent.last_action_result = result;
+      return { value: true, result };
+    },
+  });
+  director.foodSourceBlocker = {
+    position: { x: 0, y: 64, z: 0 },
+    dimension: 'overworld',
+    requester: null,
+    returnAttempted: true,
+    returnSucceeded: false,
+    surfaceAttempted: true,
+    surfaceSucceeded: false,
+    homeAttempted: true,
+    homeSucceeded: false,
+    huntableFoodSourceSignature: '',
+  };
+
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!shelterInPlace']);
+  assert.equal(director.snapshot().code, 'skill_sheltered');
+});
+
+test('new live passive food evidence releases an exhausted food route exactly once', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(0, 64, 0);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.bot.entities = {};
+  const director = new SurvivalDirector(agent);
+  director.captureFoodSourceBlocker({ kind: 'acquire_food' });
+  assert.equal(director.foodSourceBlocker.huntableFoodSourceSignature, '');
+  agent.bot.entities = {
+    44: {
+      id: 44,
+      name: 'pig',
+      position: new Vec3(4, 64, 0),
+      metadata: {},
+    },
+  };
+
+  const released = director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 12,
+    food: [],
+    healingConsumables: [],
+  }, POLICY);
+
+  assert.equal(released, null);
+  assert.equal(director.foodSourceBlocker, null);
+});
+
+test('exhausted food recovery expands its world question without replaying settled routes', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(10, 64, 10);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  const director = new SurvivalDirector(agent, { isAtSurface: () => true });
+  director.foodSourceBlocker = {
+    position: { x: 10, y: 64, z: 10 },
+    dimension: 'overworld',
+    requester: 'DadPlayer',
+    targetFoodPoints: 1,
+    searchRadius: 24,
+    returnAttempted: true,
+    returnSucceeded: false,
+    surfaceAttempted: true,
+    surfaceSucceeded: true,
+    homeAttempted: true,
+    homeSucceeded: false,
+    huntableFoodSourceSignature: '',
+  };
+  const situation = {
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 7,
+    food: [],
+    healingConsumables: [],
+  };
+
+  const expanded = director.foodRecoveryIntent(situation, POLICY);
+  assert.deepEqual(expanded, {
+    kind: 'acquire_food',
+    targetFoodPoints: 1,
+    searchRadius: 48,
+    reason: 'food_search_expanded',
+    preempt: true,
+  });
+  director.settleFoodRecovery(expanded, {
+    actionId: 'expanded-food-failed',
+    phase: 'failed',
+    code: 'skill_no_food_sources',
+  });
+
+  assert.equal(director.foodSourceBlocker.searchRadius, 48);
+  assert.equal(director.foodSourceBlocker.returnAttempted, true);
+  assert.equal(director.foodSourceBlocker.surfaceAttempted, true);
+  assert.equal(director.foodSourceBlocker.homeAttempted, true);
+  assert.equal(director.foodRecoveryIntent(situation, POLICY).searchRadius, 96);
+});
+
+test('a concrete elevated hunt failure forces surface recovery despite generic egress', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(0, 56, 0);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  const director = new SurvivalDirector(agent, { isAtSurface: () => true });
+  director.captureFoodSourceBlocker({
+    kind: 'acquire_food',
+    targetFoodPoints: 1,
+    searchRadius: 24,
+  }, {
+    code: 'skill_no_food_sources',
+    evidence: {
+      skill: {
+        accessRequirement: {
+          kind: 'surface',
+          reason: 'elevated_hunt_target_outside_returnable_pursuit',
+        },
+      },
+    },
+  });
+
+  const recovery = director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 7,
+    food: [],
+    healingConsumables: [],
+  }, POLICY);
+
+  assert.equal(recovery.kind, 'return_to_surface');
+  assert.equal(director.foodSourceBlocker.surfaceAccessRequired, true);
+});
+
+test('exact source-access result routes through Survival instead of becoming generic exhaustion', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(765, 62, -790);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  const director = new SurvivalDirector(agent, { isAtSurface: () => false });
+
+  director.settleFoodRecovery({
+    kind: 'acquire_food',
+    targetFoodPoints: 1,
+    searchRadius: 128,
+  }, {
+    actionId: 'crop-access-result',
+    phase: 'failed',
+    code: 'skill_source_access_required',
+    evidence: {
+      skill: {
+        accessRequirement: {
+          kind: 'food_region',
+          reason: 'loaded_food_crop_region_unreached',
+          target: { name: 'potatoes', x: 770, y: 67, z: -792 },
+        },
+      },
+    },
+  });
+
+  assert.equal(director.foodSourceBlocker.surfaceAccessRequired, true);
+  assert.equal(director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 0,
+    food: [],
+    healingConsumables: [],
+  }, POLICY).kind, 'return_to_surface');
+});
+
+test('restored food access is a single-use continuation rather than a retry loop', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(765, 67, -790);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  const director = new SurvivalDirector(agent, { isAtSurface: () => true });
+  director.foodSourceBlocker = {
+    position: { x: 765, y: 62, z: -790 },
+    dimension: 'overworld',
+    requester: null,
+    targetFoodPoints: 1,
+    searchRadius: 128,
+    returnAttempted: true,
+    returnSucceeded: false,
+    surfaceAttempted: true,
+    surfaceSucceeded: true,
+    surfaceAccessRequired: true,
+    surfaceAccessResolved: true,
+    homeAttempted: true,
+    homeSucceeded: false,
+    huntableFoodSourceSignature: '',
+  };
+
+  director.settleFoodRecovery({
+    kind: 'acquire_food',
+    reason: 'food_access_restored',
+    targetFoodPoints: 1,
+    searchRadius: 128,
+  }, {
+    actionId: 'restored-crop-access-failed',
+    phase: 'failed',
+    code: 'skill_source_access_required',
+    evidence: {
+      skill: {
+        accessRequirement: {
+          kind: 'food_region',
+          target: { name: 'potatoes', x: 770, y: 67, z: -792 },
+        },
+      },
+    },
+  });
+
+  assert.equal(director.foodSourceBlocker.surfaceAttempted, true);
+  assert.equal(director.foodSourceBlocker.surfaceAccessResolved, false);
+  assert.equal(director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 0,
+    food: [],
+    healingConsumables: [],
+  }, POLICY).kind, 'wait');
+});
+
+test('concrete food access reopens one open-surface recovery after generic surface success', () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(12, 62, -4);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  const director = new SurvivalDirector(agent, { isAtSurface: () => true });
+  director.foodSourceBlocker = {
+    position: { x: 12, y: 62, z: -4 },
+    dimension: 'overworld',
+    requester: null,
+    targetFoodPoints: 1,
+    searchRadius: 48,
+    returnAttempted: true,
+    returnSucceeded: false,
+    surfaceAttempted: true,
+    surfaceSucceeded: true,
+    homeAttempted: true,
+    homeSucceeded: false,
+    surfaceAccessRequired: false,
+    huntableFoodSourceSignature: '',
+  };
+
+  director.captureFoodSourceBlocker({
+    kind: 'acquire_food',
+    targetFoodPoints: 1,
+    searchRadius: 96,
+    reason: 'food_search_expanded',
+  }, {
+    code: 'skill_no_food_sources',
+    evidence: {
+      skill: {
+        accessRequirement: {
+          kind: 'surface',
+          reason: 'loaded_food_crop_outside_open_surface_access',
+        },
+      },
+    },
+  });
+
+  assert.equal(director.foodSourceBlocker.surfaceAttempted, false);
+  assert.equal(director.foodSourceBlocker.surfaceSucceeded, false);
+  assert.equal(director.foodSourceBlocker.surfaceAccessRequired, true);
+  assert.equal(director.foodRecoveryIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 0,
+    food: [],
+    healingConsumables: [],
+  }, POLICY).kind, 'return_to_surface');
+});
+
+test('restored open-surface food access continues before generic critical shelter', async () => {
+  const agent = createAgent();
+  agent.bot.entity.position = new Vec3(20, 65, -8);
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.bot.entities = {};
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 6,
+      hunger: 0,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+      sheltered: false,
+      shelters: [],
+      canShelterInPlace: true,
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      const result = {
+        actionId: 'food-after-open-surface',
+        phase: 'succeeded',
+        code: 'skill_food_prepared',
+        retryable: false,
+      };
+      return { value: true, result };
+    },
+  });
+  director.foodSourceBlocker = {
+    position: { x: 20, y: 59, z: -8 },
+    dimension: 'overworld',
+    requester: null,
+    targetFoodPoints: 1,
+    searchRadius: 48,
+    returnAttempted: true,
+    returnSucceeded: false,
+    surfaceAttempted: true,
+    surfaceSucceeded: true,
+    surfaceAccessRequired: true,
+    surfaceAccessResolved: true,
+    homeAttempted: false,
+    homeSucceeded: false,
+    huntableFoodSourceSignature: '',
+  };
+
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!prepareFood(1, 48)']);
+  assert.equal(director.snapshot().code, 'skill_food_prepared');
+});
+
 test('food recovery never selects a companion who caused the fresh damage as safety', () => {
   const agent = createAgent();
   agent.name = 'Kevin';
@@ -622,9 +1088,10 @@ test('a tactical retreat remains an unresolved survival incident until Kevin rea
   agent.bot.username = 'Kevin';
   agent.bot.health = 6;
   agent.bot.food = 20;
-  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entity.position = new Vec3(0, 64, 0);
+  agent.bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' });
   agent.bot.entities = {
-    44: { id: 44, name: 'skeleton', position: { x: 18, y: 64, z: 0 } },
+    44: { id: 44, name: 'skeleton', position: new Vec3(18, 64, 0) },
   };
   agent.bot.game = { dimension: 'minecraft:overworld' };
   agent.companion_context = {
@@ -654,7 +1121,7 @@ test('a tactical retreat remains an unresolved survival incident until Kevin rea
     executeCommand: (_agent, command) => {
       commands.push(command);
       attempt += 1;
-      agent.last_action_result = attempt === 1
+      const result = attempt === 1
         ? {
             actionId: 'safety-return-1',
             phase: 'interrupted',
@@ -668,6 +1135,8 @@ test('a tactical retreat remains an unresolved survival incident until Kevin rea
             target: { name: 'DadPlayer' },
             retryable: false,
           };
+      agent.last_action_result = result;
+      return { value: true, result };
     },
   });
   agent.survival_director = director;
@@ -713,6 +1182,141 @@ test('a tactical retreat remains an unresolved survival incident until Kevin rea
   ]);
   assert.equal(director.snapshot().safetyIncident.active, false);
   assert.equal(director.snapshot().safetyIncident.resolutionCode, 'safety_rendezvous_reached');
+});
+
+test('a future Agenda rendezvous cannot release an active Safety incident to unrelated player work', async () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 6;
+  agent.bot.food = 20;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {};
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.goal_director = { activeGoal: { id: 'goal-mining', requester: 'DadPlayer' } };
+  agent.agenda_director = {
+    activeEntry: () => ({ id: 'mine-now', kind: 'inventory_checklist', requester: 'DadPlayer' }),
+    pending: () => [{ id: 'goto-later', kind: 'goto', requester: 'DadPlayer' }],
+  };
+  agent.companion_context = {
+    snapshot: () => ({
+      presence: 'present',
+      canonicalUsername: 'DadPlayer',
+      position: { x: 30, y: 64, z: 0 },
+    }),
+  };
+  const commands = [];
+  const director = new SurvivalDirector(agent, {
+    getSituation: () => ({
+      held: false,
+      idle: true,
+      health: 6,
+      hunger: 20,
+      urgentDanger: false,
+      food: [],
+      healingConsumables: [],
+      shelters: [],
+      timeOfDay: 6_000,
+      weather: 'Clear',
+    }),
+    executeCommand: (_agent, command) => {
+      commands.push(command);
+      agent.last_action_result = {
+        actionId: 'safety-return',
+        phase: 'interrupted',
+        code: 'interrupted',
+        retryable: true,
+      };
+    },
+  });
+  director.safetyIncident = {
+    id: 'safety-agenda-gate',
+    active: true,
+    stage: 'disengaged',
+    source: { kind: 'hostile', id: 44, name: 'drowned', username: null },
+    openedAt: Date.now(),
+    lastDamageAt: Date.now(),
+  };
+
+  assert.equal(director.blocksLowerPriority(), true);
+  director.update();
+  await settle();
+
+  assert.deepEqual(commands, ['!goToPlayer("DadPlayer", 3, true)']);
+  assert.equal(director.snapshot().safetyIncident.active, true);
+});
+
+test('Safety carries an authoritative offline-helper failure across death until presence returns', () => {
+  const agent = createAgent();
+  agent.name = 'Kevin';
+  agent.bot.username = 'Kevin';
+  agent.bot.health = 6;
+  agent.bot.food = 20;
+  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entities = {};
+  agent.bot.game = { dimension: 'minecraft:overworld' };
+  agent.goal_director = { activeGoal: { id: 'goal-mining', requester: 'DirectorOps' } };
+  let presence = 'absent';
+  let playerPosition = null;
+  agent.companion_context = {
+    snapshot: () => ({
+      presence,
+      canonicalUsername: 'DirectorOps',
+      position: playerPosition,
+    }),
+  };
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent);
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 45,
+    name: 'skeleton',
+    observedAt: Date.now(),
+  });
+  director.replaceSafetyIncident({ stage: 'disengaged' });
+
+  const situation = {
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 20,
+    shelters: [],
+    canShelterInPlace: true,
+    shelterInPlaceStances: [],
+    food: [],
+    healingConsumables: [],
+  };
+  const firstIntent = director.safetyIncidentIntent(situation);
+
+  assert.equal(firstIntent.kind, 'return_to_player');
+  director.settleSafetyIncident(firstIntent, {
+    actionId: 'offline-helper',
+    phase: 'failed',
+    code: 'skill_target_offline',
+    retryable: false,
+  });
+  director.reconcileDeath();
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 46,
+    name: 'zombie',
+    observedAt: Date.now() + 1,
+  });
+  director.replaceSafetyIncident({ stage: 'disengaged' });
+
+  const afterDeathIntent = director.safetyIncidentIntent(situation);
+  assert.equal(afterDeathIntent.kind, 'shelter_in_place');
+  assert.equal(afterDeathIntent.incidentId, director.safetyIncident.id);
+
+  presence = 'present';
+  playerPosition = { x: 30, y: 64, z: 0 };
+  const restoredIntent = director.safetyIncidentIntent(situation);
+
+  assert.equal(restoredIntent.kind, 'return_to_player');
+  assert.equal(restoredIntent.target.name, 'DirectorOps');
 });
 
 test('a player-caused hit waits for clarification and a fresh explicit order resolves it', () => {
@@ -780,7 +1384,13 @@ test('an attributed live hostile opens the safety incident before tactical execu
   agent.bot.entity.position = { x: 0, y: 64, z: 0 };
   agent.bot.entities = { [threat.id]: threat };
   const wakes = [];
-  agent.behavior_arbiter = { wake: reason => wakes.push(reason) };
+  const suspensions = [];
+  const releases = [];
+  agent.behavior_arbiter = {
+    wake: reason => wakes.push(reason),
+    beginSafetySuspension: incident => suspensions.push(incident.id),
+    releaseSafetySuspension: (incident, code) => releases.push({ id: incident.id, code }),
+  };
   const director = new SurvivalDirector(agent);
 
   assert.equal(director.observeAttributedThreat({
@@ -807,6 +1417,7 @@ test('an attributed live hostile opens the safety incident before tactical execu
   });
   assert.equal(Number.isFinite(incident.source.observedAt), true);
   assert.deepEqual(wakes, ['survival_incident_observed']);
+  assert.deepEqual(suspensions, [incident.id]);
 
   assert.equal(director.observeAttributedThreat({
     entityId: threat.id,
@@ -823,6 +1434,13 @@ test('an attributed live hostile opens the safety incident before tactical execu
     name: threat.name,
     attribution: 'self_damage',
   }), false, 'an unloaded threat cannot create tactical authority');
+
+  assert.equal(director.closeSafetyIncident({
+    phase: 'succeeded',
+    code: 'threat_destroyed',
+    detail: 'The hostile is gone.',
+  }), true);
+  assert.deepEqual(releases, [{ id: incident.id, code: 'threat_destroyed' }]);
 });
 
 test('a settled failed help route is not retried unchanged and unproven cover is rejected', async () => {
@@ -831,9 +1449,10 @@ test('a settled failed help route is not retried unchanged and unproven cover is
   agent.bot.username = 'Kevin';
   agent.bot.health = 6;
   agent.bot.food = 20;
-  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entity.position = new Vec3(0, 64, 0);
+  agent.bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' });
   agent.bot.entities = {
-    45: { id: 45, name: 'skeleton', position: { x: 12, y: 64, z: 0 } },
+    45: { id: 45, name: 'skeleton', position: new Vec3(12, 64, 0) },
   };
   agent.companion_context = {
     snapshot: () => ({
@@ -868,12 +1487,14 @@ test('a settled failed help route is not retried unchanged and unproven cover is
     getSituation: () => situation,
     executeCommand: (_agent, command) => {
       commands.push(command);
-      agent.last_action_result = {
+      const result = {
         actionId: 'failed-help-route',
         phase: 'failed',
         code: 'skill_unreachable',
         retryable: true,
       };
+      agent.last_action_result = result;
+      return { value: true, result };
     },
   });
   const receipt = {
@@ -907,15 +1528,388 @@ test('a settled failed help route is not retried unchanged and unproven cover is
   assert.equal(director.safetyIncidentIntent(situation).kind, 'seek_shelter');
 });
 
+test('stable sealed containment releases suspended work while guarding loaded threats', () => {
+  const agent = createAgent();
+  const releases = [];
+  let now = 10_000;
+  agent.bot.health = 6;
+  agent.bot.food = 8;
+  agent.bot.entity.position = new Vec3(0, 64, 0);
+  agent.bot.entity.eyeHeight = 1.62;
+  agent.bot.entities = {
+    47: {
+      id: 47,
+      uuid: 'persistent-spider',
+      name: 'spider',
+      position: new Vec3(8, 64, 0),
+      height: 0.9,
+    },
+    48: {
+      id: 48,
+      uuid: 'persistent-zombie',
+      name: 'zombie',
+      position: new Vec3(-8, 64, 0),
+      height: 1.8,
+    },
+  };
+  agent.bot.blockAt = position => {
+    const enclosed = (
+      (position.x === 0 && position.z === 0 && position.y === 66)
+      || (
+        Math.abs(position.x) + Math.abs(position.z) === 1
+        && [64, 65].includes(position.y)
+      )
+      || (position.x === 0 && position.z === 0 && position.y === 63)
+    );
+    return {
+      name: enclosed ? 'stone' : 'air',
+      boundingBox: enclosed ? 'block' : 'empty',
+      position,
+    };
+  };
+  agent.bot.world = { raycast: () => ({ name: 'stone' }) };
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    releaseSafetySuspension: (incident, code) => releases.push({ id: incident.id, code }),
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent, { now: () => now });
+  director.observeDamageSource({
+    matchesSelf: true,
+    kind: 'hostile',
+    source: { id: 47, name: 'spider', type: 'mob' },
+    observedAt: now,
+  });
+  const incidentId = director.snapshot().safetyIncident.id;
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 48,
+    name: 'zombie',
+    observedAt: now + 1,
+  });
+
+  assert.equal(director.settleSafetyIncident({
+    kind: 'seek_shelter',
+    incidentId,
+    target: { x: 0, y: 64, z: 0 },
+  }, {
+    phase: 'succeeded',
+    code: 'skill_arrived',
+  }), false);
+  assert.equal(director.snapshot().safetyIncident.stage, 'under_cover');
+
+  const contained = director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    shelters: [],
+    food: [],
+    healingConsumables: [],
+  });
+  assert.equal(contained.kind, 'wait');
+  assert.equal(contained.reason, 'safety_containment_stabilizing');
+  assert.equal(director.snapshot().safetyIncident.active, true);
+  assert.deepEqual(releases, []);
+
+  now += 2_001;
+  assert.equal(director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    shelters: [],
+    food: [],
+    healingConsumables: [],
+  }), null);
+  assert.equal(director.safetyIncident, null);
+  assert.equal(director.snapshot().containedThreatGuard.incidentId, incidentId);
+  assert.deepEqual(director.snapshot().containedThreatGuard.sources.map(source => source.id), [47, 48]);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[47]), true);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[48]), true);
+  assert.deepEqual(releases, [{ id: incidentId, code: 'safety_structurally_contained' }]);
+});
+
+test('stable no-line-of-sight disengagement resumes work and guards every loaded source', () => {
+  const agent = createAgent();
+  const releases = [];
+  let now = 10_000;
+  agent.bot.entity.position = new Vec3(0, 52, 0);
+  agent.bot.entity.eyeHeight = 1.62;
+  agent.bot.entities = {
+    51: {
+      id: 51,
+      uuid: 'distant-zombie',
+      name: 'zombie',
+      position: new Vec3(0, 52, 6),
+      height: 1.8,
+    },
+    52: {
+      id: 52,
+      uuid: 'distant-skeleton',
+      name: 'skeleton',
+      position: new Vec3(8, 52, 0),
+      height: 1.8,
+    },
+    53: {
+      id: 53,
+      uuid: 'new-creeper-during-recovery',
+      name: 'creeper',
+      position: new Vec3(-18, 50, 0),
+      height: 1.7,
+    },
+  };
+  agent.bot.blockAt = position => ({
+    name: 'air',
+    boundingBox: 'empty',
+    position,
+  });
+  agent.bot.world = { raycast: () => ({ name: 'stone' }) };
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    releaseSafetySuspension: (incident, code) => releases.push({ id: incident.id, code }),
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent, { now: () => now });
+  director.observeDamageSource({
+    matchesSelf: true,
+    kind: 'hostile',
+    source: { id: 51, name: 'zombie', type: 'mob' },
+    observedAt: now,
+  });
+  const incidentId = director.snapshot().safetyIncident.id;
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 52,
+    name: 'skeleton',
+    observedAt: now + 1,
+  });
+  director.replaceSafetyIncident({ stage: 'response_blocked' });
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[51]), true);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[52]), true);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[53]), true);
+  assert.deepEqual(director.snapshot().safetyIncident.sources.map(source => source.id), [51, 52, 53]);
+
+  now += 5_000;
+  const stabilizing = director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    shelters: [],
+    food: [],
+    healingConsumables: [],
+  });
+  assert.equal(stabilizing.kind, 'wait');
+  assert.equal(stabilizing.reason, 'safety_disengagement_stabilizing');
+
+  now += 2_001;
+  assert.equal(director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    shelters: [],
+    food: [],
+    healingConsumables: [],
+  }), null);
+  assert.equal(director.safetyIncident, null);
+  assert.equal(director.snapshot().containedThreatGuard.kind, 'stable_disengagement');
+  assert.deepEqual(director.snapshot().containedThreatGuard.sources.map(source => source.id), [51, 52, 53]);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[51]), true);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[52]), true);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[53]), true);
+  assert.deepEqual(releases, [{ id: incidentId, code: 'safety_stably_disengaged' }]);
+
+  agent.bot.entities[52].position = new Vec3(5, 52, 0);
+  assert.equal(director.ownsSafetyRecoveryForThreat(agent.bot.entities[52]), false);
+  assert.equal(director.snapshot().containedThreatGuard, null);
+});
+
+test('a critical body escalates from one settled retreat to owned shelter recovery across attackers', () => {
+  const agent = createAgent();
+  agent.bot.health = 6;
+  agent.bot.entities = {};
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    wake: () => {},
+  };
+  let shelterAssessments = 0;
+  const director = new SurvivalDirector(agent, {
+    assessDefensiveShelter: () => {
+      shelterAssessments += 1;
+      return { feasible: true, code: 'ready' };
+    },
+  });
+  director.observeDamageSource({
+    matchesSelf: true,
+    kind: 'hostile',
+    source: { id: 50, name: 'spider', type: 'mob' },
+    observedAt: Date.now(),
+  });
+  director.replaceSafetyIncident({ stage: 'disengaged' });
+
+  assert.equal(director.ownsSafetyRecoveryForThreat({ id: 51, name: 'zombie' }), true);
+  assert.equal(shelterAssessments, 0);
+  agent.bot.health = 12;
+  assert.equal(director.ownsSafetyRecoveryForThreat({ id: 52, name: 'creeper' }), true);
+  assert.equal(director.ownsSafetyRecoveryForThreat({ id: 50, name: 'spider' }), true);
+  director.replaceSafetyIncident({ stage: 'under_cover' });
+  assert.equal(
+    director.ownsSafetyRecoveryForThreat({ id: 53, name: 'skeleton' }),
+    true,
+    'a verified refuge excludes every combat reflex, not just its first attacker',
+  );
+});
+
+test('one Safety episode preserves failed recovery state across multiple attackers', () => {
+  const agent = createAgent();
+  agent.bot.health = 6;
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent);
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 60,
+    name: 'spider',
+    observedAt: Date.now(),
+  });
+  const episodeId = director.snapshot().safetyIncident.id;
+  director.replaceSafetyIncident({
+    stage: 'recovery_blocked',
+    failedPlayerTarget: 'DirectorOps',
+  });
+
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 61,
+    name: 'zombie',
+    observedAt: Date.now() + 1,
+  });
+  const episode = director.snapshot().safetyIncident;
+  assert.equal(episode.id, episodeId);
+  assert.equal(episode.stage, 'threat_response');
+  assert.equal(episode.source.id, 61);
+  assert.deepEqual(episode.sources.map(source => source.id), [60, 61]);
+  assert.equal(episode.encounterCount, 2);
+  assert.equal(episode.failedPlayerTarget, 'DirectorOps');
+});
+
+test('an active Safety episode keeps refuge recovery eligible after recent-damage time expires', () => {
+  const position = new Vec3(0, 64, 0);
+  const cobblestone = { name: 'cobblestone', count: 8 };
+  const bot = {
+    entity: { position, onGround: true },
+    health: 6,
+    food: 0,
+    lastDamageTime: Date.now() - 10_000,
+    game: { dimension: 'minecraft:overworld', difficulty: 'normal' },
+    time: { timeOfDay: 6_000 },
+    rainState: 0,
+    thunderState: 0,
+    entities: {},
+    inventory: {
+      slots: [cobblestone],
+      items: () => [cobblestone],
+      findInventoryItem: name => name === 'cobblestone' ? cobblestone : null,
+    },
+    registry: { foodsByName: {} },
+    modes: { getStatus: () => [] },
+    findBlocks: () => [],
+    nearestEntity: () => null,
+    blockAt(target) {
+      const at = target.floored ? target.floored() : target;
+      return {
+        name: at.y <= 63 ? 'stone' : 'air',
+        boundingBox: at.y <= 63 ? 'block' : 'empty',
+        position: at,
+      };
+    },
+  };
+  const agent = {
+    bot,
+    runtime: { survival: POLICY },
+    survival_director: { safetyIncident: { active: true } },
+    isIdle: () => true,
+    isOperatorHeld: () => false,
+  };
+
+  const situation = summarizeSurvivalSituation(agent);
+  assert.equal(situation.recentDamage, false);
+  assert.equal(situation.shelterInPlaceFeasibility.code, 'ready');
+  assert.equal(situation.canShelterInPlace, true);
+});
+
+test('Safety relocates to a sealable stance instead of waiting on the current cell', () => {
+  const agent = createAgent();
+  agent.bot.health = 6;
+  agent.bot.entities = {};
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent);
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 70,
+    name: 'creeper',
+    observedAt: Date.now(),
+  });
+  director.replaceSafetyIncident({
+    stage: 'disengaged',
+    failedPlayerTarget: 'DirectorOps',
+  });
+
+  const intent = director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 0,
+    shelters: [],
+    shelterInPlaceStances: [{ x: 8, y: 64, z: 2, distance: 8.2 }],
+    food: [],
+    healingConsumables: [],
+  });
+  assert.equal(intent.kind, 'relocate_for_shelter');
+  assert.deepEqual(intent.target, { x: 8, y: 64, z: 2, distance: 8.2 });
+});
+
+test('Safety seals a ready current cell before exposed food acquisition', () => {
+  const agent = createAgent();
+  agent.bot.health = 6;
+  agent.bot.entities = {};
+  agent.behavior_arbiter = {
+    beginSafetySuspension: () => {},
+    wake: () => {},
+  };
+  const director = new SurvivalDirector(agent);
+  director.observeSafetySource({
+    kind: 'hostile',
+    id: 71,
+    name: 'spider',
+    observedAt: Date.now(),
+  });
+  director.replaceSafetyIncident({ stage: 'disengaged' });
+
+  const intent = director.safetyIncidentIntent({
+    held: false,
+    urgentDanger: false,
+    health: 6,
+    hunger: 0,
+    shelters: [],
+    canShelterInPlace: true,
+    shelterInPlaceStances: [],
+    food: [],
+    healingConsumables: [],
+  });
+  assert.equal(intent.kind, 'shelter_in_place');
+  assert.equal(intent.reason, 'survival_incident_seal_ready');
+});
+
 test('a blocked safety incident consumes carried emergency food instead of starving behind help-unavailable', async () => {
   const agent = createAgent();
   agent.name = 'Kevin';
   agent.bot.username = 'Kevin';
   agent.bot.health = 1;
   agent.bot.food = 0;
-  agent.bot.entity.position = { x: 0, y: 64, z: 0 };
+  agent.bot.entity.position = new Vec3(0, 64, 0);
+  agent.bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' });
   agent.bot.entities = {
-    46: { id: 46, name: 'zombie', position: { x: 20, y: 64, z: 0 } },
+    46: { id: 46, name: 'zombie', position: new Vec3(20, 64, 0) },
   };
   agent.companion_context = { snapshot: () => ({ presence: 'absent' }) };
   agent.openChat = () => {};
@@ -938,13 +1932,15 @@ test('a blocked safety incident consumes carried emergency food instead of starv
     }),
     executeCommand: (_agent, command) => {
       commands.push(command);
-      agent.last_action_result = {
+      const result = {
         actionId: 'incident-food-1',
         phase: 'succeeded',
         code: 'skill_consumed',
         target: { name: 'rotten_flesh' },
         retryable: false,
       };
+      agent.last_action_result = result;
+      return { value: true, result };
     },
   });
   agent.survival_director = director;

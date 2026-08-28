@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  openWaterDrowningEscapeDecision,
   rearmDeterioratingSelfPreservationRetreat,
   rearmOpenWaterDrowningEscape,
   recentDamageRequiresRetreat,
@@ -14,7 +15,20 @@ test('open-water breathing retains emergency retry authority ahead of combat', (
   const agent = {
     bot: {
       entity: { isInWater: true, position: { x: 0, y: 63, z: 0 } },
+      game: { dimension: 'overworld' },
+      health: 10,
+      oxygenLevel: 20,
       blockAt: () => ({ name: 'water' }),
+    },
+    goal_director: {
+      activeGoal: {
+        id: 'goal-obsidian',
+        phase: 'assess',
+        checkpoint: {
+          miningReturnRoute: [{ x: 0, y: 63, z: 0 }],
+          miningReturnIndex: 0,
+        },
+      },
     },
     behavior_arbiter: { wake: reason => wakeReasons.push(reason) },
   };
@@ -27,14 +41,46 @@ test('open-water breathing retains emergency retry authority ahead of combat', (
           kind: 'survival',
           outcome: 'drowning_escape_open_water',
           retryable: true,
+          shore: { outcome: 'no_safe_shore', candidates: 0 },
         },
       },
     },
   };
 
   assert.equal(rearmOpenWaterDrowningEscape(mode, agent, execution), true);
-  assert.equal(mode.next_retry_at, 0);
-  assert.deepEqual(wakeReasons, ['open_water_drowning_escape']);
+  assert.equal(mode.next_retry_at, 21_500, 'settlement backoff must not be erased');
+  assert.deepEqual(wakeReasons, ['open_water_drowning_handoff']);
+  assert.equal(mode.failed_drowning_trigger.goalId, 'goal-obsidian');
+
+  assert.deepEqual(
+    openWaterDrowningEscapeDecision(mode, agent),
+    {
+      eligible: false,
+      blocking: false,
+      code: 'open_water_mining_return_handoff',
+    },
+  );
+
+  agent.goal_director.activeGoal.checkpoint.miningReturnRoute = [];
+  assert.deepEqual(
+    openWaterDrowningEscapeDecision(mode, agent),
+    {
+      eligible: false,
+      blocking: true,
+      code: 'open_water_escape_waiting_for_material_change',
+    },
+  );
+
+  agent.bot.oxygenLevel = 12;
+  assert.deepEqual(
+    openWaterDrowningEscapeDecision(mode, agent),
+    {
+      eligible: true,
+      blocking: false,
+      code: 'open_water_escape_material_changed',
+    },
+  );
+  assert.equal(mode.failed_drowning_trigger, null);
 
   agent.bot.entity.isInWater = false;
   agent.bot.blockAt = () => ({ name: 'air' });

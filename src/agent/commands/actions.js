@@ -49,6 +49,8 @@ import { createAccessRepairWorkOrder, selectExistingAccessRepair } from '../runt
 
 const RESPONSIVE_COLLECTION_ACTION_TIMEOUT_MINUTES = 0.5;
 const RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES = 1;
+const SURFACE_RECOVERY_ACTION_TIMEOUT_MINUTES = 10;
+const FLUID_MECHANIC_ACTION_TIMEOUT_MINUTES = 5;
 const MAX_ORDERED_ITEM_PLAN_STEPS = 12;
 
 function woodCollectionActionTimeoutMinutes(count, completeStartedTree = true) {
@@ -66,11 +68,29 @@ function woodCollectionActionTimeoutMinutes(count, completeStartedTree = true) {
     return Math.min(5, 2.5 + requested / 24);
 }
 
+function activeMiningReturnState(agent) {
+    const jobCheckpoint = agent?.job_director?.activeOrder?.checkpoint;
+    const goalCheckpoint = agent?.goal_director?.activeGoal?.checkpoint;
+    const checkpoint = Array.isArray(jobCheckpoint?.miningReturnRoute)
+        && jobCheckpoint.miningReturnRoute.length > 0
+        ? jobCheckpoint
+        : goalCheckpoint;
+    const route = Array.isArray(checkpoint?.miningReturnRoute)
+        ? checkpoint.miningReturnRoute
+        : [];
+    const index = Number.isFinite(Number(checkpoint?.miningReturnIndex))
+        ? Math.min(route.length - 1, Math.floor(Number(checkpoint.miningReturnIndex)))
+        : route.length - 1;
+    return { route, index };
+}
+
 function activeMiningReturnRoute(agent) {
-    const jobRoute = agent?.job_director?.activeOrder?.checkpoint?.miningReturnRoute;
-    if (Array.isArray(jobRoute) && jobRoute.length > 0) return jobRoute;
-    const goalRoute = agent?.goal_director?.activeGoal?.checkpoint?.miningReturnRoute;
-    return Array.isArray(goalRoute) ? goalRoute : [];
+    const { route, index } = activeMiningReturnState(agent);
+    // A checkpoint can retain cells beyond the body's current return index
+    // while recovery walks backward. Outbound mechanics own only the active
+    // prefix through that index; handing them the stale suffix makes local
+    // route deltas splice against a point the body no longer occupies.
+    return index >= 0 ? route.slice(0, index + 1) : [];
 }
 
 function queueOrderedItemPlan(agent, encodedPlan, playerName, returnToPlayer = false) {
@@ -1008,7 +1028,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, x, y, z, closeness) => {
             return await skills.rideToPosition(agent.bot, x, y, z, closeness);
-        }),
+        }, false, -1, null, 'legacy', 'vehicle'),
     },
     {
         name: '!dismount',
@@ -1036,9 +1056,9 @@ export const actionsList = [
         name: '!goToMiningDepth',
         description: 'Reach a productive mining depth through an existing safe route or carve a bounded supported natural-stone staircase.',
         params: {
-            'target_y': { type: 'int', description: 'Productive target Y level.', domain: [-60, 300] },
-            'search_range': { type: 'int', description: 'Maximum loaded cave search radius.', domain: [16, 128] },
-            'protected_route_cells': { type: 'int', description: 'Expected persisted return-route cell count.', domain: [0, 513], optional: true },
+            'target_y': { type: 'int', description: 'Productive target Y level.', domain: [-60, 300, '[]'] },
+            'search_range': { type: 'int', description: 'Maximum loaded cave search radius.', domain: [16, 128, '[]'] },
+            'protected_route_cells': { type: 'int', description: 'Expected persisted return-route cell count.', domain: [0, 513, '[]'], optional: true },
         },
         perform: runAsAction(async (agent, target_y, search_range, protected_route_cells = null) => {
             return await skills.goToMiningDepth(agent.bot, target_y, search_range, {
@@ -1049,13 +1069,28 @@ export const actionsList = [
     },
     {
         name: '!traverseMiningRouteCell',
-        description: 'Return through one exact previously cleared mining-route cell using native Pathfinder with digging disabled.',
+        description: 'Return through a bounded segment of the exact previously cleared mining route using native Pathfinder with digging disabled.',
         params: {
             'x': { type: 'int', description: 'Preserved route-cell x coordinate.' },
             'y': { type: 'int', description: 'Preserved route-cell y coordinate.' },
             'z': { type: 'int', description: 'Preserved route-cell z coordinate.' },
         },
         perform: runAsAction(async (agent, x, y, z) => {
+            const { route, index } = activeMiningReturnState(agent);
+            const segmentEndIndex = route.findLastIndex((cell, candidateIndex) => (
+                candidateIndex <= index
+                && Math.floor(Number(cell?.x)) === Math.floor(Number(x))
+                && Math.floor(Number(cell?.y)) === Math.floor(Number(y))
+                && Math.floor(Number(cell?.z)) === Math.floor(Number(z))
+            ));
+            if (index >= 0 && segmentEndIndex >= 0) {
+                return await skills.traverseMiningRouteSegment(
+                    agent.bot,
+                    route,
+                    index,
+                    segmentEndIndex,
+                );
+            }
             return await skills.traverseMiningRouteCell(agent.bot, x, y, z);
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
     },
@@ -1085,6 +1120,30 @@ export const actionsList = [
                 excludedTargets: collectionExclusionsForAgent(agent, resource_name),
             });
         }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+    },
+    {
+        name: '!fillWaterBucket',
+        description: 'Fill one carried empty bucket from a connected renewable non-farm water source and verify the inventory change.',
+        params: {
+            'range': { type: 'int', description: 'Maximum loaded-source search range.', domain: [16, 192] },
+        },
+        perform: runAsAction(async (agent, range) => {
+            return await skills.fillWaterBucket(agent.bot, range);
+        }, false, FLUID_MECHANIC_ACTION_TIMEOUT_MINUTES)
+    },
+    {
+        name: '!castObsidianSource',
+        description: 'Use a carried water bucket at a safe loaded lava shore to cast, water-shield, harvest, and collect obsidian before recovering the water, or advance one bounded returnable lava-access corridor.',
+        params: {
+            'quantity': { type: 'int', description: 'Requested number of obsidian source blocks.', domain: [1, 16] },
+            'protected_route_cells': { type: 'int', description: 'Expected persisted return-route cell count.', domain: [0, 513], optional: true },
+        },
+        perform: runAsAction(async (agent, quantity, protected_route_cells = null) => {
+            return await skills.castObsidianSource(agent.bot, quantity, {
+                preservedReturnRoute: activeMiningReturnRoute(agent),
+                expectedProtectedRouteCells: protected_route_cells,
+            });
+        }, false, FLUID_MECHANIC_ACTION_TIMEOUT_MINUTES)
     },
     {
         name: '!lightCaveAt',
@@ -2427,7 +2486,7 @@ export const actionsList = [
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},
         perform: runAsAction(async (agent, type) => {
             return await skills.attackNearest(agent.bot, type, true);
-        })
+        }, false, -1, null, 'legacy', 'pvp')
     },
     {
         name: '!attackHostile',
@@ -2435,7 +2494,7 @@ export const actionsList = [
         params: {},
         perform: runAsAction(async (agent) => {
             return await skills.resolveTacticalCombat(agent.bot, 16);
-        })
+        }, false, -1, null, 'legacy', 'pvp')
     },
     {
         name: '!resolveTacticalCombat',
@@ -2445,7 +2504,7 @@ export const actionsList = [
         },
         perform: runAsAction(async (agent, range) => {
             return await skills.resolveTacticalCombat(agent.bot, range);
-        }, false, 3)
+        }, false, 3, null, 'legacy', 'pvp')
     },
     {
         name: '!attackPlayer',
@@ -2466,7 +2525,7 @@ export const actionsList = [
                 return false;
             }
             return await skills.attackEntity(agent.bot, player, true);
-        })
+        }, false, -1, null, 'legacy', 'pvp')
     },
     {
         name: '!goToBed',
@@ -3004,11 +3063,15 @@ export const actionsList = [
     },
     {
         name: '!goToSurface',
-        description: 'Moves the bot to the highest block above it (usually the surface).',
-        params: {},
-        perform: runAsAction(async (agent) => {
-            return await skills.goToSurface(agent.bot);
-        }, false, RESOURCE_COLLECTION_ACTION_TIMEOUT_MINUTES)
+        description: 'Moves the bot to a verified usable surface stance, optionally requiring literal open sky for resource access.',
+        params: {
+            'require_open_surface': { type: 'boolean', description: 'Require the final occupied stance itself to be open to the sky instead of merely having a proved nearby surface egress.', optional: true, default: false },
+        },
+        perform: runAsAction(async (agent, require_open_surface=false) => {
+            return await skills.goToSurface(agent.bot, {
+                requireOpenSurface: require_open_surface === true,
+            });
+        }, false, SURFACE_RECOVERY_ACTION_TIMEOUT_MINUTES, null, 'legacy', 'pathfinder')
     },
     {
         name: '!useItem',

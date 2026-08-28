@@ -51,9 +51,11 @@ function createFleet({
       deliverText: text => deliveries.push({ name, text }),
       executeGesture: (_agent, command) => {
         gestures.push({ name, command });
-        agent.last_action_result = {
-          actionId: `${name}-${gestures.length}`,
-          phase: 'succeeded',
+        return {
+          result: {
+            actionId: `${name}-${gestures.length}`,
+            phase: 'succeeded',
+          },
         };
       },
     });

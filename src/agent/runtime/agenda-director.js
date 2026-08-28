@@ -47,6 +47,15 @@ const REJECTED_COOLDOWN_MS = 5_000;
 const MAX_ENTRY_ATTEMPTS = 2;
 const MAX_ENTRY_PREEMPTIONS = 24;
 const MAX_INVENTORY_RECONCILIATIONS = 12;
+const GOAL_CONTINUATION_MAX_AGE_MS = 10 * 60_000;
+const ACTIVE_AGENDA_HEARTBEAT_MS = 60_000;
+const MINING_CONTINUATION_REJOIN_DISTANCE = 64;
+const RELEASED_MINING_CONTINUATION_CODES = new Set([
+  'mining_return_route_invalidated',
+  'mining_route_rejoin_exhausted',
+  'mining_route_rejoin_out_of_range',
+  'mining_route_rejoin_dimension_changed',
+]);
 const WAITABLE_DIRECT_OUTCOMES = new Set(['skill_not_sleep_time']);
 const PRODUCTIVE_ROUTE_OUTCOMES = new Set([
   'skill_closest_explored',
@@ -159,27 +168,139 @@ function encodeBaselineInventory(entries) {
     : 'none';
 }
 
-function acquisitionRetryCheckpoint(entry, goal) {
+function goalMiningContinuationCheckpoint(goal) {
   const route = goal?.checkpoint?.miningReturnRoute;
   const index = Number(goal?.checkpoint?.miningReturnIndex);
+  if (!Array.isArray(route) || route.length < 1 || !Number.isFinite(index) || index < -1) {
+    return null;
+  }
+  return {
+    miningReturnRoute: route,
+    // -1 is not absence: it proves every preserved return cell was traversed
+    // and hands the body to surface recovery. Dropping it resurrects an older
+    // deep-route cursor after an Agenda restart and lets the next prerequisite
+    // run underground without the active escape latch.
+    miningReturnIndex: Math.max(-1, Math.min(route.length - 1, Math.floor(index))),
+    ...(goal.checkpoint.miningReturnDimension
+      ? { miningReturnDimension: goal.checkpoint.miningReturnDimension }
+      : {}),
+  };
+}
+
+function currentMiningContinuationCheckpoint(agent, checkpoint) {
+  const route = checkpoint?.miningReturnRoute;
+  const index = Number(checkpoint?.miningReturnIndex);
+  const currentPosition = agent.bot?.entity?.position;
+  const currentDimension = String(agent.bot?.game?.dimension || '').replace(/^minecraft:/, '');
+  const routeDimension = String(checkpoint?.miningReturnDimension || '').replace(/^minecraft:/, '');
   if (
-    entry?.kind !== 'acquire'
-    || entry.completion !== 'inventory'
+    !currentPosition
     || !Array.isArray(route)
     || route.length < 1
     || !Number.isFinite(index)
-    || index < 0
+    || index < -1
+    || (routeDimension && routeDimension !== currentDimension)
+  ) return null;
+
+  if (Math.floor(index) === -1) {
+    return {
+      miningReturnRoute: route,
+      miningReturnIndex: -1,
+      ...(checkpoint.miningReturnDimension
+        ? { miningReturnDimension: checkpoint.miningReturnDimension }
+        : {}),
+    };
+  }
+
+  const boundedIndex = Math.min(route.length - 1, Math.floor(index));
+  let nearestIndex = -1;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let candidateIndex = 0; candidateIndex <= boundedIndex; candidateIndex += 1) {
+    const cell = route[candidateIndex];
+    if (![cell?.x, cell?.y, cell?.z].every(Number.isFinite)) continue;
+    const distance = Math.hypot(
+      currentPosition.x - cell.x,
+      currentPosition.y - cell.y,
+      currentPosition.z - cell.z,
+    );
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = candidateIndex;
+    }
+  }
+  if (nearestDistance > MINING_CONTINUATION_REJOIN_DISTANCE || nearestIndex < 0) return null;
+  const bodyAlreadyOnRoute = nearestDistance <= 4;
+  return {
+    miningReturnRoute: route,
+    // A nearby displaced body has not traversed the route. Keep the durable
+    // cursor at its proven endpoint so GoalDirector can first rejoin a nearby
+    // cell without truncating the still-existing corridor. Once the body is
+    // actually on-route, the nearest occupied index becomes authoritative.
+    miningReturnIndex: bodyAlreadyOnRoute ? nearestIndex : boundedIndex,
+    ...(checkpoint.miningReturnDimension
+      ? { miningReturnDimension: checkpoint.miningReturnDimension }
+      : {}),
+  };
+}
+
+function acquisitionRetryCheckpoint(entry, goal) {
+  const continuation = goalMiningContinuationCheckpoint(goal);
+  if (
+    entry?.kind !== 'acquire'
+    || entry.completion !== 'inventory'
+    || !continuation
   ) return null;
   return {
     baselineInventory: entry.acquisitionCheckpoint?.baselineInventory
       ?? goal.checkpoint?.baselineInventory,
     targetInventory: entry.acquisitionCheckpoint?.targetInventory
       ?? goal.checkpoint?.targetInventory,
-    miningReturnRoute: route,
-    miningReturnIndex: index,
-    ...(goal.checkpoint.miningReturnDimension
-      ? { miningReturnDimension: goal.checkpoint.miningReturnDimension }
-      : {}),
+    ...continuation,
+  };
+}
+
+function priorChecklistGoalContinuation(agent, requester, requirement) {
+  const prior = agent.goal_director?.lastGoal;
+  const now = agent.goal_director?.now?.() || Date.now();
+  const sameTarget = prior?.target?.inventoryName === requirement.target;
+  const fresh = now - Number(prior?.updatedAt || 0) <= GOAL_CONTINUATION_MAX_AGE_MS;
+  if (
+    !prior
+    || !['failed', 'cancelled'].includes(prior.phase)
+    || prior.kind !== 'acquire'
+    || prior.requester !== requester
+    || prior.quantityMode !== 'minimum'
+    || prior.completion?.kind !== 'inventory'
+  ) return null;
+
+  const failedTargets = sameTarget && fresh
+    ? (prior.memory?.failedTargets || []).filter(target => (
+      target?.kind === 'collect'
+      && now - Number(target.lastFailedAt || 0) <= GOAL_CONTINUATION_MAX_AGE_MS
+    ))
+    : [];
+  const miningContinuation = currentMiningContinuationCheckpoint(agent, prior.checkpoint);
+  const activeCollectionTarget = sameTarget && fresh
+    ? prior.memory?.activeCollectionTarget || null
+    : null;
+  if (
+    failedTargets.length === 0
+    && !miningContinuation
+    && !activeCollectionTarget
+  ) return null;
+
+  // Carry physical knowledge, not the failed executor lifecycle. Rejected
+  // coordinates and an observed target belong only to the same material, but a
+  // verified escape corridor belongs to the body until it has actually exited.
+  // This keeps a multi-prerequisite Agenda from losing its way home merely
+  // because the next missing inventory item has a different name. Tool and
+  // workstation requirements are still re-derived from current code and body.
+  return {
+    checkpoint: miningContinuation,
+    memory: {
+      failedTargets,
+      ...(activeCollectionTarget ? { activeCollectionTarget } : {}),
+    },
   };
 }
 
@@ -453,6 +574,7 @@ export class AgendaDirector {
     this.dispatching = false;
     this.directDispatchGeneration = 0;
     this.sequence = 0;
+    this.lastPersistAt = this.now();
     this.status = {
       phase: 'idle',
       code: 'no_agenda',
@@ -461,7 +583,15 @@ export class AgendaDirector {
     };
     try {
       this.store = store || new AgendaStore(agent.name);
-      this.entries = this.store.load();
+      this.entries = this.store.load({
+        freshExecutorIds: [
+          this.agent.goal_director?.activeGoal?.id,
+          this.agent.goal_director?.lastGoal?.id,
+          this.agent.job_director?.activeOrder?.id,
+          this.agent.job_director?.lastOrder?.id,
+        ].filter(Boolean),
+      });
+      const reconciledStaleActivity = this.store.reconciledStaleActivity === true;
       this.entries = this.entries.map((entry, index, entries) => {
         const inferred = inferredLegacyDependency(entries[index - 1], entry);
         return inferred ? normalizeAgendaEntry({ ...entry, ...inferred }) : entry;
@@ -608,6 +738,12 @@ export class AgendaDirector {
       }
       // Restored ids must not collide with ids minted this session.
       this.sequence = this.entries.length;
+      if (reconciledStaleActivity && this.entries.length > 0) {
+        // Refresh the queue timestamp immediately after exact cross-store
+        // reconciliation so later restarts do not depend on the old file age.
+        this.store.save(this.entries);
+        this.lastPersistAt = this.now();
+      }
       if (this.store.lastError) {
         this.setStatus('failed', 'agenda_load_failed', this.store.lastError);
       } else if (this.entries.length) {
@@ -632,7 +768,7 @@ export class AgendaDirector {
 
   persist() {
     if (!this.store) return;
-    this.store.save(this.entries);
+    if (this.store.save(this.entries)) this.lastPersistAt = this.now();
   }
 
   pending() {
@@ -645,6 +781,47 @@ export class AgendaDirector {
 
   activeEntry() {
     return this.entries.find(entry => entry.state === 'active') || null;
+  }
+
+  currentControlCommitment(action = {}) {
+    const entry = this.activeEntry() || this.pending()[0] || null;
+    if (!entry?.id) return null;
+    return {
+      owner: 'player_agenda',
+      obligationId: entry.id,
+      phase: entry.state || null,
+      ownsCurrentAction: entry.executor === 'direct' && action.owner === 'player',
+    };
+  }
+
+  reconcileActiveGoalMiningContinuation(entry) {
+    const director = this.agent.goal_director;
+    const goal = director?.activeGoal;
+    if (
+      !entry
+      || entry.kind !== 'inventory_checklist'
+      || entry.executor !== 'goal'
+      || !entry.executorId
+      || goal?.id !== entry.executorId
+      || director?.inFlight
+      || (goal.checkpoint?.miningReturnRoute?.length || 0) > 0
+    ) return false;
+    if (RELEASED_MINING_CONTINUATION_CODES.has(String(goal.evidence?.code || ''))) {
+      // GoalDirector already exhausted or invalidated this exact spine from
+      // current Minecraft state. Retire the Agenda copy in the same update so
+      // the next heartbeat cannot resurrect it and force an adopt/reject loop.
+      this.replace(entry.id, { goalContinuationCheckpoint: null });
+      return false;
+    }
+    const continuation = currentMiningContinuationCheckpoint(
+      this.agent,
+      entry.goalContinuationCheckpoint,
+    );
+    if (!continuation) return false;
+    return director.adoptMiningContinuationCheckpoint?.(
+      continuation,
+      'Agenda reconciled the active inventory Goal with its exact persisted mining spine after body displacement.',
+    ) === true;
   }
 
   ownsGoalExecutor(goalId) {
@@ -983,7 +1160,20 @@ export class AgendaDirector {
   }
 
   resumeFailedChain(reason = 'Explicitly resumed after a material repair.') {
-    const rootIndex = this.entries.findIndex(entry => entry.state === 'failed');
+    let rootIndex = this.entries.findIndex(entry => entry.state === 'failed');
+    if (
+      rootIndex < 0
+      && this.entries.length === 0
+      && this.store?.load
+      && /Discarded persisted agenda/i.test(String(this.store.lastError || ''))
+    ) {
+      const restored = this.store.load({ allowStaleFailedChain: true });
+      if (this.store.explicitStaleResume === true) {
+        this.entries = restored;
+        this.sequence = this.entries.length;
+        rootIndex = this.entries.findIndex(entry => entry.state === 'failed');
+      }
+    }
     if (rootIndex < 0) return { resumed: 0, rootId: null };
     const failedJobReceipt = this.agent.job_director?.lastReceipt;
     const resumableJobId = failedJobReceipt?.phase === 'failed'
@@ -1012,6 +1202,14 @@ export class AgendaDirector {
             attempts: 0,
             preemptions: 0,
             materialChangeBlocker: null,
+            ...(entry.kind === 'inventory_checklist' ? {
+              // This counter bounds one causal correction campaign. An explicit
+              // resume is only authorized after the owning mechanism changes,
+              // so carrying the exhausted budget would fail the repaired root
+              // before it can dispatch even one new Goal.
+              reconciliationTarget: '',
+              reconciliations: 0,
+            } : {}),
             evidence: {
               code: 'agenda_chain_explicitly_resumed',
               detail: boundedText(reason),
@@ -1261,6 +1459,9 @@ export class AgendaDirector {
         };
       }
       const succeeded = last?.phase === 'complete';
+      const goalContinuationCheckpoint = entry.kind === 'inventory_checklist'
+        ? goalMiningContinuationCheckpoint(last)
+        : null;
       const retryCheckpoint = !succeeded
         ? acquisitionRetryCheckpoint(entry, last)
         : null;
@@ -1269,6 +1470,7 @@ export class AgendaDirector {
           state: 'recheck',
           code: last?.evidence?.code || 'inventory_reconciliation_complete',
           detail: last?.evidence?.detail || '',
+          ...(goalContinuationCheckpoint ? { goalContinuationCheckpoint } : {}),
         };
       }
       return {
@@ -1283,6 +1485,7 @@ export class AgendaDirector {
         retryable: last?.evidence?.retryable === true,
         completionBlocked: last?.evidence?.completionBlocked === true,
         ...(retryCheckpoint ? { acquisitionCheckpoint: retryCheckpoint } : {}),
+        ...(goalContinuationCheckpoint ? { goalContinuationCheckpoint } : {}),
       };
     }
     if (entry.executor === 'job') {
@@ -1374,6 +1577,31 @@ export class AgendaDirector {
         baselineInventory: requirement.count,
         completion: 'inventory',
       });
+      const priorContinuation = priorChecklistGoalContinuation(
+        this.agent,
+        requester,
+        requirement,
+      );
+      const persistedCheckpoint = currentMiningContinuationCheckpoint(
+        this.agent,
+        entry.goalContinuationCheckpoint,
+      );
+      const continuation = priorContinuation || persistedCheckpoint
+        ? {
+            checkpoint: priorContinuation?.checkpoint || persistedCheckpoint,
+            memory: priorContinuation?.memory || { failedTargets: [] },
+          }
+        : null;
+      if (continuation) {
+        goal = normalizeGoalContract({
+          ...goal,
+          checkpoint: {
+            ...goal.checkpoint,
+            ...(continuation.checkpoint || {}),
+          },
+          memory: continuation.memory,
+        });
+      }
     } catch (error) {
       return { accepted: false, code: 'invalid_goal', detail: boundedText(error?.message || error) };
     }
@@ -1394,6 +1622,9 @@ export class AgendaDirector {
       finishedAt: null,
       executorId: '',
       reconciliationTarget: '',
+      ...(settled.goalContinuationCheckpoint
+        ? { goalContinuationCheckpoint: settled.goalContinuationCheckpoint }
+        : {}),
       evidence: {
         code: 'inventory_reconciliation_progress',
         detail: settled.detail || 'A missing final inventory floor was restored; rechecking the complete plan.',
@@ -1791,6 +2022,9 @@ export class AgendaDirector {
             ? { transactionCheckpoint: settled.transactionCheckpoint }
             : {}),
         };
+    const checkpointedActivePatch = settled.goalContinuationCheckpoint
+      ? { ...activePatch, goalContinuationCheckpoint: settled.goalContinuationCheckpoint }
+      : activePatch;
     // Persist the terminal step and its dependent exact-workstation handoff in
     // one store write. A restart can therefore never observe arrival complete
     // while the following smelt remains free to select a different furnace.
@@ -1798,7 +2032,7 @@ export class AgendaDirector {
     // remain pending too; only the committed terminal parent state can make a
     // requires-success dependency impossible.
     this.entries = this.entries.map(entry => {
-      if (entry.id === active.id) return normalizeAgendaEntry({ ...entry, ...activePatch });
+      if (entry.id === active.id) return normalizeAgendaEntry({ ...entry, ...checkpointedActivePatch });
       if (bindingConstraint && entry.id === dependentEntryId) {
         return normalizeAgendaEntry({
           ...entry,
@@ -2242,6 +2476,8 @@ export class AgendaDirector {
         return `!putFamilyInChestAt("${entry.target}", ${entry.quantity}, ${entry.containerConstraint.position.x}, ${entry.containerConstraint.position.y}, ${entry.containerConstraint.position.z}, ${JSON.stringify(entry.containerConstraint.dimension)}, ${JSON.stringify(baselineManifest)})`;
       },
       settle_livestock: () => `!settleLivestockAtPen(${JSON.stringify(entry.target)}, ${entry.quantity}, ${entry.breedingPairs}, ${entry.x}, ${entry.y}, ${entry.z}, ${entry.penConstraint.gate.x}, ${entry.penConstraint.gate.y}, ${entry.penConstraint.gate.z}, ${entry.penConstraint.inside.x}, ${entry.penConstraint.inside.y}, ${entry.penConstraint.inside.z}, ${entry.penConstraint.outside.x}, ${entry.penConstraint.outside.y}, ${entry.penConstraint.outside.z}, ${entry.penConstraint.bounds.minX}, ${entry.penConstraint.bounds.maxX}, ${entry.penConstraint.bounds.minZ}, ${entry.penConstraint.bounds.maxZ}, ${entry.penConstraint.bounds.y}, ${JSON.stringify(entry.penConstraint.dimension)}, ${entry.penConstraint.baselineAnimals})`,
+      portal_build: () => `!buildNetherPortal(${entry.radius})`,
+      nether_round_trip: () => `!completeNetherQuartzRun(${entry.quantity})`,
       sleep: () => entry.bindingConstraint?.kind === 'structure_fixture'
         ? `!goToBedAt(${entry.bindingConstraint.position.x}, ${entry.bindingConstraint.position.y}, ${entry.bindingConstraint.position.z}, ${JSON.stringify(entry.bindingConstraint.dimension)})`
         : '!goToBed',
@@ -2304,7 +2540,13 @@ export class AgendaDirector {
   }
 
   update() {
-    if (!this.entries.length || this.dispatching) return;
+    if (!this.entries.length) return;
+    const activeForHeartbeat = this.activeEntry();
+    if (
+      activeForHeartbeat
+      && this.now() - this.lastPersistAt >= ACTIVE_AGENDA_HEARTBEAT_MS
+    ) this.persist();
+    if (this.dispatching) return;
     if (this.agent.isOperatorHeld?.()) {
       this.setStatus('suppressed', 'operator_hold', this.agent.operator_hold_reason || 'Operator Stop is active.');
       return;
@@ -2312,6 +2554,7 @@ export class AgendaDirector {
 
     const active = this.activeEntry();
     if (active) {
+      this.reconcileActiveGoalMiningContinuation(active);
       // A step is only finished once the executor carrying it has let go.
       if (!this.executorsIdle()) {
         this.setStatus('acting', 'agenda_step_running', describeAgendaEntry(active), active.id);

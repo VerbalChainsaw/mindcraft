@@ -1,6 +1,9 @@
 import { executeCommand as executeAgentCommand } from '../commands/index.js';
 import {
   assessShelterInPlace,
+  findShelterInPlaceStances,
+  occupiesDefensiveShelter,
+  occupiesUsableSurfaceStance,
   probeSafeNavigationStances,
 } from '../library/skills.js';
 import { hasLineOfSightToEntity } from '../library/world.js';
@@ -27,7 +30,13 @@ const FAILURE_COOLDOWN_MS = 10_000;
 const BLOCKED_COOLDOWN_MS = 15_000;
 const SURVIVAL_ENVIRONMENT_TTL_MS = 1_000;
 const FOOD_RECOVERY_REGION_CHANGE_DISTANCE = 8;
+const FOOD_SOURCE_OBSERVATION_RADIUS = 24;
+const FOOD_SEARCH_INITIAL_RADIUS = 24;
+const FOOD_SEARCH_MAX_RADIUS = 128;
 const SAFETY_INCIDENT_CALM_MS = 4_000;
+const SAFETY_CONTAINMENT_STABLE_MS = 2_000;
+const SAFETY_GUARD_BREACH_DISTANCE = 3.5;
+const SAFETY_SEPARATION_CLOSING_TOLERANCE = 0.5;
 const SAFETY_REPEAT_SOURCE_WINDOW_MS = 120_000;
 const SAFETY_RENDEZVOUS_DISTANCE = 4;
 const SURVIVAL_DECISION_SCHEMA_VERSION = 1;
@@ -48,6 +57,7 @@ const GENERIC_FOOD_RECOVERY_INTENTS = new Set([
   'acquire_food',
   'eat',
   'return_to_player',
+  'return_to_surface',
   'return_home',
   'wait',
 ]);
@@ -60,6 +70,10 @@ const SAFETY_WAIT_CODES = new Set([
   'safety_help_unavailable',
   'safety_waiting_for_intent_clarification',
   'safety_cover_unavailable',
+  'safety_threat_contained',
+  'safety_containment_stabilizing',
+  'safety_disengagement_stabilizing',
+  'safety_containment_verification',
 ]);
 
 function dimensionName(value) {
@@ -247,17 +261,13 @@ function safetyPlayerTarget(agent, incident) {
   return attacker && name.toLowerCase() === attacker ? null : name;
 }
 
-function safetyAgendaRemedy(agent, incident) {
-  const player = safetyPlayerTarget(agent, incident);
-  if (!player) return null;
-  const entries = [
-    agent.agenda_director?.activeEntry?.(),
-    ...(agent.agenda_director?.pending?.() || []),
-  ].filter(Boolean);
-  return entries.find(entry => (
-    entry.kind === 'goto'
-    && String(entry.recipient || entry.requester || '').toLowerCase() === player.toLowerCase()
-  )) || null;
+function safetyPlayerPresenceConfirmed(agent, playerName) {
+  const companion = agent.companion_context?.snapshot?.() || null;
+  return Boolean(
+    companion?.presence === 'present'
+    && String(companion.canonicalUsername || '').toLowerCase() === String(playerName || '').toLowerCase()
+    && physicalPosition(companion.position)
+  );
 }
 
 function safetyPlayerDistance(agent, playerName) {
@@ -272,18 +282,44 @@ function safetyPlayerDistance(agent, playerName) {
   );
 }
 
-function loadedIncidentThreat(agent, incident) {
-  const id = Number(incident?.source?.id);
+function loadedSafetySource(agent, source) {
+  const id = Number(source?.id);
   if (!Number.isFinite(id)) return null;
   const entity = agent.bot?.entities?.[Math.floor(id)] || null;
   if (!entity?.position) return null;
-  const expectedUsername = String(incident.source.username || '').toLowerCase();
+  const expectedUsername = String(source.username || '').toLowerCase();
   const actualUsername = String(entity.username || '').toLowerCase();
   if (expectedUsername && expectedUsername !== actualUsername) return null;
-  const expectedName = String(incident.source.name || '').toLowerCase();
+  const expectedName = String(source.name || '').toLowerCase();
   const actualName = String(entity.name || '').toLowerCase();
   if (!expectedUsername && expectedName && expectedName !== actualName) return null;
   return entity;
+}
+
+function incidentSources(incident) {
+  const sources = Array.isArray(incident?.sources) && incident.sources.length > 0
+    ? incident.sources
+    : incident?.source
+      ? [incident.source]
+      : [];
+  return sources.filter(Boolean);
+}
+
+function loadedIncidentThreats(agent, incident) {
+  const seen = new Set();
+  const threats = [];
+  for (const source of incidentSources(incident)) {
+    const entity = loadedSafetySource(agent, source);
+    if (!entity || seen.has(entity.id)) continue;
+    seen.add(entity.id);
+    threats.push(entity);
+  }
+  return threats;
+}
+
+function loadedIncidentThreat(agent, incident) {
+  const current = loadedSafetySource(agent, incident?.source);
+  return current || loadedIncidentThreats(agent, incident)[0] || null;
 }
 
 function rememberedHome(agent, currentDimension) {
@@ -298,7 +334,10 @@ function rememberedHome(agent, currentDimension) {
 
 function foodInventory(bot) {
   const foodData = bot.registry?.foodsByName || {};
-  return (bot.inventory?.items?.() || [])
+  const carried = Array.isArray(bot.inventory?.slots)
+    ? bot.inventory.slots.filter(Boolean)
+    : (bot.inventory?.items?.() || []);
+  return carried
     .filter(item => item?.name && foodData[item.name])
     .map(item => ({
       name: item.name,
@@ -436,6 +475,20 @@ function usefulDropCandidates(bot) {
     });
   }
   return candidates.sort((left, right) => left.distance - right.distance);
+}
+
+function huntableFoodSourceSignature(bot, radius = FOOD_SOURCE_OBSERVATION_RADIUS) {
+  const origin = bot.entity?.position;
+  if (!origin) return '';
+  return Object.values(bot.entities || {})
+    .filter(entity => (
+      entity?.position
+      && mc.isHuntable(entity)
+      && origin.distanceTo(entity.position) <= radius
+    ))
+    .map(entity => `${Number(entity.id) || 0}:${String(entity.name || '')}`)
+    .sort()
+    .join('|');
 }
 
 function usefulDropInventorySignature(bot) {
@@ -708,24 +761,32 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
   const night = isNightTime(timeOfDay);
   const unsafeNight = night && difficulty !== 'peaceful';
   const eligible = policy.mode === 'full' && !held && !urgentDanger && idle;
+  const safetyRecoveryActive = agent.survival_director?.safetyIncident?.active === true;
   const needs = {
     beds: eligible && policy.sleep === 'safe' && night && dimension === 'overworld',
     shelters: eligible && (
+      safetyRecoveryActive
+      ||
       (Number.isFinite(health) && health <= 14 && recentDamage)
       || (policy.shelter !== 'off' && (unsafeNight || weather === 'Thunderstorm'))
     ),
   };
 
   const environment = environmentalSituation(bot, now, needs);
+  const defensiveShelter = occupiesDefensiveShelter(bot);
   const shouldAssessShelterInPlace = eligible
     && policy.shelter !== 'off'
     && Number.isFinite(health)
     && health <= 8
-    && environment.sheltered !== true
-    && (recentDamage || unsafeNight);
+    && defensiveShelter !== true
+    && (safetyRecoveryActive || recentDamage || unsafeNight);
   const shelterInPlaceFeasibility = shouldAssessShelterInPlace
     ? assessShelterInPlace(bot)
     : Object.freeze({ feasible: false, code: 'not_required' });
+  const shelterInPlaceStances = shouldAssessShelterInPlace
+    && shelterInPlaceFeasibility.feasible !== true
+    ? findShelterInPlaceStances(bot)
+    : [];
 
   return {
     held,
@@ -742,8 +803,10 @@ export function summarizeSurvivalSituation(agent, { now = Date.now() } = {}) {
     weather,
     armor: armorInventory(bot),
     ...environment,
+    defensiveShelter,
     canShelterInPlace: shelterInPlaceFeasibility.feasible === true,
     shelterInPlaceFeasibility,
+    shelterInPlaceStances,
   };
 }
 
@@ -752,13 +815,19 @@ export const SLEEP_RETRY_HOLD_MS = 60_000;
 
 export class SurvivalDirector extends BehaviorDirector {
   constructor(agent, {
+    now = Date.now,
     getSituation = summarizeSurvivalSituation,
     executeCommand = executeAgentCommand,
     requestWorkOrder,
+    isAtSurface = occupiesUsableSurfaceStance,
+    assessDefensiveShelter = assessShelterInPlace,
   } = {}) {
     super(agent, { name: 'survival' });
     this.getSituation = getSituation;
+    this.now = now;
     this.executeCommand = executeCommand;
+    this.isAtSurface = isAtSurface;
+    this.assessDefensiveShelter = assessDefensiveShelter;
     this.requestWorkOrder = requestWorkOrder || (order => (
       this.agent.job_director?.requestWorkOrder?.(order)
       || { accepted: false, code: 'job_director_unavailable' }
@@ -772,6 +841,8 @@ export class SurvivalDirector extends BehaviorDirector {
     this.lastDecision = null;
     this.safetyIncident = null;
     this.lastSafetyIncident = null;
+    this.containedThreatGuard = null;
+    this.unavailableSafetyPlayer = null;
   }
 
   inspectSleepBeds() {
@@ -864,6 +935,7 @@ export class SurvivalDirector extends BehaviorDirector {
       ...super.snapshot(),
       decision: this.lastDecision,
       safetyIncident: this.safetyIncident || this.lastSafetyIncident,
+      containedThreatGuard: this.containedThreatGuard,
     };
   }
 
@@ -873,7 +945,7 @@ export class SurvivalDirector extends BehaviorDirector {
       ...this.safetyIncident,
       ...patch,
       active: true,
-      updatedAt: Date.now(),
+      updatedAt: this.now(),
     });
     return this.safetyIncident;
   }
@@ -891,15 +963,97 @@ export class SurvivalDirector extends BehaviorDirector {
       : null;
   }
 
+  ownsSafetyRecoveryForThreat(threat) {
+    const incident = this.safetyIncident;
+    if (!incident?.active) {
+      const guard = this.containedThreatGuard;
+      if (!guard || !incidentSources(guard).some(source => sameSource(source, threat))) return false;
+      if (guard.kind === 'stable_disengagement') {
+        const distance = this.agent.bot?.entity?.position?.distanceTo?.(threat?.position);
+        const source = incidentSources(guard).find(candidate => sameSource(candidate, threat));
+        const guardedMinimum = Number(guard.minimumDistances?.[String(source?.id)]);
+        const separated = Number.isFinite(distance)
+          && distance >= (Number.isFinite(guardedMinimum)
+            ? guardedMinimum
+            : Number(guard.minimumDistance || SAFETY_GUARD_BREACH_DISTANCE))
+          && hasLineOfSightToEntity(this.agent.bot, threat) === false;
+        if (!separated) this.containedThreatGuard = null;
+        return separated;
+      }
+      if (!occupiesDefensiveShelter(this.agent.bot)) {
+        this.containedThreatGuard = null;
+        return false;
+      }
+      return hasLineOfSightToEntity(this.agent.bot, threat) === false;
+    }
+    if (incident.stage === 'under_cover') return true;
+    if (this.dispatchLease?.metadata?.intent?.kind === 'shelter_in_place') return true;
+    if (![
+      'disengaged',
+      'disengaging',
+      'response_blocked',
+      'recovery_blocked',
+      'shelter_relocated',
+    ].includes(incident.stage)) {
+      return false;
+    }
+    if (!incidentSources(incident).some(source => sameSource(source, threat))) {
+      const threatId = Number(threat?.id);
+      if (Number.isFinite(threatId) && threat?.position) {
+        const source = Object.freeze({
+          kind: 'hostile',
+          id: Math.floor(threatId),
+          name: boundedDecisionText(threat.name || threat.username, 64).toLowerCase() || null,
+          username: null,
+          type: boundedDecisionText(threat.type, 32) || null,
+          observedAt: this.now(),
+        });
+        const sources = [
+          ...incidentSources(incident).filter(candidate => !sameSource(candidate, source)),
+          source,
+        ].slice(-8);
+        this.replaceSafetyIncident({
+          sources: Object.freeze(sources),
+          lastThreatSeenAt: this.now(),
+          disengagementStartedAt: null,
+          disengagementDistances: null,
+        });
+      }
+    }
+    // After one tactical response hands off, Safety owns the whole hostile
+    // band. New attackers are enrolled above and evaluated together; they do
+    // not each launch another lower combat leaf while the original work is
+    // already suspended.
+    return true;
+  }
+
   observeSafetySource(source) {
     if (!source) return false;
-    const now = Date.now();
-    if (this.safetyIncident && sameSource(this.safetyIncident.source, source)) {
+    const now = this.now();
+    this.containedThreatGuard = null;
+    if (this.safetyIncident) {
+      const sameThreat = sameSource(this.safetyIncident.source, source);
+      const priorSources = Array.isArray(this.safetyIncident.sources)
+        ? this.safetyIncident.sources
+        : [this.safetyIncident.source];
+      const sources = sameThreat
+        ? priorSources.map(candidate => sameSource(candidate, source) ? source : candidate)
+        : [...priorSources.filter(candidate => !sameSource(candidate, source)), source].slice(-8);
       this.replaceSafetyIncident({
         source,
+        sources: Object.freeze(sources),
         stage: 'threat_response',
+        containmentStartedAt: null,
+        disengagementStartedAt: null,
         lastDamageAt: source.observedAt,
+        ...(source.kind === 'hostile' ? { lastThreatSeenAt: source.observedAt } : {}),
         health: finiteOrNull(this.agent.bot?.health),
+        ...(!sameThreat
+          ? {
+              encounterCount: Math.max(1, Number(this.safetyIncident.encounterCount) || 1) + 1,
+              failedResponse: null,
+            }
+          : {}),
       });
     } else {
       const previousIncident = this.lastSafetyIncident;
@@ -915,6 +1069,7 @@ export class SurvivalDirector extends BehaviorDirector {
         active: true,
         stage: 'threat_response',
         source,
+        sources: Object.freeze([source]),
         startedAt: source.observedAt,
         updatedAt: now,
         lastDamageAt: source.observedAt,
@@ -932,6 +1087,7 @@ export class SurvivalDirector extends BehaviorDirector {
       this.lastSafetyIncident = null;
     }
     this.nextEligibleAt = 0;
+    this.agent.behavior_arbiter?.beginSafetySuspension?.(this.safetyIncident);
     this.agent.behavior_arbiter?.wake?.('survival_incident_observed');
     return true;
   }
@@ -972,10 +1128,11 @@ export class SurvivalDirector extends BehaviorDirector {
       active: false,
       stage: phase === 'succeeded' ? 'resolved' : 'failed',
       resolutionCode: boundedDecisionText(code, 80) || 'survival_incident_resolved',
-      resolvedAt: Date.now(),
-      updatedAt: Date.now(),
+      resolvedAt: this.now(),
+      updatedAt: this.now(),
     });
     this.lastSafetyIncident = closed;
+    this.agent.behavior_arbiter?.releaseSafetySuspension?.(closed, closed.resolutionCode);
     this.safetyIncident = null;
     this.finish({
       phase,
@@ -1122,13 +1279,11 @@ export class SurvivalDirector extends BehaviorDirector {
 
   blocksLowerPriority() {
     if (this.inFlight || this.status.phase === 'acting') return true;
-    if (this.safetyIncident) {
-      // An exact Agenda rendezvous is the incident remedy, not competing work.
-      // Every other unresolved incident retains the body until it reaches a
-      // player, verified cover, or a truthful settled help state.
-      if (safetyAgendaRemedy(this.agent, this.safetyIncident)) return false;
-      return true;
-    }
+    // An unresolved Safety incident owns the body. A future Agenda entry may
+    // happen to name the same player, but it is still suspended player work;
+    // Survival dispatches its own bounded rendezvous and releases this gate
+    // only when the incident itself reaches a terminal safe settlement.
+    if (this.safetyIncident) return true;
     let criticalNeed = false;
     let situation;
     try {
@@ -1156,15 +1311,11 @@ export class SurvivalDirector extends BehaviorDirector {
       // consumption before a player job can reclaim the body.
       return true;
     }
-    return this.status.phase === 'waiting' && new Set([
-      'missing_safe_food',
-      'recovery_missing_food',
-      'recovery_food_sources_exhausted',
-      'regenerating_health',
-      'preserving_food_reserve',
-      'no_safe_storm_shelter',
-      'no_safe_night_shelter',
-    ]).has(this.status.code);
+    // Critical bodily state itself owns the priority boundary. Restricting
+    // this hold to a handful of waiting codes left a race after an eat,
+    // shelter, or retreat action settled: the player Goal could reacquire the
+    // body at one health before SurvivalDirector selected its next remedy.
+    return true;
   }
 
   permitsIdleEmbodiment() {
@@ -1193,18 +1344,50 @@ export class SurvivalDirector extends BehaviorDirector {
     }
   }
 
-  captureFoodSourceBlocker(intent = {}) {
+  captureFoodSourceBlocker(intent = {}, result = null) {
     const position = physicalPosition(this.agent.bot?.entity?.position);
     if (!position) return;
+    const continuesRecovery = ['food_search_expanded', 'food_access_restored'].includes(intent.reason);
+    const prior = continuesRecovery ? this.foodSourceBlocker : null;
+    const observedAccessRequirement = result?.evidence?.skill?.accessRequirement || null;
+    const observedSurfaceRequirement = ['surface', 'food_region'].includes(
+      observedAccessRequirement?.kind,
+    );
+    const consumedSurfaceAccess = intent.reason === 'food_access_restored';
+    // A generic covered-surface arrival can be valid for ordinary locomotion
+    // and still be insufficient for a concrete crop or animal above the body.
+    // If that stronger evidence arrives after a successful generic surface
+    // attempt, reopen exactly one open-surface recovery instead of preserving
+    // the stale "surface already attempted" bit forever.
+    const reopenSurfaceRecovery = Boolean(
+      observedSurfaceRequirement
+      && !consumedSurfaceAccess
+      && prior?.surfaceAttempted === true
+      && prior?.surfaceSucceeded === true
+    );
+    const searchRadius = Math.max(
+      FOOD_SEARCH_INITIAL_RADIUS,
+      Math.min(FOOD_SEARCH_MAX_RADIUS, Math.floor(Number(intent.searchRadius) || FOOD_SEARCH_INITIAL_RADIUS)),
+    );
     this.foodSourceBlocker = {
       position,
       dimension: dimensionName(this.agent.bot?.game?.dimension),
-      requester: activePlayerRequester(this.agent),
-      workOrderId: boundedDecisionText(intent.workOrderId, 96),
-      returnAttempted: false,
-      returnSucceeded: false,
-      homeAttempted: false,
-      homeSucceeded: false,
+      requester: prior?.requester || activePlayerRequester(this.agent),
+      workOrderId: boundedDecisionText(intent.workOrderId || prior?.workOrderId, 96),
+      targetFoodPoints: Math.max(1, Math.floor(Number(intent.targetFoodPoints || prior?.targetFoodPoints) || 1)),
+      searchRadius,
+      returnAttempted: prior?.returnAttempted === true,
+      returnSucceeded: prior?.returnSucceeded === true,
+      surfaceAttempted: reopenSurfaceRecovery ? false : prior?.surfaceAttempted === true,
+      surfaceSucceeded: reopenSurfaceRecovery ? false : prior?.surfaceSucceeded === true,
+      surfaceAccessResolved: reopenSurfaceRecovery || consumedSurfaceAccess
+        ? false
+        : prior?.surfaceAccessResolved === true,
+      homeAttempted: prior?.homeAttempted === true,
+      homeSucceeded: prior?.homeSucceeded === true,
+      surfaceAccessRequired: prior?.surfaceAccessRequired === true
+        || observedSurfaceRequirement,
+      huntableFoodSourceSignature: huntableFoodSourceSignature(this.agent.bot),
     };
   }
 
@@ -1362,19 +1545,110 @@ export class SurvivalDirector extends BehaviorDirector {
     }
     if (situation.urgentDanger) return { kind: 'defer_to_reflex', incidentId: incident.id };
 
+    const threats = loadedIncidentThreats(this.agent, incident);
     const threat = loadedIncidentThreat(this.agent, incident);
-    if (threat) {
-      this.replaceSafetyIncident({ lastThreatSeenAt: Date.now() });
-      if (isSheltered(this.agent.bot) && hasLineOfSightToEntity(this.agent.bot, threat) === false) {
-        this.closeSafetyIncident({
-          code: 'verified_threat_cover_reached',
-          detail: 'A supported covered stance blocks line of sight from the attributed threat.',
-        });
-        return null;
+    if (threats.length > 0) {
+      const now = this.now();
+      const sightBlocked = threats.every(candidate => (
+        hasLineOfSightToEntity(this.agent.bot, candidate) === false
+      ));
+      const contained = occupiesDefensiveShelter(this.agent.bot) && sightBlocked;
+      const threatDistances = Object.fromEntries(threats
+        .map(candidate => [
+          String(candidate.id),
+          this.agent.bot?.entity?.position?.distanceTo?.(candidate.position),
+        ])
+        .filter(([, distance]) => Number.isFinite(distance)));
+      const priorDistances = incident.disengagementDistances || null;
+      const distanceBandComplete = Object.keys(threatDistances).length === threats.length;
+      const separationNotClosing = Boolean(
+        distanceBandComplete
+        && priorDistances
+        && Object.entries(threatDistances).every(([id, distance]) => (
+          Number.isFinite(Number(priorDistances[id]))
+          && distance >= Number(priorDistances[id]) - SAFETY_SEPARATION_CLOSING_TOLERANCE
+        )),
+      );
+      const separationCandidate = !contained
+        && sightBlocked
+        && distanceBandComplete
+        && now - Number(incident.lastDamageAt || incident.startedAt || now) >= SAFETY_INCIDENT_CALM_MS;
+      const disengagementStartedAt = separationCandidate && separationNotClosing
+        ? Number(incident.disengagementStartedAt) || now
+        : now;
+      this.replaceSafetyIncident({
+        lastThreatSeenAt: now,
+        ...(!contained ? { containmentStartedAt: null } : {}),
+        ...(!contained && separationCandidate
+          ? {
+              disengagementStartedAt,
+              disengagementDistances: Object.freeze({ ...threatDistances }),
+            }
+          : {
+              disengagementStartedAt: null,
+              disengagementDistances: null,
+            }),
+      });
+      if (contained) {
+        const containmentStartedAt = Number(incident.containmentStartedAt) || now;
+        if (now - containmentStartedAt >= SAFETY_CONTAINMENT_STABLE_MS) {
+          this.containedThreatGuard = Object.freeze({
+            incidentId: incident.id,
+            source: incident.source,
+            sources: Object.freeze([...incidentSources(incident)]),
+            containedAt: now,
+          });
+          this.closeSafetyIncident({
+            code: 'safety_structurally_contained',
+            detail: `A complete refuge blocked line of sight from all ${threats.length} loaded incident threat${threats.length === 1 ? '' : 's'} through the bounded stability window.`,
+          });
+          return null;
+        }
+        this.replaceSafetyIncident({ stage: 'under_cover', containmentStartedAt });
+        return {
+          kind: 'wait',
+          reason: 'safety_containment_stabilizing',
+          retryable: true,
+          incidentId: incident.id,
+        };
+      }
+      if (separationCandidate) {
+        if (
+          separationNotClosing
+          && now - disengagementStartedAt >= SAFETY_CONTAINMENT_STABLE_MS
+        ) {
+          const minimumDistances = Object.freeze(Object.fromEntries(
+            Object.entries(threatDistances).map(([id, distance]) => [
+              id,
+              Math.max(SAFETY_GUARD_BREACH_DISTANCE, distance - 2),
+            ]),
+          ));
+          this.containedThreatGuard = Object.freeze({
+            kind: 'stable_disengagement',
+            incidentId: incident.id,
+            source: incident.source,
+            sources: Object.freeze([...incidentSources(incident)]),
+            minimumDistance: SAFETY_GUARD_BREACH_DISTANCE,
+            minimumDistances,
+            disengagedAt: now,
+          });
+          this.closeSafetyIncident({
+            code: 'safety_stably_disengaged',
+            detail: `All ${threats.length} loaded incident threat${threats.length === 1 ? '' : 's'} remained behind blocked sight without renewed damage or closing separation through the bounded stability window.`,
+          });
+          return null;
+        }
+        this.replaceSafetyIncident({ stage: 'disengaging', disengagementStartedAt });
+        return {
+          kind: 'wait',
+          reason: 'safety_disengagement_stabilizing',
+          retryable: true,
+          incidentId: incident.id,
+        };
       }
     } else if (
-      ['hostile', 'other_entity', 'unknown'].includes(incident.source.kind)
-      && Date.now() - Math.max(
+      incidentSources(incident).some(source => ['hostile', 'other_entity', 'unknown'].includes(source.kind))
+      && this.now() - Math.max(
         Number(incident.lastDamageAt) || 0,
         Number(incident.lastThreatSeenAt) || 0,
       ) >= SAFETY_INCIDENT_CALM_MS
@@ -1388,7 +1662,30 @@ export class SurvivalDirector extends BehaviorDirector {
       return null;
     }
 
-    const player = safetyPlayerTarget(this.agent, incident);
+    if (
+      !threat
+      && incident.stage === 'under_cover'
+      && occupiesDefensiveShelter(this.agent.bot)
+    ) {
+      return {
+        kind: 'wait',
+        reason: 'safety_containment_verification',
+        retryable: true,
+        incidentId: incident.id,
+      };
+    }
+
+    let player = safetyPlayerTarget(this.agent, incident);
+    if (
+      player
+      && String(this.unavailableSafetyPlayer?.name || '').toLowerCase() === player.toLowerCase()
+    ) {
+      if (safetyPlayerPresenceConfirmed(this.agent, player)) {
+        this.unavailableSafetyPlayer = null;
+      } else {
+        player = null;
+      }
+    }
     if (player) {
       if (safetyPlayerDistance(this.agent, player) <= SAFETY_RENDEZVOUS_DISTANCE) {
         this.closeSafetyIncident({
@@ -1396,14 +1693,6 @@ export class SurvivalDirector extends BehaviorDirector {
           detail: `Reached ${player} after the safety reflex instead of treating spacing as completion.`,
         });
         return null;
-      }
-      if (safetyAgendaRemedy(this.agent, incident)) {
-        return {
-          kind: 'agenda_safety_rendezvous',
-          target: { name: player },
-          reason: 'durable_player_rendezvous_owns_safety_recovery',
-          incidentId: incident.id,
-        };
       }
       if (String(incident.failedPlayerTarget || '').toLowerCase() !== player.toLowerCase()) {
         return {
@@ -1442,6 +1731,32 @@ export class SurvivalDirector extends BehaviorDirector {
       };
     }
 
+    if (situation.canShelterInPlace === true) {
+      return {
+        kind: 'shelter_in_place',
+        reason: 'survival_incident_seal_ready',
+        incidentId: incident.id,
+        preempt: true,
+      };
+    }
+
+    const shelterRelocation = (Array.isArray(situation.shelterInPlaceStances)
+      ? situation.shelterInPlaceStances
+      : [])
+      .filter(candidate => (
+        `${Math.floor(candidate.x)},${Math.floor(candidate.y)},${Math.floor(candidate.z)}`
+          !== incident.failedShelterTarget
+      ))[0];
+    if (shelterRelocation) {
+      return {
+        kind: 'relocate_for_shelter',
+        target: shelterRelocation,
+        reason: 'survival_incident_relocating_for_seal',
+        incidentId: incident.id,
+        preempt: true,
+      };
+    }
+
     // A settled tactical reflex is not allowed to turn "no helper/route" into
     // an indefinite wait while a deterministic bodily action remains locally
     // executable. Reuse the same survival ladder and correlate the action to
@@ -1467,6 +1782,10 @@ export class SurvivalDirector extends BehaviorDirector {
       reason: threat ? 'safety_cover_unavailable' : 'safety_help_unavailable',
       retryable: true,
       incidentId: incident.id,
+      shelterBlocker: boundedDecisionText(situation.shelterInPlaceFeasibility?.code, 80) || null,
+      shelterCandidates: Array.isArray(situation.shelterInPlaceStances)
+        ? situation.shelterInPlaceStances.length
+        : 0,
     };
   }
 
@@ -1479,17 +1798,36 @@ export class SurvivalDirector extends BehaviorDirector {
       return false;
     }
     if (result?.phase !== 'succeeded') {
+      if (
+        intent.kind === 'return_to_player'
+        && result?.code === 'skill_target_offline'
+        && result?.retryable !== true
+      ) {
+        this.unavailableSafetyPlayer = Object.freeze({
+          name: boundedDecisionText(intent.target?.name, 32),
+          code: result.code,
+          observedAt: this.now(),
+        });
+      }
       this.replaceSafetyIncident({
         stage: 'recovery_blocked',
         ...(intent.kind === 'return_to_player'
           ? { failedPlayerTarget: intent.target?.name || null }
           : intent.kind === 'seek_shelter'
             ? { failedCoverTarget: `${Math.floor(intent.target.x)},${Math.floor(intent.target.y)},${Math.floor(intent.target.z)}` }
+            : intent.kind === 'relocate_for_shelter'
+              ? { failedShelterTarget: `${Math.floor(intent.target.x)},${Math.floor(intent.target.y)},${Math.floor(intent.target.z)}` }
             : {}),
       });
       return false;
     }
     if (intent.kind === 'return_to_player') {
+      if (
+        String(this.unavailableSafetyPlayer?.name || '').toLowerCase()
+          === String(intent.target?.name || '').toLowerCase()
+      ) {
+        this.unavailableSafetyPlayer = null;
+      }
       this.announceSafetyIncident(
         'safety_rendezvous_reached',
         `I made it to ${intent.target.name}. I need help with the ${this.safetyIncident.source.name || 'thing that hit me'}.`,
@@ -1499,9 +1837,16 @@ export class SurvivalDirector extends BehaviorDirector {
         detail: `Reached ${intent.target.name} after the safety reflex.`,
       });
     }
+    if (intent.kind === 'relocate_for_shelter') {
+      this.replaceSafetyIncident({
+        stage: 'shelter_relocated',
+        failedShelterTarget: null,
+      });
+      return false;
+    }
     if (intent.kind === 'seek_shelter' || intent.kind === 'shelter_in_place') {
       const threat = loadedIncidentThreat(this.agent, this.safetyIncident);
-      const coverVerified = isSheltered(this.agent.bot)
+      const coverVerified = occupiesDefensiveShelter(this.agent.bot)
         && (!threat || hasLineOfSightToEntity(this.agent.bot, threat) === false);
       if (!coverVerified) {
         this.replaceSafetyIncident({ stage: 'cover_unverified' });
@@ -1515,10 +1860,11 @@ export class SurvivalDirector extends BehaviorDirector {
         'verified_threat_cover_reached',
         `I'm under cover from the ${this.safetyIncident.source.name || 'thing that hit me'}.`,
       );
-      return this.closeSafetyIncident({
-        code: 'verified_threat_cover_reached',
-        detail: 'The routed shelter stance has overhead cover and blocks the attributed threat line of sight.',
+      this.replaceSafetyIncident({
+        stage: 'under_cover',
+        ...(threat ? { lastThreatSeenAt: Date.now() } : {}),
       });
+      return false;
     }
     return false;
   }
@@ -1526,6 +1872,18 @@ export class SurvivalDirector extends BehaviorDirector {
   foodRecoveryIntent(situation, policy) {
     const blocker = this.foodSourceBlocker;
     if (!blocker) return null;
+    if (blocker.surfaceAccessResolved === true) {
+      return {
+        kind: 'acquire_food',
+        targetFoodPoints: Math.max(1, Math.floor(Number(blocker.targetFoodPoints) || 1)),
+        searchRadius: Math.max(
+          FOOD_SEARCH_INITIAL_RADIUS,
+          Math.min(FOOD_SEARCH_MAX_RADIUS, Math.floor(Number(blocker.searchRadius) || FOOD_SEARCH_INITIAL_RADIUS)),
+        ),
+        reason: 'food_access_restored',
+        preempt: true,
+      };
+    }
     const currentPosition = physicalPosition(this.agent.bot?.entity?.position);
     const currentDimension = dimensionName(this.agent.bot?.game?.dimension);
     const safeFoodAvailable = rankFoodCandidates(situation.food, situation, policy).length > 0;
@@ -1533,12 +1891,17 @@ export class SurvivalDirector extends BehaviorDirector {
       ? situation.healingConsumables
       : []).some(candidate => candidate?.item === 'healing_potion' && Number(candidate.count) > 0);
     const requester = activePlayerRequester(this.agent);
+    const currentHuntableFoodSources = huntableFoodSourceSignature(this.agent.bot);
     if (!blocker.requester && requester) blocker.requester = requester;
     const materialChange = (
       !currentPosition
       || currentDimension !== blocker.dimension
       || (
         blocker.returnSucceeded === true
+        && distanceBetween(currentPosition, blocker.position) >= FOOD_RECOVERY_REGION_CHANGE_DISTANCE
+      )
+      || (
+        blocker.surfaceSucceeded === true
         && distanceBetween(currentPosition, blocker.position) >= FOOD_RECOVERY_REGION_CHANGE_DISTANCE
       )
       || (
@@ -1551,6 +1914,10 @@ export class SurvivalDirector extends BehaviorDirector {
       )
       || safeFoodAvailable
       || healingAvailable
+      || Boolean(
+        currentHuntableFoodSources
+        && currentHuntableFoodSources !== String(blocker.huntableFoodSourceSignature || '')
+      )
       || Boolean(requester && requester !== blocker.requester)
     );
     if (materialChange) {
@@ -1565,6 +1932,20 @@ export class SurvivalDirector extends BehaviorDirector {
         reason: 'food_sources_exhausted_returning_to_requester',
       };
     }
+    let atUsableSurface = false;
+    try {
+      atUsableSurface = this.isAtSurface(this.agent.bot) === true;
+    } catch {
+      // Unknown surface state is not authority to skip the bounded surface
+      // command; that command owns the full physical verification.
+    }
+    if ((blocker.surfaceAccessRequired || !atUsableSurface) && !blocker.surfaceAttempted) {
+      return {
+        kind: 'return_to_surface',
+        target: { name: 'usable_surface' },
+        reason: 'food_sources_exhausted_returning_to_surface',
+      };
+    }
     const home = rememberedHome(this.agent, currentDimension);
     if (
       !blocker.homeAttempted
@@ -1577,6 +1958,22 @@ export class SurvivalDirector extends BehaviorDirector {
         reason: 'food_sources_exhausted_returning_home',
       };
     }
+    const priorSearchRadius = Math.max(
+      FOOD_SEARCH_INITIAL_RADIUS,
+      Math.floor(Number(blocker.searchRadius) || FOOD_SEARCH_INITIAL_RADIUS),
+    );
+    if (priorSearchRadius < FOOD_SEARCH_MAX_RADIUS) {
+      const searchRadius = Math.min(FOOD_SEARCH_MAX_RADIUS, priorSearchRadius * 2);
+      return {
+        kind: 'acquire_food',
+        targetFoodPoints: Math.max(1, Math.floor(Number(blocker.targetFoodPoints) || 1)),
+        searchRadius,
+        reason: 'food_search_expanded',
+        ...(Number(situation.health) <= 8 || Number(situation.hunger) <= Number(policy.criticalFood ?? 6)
+          ? { preempt: true }
+          : {}),
+      };
+    }
     return {
       kind: 'wait',
       reason: 'recovery_food_sources_exhausted',
@@ -1586,7 +1983,9 @@ export class SurvivalDirector extends BehaviorDirector {
 
   settleFoodRecovery(intent, result) {
     if (intent?.kind === 'acquire_food') {
-      if (result?.code === 'skill_no_food_sources') this.captureFoodSourceBlocker(intent);
+      if (['skill_no_food_sources', 'skill_source_access_required'].includes(result?.code)) {
+        this.captureFoodSourceBlocker(intent, result);
+      }
       else if (result?.phase === 'succeeded') this.foodSourceBlocker = null;
       return;
     }
@@ -1596,13 +1995,63 @@ export class SurvivalDirector extends BehaviorDirector {
       this.foodSourceBlocker.returnSucceeded = result?.phase === 'succeeded';
       return;
     }
+    if (intent?.kind === 'return_to_surface' && this.foodSourceBlocker) {
+      this.foodSourceBlocker.surfaceAttempted = true;
+      this.foodSourceBlocker.surfaceSucceeded = result?.phase === 'succeeded';
+      this.foodSourceBlocker.surfaceAccessResolved = Boolean(
+        result?.phase === 'succeeded'
+        && this.foodSourceBlocker.surfaceAccessRequired === true
+      );
+      return;
+    }
     if (intent?.kind === 'return_home' && this.foodSourceBlocker) {
       this.foodSourceBlocker.homeAttempted = true;
       this.foodSourceBlocker.homeSucceeded = result?.phase === 'succeeded';
     }
   }
 
+  settleDispatch(lease, result) {
+    if (!this.claimDispatchSettlement(lease)) return false;
+    const intent = lease.metadata?.intent || null;
+    const situation = lease.metadata?.situation || {};
+    if (!result?.actionId) {
+      this.fail('missing_action_result', 'Survival action returned without a new structured result.', true);
+      this.nextEligibleAt = Date.now() + FAILURE_COOLDOWN_MS;
+      return true;
+    }
+    const safetySettled = this.settleSafetyIncident(intent, result);
+    this.settleFoodRecovery(intent, result);
+    this.settleSleep(intent, result);
+    this.settleUsefulDrops(intent, result, situation);
+    if (!safetySettled) this.finish(result);
+    this.nextEligibleAt = Date.now() + (
+      result.phase === 'succeeded' ? SUCCESS_COOLDOWN_MS : FAILURE_COOLDOWN_MS
+    );
+    return true;
+  }
+
+  reconcileDispatch() {
+    const reconciliation = this.reconcileDispatchLease();
+    if (reconciliation.state === 'terminal') {
+      this.settleDispatch(reconciliation.lease, reconciliation.result);
+      return true;
+    }
+    if (reconciliation.state !== 'orphaned') return false;
+    return this.settleDispatch(reconciliation.lease, {
+      actionId: `${reconciliation.lease.id}:orphaned`,
+      phase: 'failed',
+      code: 'survival_dispatch_orphaned',
+      detail: `Survival released an idle body after ${Math.round(reconciliation.elapsedMs)}ms without a correlated ActionManager activity or terminal result.`,
+      retryable: true,
+    });
+  }
+
   update() {
+    // The physical actuator is authoritative over a director's logical lease.
+    // Adopt a terminal result that outlived its command Promise, or fail open
+    // when no matching action ever started; never let stale inFlight state hold
+    // every lower lane indefinitely.
+    this.reconcileDispatch();
     const evaluatedAt = Date.now();
     const policy = this.agent.runtime?.survival;
     const gate = this.scheduleGate({ allowBusy: true, now: evaluatedAt });
@@ -1665,15 +2114,40 @@ export class SurvivalDirector extends BehaviorDirector {
         this.clearJobFoodUpkeep(this.jobFoodUpkeep.workOrderId);
       }
       const cooperativeUpkeep = this.jobFoodUpkeep;
+      const immediateBodilyIntent = chooseSurvivalIntent(situation, effectivePolicy);
+      // Failed food routing is memory for the next food acquisition; it is not
+      // a higher survival policy. A stale food blocker must never mask a newly
+      // available heal, meal, or protective shelter posture.
+      const recoveryFoodIntent = this.foodRecoveryIntent(situation, effectivePolicy);
+      // A successful open-surface access action is a causal prerequisite, not
+      // ordinary idle movement. Give its exact food continuation the next body
+      // turn before generic exposed-body shelter policy can immediately dig the
+      // bot underground again. A fresh Safety incident/urgent danger still
+      // outranks this branch above and inside Safety's own supervisor.
+      const restoredFoodContinuation = recoveryFoodIntent?.reason === 'food_access_restored'
+        && situation.urgentDanger !== true;
+      const routedFoodIntent = restoredFoodContinuation
+        ? recoveryFoodIntent
+        : immediateBodilyIntent?.kind === 'acquire_food'
+          ? recoveryFoodIntent || immediateBodilyIntent
+          : immediateBodilyIntent || recoveryFoodIntent;
       intent = this.safetyIncidentIntent(situation, effectivePolicy)
-        || this.foodRecoveryIntent(situation, effectivePolicy)
+        || routedFoodIntent
         || (cooperativeUpkeep ? {
           kind: 'acquire_food',
           targetFoodPoints: cooperativeUpkeep.targetFoodPoints,
           reason: 'durable_job_food_resupply',
           workOrderId: cooperativeUpkeep.workOrderId,
-        } : null)
-        || chooseSurvivalIntent(situation, effectivePolicy);
+        } : null);
+      if (intent?.kind === 'acquire_food' && !Number.isFinite(Number(intent.searchRadius))) {
+        intent = {
+          ...intent,
+          searchRadius: Number(situation.health) <= 8
+            || Number(situation.hunger) <= Number(policy.criticalFood ?? 6)
+            ? FOOD_SEARCH_INITIAL_RADIUS
+            : 64,
+        };
+      }
       context.jobFoodUpkeep = cooperativeUpkeep;
       context.situation = situation;
       context.intent = intent;
@@ -1689,10 +2163,6 @@ export class SurvivalDirector extends BehaviorDirector {
     }
     if (intent.kind === 'defer_to_reflex') {
       this.recordDecision(context, 'safety_reflex_retains_control');
-      return;
-    }
-    if (intent.kind === 'agenda_safety_rendezvous') {
-      this.recordDecision(context, 'durable_agenda_safety_remedy');
       return;
     }
     const durablePlayerWorkActive = Boolean(
@@ -1751,6 +2221,10 @@ export class SurvivalDirector extends BehaviorDirector {
           ? 'You hit me. I am staying clear until you tell me whether that was intentional.'
           : intent.reason === 'safety_cover_unavailable'
             ? `I got away from the ${source.name || 'thing that hit me'}, but I cannot verify cover or a safe route. I need help.`
+            : intent.reason === 'safety_threat_contained'
+              ? `I'm under cover from the ${source.name || 'thing that hit me'} and staying here until it is actually gone.`
+              : intent.reason === 'safety_containment_verification'
+                ? `The ${source.name || 'thing that hit me'} is out of sight. I'm verifying it stays gone before I resume.`
             : 'I got clear, but I cannot identify a safe helper or verified cover. I need help.';
         this.announceSafetyIncident(intent.reason, message);
       }
@@ -1763,12 +2237,22 @@ export class SurvivalDirector extends BehaviorDirector {
             ? 'No safe food source was found and the bounded return strategy is settled; waiting for material new evidence.'
           : intent.reason === 'safety_waiting_for_intent_clarification'
             ? 'The exact player attacker is known, but motive is not observable; waiting for a fresh explicit order.'
+          : intent.reason === 'safety_threat_contained'
+            ? 'Verified cover contains the loaded attributed threat; Safety retains body ownership until the source is durably gone.'
+          : intent.reason === 'safety_containment_verification'
+            ? 'The attributed threat is unloaded; Safety retains body ownership through the bounded calm window before resuming lower work.'
+          : intent.reason === 'safety_cover_unavailable' && intent.shelterBlocker
+            ? `No helper, defensive cover, or reachable seal stance is available; current seal admission is ${intent.shelterBlocker} and the bounded local scan found ${intent.shelterCandidates} candidate(s).`
           : SAFETY_WAIT_CODES.has(intent.reason)
             ? 'The immediate reflex settled, but no verified cover or non-attacking helper is currently available.'
           : 'Survival upkeep is waiting for a safe prerequisite.',
         retryable: intent.retryable === true,
       });
-      this.nextEligibleAt = Date.now() + BLOCKED_COOLDOWN_MS;
+      this.nextEligibleAt = Date.now() + (
+        ['safety_threat_contained', 'safety_containment_verification', 'safety_disengagement_stabilizing'].includes(intent.reason)
+          ? SUCCESS_COOLDOWN_MS
+          : BLOCKED_COOLDOWN_MS
+      );
       this.recordDecision(context, 'wait_selected');
       return;
     }
@@ -1825,11 +2309,15 @@ export class SurvivalDirector extends BehaviorDirector {
       : intent.kind === 'heal'
         ? `!consume(${JSON.stringify(intent.item)})`
       : intent.kind === 'acquire_food'
-        ? `!prepareFood(${Math.max(1, Math.floor(Number(intent.targetFoodPoints) || 24))}, ${criticalSurvivalNeed ? 24 : 64})`
+        ? `!prepareFood(${Math.max(1, Math.floor(Number(intent.targetFoodPoints) || 24))}, ${Math.max(16, Math.min(128, Math.floor(Number(intent.searchRadius) || (criticalSurvivalNeed ? FOOD_SEARCH_INITIAL_RADIUS : 64))))})`
       : intent.kind === 'return_to_player'
         ? `!goToPlayer(${JSON.stringify(intent.target.name)}, 3, true)`
+      : intent.kind === 'return_to_surface'
+        ? '!goToSurface(true)'
       : intent.kind === 'return_home'
         ? `!goToCoordinates(${intent.target.x}, ${intent.target.y}, ${intent.target.z}, 2, true)`
+      : intent.kind === 'relocate_for_shelter'
+        ? `!goToCoordinates(${intent.target.x}, ${intent.target.y}, ${intent.target.z}, 0, true)`
       : intent.kind === 'collect_useful_drop'
         ? '!pickupUsefulItems(12)'
       : intent.kind === 'equip'
@@ -1855,7 +2343,11 @@ export class SurvivalDirector extends BehaviorDirector {
         ? { name: 'safe_food', foodPoints: intent.targetFoodPoints }
         : intent.kind === 'return_to_player'
           ? intent.target
+        : intent.kind === 'return_to_surface'
+          ? intent.target
         : intent.kind === 'return_home'
+          ? intent.target
+        : intent.kind === 'relocate_for_shelter'
           ? intent.target
         : intent.kind === 'collect_useful_drop'
           ? intent.target
@@ -1866,13 +2358,21 @@ export class SurvivalDirector extends BehaviorDirector {
       this.recordDecision(context, 'begin_rejected');
       return;
     }
-    this.recordDecision(context, 'action_dispatched', { scheduled: true });
     const incident = this.safetyIncident;
+    const missionId = incident?.id || `survival:${intent.kind}`;
+    const activityId = intent.kind;
+    const dispatchLease = this.beginDispatchLease({
+      owner: 'survival',
+      missionId,
+      activityId,
+      metadata: { intent, situation },
+    });
+    this.recordDecision(context, 'action_dispatched', { scheduled: true });
     void Promise.resolve(this.executeCommand(this.agent, command, {
       owner: 'survival',
       routeOrigin: 'internal',
-      missionId: incident?.id || `survival:${intent.kind}`,
-      activityId: intent.kind,
+      missionId,
+      activityId,
       materialToken: JSON.stringify([
         incident?.stage || null,
         incident?.source?.id || incident?.source?.uuid || null,
@@ -1882,26 +2382,16 @@ export class SurvivalDirector extends BehaviorDirector {
       returnExecution: true,
     }))
       .then(execution => {
+        if (!this.ownsDispatchLease(dispatchLease)) return;
         const hasExecutionEnvelope = execution
           && typeof execution === 'object'
           && Object.hasOwn(execution, 'value')
           && Object.hasOwn(execution, 'result');
         const result = hasExecutionEnvelope ? execution.result || null : null;
-        if (!result?.actionId) {
-          this.fail('missing_action_result', 'Survival action returned without a new structured result.', true);
-          this.nextEligibleAt = Date.now() + FAILURE_COOLDOWN_MS;
-          return;
-        }
-        const safetySettled = this.settleSafetyIncident(intent, result);
-        this.settleFoodRecovery(intent, result);
-        this.settleSleep(intent, result);
-        this.settleUsefulDrops(intent, result, situation);
-        if (!safetySettled) this.finish(result);
-        this.nextEligibleAt = Date.now() + (
-          result.phase === 'succeeded' ? SUCCESS_COOLDOWN_MS : FAILURE_COOLDOWN_MS
-        );
+        this.settleDispatch(dispatchLease, result);
       })
       .catch(error => {
+        if (!this.claimDispatchSettlement(dispatchLease)) return;
         this.fail('dispatch_error', error?.message || error, true);
         this.nextEligibleAt = Date.now() + FAILURE_COOLDOWN_MS;
       });

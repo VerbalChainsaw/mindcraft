@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { inspectGameObject } from '../library/game_knowledge.js';
 import * as mc from '../../utils/mcdata.js';
 import { normalizeWorkstationTransactionReceipt } from './workstation-transaction.js';
+import { loopEraseMiningRouteCells } from './mining-corridor-planner.js';
 
 const GOAL_KINDS = new Set(['acquire', 'deliver']);
 const COMPLETION_KINDS = new Set(['inventory', 'main_hand', 'off_hand', 'delivery']);
@@ -19,6 +20,7 @@ const GOAL_PHASES = new Set([
   'cancelled',
 ]);
 const SUBGOAL_STATES = new Set(['pending', 'acting', 'succeeded', 'failed', 'cancelled']);
+const FAILURE_SCOPES = new Set(['target', 'region', 'prerequisite', 'method']);
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,96}$/;
 const SAFE_PLAYER = /^[A-Za-z0-9_. -]{1,64}$/;
 const CANONICAL_NAME = /^[a-z0-9_]{1,80}$/;
@@ -595,7 +597,17 @@ function normalizeDeathRecoveryBinding(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const recordedAt = Number(raw.recordedAt);
   if (!Number.isSafeInteger(recordedAt) || recordedAt < 1) return null;
-  return Object.freeze({ recordedAt });
+  const recovered = Number(raw.recovered);
+  const missing = Number(raw.missing);
+  return Object.freeze({
+    recordedAt,
+    ...(Number.isFinite(recovered)
+      ? { recovered: Math.max(0, Math.floor(recovered)) }
+      : {}),
+    ...(Number.isFinite(missing)
+      ? { missing: Math.max(0, Math.floor(missing)) }
+      : {}),
+  });
 }
 
 function normalizeOperationalMemory(raw) {
@@ -631,6 +643,7 @@ function normalizeSubgoal(raw, index) {
   const state = boundedText(raw.state || 'pending', 24);
   if (!SUBGOAL_STATES.has(state)) throw new TypeError('Goal subgoal state is invalid.');
   const commandName = boundedText(raw.commandName, 80);
+  const failureScope = boundedText(raw.failureScope, 24);
   if (commandName && !/^![A-Za-z0-9_]+$/.test(commandName)) {
     throw new TypeError('Goal subgoal command is invalid.');
   }
@@ -642,6 +655,7 @@ function normalizeSubgoal(raw, index) {
     attempt: finiteInteger(raw.attempt, 0, 0, 64),
     actionId: boundedText(raw.actionId, 96) || null,
     code: boundedText(raw.code, 80) || null,
+    failureScope: FAILURE_SCOPES.has(failureScope) ? failureScope : null,
     detail: boundedText(raw.detail, 280),
     targetName: canonicalName(raw.targetName) || null,
     targetFamily: ['logs', 'planks'].includes(canonicalName(raw.targetFamily))
@@ -663,20 +677,10 @@ export function normalizeMiningReturnCheckpoint(raw) {
   const checkpointSource = raw && typeof raw === 'object' && !Array.isArray(raw)
     ? raw
     : {};
-  const miningReturnRoute = [];
-  if (Array.isArray(checkpointSource.miningReturnRoute)) {
-    for (const rawCell of checkpointSource.miningReturnRoute.slice(0, MAX_MINING_RETURN_CELLS)) {
-      if (![rawCell?.x, rawCell?.y, rawCell?.z].every(Number.isFinite)) continue;
-      const cell = Object.freeze({
-        x: Math.floor(rawCell.x),
-        y: Math.floor(rawCell.y),
-        z: Math.floor(rawCell.z),
-      });
-      const previous = miningReturnRoute.at(-1);
-      if (previous && previous.x === cell.x && previous.y === cell.y && previous.z === cell.z) continue;
-      miningReturnRoute.push(cell);
-    }
-  }
+  const miningReturnRoute = loopEraseMiningRouteCells(
+    checkpointSource.miningReturnRoute,
+    { limit: MAX_MINING_RETURN_CELLS },
+  ).map(cell => Object.freeze(cell));
   const miningReturnDimension = boundedText(checkpointSource.miningReturnDimension, 64)
     .toLowerCase()
     .replace(/^minecraft:/, '')

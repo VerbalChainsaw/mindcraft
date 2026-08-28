@@ -194,6 +194,59 @@ test('replacement Mission waits for graceful halt and correlated Activity settle
   assert.equal(controller.store.last.lastOutcome.reasonCode, 'mission_replaced');
 });
 
+test('a safety-owned interruption suspends a Mission Activity without spending its activity budget', async () => {
+  const agent = fakeAgent();
+  let dispatches = 0;
+  agent.behavior_arbiter = {
+    wake() {},
+    matchesControlSuspension(commitment) {
+      assert.equal(commitment.owner, 'player_mission');
+      assert.equal(commitment.actionId, 'mission-action-1');
+      return true;
+    },
+  };
+  const controller = new CharcoalMissionController(agent, {
+    mode: 'active',
+    buildPlan: () => ({
+      status: 'ready',
+      nextStep: {
+        kind: 'collect',
+        target: 'oak_log',
+        capability: { id: 'collect_block', arguments: {} },
+      },
+    }),
+    executeCapability() {
+      dispatches += 1;
+      if (dispatches > 1) return new Promise(() => {});
+      return Promise.resolve({
+        result: {
+          actionId: 'mission-action-1',
+          phase: 'interrupted',
+          code: 'interrupted',
+          detail: 'A hostile started the safety incident.',
+          retryable: true,
+        },
+      });
+    },
+  });
+  agent.charcoal_mission = controller;
+  const accepted = await controller.accept({ requester: 'Director', quantity: 4 });
+
+  assert.equal(controller.update(), true);
+  await settleMicrotasks();
+  assert.equal(controller.activeMission.missionId, accepted.missionId);
+  assert.equal(controller.activeMission.activities[0].state, 'SUSPENDED');
+  assert.equal(controller.status.code, 'safety_suspended');
+  assert.equal(controller.nextAttemptAt, 0);
+
+  assert.equal(controller.update(), true, 'the arbiter can release the same Mission back to planning');
+  assert.equal(dispatches, 2);
+  assert.equal(
+    controller.activeMission.activities.filter(activity => activity.state !== 'SUSPENDED').length,
+    1,
+  );
+});
+
 test('invalid replacement is rejected before halt and leaves the active Mission untouched', async () => {
   const agent = fakeAgent();
   let stopCalls = 0;

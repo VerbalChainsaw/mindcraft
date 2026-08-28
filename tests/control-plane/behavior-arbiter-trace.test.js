@@ -61,6 +61,219 @@ test('authoritative player polling is held-safe, owner-responsive, and idle-back
   assert.equal(authoritativePlayerRefreshMs({ isOperatorHeld: () => false }, {}), 30_000);
 });
 
+test('a safety incident suspends and releases the exact durable player commitment once', () => {
+  let now = 1_000;
+  const agent = {
+    name: 'SuspensionBot',
+    runtime: { autonomy: 'command' },
+    bot: { modes: {} },
+    actions: {
+      executing: true,
+      currentActionId: 'goal-action-1',
+      currentActionOwner: 'player',
+      currentActionLabel: 'action:collectBlocksInRange',
+      currentActionStartedAt: 900,
+      ownerPriority: () => 40,
+    },
+    goal_director: { activeGoal: { id: 'goal-1', phase: 'acquire' } },
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => now,
+    trace: { enabled: false },
+    commitmentProviders: [action => ({
+      owner: 'player_goal',
+      obligationId: agent.goal_director.activeGoal.id,
+      phase: agent.goal_director.activeGoal.phase,
+      ownsCurrentAction: action.owner === 'player',
+    })],
+  });
+  agent.behavior_arbiter = arbiter;
+  const incident = { id: 'safety-1-zombie', active: true, stage: 'threat_response' };
+
+  const suspension = arbiter.beginSafetySuspension(incident);
+  assert.deepEqual(suspension, {
+    id: 'suspension:safety-1-zombie',
+    incidentId: 'safety-1-zombie',
+    owner: 'player_goal',
+    obligationId: 'goal-1',
+    phase: 'acquire',
+    actionId: 'goal-action-1',
+    actionLabel: 'action:collectBlocksInRange',
+    state: 'suspended',
+    startedAt: 1_000,
+  });
+  assert.equal(arbiter.matchesControlSuspension({
+    owner: 'player_goal',
+    obligationId: 'goal-1',
+    actionId: 'goal-action-1',
+  }), true);
+  assert.equal(arbiter.matchesControlSuspension({
+    owner: 'player_goal',
+    obligationId: 'another-goal',
+    actionId: 'goal-action-1',
+  }), false);
+
+  now = 1_200;
+  assert.equal(arbiter.releaseSafetySuspension({
+    id: incident.id,
+    resolutionCode: 'threat_destroyed',
+  }), true);
+  assert.equal(arbiter.currentControlSuspension(), null);
+  assert.equal(arbiter.lastControlSuspension.state, 'released');
+  assert.equal(arbiter.lastControlSuspension.releaseCode, 'threat_destroyed');
+  assert.equal(arbiter.matchesControlSuspension({
+    owner: 'player_goal',
+    obligationId: 'goal-1',
+    actionId: 'goal-action-1',
+  }), true, 'the exact interrupted settlement remains correlated across the release edge');
+  assert.equal(arbiter.matchesControlSuspension({
+    owner: 'player_goal',
+    obligationId: 'goal-1',
+    actionId: 'goal-action-2',
+  }), false, 'a later resumed action cannot inherit the old suspension');
+  assert.equal(arbiter.releaseSafetySuspension(incident), false, 'release is idempotent');
+});
+
+test('durable player work is suspended even when Survival already owns the transient lease', () => {
+  const agent = {
+    name: 'LeaseTransferBot',
+    runtime: { autonomy: 'command' },
+    bot: { modes: {} },
+    actions: {
+      executing: true,
+      currentActionId: 'survival-action-1',
+      currentActionOwner: 'survival',
+      currentActionLabel: 'action:prepareFood',
+      currentActionStartedAt: 900,
+      ownerPriority: () => 40,
+    },
+    goal_director: { activeGoal: { id: 'goal-while-unsafe', phase: 'assess' } },
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => 1_000,
+    trace: { enabled: false },
+    commitmentProviders: [action => ({
+      owner: 'player_goal',
+      obligationId: agent.goal_director.activeGoal.id,
+      phase: agent.goal_director.activeGoal.phase,
+      ownsCurrentAction: action.owner === 'player',
+    })],
+  });
+
+  const suspension = arbiter.beginSafetySuspension({
+    id: 'safety-after-transfer',
+    active: true,
+  });
+  assert.equal(suspension.owner, 'player_goal');
+  assert.equal(suspension.obligationId, 'goal-while-unsafe');
+  assert.equal(suspension.actionId, null, 'the transient Survival action is not misbound to the Goal');
+  assert.equal(arbiter.matchesControlSuspension({
+    owner: 'player_goal',
+    obligationId: 'goal-while-unsafe',
+    actionId: 'late-goal-interruption',
+  }), true);
+});
+
+test('registered Agenda commitments suspend without arbiter knowledge of Agenda internals', () => {
+  const agent = {
+    name: 'AgendaCommitmentBot',
+    runtime: { autonomy: 'command' },
+    bot: { modes: {} },
+    actions: {
+      executing: true,
+      currentActionId: 'agenda-action-1',
+      currentActionOwner: 'player',
+      currentActionLabel: 'action:rideToCoordinates',
+      currentActionStartedAt: 900,
+      ownerPriority: () => 30,
+    },
+  };
+  const agendaProvider = {
+    currentControlCommitment(action) {
+      return {
+        owner: 'player_agenda',
+        obligationId: 'agenda-nether-entry-1',
+        phase: 'active',
+        ownsCurrentAction: action.owner === 'player',
+      };
+    },
+  };
+  const arbiter = new BehaviorArbiter(agent, {
+    now: () => 1_000,
+    trace: { enabled: false },
+    commitmentProviders: [agendaProvider],
+  });
+
+  const suspension = arbiter.beginSafetySuspension({ id: 'safety-agenda', active: true });
+
+  assert.equal(suspension.owner, 'player_agenda');
+  assert.equal(suspension.obligationId, 'agenda-nether-entry-1');
+  assert.equal(suspension.actionId, 'agenda-action-1');
+});
+
+test('an active Safety suspension hard-gates every lower body owner even if a leaf yields incorrectly', async () => {
+  let survivalUpdates = 0;
+  let goalUpdates = 0;
+  const survival = {
+    inFlight: false,
+    status: { code: 'safety_recovery_pending' },
+    safetyIncident: { id: 'safety-hard-gate', active: true, stage: 'disengaged' },
+    update() { survivalUpdates += 1; },
+    blocksLowerPriority() { return false; },
+    snapshot() { return { safetyIncident: this.safetyIncident }; },
+  };
+  const { agent } = fakeAgent({ survival });
+  agent.isIdle = () => true;
+  agent.goal_director = {
+    activeGoal: { id: 'goal-hard-gated', phase: 'recover' },
+    currentControlCommitment(action) {
+      return {
+        owner: 'player_goal',
+        obligationId: this.activeGoal.id,
+        phase: this.activeGoal.phase,
+        ownsCurrentAction: action.owner === 'player',
+      };
+    },
+    update() { goalUpdates += 1; },
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+  arbiter.registerControlCommitmentProvider(agent.goal_director);
+  agent.behavior_arbiter = arbiter;
+  arbiter.beginSafetySuspension(survival.safetyIncident);
+
+  const selected = await arbiter.update(25);
+
+  assert.equal(selected.selectedLane, 'basic_survival');
+  assert.equal(selected.code, 'safety_recovery_pending');
+  assert.equal(survivalUpdates, 1);
+  assert.equal(goalUpdates, 0, 'an active Safety suspension cannot leak into Goal execution');
+  assert.equal(arbiter.currentControlSuspension()?.incidentId, 'safety-hard-gate');
+});
+
+test('internal assignment control blocks lower lanes without becoming Operator Hold', async () => {
+  let goalUpdates = 0;
+  const { agent } = fakeAgent();
+  agent.isIdle = () => true;
+  agent.goal_director = {
+    activeGoal: { id: 'goal-behind-compilation', phase: 'assess' },
+    update() { goalUpdates += 1; },
+  };
+  agent.currentInternalControlBlock = () => ({
+    generation: 4,
+    kind: 'assignment_compilation',
+    reason: 'item plan assignment pending',
+    blocksBody: true,
+  });
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const selected = await arbiter.update(25);
+
+  assert.equal(agent.isOperatorHeld(), false);
+  assert.equal(selected.selectedLane, 'internal_control');
+  assert.equal(selected.code, 'internal_assignment_wait');
+  assert.equal(goalUpdates, 0);
+});
+
 test('trace enablement preserves the emergency selection and side-effect order', async () => {
   const traced = fakeAgent({ emergency: true });
   const untraced = fakeAgent({ emergency: true });
@@ -80,6 +293,34 @@ test('trace enablement preserves the emergency selection and side-effect order',
   assert.equal(trace.winner.lane, 'emergency_self_preservation');
   assert.equal(trace.lanes.find(lane => lane.lane === 'emergency_self_preservation').status, 'eligible');
   assert.equal(trace.lanes.find(lane => lane.lane === 'operator_hold').status, 'not_evaluated');
+  assert.equal(trace.lanes.find(lane => lane.lane === 'attributed_protection').status, 'not_evaluated');
+});
+
+test('a material-change wait keeps the emergency band selected without inventing an action', async () => {
+  const { agent, calls } = fakeAgent();
+  agent.bot.modes.updateBand = names => {
+    calls.push(`modes:${names.join(',')}`);
+    if (names.includes('self_preservation')) {
+      return {
+        active: false,
+        scheduled: false,
+        blocking: true,
+        mode: 'self_preservation',
+        code: 'open_water_escape_waiting_for_material_change',
+      };
+    }
+    return { active: false, scheduled: false, code: 'inactive' };
+  };
+  const arbiter = new BehaviorArbiter(agent, { trace: { enabled: true, retention: 4 } });
+
+  const status = await arbiter.update(25);
+
+  assert.equal(status.selectedLane, 'emergency_self_preservation');
+  assert.equal(status.code, 'open_water_escape_waiting_for_material_change');
+  assert.equal(agent.actions.executing, false);
+  assert.equal(calls.some(call => call === 'modes:self_defense,cowardice'), false);
+  const trace = arbiter.snapshot().decisionTrace.recent[0];
+  assert.equal(trace.lanes.find(lane => lane.lane === 'emergency_self_preservation').status, 'eligible');
   assert.equal(trace.lanes.find(lane => lane.lane === 'attributed_protection').status, 'not_evaluated');
 });
 
